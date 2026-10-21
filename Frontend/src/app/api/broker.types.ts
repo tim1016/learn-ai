@@ -5036,6 +5036,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs-internal/options-backtest/benchmark-preflight": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Benchmark Preflight */
+        post: operations["benchmark_preflight_api_jobs_internal_options_backtest_benchmark_preflight_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs-internal/options-backtest/benchmark-resources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Benchmark Resources */
+        get: operations["benchmark_resources_api_jobs_internal_options_backtest_benchmark_resources_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs-internal/options-backtest/benchmark-result/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Benchmark Result */
+        get: operations["benchmark_result_api_jobs_internal_options_backtest_benchmark_result__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs-internal/options-backtest/prepare": {
         parameters: {
             query?: never;
@@ -9263,6 +9314,63 @@ export interface components {
             test_metrics: components["schemas"]["RunMetrics"];
             /** Test Trade Count */
             test_trade_count: number;
+        };
+        /** BenchmarkPreflightRequest */
+        BenchmarkPreflightRequest: {
+            /**
+             * Case
+             * @enum {string}
+             */
+            case: "spy_typical_v1" | "spy_eight_leg_cover_v1";
+        };
+        /** BenchmarkPreflightResponse */
+        BenchmarkPreflightResponse: {
+            /** Case Digest */
+            case_digest: string;
+            /** Incomplete Session Ms */
+            incomplete_session_ms: number[];
+            /** Inventory Digest */
+            inventory_digest: string;
+            /** Sessions */
+            sessions: number;
+        };
+        /** BenchmarkResourcesResponse */
+        BenchmarkResourcesResponse: {
+            /** Cgroup Memory Bytes */
+            cgroup_memory_bytes: number | null;
+            /** Cgroup Memory Limit Bytes */
+            cgroup_memory_limit_bytes: number | null;
+            /** Cpu Period Us */
+            cpu_period_us: number | null;
+            /** Cpu Quota Us */
+            cpu_quota_us: number | null;
+            /** Database Connection Limit */
+            database_connection_limit: number;
+            /** Database Connections */
+            database_connections: number;
+            /** Frozen Input Bytes */
+            frozen_input_bytes: number;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Runtime Instance */
+            runtime_instance: string;
+            /** Worker Width */
+            worker_width: number;
+        };
+        /** BenchmarkResultResponse */
+        BenchmarkResultResponse: {
+            /** Accepted At Ms */
+            accepted_at_ms: number;
+            /** Execution Metadata */
+            execution_metadata: Record<string, never>;
+            /** Phase Timings */
+            phase_timings: components["schemas"]["PhaseTiming"][];
+            /** Result Digest */
+            result_digest: string;
+            /** Run Id */
+            run_id: number;
+            /** Saved At Ms */
+            saved_at_ms: number;
         };
         /** Body_generate_validation_report_api_dataset_validation_report_post */
         Body_generate_validation_report_api_dataset_validation_report_post: {
@@ -42379,6 +42487,105 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    benchmark_preflight_api_jobs_internal_options_backtest_benchmark_preflight_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BenchmarkPreflightRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BenchmarkPreflightResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    benchmark_resources_api_jobs_internal_options_backtest_benchmark_resources_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BenchmarkResourcesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    benchmark_result_api_jobs_internal_options_backtest_benchmark_result__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BenchmarkResultResponse"];
                 };
             };
             /** @description Validation Error */

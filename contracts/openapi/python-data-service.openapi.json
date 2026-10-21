@@ -4453,6 +4453,197 @@
         "title": "BaselineRunRecord",
         "type": "object"
       },
+      "BenchmarkPreflightRequest": {
+        "properties": {
+          "case": {
+            "enum": [
+              "spy_typical_v1",
+              "spy_eight_leg_cover_v1"
+            ],
+            "title": "Case",
+            "type": "string"
+          }
+        },
+        "required": [
+          "case"
+        ],
+        "title": "BenchmarkPreflightRequest",
+        "type": "object"
+      },
+      "BenchmarkPreflightResponse": {
+        "properties": {
+          "case_digest": {
+            "title": "Case Digest",
+            "type": "string"
+          },
+          "incomplete_session_ms": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Incomplete Session Ms",
+            "type": "array"
+          },
+          "inventory_digest": {
+            "title": "Inventory Digest",
+            "type": "string"
+          },
+          "sessions": {
+            "minimum": 0.0,
+            "title": "Sessions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "case_digest",
+          "inventory_digest",
+          "sessions",
+          "incomplete_session_ms"
+        ],
+        "title": "BenchmarkPreflightResponse",
+        "type": "object"
+      },
+      "BenchmarkResourcesResponse": {
+        "properties": {
+          "cgroup_memory_bytes": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cgroup Memory Bytes"
+          },
+          "cgroup_memory_limit_bytes": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cgroup Memory Limit Bytes"
+          },
+          "cpu_period_us": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpu Period Us"
+          },
+          "cpu_quota_us": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpu Quota Us"
+          },
+          "database_connection_limit": {
+            "minimum": 0.0,
+            "title": "Database Connection Limit",
+            "type": "integer"
+          },
+          "database_connections": {
+            "minimum": 0.0,
+            "title": "Database Connections",
+            "type": "integer"
+          },
+          "frozen_input_bytes": {
+            "minimum": 0.0,
+            "title": "Frozen Input Bytes",
+            "type": "integer"
+          },
+          "observed_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "runtime_instance": {
+            "title": "Runtime Instance",
+            "type": "string"
+          },
+          "worker_width": {
+            "minimum": 1.0,
+            "title": "Worker Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "observed_at_ms",
+          "runtime_instance",
+          "worker_width",
+          "cgroup_memory_bytes",
+          "cgroup_memory_limit_bytes",
+          "cpu_quota_us",
+          "cpu_period_us",
+          "frozen_input_bytes",
+          "database_connections",
+          "database_connection_limit"
+        ],
+        "title": "BenchmarkResourcesResponse",
+        "type": "object"
+      },
+      "BenchmarkResultResponse": {
+        "properties": {
+          "accepted_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Accepted At Ms",
+            "type": "integer"
+          },
+          "execution_metadata": {
+            "title": "Execution Metadata",
+            "type": "object"
+          },
+          "phase_timings": {
+            "items": {
+              "$ref": "#/components/schemas/PhaseTiming"
+            },
+            "title": "Phase Timings",
+            "type": "array"
+          },
+          "result_digest": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Result Digest",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "integer"
+          },
+          "saved_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Saved At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "run_id",
+          "accepted_at_ms",
+          "saved_at_ms",
+          "result_digest",
+          "phase_timings",
+          "execution_metadata"
+        ],
+        "title": "BenchmarkResultResponse",
+        "type": "object"
+      },
       "Body_generate_validation_report_api_dataset_validation_report_post": {
         "properties": {
           "our_csv": {
@@ -85134,6 +85325,173 @@
           }
         },
         "summary": "Start Options Backtest Job",
+        "tags": [
+          "jobs-internal"
+        ]
+      }
+    },
+    "/api/jobs-internal/options-backtest/benchmark-preflight": {
+      "post": {
+        "operationId": "benchmark_preflight_api_jobs_internal_options_backtest_benchmark_preflight_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BenchmarkPreflightRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BenchmarkPreflightResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Benchmark Preflight",
+        "tags": [
+          "jobs-internal"
+        ]
+      }
+    },
+    "/api/jobs-internal/options-backtest/benchmark-resources": {
+      "get": {
+        "operationId": "benchmark_resources_api_jobs_internal_options_backtest_benchmark_resources_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BenchmarkResourcesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Benchmark Resources",
+        "tags": [
+          "jobs-internal"
+        ]
+      }
+    },
+    "/api/jobs-internal/options-backtest/benchmark-result/{run_id}": {
+      "get": {
+        "operationId": "benchmark_result_api_jobs_internal_options_backtest_benchmark_result__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Run Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BenchmarkResultResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Benchmark Result",
         "tags": [
           "jobs-internal"
         ]
