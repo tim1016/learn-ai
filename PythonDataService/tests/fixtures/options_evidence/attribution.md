@@ -37,6 +37,9 @@ These are distinct accounting measures, not 28 independent strategies. Only
 the first 51 trial receipts and first 201 exposure receipts can be captured;
 this study has 28 and one respectively. No evaluation payloads or credentials
 are included. `capture_lineage.py` reproduces this bounded read into a new file.
+`lineage-read.json` and `lineage-trials.json` are deterministic display projections
+of this fixture and `study-record.json`, generated offline by
+`options_research_lineage.project` and `trial_page` for UI/browser checks.
 
 These fixtures test identity and display projections. Canonical numerical
 calculations remain covered by their existing engine fixtures/tests. No vendor

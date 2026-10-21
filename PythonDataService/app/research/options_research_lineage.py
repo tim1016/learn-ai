@@ -85,6 +85,8 @@ def project(row: dict[str, Any], retained: dict[str, Any]) -> OptionsResearchLin
             if setup_sha256(written) != digest:
                 raise ValueError("A retained fold winner does not match its exact settings.")
         forward = observed.get("forward")
+        if forward is not None and forward.get("point_hash") != digest:
+            raise ValueError("Retained forward evidence belongs to another fold winner.")
         folds.append(OptionsLineageFold(index=fold.index, training=window_view(fold.training), forward=window_view(fold.forward),
             state=observed.get("status", "not_recorded"), winner_hash=digest,
             winner_label=label(written, digest == setup_sha256(protocol.setup)) if written else None,
@@ -99,16 +101,29 @@ def project(row: dict[str, Any], retained: dict[str, Any]) -> OptionsResearchLin
             evidence=result["evidence"] if result else []))
     exposures = []
     for item in retained["exposures"][:200]:
-        scope = next((w.key for w in (protocol.development, protocol.final)
+        scope = next((name for name, w in (("development", protocol.development), ("final", protocol.final))
             if (w.start_ms, w.end_ms) == (item["start_ms"], item["end_ms"])), "other_recorded_interval")
         exposures.append(OptionsLineageExposure(receipt_id=str(item["id"]), start_ms=item["start_ms"], end_ms=item["end_ms"],
             created_at_ms=item["created_at_ms"], scope=scope))
     rules = [{"label": key.replace("_", " "), "value": readable(value)}
         for key, value in protocol.policy.model_dump(mode="json").items() if key not in {"version", "rank_by"}]
     objective = {"net_profit": "Net profit after modeled costs", "sharpe": "Daily Sharpe", "drawdown": "Starting-capital minute drawdown"}[protocol.policy.rank_by]
+    winner_hash = (selection.get("winner") or {}).get("point_hash") if selection else None
+    winner_setup = None
+    if winner_hash:
+        winner_setup = protocol.setup if winner_hash == setup_sha256(protocol.setup) else materialize(protocol, selection["points"][winner_hash])
+        if setup_sha256(winner_setup) != winner_hash:
+            raise ValueError("A retained development winner does not match its exact settings.")
+    procedure_details = [{"label": "Tie breaks", "value": "Net profit, drawdown, Sharpe, then exact setup hash resolve remaining eligible ties. Coordinate Zoom preserves its incumbent on a primary-objective tie."}]
+    if protocol.method == "zoom":
+        procedure_details.extend({"label": "Zoom " + key, "value": str(value)} for key, value in protocol.zoom.model_dump().items())
+    procedure_details.extend({"label": "Pair audit", "value": " × ".join(pair)} for pair in protocol.pair_audits)
     return OptionsResearchLineage(study_id=row["id"], protocol_hash=row["protocol_hash"], revision=row["revision"],
         parent_study_id=row.get("parent_study_id"), method=protocol.method, objective=objective,
         selection_explanation="Only candidates meeting every frozen eligibility rule can be selected. Development ranks candidates; each forward fold independently selects on its training window. Pooled folds describe the procedure, not one setup's track record.",
+        procedure_details=procedure_details, development_state="not_recorded" if selection is None else "selected" if winner_hash else "no_eligible_point",
+        development_winner_hash=winner_hash, development_winner_label=label(winner_setup, winner_hash == setup_sha256(protocol.setup)) if winner_setup else None,
+        selection_complete=selection.get("complete") if selection else None, selection_limitation=selection.get("limitation") if selection else None,
         development=window_view(protocol.development), final=window_view(protocol.final),
         settings=[{**knob.model_dump(mode="json"), "values": [readable(value) for value in knob.model_dump(mode="json")["values"]]} for knob in protocol.knobs],
         rules=rules, counts=OptionsLineageCounts.model_validate(counts), folds=folds, finalists=finalists,
@@ -118,9 +133,14 @@ def project(row: dict[str, Any], retained: dict[str, Any]) -> OptionsResearchLin
 
 
 async def read(study_id: str) -> OptionsResearchLineage:
-    row = await with_connection(repo.get, study_id)
-    retained = await with_connection(receipts, study_id, admitted_windows(row))
+    row, retained = await with_connection(read_records, study_id)
     return project(row, retained)
+
+
+async def read_records(conn: asyncpg.Connection, study_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    async with conn.transaction(isolation="repeatable_read", readonly=True):
+        row = await repo.get(conn, study_id)
+        return row, await receipts(conn, study_id, admitted_windows(row))
 
 
 async def trial_rows(conn: asyncpg.Connection, study_id: str, windows: list[str], after: int, limit: int) -> list[dict[str, Any]]:
@@ -142,6 +162,11 @@ def trial_page(row: dict[str, Any], rows: list[dict[str, Any]], limit: int) -> O
 
 
 async def trials(study_id: str, *, after: str = "0", limit: int = 50) -> OptionsLineageTrialPage:
-    row = await with_connection(repo.get, study_id)
-    rows = await with_connection(trial_rows, study_id, admitted_windows(row), int(after), limit)
+    row, rows = await with_connection(read_trials, study_id, int(after), limit)
     return trial_page(row, rows, limit)
+
+
+async def read_trials(conn: asyncpg.Connection, study_id: str, after: int, limit: int) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    async with conn.transaction(isolation="repeatable_read", readonly=True):
+        row = await repo.get(conn, study_id)
+        return row, await trial_rows(conn, study_id, admitted_windows(row), after, limit)

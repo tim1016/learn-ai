@@ -82,6 +82,12 @@ class OptionsResearchLineage(BaseModel):
     method: str
     objective: str
     selection_explanation: str
+    procedure_details: list[EvidenceItem]
+    development_state: Literal["not_recorded", "no_eligible_point", "selected"]
+    development_winner_hash: str | None
+    development_winner_label: str | None
+    selection_complete: bool | None
+    selection_limitation: str | None
     development: OptionsLineageWindow
     final: OptionsLineageWindow
     settings: list[OptionsLineageSetting]

@@ -6,6 +6,7 @@ import { OptionsBacktestService } from '../options-backtest/options-backtest.ser
 import { OptionsEvidencePageComponent } from './options-evidence-page.component';
 import { OptionsEvidenceService, type EvidenceWorkspace } from './options-evidence.service';
 import { RUN_WORKSPACE, STUDY_WORKSPACE } from './testing';
+import { OptionsResearchLineageService } from './options-research-lineage.service';
 
 describe('Options evidence workspace', () => {
   it.each([
@@ -56,6 +57,7 @@ describe('Options evidence workspace', () => {
     const result = await render(OptionsEvidencePageComponent, {
       inputs: { kind: 'run', subjectId: '76', view: 'lineage' },
       providers: [provideRouter([]), { provide: OptionsEvidenceService, useValue: { read } },
+        { provide: OptionsResearchLineageService, useValue: { read: async () => { throw new Error('Retained procedure unavailable'); } } },
         { provide: OptionsBacktestService, useValue: { describe: async () => { throw new Error('Description unavailable'); } } }],
     });
     await waitFor(() => expect(read).toHaveBeenCalledTimes(1));

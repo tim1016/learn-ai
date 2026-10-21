@@ -27,6 +27,7 @@ def test_actual_put_procedure_explains_no_winners_and_distinct_receipt_counts() 
     assert view.counts.distinct_development_candidates == 3
     assert view.counts.eligible_development_candidates == 0
     assert view.counts.rejected_development_candidates == 3
+    assert view.development_state == "no_eligible_point" and view.development_winner_hash is None
     assert view.counts.evaluation_keys == view.counts.completed_evaluations == view.counts.physical_starts == 27
     assert view.counts.trial_events == 28
     assert view.counts.evaluated_trial_events == 21
@@ -45,6 +46,7 @@ def test_distinct_fold_winners_and_final_stress_remain_exact_recorded_facts() ->
     protocol = OptionsSearchProtocol.model_validate(row["protocol"])
     points = row["research"]["selection"]["points"]
     hashes = list(points)
+    row["research"]["selection"]["winner"] = {"point_hash": hashes[0]}
     for index, observed in enumerate(row["research"]["folds"][:2]):
         digest = hashes[index]
         observed.update(status="evaluated", winner_hash=digest,
@@ -54,6 +56,7 @@ def test_distinct_fold_winners_and_final_stress_remain_exact_recorded_facts() ->
     row.update(finalists=[frozen["candidate_hash"]], final_results=[frozen])
     view = lineage.project(row, fixture("lineage-receipts"))
     assert view.folds[0].winner_hash != view.folds[1].winner_hash
+    assert view.development_state == "selected" and view.development_winner_hash == hashes[0]
     assert view.folds[0].forward_net_profit_usd == "10.01234567890123456789"
     assert view.folds[0].forward_eligible is False
     assert view.final_state == "opened"
@@ -75,6 +78,7 @@ def test_legacy_absent_results_are_not_zero_or_inferred_final_success() -> None:
     assert view.counts.distinct_development_candidates is None
     assert all(f.state == "not_recorded" for f in view.folds)
     assert view.final_state == "opened" and not view.finalists
+    assert view.development_state == "not_recorded"
 
 
 async def test_http_is_bounded_scope_fenced_and_reads_no_blobs(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -83,14 +87,11 @@ async def test_http_is_bounded_scope_fenced_and_reads_no_blobs(monkeypatch: pyte
     calls = []
     async def read(fn: Any, *args: Any) -> Any:
         calls.append(fn)
-        if fn is repo.get:
-            return row
-        if fn is lineage.receipts:
-            assert "final" not in args[1]
-            return retained
-        assert fn is lineage.trial_rows
-        assert "final" not in args[1]
-        return [item for item in retained["trials"] if item["id"] > args[2]][:args[3] + 1]
+        assert "final" not in lineage.admitted_windows(row)
+        if fn is lineage.read_records:
+            return row, retained
+        assert fn is lineage.read_trials
+        return row, [item for item in retained["trials"] if item["id"] > args[1]][:args[2] + 1]
     monkeypatch.setattr(lineage, "with_connection", read)
     app = FastAPI()
     app.include_router(router)
