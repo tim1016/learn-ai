@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path, PurePosixPath
@@ -265,11 +264,6 @@ class OptionMinuteBarPath:
 
 
 _OPTION_SESSION_ROOT = _OPTION_ROOT / "session" / "v1"
-
-
-def option_session_staged_files(staging_root: Path) -> Iterator[Path]:
-    """Session-container temps in the original request/worker/attempt layout."""
-    return staging_root.glob(f"*/*/attempt_*/{_OPTION_SESSION_ROOT}/**/*.tmp")
 
 
 @dataclass(frozen=True)

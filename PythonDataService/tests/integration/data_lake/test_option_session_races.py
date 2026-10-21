@@ -13,16 +13,16 @@ import respx
 from app.config import settings
 from app.data_lake import catalog_client
 from app.data_lake.option_bars import ensure_option_day_bars, read_option_day_bars
-from app.data_lake.option_lake import LEASE_TTL_MS, WORKER_ID, HeldLease
+from app.data_lake.option_lake import LEASE_TTL_MS, WORKER_ID, HeldLease, option_session_publication_lock
 from app.data_lake.option_listing import read_option_listing
 from app.data_lake.option_session import (
     build_option_session_bytes,
     option_session_dch,
-    option_session_publication_lock,
     read_option_session,
 )
 from app.data_lake.option_session_repack import _publish, admitted_legacy_members, repack_option_session
-from app.data_lake.path_policy import OptionSessionPath
+from app.data_lake.option_session_staging import OptionSessionStaging
+from app.data_lake.path_policy import OptionSessionPath, resolve_staging_root
 from app.data_lake.types import ArtifactIdentity
 from app.options.contract import OptionContract
 from app.utils.background_loop import background_loop
@@ -33,6 +33,10 @@ from tests.options_backtest._lake import the_clock_is_fixed as the_clock_is_fixe
 pytestmark = pytest.mark.slow
 CALL = OptionContract.of(root="SPY", expiry_date=FRIDAY, right="call", strike=500)
 PUT = OptionContract.of(root="SPY", expiry_date=FRIDAY, right="put", strike=500)
+
+
+def _budget() -> OptionSessionStaging:
+    return OptionSessionStaging(resolve_staging_root("raw"))
 
 
 @pytest.fixture
@@ -70,7 +74,7 @@ async def test_concurrent_contract_publication_cannot_be_lost_by_partial_repack(
     await store_option_day(PUT, [])
     # During the migration interval partial containers resolve unknown tickers
     # through admitted legacy files, so the concurrent successful capture is usable.
-    assert await asyncio.to_thread(read_option_day_bars, PUT, FRIDAY) is not None
+    assert await asyncio.to_thread(read_option_day_bars, PUT, FRIDAY, listed_under="SPY") is not None
     complete = await repack_option_session("SPY", FRIDAY)
     assert complete.failure is None
     session = await asyncio.to_thread(read_option_session, "SPY", FRIDAY)
@@ -92,9 +96,9 @@ async def test_stale_container_publisher_cannot_replace_or_clean_winners_bytes(s
         await conn.execute('UPDATE "DataLakeArtifacts" SET "LeaseExpiresAtMs" = 1 WHERE "Id" = $1', artifact_id)
     generation = await catalog_client.steal_or_retry_minute_bar(artifact_id=artifact_id, worker_id=WORKER_ID,
         lease_ttl_ms=LEASE_TTL_MS, max_retries=3)
-    winner = await _publish(HeldLease(artifact_id, generation), identity, listing, payload)
+    winner = await _publish(HeldLease(artifact_id, generation), identity, listing, payload, staging_budget=_budget())
     assert winner.failure is None
-    stale = await _publish(HeldLease(artifact_id, 1), identity, listing, payload)
+    stale = await _publish(HeldLease(artifact_id, 1), identity, listing, payload, staging_budget=_budget())
     assert stale.failure.reason == "lease_timeout"
     retained = await asyncio.to_thread(read_option_session, "SPY", FRIDAY)
     assert retained.sha256 == winner.record.file_sha256 and retained.legacy_bytes(CALL.occ_symbol) == members[CALL.occ_symbol]
@@ -143,7 +147,7 @@ async def test_listing_publish_cannot_cross_container_final_check_and_rebind_is_
     async def finish_container():
         with option_session_publication_lock("SPY", FRIDAY) as owns:
             assert owns
-            return await _publish(HeldLease(artifact_id, 1), identity, listing, payload)
+            return await _publish(HeldLease(artifact_id, 1), identity, listing, payload, staging_budget=_budget())
     task = asyncio.create_task(finish_container())
     try:
         # Real staging files appear only after the final listing admission check.
@@ -180,8 +184,8 @@ async def test_killed_collector_releases_ownership_and_resumes_original_staged_o
     import sys
 
     from app.data_lake.option_lake import publish_option_artifact
-    from app.data_lake.option_session_capture import capture_option_session
     from app.data_lake.path_policy import LeanMinuteBarPath
+    from app.options_backtest.option_session_capture import capture_option_session
     from tests._helpers.option_vendor import no_trades
     from tests.options_backtest._lake import FRIDAY_OPEN_MS, NOW_2026_10_12_MS, stock_bar, stock_day_zip
 
@@ -200,7 +204,7 @@ import asyncio, os
 from pathlib import Path
 from datetime import date
 import httpx, respx
-from app.data_lake.option_session_capture import capture_option_session
+from app.options_backtest.option_session_capture import capture_option_session
 async def main():
     async def pause(request):
         Path(os.environ['STORAGE_TEST_ENTERED']).write_bytes(b'ready')

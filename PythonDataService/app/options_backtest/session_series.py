@@ -47,7 +47,7 @@ from enum import StrEnum
 
 from app.data_lake.admission import LakeAdmissionError
 from app.data_lake.catalog_client import CatalogUnavailableError
-from app.data_lake.option_bars import OptionBarsFileError
+from app.data_lake.option_bars import OptionBarsFileError, SessionMemberRef
 from app.options.contract import OptionContract
 from app.options_backtest.data import RunData
 from app.options_backtest.lake_data import UnderlyingDayUnreadable
@@ -168,7 +168,7 @@ def _series(
     symbol: str,
     contract: OptionContract | None,
     pin: str | None,
-    reference: dict[str, str] | None,
+    reference: SessionMemberRef | None,
     no_pin: SeriesReason,
     trading_date: date,
     data: RunData,

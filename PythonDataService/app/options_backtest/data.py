@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Protocol
 
+from app.data_lake.option_bars import SessionMemberRef
 from app.options.contract import OptionContract
 from app.options_backtest.market import MinuteBar
 from app.options_backtest.picking import Listing
@@ -33,11 +34,12 @@ class Captured[T]:
     """A value read from storage, with the sha256 of the stored file it was read from.
 
     The run records the hash with each session's result, so a later replay can refuse data that has changed.
+    ``reference`` names the session-container member a contract's day was read from, when it was.
     """
 
     value: T
     sha256: str
-    reference: dict[str, str] | None = None
+    reference: SessionMemberRef | None = None
 
     def __post_init__(self) -> None:
         if not _SHA256.fullmatch(self.sha256):

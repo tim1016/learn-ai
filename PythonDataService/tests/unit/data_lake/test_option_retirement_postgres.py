@@ -110,7 +110,7 @@ async def test_approved_retirement_is_fenced_restartable_and_restorable(
         assert verify_generation(generation).generation_id == manifest.generation_id
     assert await legacy_sources(root_id) == ()
     assert not (root / original.file_path).exists()
-    kept = await asyncio.to_thread(read_option_day_bars, CALL, FRIDAY, lake_root=root)
+    kept = await asyncio.to_thread(read_option_day_bars, CALL, FRIDAY, listed_under="SPY", lake_root=root)
     assert kept.sha256 == original.file_sha256 and kept.bars == ()
     session = await asyncio.to_thread(read_option_session, "SPY", FRIDAY, lake_root=root)
     assert UNKNOWN.occ_symbol in session.unresolved

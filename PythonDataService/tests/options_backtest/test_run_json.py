@@ -7,6 +7,9 @@ import re
 from dataclasses import replace
 from typing import Any
 
+import pytest
+
+from app.data_lake.option_bars import SessionMemberRef
 from app.options_backtest import run_json
 from app.options_backtest.results import EntryRefusal, ExitReason
 from tests.options_backtest._a_run import a_busy_run, what_the_busy_run_reaches
@@ -128,3 +131,43 @@ def test_every_session_s_events_and_pins_come_back_as_they_went() -> None:
             run_json.pins_from_json(session.pins.underlying_sha256, session.pins.listing_sha256, days) == session.pins
         )
         _no_float_anywhere(events)
+
+
+_CONTAINER_PIN_JSON = (
+    '[{"contract": "SPY250613C00500000", "sha256": "' + "b" * 64 + '", "reference": {"version": "1", '
+    '"layout": "option_session", "container_sha256": "' + "a" * 64 + '", "member_sha256": "' + "b" * 64 + '", '
+    '"listing_sha256": "' + "c" * 64 + '", "recipe": "' + "d" * 64 + '", '
+    '"data_root_id": "00000000-0000-4000-8000-000000000001", "state": "captured"}}]'
+)
+
+
+def test_a_container_pin_is_stored_as_the_exact_json_saved_runs_hold_and_reads_back_typed() -> None:
+    [day] = json.loads(_CONTAINER_PIN_JSON)
+
+    pins = run_json.pins_from_json(None, "c" * 64, [day])
+
+    assert pins.option_days[0].reference == SessionMemberRef(
+        "a" * 64, "b" * 64, "c" * 64, "d" * 64, "00000000-0000-4000-8000-000000000001", "captured"
+    )
+    assert json.dumps(run_json.option_days_to_json(pins)) == _CONTAINER_PIN_JSON, "stored bytes are unchanged"
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        lambda ref: {key: value for key, value in ref.items() if key != "recipe"},
+        lambda ref: {**ref, "extra": "x"},
+        lambda ref: {**ref, "version": "2"},
+        lambda ref: {**ref, "layout": "day_file"},
+        lambda ref: {**ref, "container_sha256": "A" * 64},
+        lambda ref: {**ref, "state": "unresolved"},
+        lambda ref: {**ref, "data_root_id": ""},
+        lambda ref: "not an object",
+    ],
+    ids=["missing", "extra", "version", "layout", "sha", "state", "root", "shape"],
+)
+def test_a_malformed_stored_container_pin_is_refused_on_load_not_later(damage: Any) -> None:
+    [day] = json.loads(_CONTAINER_PIN_JSON)
+
+    with pytest.raises(ValueError, match="session member reference"):
+        run_json.pins_from_json(None, "c" * 64, [{**day, "reference": damage(day["reference"])}])

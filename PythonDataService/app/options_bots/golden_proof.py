@@ -156,7 +156,7 @@ def input_manifest(result: RunResult) -> dict[str, str]:
         for pinned in pins.option_days:
             if pinned.reference is not None:
                 path = OptionSessionPath(result.setup.underlying, day).relative_path()
-                manifest[str(path)] = pinned.reference["container_sha256"]
+                manifest[str(path)] = pinned.reference.container_sha256
             else:
                 path = OptionMinuteBarPath(pinned.contract.root, pinned.contract.occ_symbol, day).relative_path()
                 manifest[str(path)] = pinned.sha256

@@ -73,11 +73,11 @@ async def test_coverage_determinism_empty_and_exact_original_bytes(fake_catalog,
     assert session.captured == {CALL.occ_symbol}
     assert session.confirmed_empty == {PUT.occ_symbol}
     assert session.unresolved == {OTHER.occ_symbol}
-    assert not session.complete
+    assert not session.contracts_complete
     assert session.legacy_bytes(CALL.occ_symbol) == payloads[CALL.occ_symbol]
     assert session.option_day(PUT.occ_symbol).bars == ()
     assert session.option_day(OTHER.occ_symbol) is None
-    assert session.reference(CALL.occ_symbol)["member_sha256"] == hashlib.sha256(payloads[CALL.occ_symbol]).hexdigest()
+    assert session.reference(CALL.occ_symbol).member_sha256 == hashlib.sha256(payloads[CALL.occ_symbol]).hexdigest()
 
 
 @respx.mock
@@ -87,7 +87,6 @@ async def test_full_session_and_repack_report_require_admitted_underlying(fake_c
     listing = await listing_of(CALL)
     await store_option_day(CALL, [])
     parsed = parse_option_session(build_option_session_bytes(listing, {CALL.occ_symbol: option_day_zip(CALL, [])}), listing)
-    assert not parsed.complete
     assert parsed.contracts_complete
     [missing] = await repack(["SPY"])
     assert missing["contracts_complete"] and not missing["complete"]
@@ -99,7 +98,7 @@ async def test_full_session_and_repack_report_require_admitted_underlying(fake_c
         await repack(["SPY"])
     # Contract data stays readable independently of full-session readiness.
     assert (await asyncio.to_thread(read_option_session, "SPY", FRIDAY)).contracts_complete
-    assert await asyncio.to_thread(read_option_day_bars, CALL, FRIDAY) is not None
+    assert await asyncio.to_thread(read_option_day_bars, CALL, FRIDAY, listed_under="SPY") is not None
 
 
 @respx.mock
@@ -118,7 +117,7 @@ async def test_publication_temp_capacity_is_reserved_before_claim_and_old_temps_
     budget.reconcile()
     used = json.loads(budget.ledger.read_bytes())["used_bytes"]
     paused = await repack_option_session("SPY", FRIDAY, max_staging_bytes=used + len(payload) - 1)
-    assert paused.failure.reason == "lease_timeout" and "staging capacity" in paused.failure.detail.lower()
+    assert paused.failure.reason == "staging_capacity" and "staging capacity" in paused.failure.detail.lower()
     assert not any(row["data_contract_hash"] == option_session_dch() for row in fake_catalog.rows.values())
     assert old_temp.read_bytes() == b"preserve this interrupted publication"
     recovered = await repack_option_session("SPY", FRIDAY, max_staging_bytes=used + len(payload))
@@ -175,7 +174,7 @@ async def test_partial_repack_preserves_original_hash_and_empty_state_and_is_ide
     await listing_of(CALL, PUT, OTHER)
     await store_option_day(CALL, [{"t": FRIDAY_OPEN_MS, "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}])
     await store_option_day(PUT, [])
-    original = await asyncio.to_thread(read_option_day_bars, CALL, FRIDAY)
+    original = await asyncio.to_thread(read_option_day_bars, CALL, FRIDAY, listed_under="SPY")
     result = await repack_option_session("SPY", FRIDAY)
     assert result.failure is None
     repeat = await repack_option_session("SPY", FRIDAY)
@@ -185,9 +184,9 @@ async def test_partial_repack_preserves_original_hash_and_empty_state_and_is_ide
     assert session.unresolved == {OTHER.occ_symbol}
     legacy = raw_root(tmp_lake) / OptionMinuteBarPath("SPY", CALL.occ_symbol, FRIDAY).relative_path()
     legacy.unlink()
-    read = await asyncio.to_thread(read_option_day_bars, CALL, FRIDAY)
+    read = await asyncio.to_thread(read_option_day_bars, CALL, FRIDAY, listed_under="SPY")
     assert read.bars == original.bars and read.sha256 == original.sha256
-    assert read.reference["container_sha256"] == result.record.file_sha256
+    assert read.reference.container_sha256 == result.record.file_sha256
 
 
 @respx.mock
@@ -198,12 +197,12 @@ async def test_published_corrupt_session_never_falls_back_to_good_legacy(fake_ca
     path = str(OptionSessionPath("SPY", FRIDAY).relative_path())
     replace_the_stored_file(fake_catalog, raw_root(tmp_lake), path, b"corrupt", admit=True)
     with pytest.raises(OptionSessionFileError):
-        await asyncio.to_thread(read_option_day_bars, CALL, FRIDAY)
+        await asyncio.to_thread(read_option_day_bars, CALL, FRIDAY, listed_under="SPY")
     with pytest.raises(OptionSessionFileError):
         await repack_option_session("SPY", FRIDAY, rebind_listing=True)
     replace_the_stored_file(fake_catalog, raw_root(tmp_lake), path, b"different", admit=False)
     with pytest.raises(LakeAdmissionError):
-        await asyncio.to_thread(read_option_day_bars, CALL, FRIDAY)
+        await asyncio.to_thread(read_option_day_bars, CALL, FRIDAY, listed_under="SPY")
 
 
 @respx.mock
@@ -215,10 +214,10 @@ async def test_ten_thousand_listing_repack_keeps_26_known_days_partial(fake_cata
     outcome = await repack_option_session("SPY", FRIDAY)
     assert outcome.failure is None
     session = await asyncio.to_thread(read_option_session, "SPY", FRIDAY)
-    assert not session.complete and session.answered_count == 26 and len(session.unresolved) == 9_974
+    assert not session.contracts_complete and session.answered_count == 26 and len(session.unresolved) == 9_974
     assert session.confirmed_empty == {contract.occ_symbol for contract in contracts[:26]}
-    assert await asyncio.to_thread(read_option_day_bars, contracts[0], FRIDAY) is not None
-    assert await asyncio.to_thread(read_option_day_bars, contracts[-1], FRIDAY) is None
+    assert await asyncio.to_thread(read_option_day_bars, contracts[0], FRIDAY, listed_under="SPY") is not None
+    assert await asyncio.to_thread(read_option_day_bars, contracts[-1], FRIDAY, listed_under="SPY") is None
 
 
 @respx.mock
@@ -243,7 +242,7 @@ async def test_late_snapshot_cannot_replace_newer_resolved_container_member(fake
     assert repeated.reused
     assert (await asyncio.to_thread(read_option_session, "SPY", FRIDAY)).legacy_bytes(CALL.occ_symbol) == refreshed
 
-    from app.data_lake.option_session_capture import capture_option_session
+    from app.options_backtest.option_session_capture import capture_option_session, read_session_completeness
     from tests._helpers.option_vendor import no_trades
     from tests.options_backtest._lake import NOW_2026_10_12_MS, stock_bar, store_underlying_day
     await store_underlying_day(fake_catalog, tmp_lake, [stock_bar(FRIDAY_OPEN_MS, "500", "500", "500", "500")])
@@ -251,14 +250,13 @@ async def test_late_snapshot_cannot_replace_newer_resolved_container_member(fake
         return_value=no_trades(PUT.occ_symbol))
     native = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS)
     assert native.failure is None
-    after_capture = await asyncio.to_thread(read_option_session, "SPY", FRIDAY, check_underlying=True)
-    assert after_capture.complete and after_capture.legacy_bytes(CALL.occ_symbol) == refreshed
+    after_capture, complete = await asyncio.to_thread(read_session_completeness, "SPY", FRIDAY)
+    assert complete and after_capture.legacy_bytes(CALL.occ_symbol) == refreshed
 
 
 @pytest.mark.parametrize("escape", ["root", "underlying", "lock_file"])
 def test_publication_lock_refuses_symlink_escape_before_opening_outside_file(tmp_lake, tmp_path, escape):
-    from app.data_lake.option_lake import option_read_root
-    from app.data_lake.option_session import option_session_publication_lock
+    from app.data_lake.option_lake import option_read_root, option_session_publication_lock
     from app.lean_sidecar.trading_calendar import session_open_ms_utc
 
     lock_root = option_read_root().parent.parent / ".option-session-publication"

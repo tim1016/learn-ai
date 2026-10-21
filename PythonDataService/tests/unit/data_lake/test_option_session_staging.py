@@ -46,12 +46,11 @@ def test_replacement_reserves_atomic_temp_peak_before_changing_original(tmp_path
     assert target.read_bytes() == b"b" * 600
 
 
-def test_old_generations_and_both_publication_layouts_count_after_restart(tmp_path: Path) -> None:
+def test_old_generations_and_publication_temps_count_after_restart(tmp_path: Path) -> None:
     allowance = overhead(tmp_path)
     files = {
         "option_sessions/SPY/old-listing/call.zip": b"v" * 100,
         "option_sessions/SPY/old-listing/.orphan.tmp": b"t" * 50,
-        "request/worker/attempt_1/option/usa/session/v1/spy/old.zip.tmp": b"p" * 70,
         "option_session_publications/request/worker/attempt_2/orphan.tmp": b"q" * 80,
     }
     for name, raw in files.items():
@@ -60,8 +59,8 @@ def test_old_generations_and_both_publication_layouts_count_after_restart(tmp_pa
         path.write_bytes(raw)
     budget = OptionSessionStaging(tmp_path, max_bytes=allowance + 500)
     with pytest.raises(StagingCapacityError):
-        budget.reserve(201)
-    reserved = budget.reserve(200)
+        budget.reserve(271)
+    reserved = budget.reserve(270)
     reserved.close()
     assert all((tmp_path / name).read_bytes() == raw for name, raw in files.items())
 
@@ -118,7 +117,11 @@ def test_concurrent_collectors_cannot_reserve_the_same_capacity(tmp_path: Path) 
             job.result(timeout=5)
 
 
-def test_dead_process_reclaims_reservation_but_keeps_its_verified_outcome(tmp_path: Path) -> None:
+# ``-O`` strips asserts: a reservation must hold its lease lock without one, or the reservation reads as dead.
+@pytest.mark.parametrize("interpreter_flags", [(), ("-O",)], ids=["default", "optimized"])
+def test_dead_process_reclaims_reservation_but_keeps_its_verified_outcome(
+    tmp_path: Path, interpreter_flags: tuple[str, ...]
+) -> None:
     cap = overhead(tmp_path) + 650
     child = '''
 import sys
@@ -131,7 +134,7 @@ sys.stdout.write("ready\\n")
 sys.stdout.flush()
 sys.stdin.read()
 '''
-    process = subprocess.Popen([sys.executable, "-c", child, str(tmp_path), str(cap)],
+    process = subprocess.Popen([sys.executable, *interpreter_flags, "-c", child, str(tmp_path), str(cap)],
         cwd=Path(__file__).resolve().parents[3], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
         assert process.stdout.readline() == b"ready\n"

@@ -275,6 +275,8 @@ LAKE_REASON_WORDS: dict[str, str] = {
     "lease_timeout": "another request was holding it",
     "fetch_timeout": "the lake has already tried as often as it will",
     "io_error": "the lake could not read or write its files",
+    "staging_capacity": "the lake's staging space was full, so it paused and kept what it had",
+    "paused": "the lake paused before asking again and kept what it had",
     "launcher_unreachable": "the service the lake needs for the exchange calendar could not be reached",
     "unsupported_resolution": "the lake does not hold bars of that size",
     "unsupported_artifact_kind": "the lake does not hold that kind of data",

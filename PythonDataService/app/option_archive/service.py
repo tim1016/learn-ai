@@ -17,7 +17,6 @@ from app.data_lake import catalog_client
 from app.data_lake.admission import LakeAdmissionError
 from app.data_lake.option_lake import OptionCaptureResult, OptionDataFailure
 from app.data_lake.option_request_priority import archive_request
-from app.data_lake.option_session_staging import CAPACITY_PREFIX
 from app.data_lake.root_identity import active_root_id
 from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms_utc, session_window_for_date
 from app.option_archive.backup import (
@@ -53,7 +52,7 @@ logger = logging.getLogger(__name__)
 
 def _capacity_pause(result: OptionCaptureResult) -> bool:
     failure = result.failure
-    return failure is not None and failure.reason == "lease_timeout" and failure.detail.startswith(CAPACITY_PREFIX)
+    return failure is not None and failure.reason == "staging_capacity"
 
 
 def now_ms() -> int:
@@ -142,8 +141,7 @@ class OptionArchiveService:
         self._health = None
 
     async def _capture_and_record(self, underlying: str, session_ms: int, *, retry_exhausted: bool) -> OptionCaptureResult:
-        from app.data_lake.option_session import read_option_session
-        from app.data_lake.option_session_capture import capture_option_session
+        from app.options_backtest.option_session_capture import capture_option_session, read_session_completeness
         recovery_block = self.state.read().get("provider_blocks", {}).get(underlying)
         await self._record_session(underlying, session_ms, started_ms=self.clock(), complete=False, recorded_ms=self.clock())
         token = archive_request.set(True)
@@ -153,20 +151,20 @@ class OptionArchiveService:
                 result = await (self.capture or capture_option_session)(underlying, et_date_at_ms(session_ms), now_ms=self.clock(),
                     should_pause=self.should_pause, history_floor=archive_history_boundary(et_date_at_ms(self.clock())),
                     retry_exhausted=retry_exhausted, max_staging_bytes=self.config.STAGING_MAX_BYTES)
-                stored = await asyncio.to_thread(read_option_session, underlying, et_date_at_ms(session_ms), check_underlying=True)
+                stored, complete = await asyncio.to_thread(read_session_completeness, underlying, et_date_at_ms(session_ms))
                 if stored is not None:
                     counts = {"listed": stored.listed_count, "answered": stored.answered_count,
                               "empty": len(stored.confirmed_empty), "with_bars": len(stored.captured)}
-                if result.failure is None and (stored is None or not stored.complete):
+                if result.failure is None and not complete:
                     raise ValueError("capture returned success without a readable complete session container")
             except (LakeAdmissionError, ValueError, OSError) as exc:
                 result = OptionCaptureResult.failed(OptionDataFailure("validation_failed", str(exc), underlying, et_date_at_ms(session_ms)))
             failure = result.failure
             retryable = failure is not None and failure.reason in {
-                "provider_rate_limited", "provider_api_error", "lease_timeout", "io_error",
+                "provider_rate_limited", "provider_api_error", "lease_timeout", "io_error", "staging_capacity", "paused",
             }
             capacity_paused = _capacity_pause(result)
-            paused = capacity_paused or (failure is not None and failure.reason == "lease_timeout" and self.should_pause())
+            paused = capacity_paused or (failure is not None and failure.reason in ("lease_timeout", "paused") and self.should_pause())
             reason = f"{failure.reason}: {failure.detail}" if failure is not None else None
             changes = dict(**counts, complete=failure is None,
                 failed=failure is not None and not paused, lost=failure is not None and failure.reason == "outside_data_plan",
@@ -265,7 +263,7 @@ class OptionArchiveService:
                     break
                 if failure is not None and failure.reason in ("provider_auth_error", "provider_entitlement_error"):
                     blocked.add(work.underlying)
-                if failure is not None and failure.reason == "lease_timeout" and self.should_pause():
+                if failure is not None and failure.reason in ("lease_timeout", "paused") and self.should_pause():
                     paused = True
                     break
                 await asyncio.sleep(0)

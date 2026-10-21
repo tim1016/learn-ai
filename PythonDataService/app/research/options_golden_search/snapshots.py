@@ -77,6 +77,7 @@ def capture_snapshot(protocol: OptionsSearchProtocol, blobs: BlobStore, *, lake_
     manifest: dict[str, str] = {}
     absent: set[str] = set()
     retained = 0
+    container_recorded = False
 
     def record(relative: str, expected: str | None) -> None:
         nonlocal retained
@@ -124,8 +125,10 @@ def capture_snapshot(protocol: OptionsSearchProtocol, blobs: BlobStore, *, lake_
         for contract in sorted(contracts, key=lambda c: c.occ_symbol):
             captured = source.option_day(contract, day)
             if captured is not None and captured.reference is not None:
-                record(str(OptionSessionPath(protocol.setup.underlying, day).relative_path()), captured.reference["container_sha256"])
+                record(str(OptionSessionPath(protocol.setup.underlying, day).relative_path()), captured.reference.container_sha256)
+                container_recorded = True
             else:
                 record(str(OptionMinuteBarPath(contract.root, contract.occ_symbol, day).relative_path()), None if captured is None else captured.sha256)
-    return Snapshot(version=2 if any("/session/" in path for path in manifest) else 1,
+    # Version 2 marks a manifest that names a session container; older snapshots keep version 1 and their id.
+    return Snapshot(version=2 if container_recorded else 1,
                     manifest=manifest, absent=tuple(sorted(absent)), retained_bytes=retained)

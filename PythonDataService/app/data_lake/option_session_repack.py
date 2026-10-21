@@ -19,6 +19,7 @@ from app.data_lake.option_lake import (
     claim_or_take_over,
     fail_row,
     option_read_root,
+    option_session_publication_lock,
     publish_option_artifact,
     stored_file_still_reads,
 )
@@ -26,7 +27,6 @@ from app.data_lake.option_listing import OptionListing, read_option_listing
 from app.data_lake.option_session import (
     build_option_session_bytes,
     option_session_dch,
-    option_session_publication_lock,
     parse_option_session,
     read_option_session,
     read_option_session_for_listing_rebind,
@@ -56,7 +56,8 @@ def admitted_legacy_members(listing: OptionListing, *, only_symbols: frozenset[s
     return result
 
 
-async def _complete(underlying: str, trading_date: date) -> ArtifactRecord | None:
+async def complete_session_record(underlying: str, trading_date: date) -> ArtifactRecord | None:
+    """The catalog's complete row of the session container under this recipe, if there is one."""
     rows = await catalog_client.select_coverage_minute_bars(
         market=OPTION_MARKET, symbol=underlying, data_type="trade", start_trading_date=trading_date,
         end_trading_date=trading_date, price_adjustment_mode=OPTION_PRICE_ADJUSTMENT_MODE,
@@ -91,7 +92,7 @@ async def _publish_option_session(listing: OptionListing, captured: dict[str, by
         previous = (await asyncio.to_thread(read_option_session_for_listing_rebind, underlying, day) if rebind_listing
                     else await asyncio.to_thread(read_option_session, underlying, day, listing=listing))
     except LakeAdmissionError:
-        if await _complete(underlying, day) is not None:
+        if await complete_session_record(underlying, day) is not None:
             raise
         # A crash after rename but before receipt commit left unreadable bytes.
         # Claim/reclaim below still decides whether this writer can replace them.
@@ -122,9 +123,9 @@ async def _publish_option_session(listing: OptionListing, captured: dict[str, by
     try:
         reservation = budget.reserve(len(payload))
     except StagingCapacityError as exc:
-        return OptionCaptureResult.failed(OptionDataFailure("lease_timeout", str(exc), underlying, day))
+        return OptionCaptureResult.failed(OptionDataFailure("staging_capacity", str(exc), underlying, day))
     try:
-        held = await claim_or_take_over(claim=claim, select_complete=lambda: _complete(underlying, day),
+        held = await claim_or_take_over(claim=claim, select_complete=lambda: complete_session_record(underlying, day),
             read_claim_state=lambda: catalog_client.select_minute_bar_claim_state(identity), stored_file_reads=matches,
             data_contract_hash=recipe, symbol=underlying, trading_date=day)
         if isinstance(held, OptionCaptureResult):
@@ -135,7 +136,7 @@ async def _publish_option_session(listing: OptionListing, captured: dict[str, by
 
 
 async def _publish(lease: HeldLease, identity: ArtifactIdentity, listing: OptionListing, payload: bytes, *,
-                   staging_budget: OptionSessionStaging | None = None) -> OptionCaptureResult:
+                   staging_budget: OptionSessionStaging) -> OptionCaptureResult:
     """Re-admit listing immediately before publication; do not publish stale identity."""
     current = await asyncio.to_thread(read_option_listing, listing.underlying, listing.as_of)
     if current is None or current.sha256 != listing.sha256:
@@ -146,7 +147,7 @@ async def _publish(lease: HeldLease, identity: ArtifactIdentity, listing: Option
     digest = await publish_option_artifact(payload=payload, rel_path=rel_path, lease=lease,
         row_count=parsed.answered_count, first_bar_start_ms=0, last_bar_start_ms=0,
         data_contract_hash=option_session_dch(), symbol=listing.underlying, trading_date=listing.as_of,
-        staging_root_override=None if staging_budget is None else staging_budget.publication_root)
+        staging_root_override=staging_budget.publication_root)
     if isinstance(digest, OptionDataFailure):
         return OptionCaptureResult.failed(digest)
     record = ArtifactRecord(id=lease.artifact_id, **identity.model_dump(), data_contract_hash=option_session_dch(),
@@ -167,11 +168,6 @@ async def repack_option_session(underlying: str, trading_date: date, *, rebind_l
         listing = await asyncio.to_thread(read_option_listing, underlying, trading_date)
         if listing is None:
             return OptionCaptureResult.failed(OptionDataFailure("listing_not_captured", "stored listing is missing", underlying, trading_date))
+        # Every source publisher takes this same lock, so the sources cannot change while it is held.
         captured = await asyncio.to_thread(admitted_legacy_members, listing)
-        # Recheck source receipts and bytes after collecting the last source, before
-        # taking the publication lease. Refreshes cannot silently become empty proof.
-        current = await asyncio.to_thread(admitted_legacy_members, listing)
-        for symbol, raw in captured.items():
-            if current.get(symbol) != raw:
-                return OptionCaptureResult.failed(OptionDataFailure("validation_failed", "source changed during repack", underlying, trading_date))
-        return await _publish_option_session(listing, current, rebind_listing=rebind_listing, max_staging_bytes=max_staging_bytes)
+        return await _publish_option_session(listing, captured, rebind_listing=rebind_listing, max_staging_bytes=max_staging_bytes)

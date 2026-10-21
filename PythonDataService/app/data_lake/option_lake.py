@@ -57,6 +57,13 @@ These come from the claim protocol, when nothing was fetched:
   working and published or recorded nothing: not a publish, and not a failure it met (a
   failure it met is the row's only when it still holds the lease to record it).
 * ``fetch_timeout``: the row has spent its attempts; the vendor is not asked again.
+
+These come from a session collection (``options_backtest.option_session_capture``), which
+keeps every validated outcome and asks again later:
+
+* ``staging_capacity``: the staging byte budget cannot hold the next outcome or the container;
+  never a failed provider attempt.
+* ``paused``: the caller asked the collection to pause before its next provider request.
 """
 
 from __future__ import annotations
@@ -70,6 +77,7 @@ import weakref
 import zipfile
 import zlib
 from collections.abc import Awaitable, Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path, PurePosixPath
@@ -81,7 +89,7 @@ from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
 from app.data_lake.atomic import ArtifactLeaseLostError, AtomicRenameUnsafeError, publish_artifact
 from app.data_lake.ensure_data import _LEASE_TTL_MS, _MAX_CLAIM_RETRIES, _WORKER_ID, _minute_trade_dch
 from app.data_lake.option_request_priority import OptionRequestGate
-from app.data_lake.path_policy import lake_root_for, resolve_lake_root, resolve_staging_root
+from app.data_lake.path_policy import OptionSessionPath, lake_root_for, resolve_lake_root, resolve_staging_root
 from app.data_lake.polygon_fetcher import (
     PolygonAuthError,
     PolygonEntitlementError,
@@ -97,7 +105,9 @@ from app.data_lake.types import (
     ArtifactRecord,
     PriceAdjustmentMode,
 )
-from app.lean_sidecar.trading_calendar import session_close_ms_utc
+from app.engine.live.identity import confine_path_to_root
+from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_open_ms_utc
+from app.utils.advisory_lock import try_advisory_file_lock
 from app.utils.background_loop import background_loop
 from app.utils.session_anchors import et_date_at_ms, et_day_end_ms
 
@@ -156,7 +166,7 @@ LISTING_FETCH_BUDGET_MS = LEASE_TTL_MS - LISTING_PUBLISH_MARGIN_MS
 #: before the failure is survived; two are not.
 NOT_LATCHED_ERRORS = frozenset({"outside_data_plan"})
 
-#: The lake's own reasons (``ArtifactFailureReason``) and the six an option capture adds; the module docstring says what each means.
+#: The lake's own reasons (``ArtifactFailureReason``) and the eight an option capture adds; the module docstring says what each means.
 OptionFailureReason = (
     ArtifactFailureReason
     | Literal[
@@ -166,8 +176,20 @@ OptionFailureReason = (
         "symbol_too_long",
         "listing_not_captured",
         "not_listed",
+        "staging_capacity",
+        "paused",
     ]
 )
+
+#: Provider answers no later ask cures until the owner acts (a key, an entitlement, a plan).
+TERMINAL_PROVIDER_REASONS: tuple[OptionFailureReason, ...] = (
+    "provider_auth_error", "provider_entitlement_error", "outside_data_plan",
+)
+
+
+def terminal_provider_reason(reason: str | None) -> OptionFailureReason | None:
+    """The terminal provider reason ``reason`` names, or ``None`` for any other code."""
+    return next((terminal for terminal in TERMINAL_PROVIDER_REASONS if terminal == reason), None)
 
 
 @dataclass(frozen=True)
@@ -277,9 +299,10 @@ def refusal_before_claim(symbol: str, trading_date: date, *, now_ms: int) -> Opt
 def plan_window_refusal(symbol: str, trading_date: date, *, now_ms: int) -> OptionDataFailure | None:
     """A session older than the plan reaches is refused before any claim, with no vendor call.
 
-    Minute bars are windowed; the contract listing is reference data that reaches back
-    before the price floor, so only the bars path asks this. Asking the vendor for such a
-    day would only be told no, and a row for it would pile up attempts for nothing.
+    Minute bars are windowed, so a contract's day and the underlying's day ask this. The
+    listing's own capture does not: it is reference data that reaches back before the price
+    floor. Asking the vendor for such a day would only be told no, and a row for it would
+    pile up attempts for nothing.
     """
     floor = option_history_floor(et_date_at_ms(now_ms))
     if trading_date < floor:
@@ -496,6 +519,23 @@ def writable_raw_roots() -> tuple[Path, Path]:
     return lake_root, staging_root
 
 
+def option_session_publication_lock(underlying: str, trading_date: date) -> AbstractContextManager[bool]:
+    """Fence source refresh and session compaction together, without DB changes.
+
+    Collection uses a different lock and yields before requesting publication.
+    No provider operation or transaction waits while this lock is held.
+    """
+    OptionSessionPath(underlying, trading_date)  # validate the path segment before using it
+    base_root = option_read_root().parent.parent
+    lock_root = confine_path_to_root(base_root / ".option-session-publication", base_root,
+                                    label="option publication lock root")
+    target = confine_path_to_root(lock_root / underlying.lower() / str(session_open_ms_utc(trading_date)),
+                                 lock_root, label="option publication lock")
+    confine_path_to_root(target.with_name(f".{target.name}.lock"), lock_root,
+                        label="option publication lock file")
+    return try_advisory_file_lock(target)
+
+
 def _write_failure_words(error: OSError | AtomicRenameUnsafeError) -> str:
     """What failed, for the row and the wire: the kind of error and the system's reason, and no path.
 
@@ -538,8 +578,6 @@ async def publish_option_artifact(
     try:
         lake_root, staging_root = writable_raw_roots()
         if staging_root_override is not None:
-            from app.engine.live.identity import confine_path_to_root
-
             staging_root = confine_path_to_root(staging_root_override, staging_root, label="option publication staging")
             staging_root.mkdir(parents=True, exist_ok=True)
         file_sha = await publish_artifact(
