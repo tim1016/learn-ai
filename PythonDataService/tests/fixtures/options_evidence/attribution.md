@@ -25,6 +25,10 @@ marks. The remaining 369 scheduled sessions were never computed.
 `candidate-development.json`, `candidate-session.json` and `study-summary.json`
 are the bounded read projections derived offline from those same bytes for the
 browser journey; they are display fixtures, not a second numerical authority.
+`failure-development.json` is the read-only diagnostic projection of the same
+retained development evidence. Its input paths and digests come from the
+recorded session pins; missing-mark causes remain unknown until a separate
+targeted inspection verifies a specific archived input.
 
 These fixtures test identity and display projections. Canonical numerical
 calculations remain covered by their existing engine fixtures/tests. No vendor

@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.request import urlopen
 
 from app.research import options_candidate_evidence as reader
+from app.research.options_failure_evidence import project as failure_projection
 from app.research.options_golden_search import repository
 from app.research.options_golden_search.projections import session_detail
 from app.research.options_golden_search.protocol import OptionsSearchProtocol
@@ -37,7 +38,8 @@ def main() -> None:
     record = asyncio.run(with_connection(repository.get_evaluation, value["id"], key))
     blobs = default_blob_store()
     retained = reader.load_record(value, record, digest, "development", blobs=blobs)
-    projections = {"development-evidence": {"record": record, "payload": json.loads(blobs.get(record["result"]["evidence_blob"]))},
+    projections = {"failure-development": failure_projection(retained, value).model_dump(mode="json"),
+        "development-evidence": {"record": record, "payload": json.loads(blobs.get(record["result"]["evidence_blob"]))},
         "candidate-development": reader.project(retained).model_dump(mode="json"),
         "study-summary": StudyDetail.from_record(value).model_dump(mode="json"),
         "candidate-session": next(detail for session in retained.result.sessions if (detail := session_detail(session))["attempts"])}

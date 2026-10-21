@@ -6574,6 +6574,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/options-golden-search/studies/{study_id}/candidate-evidence/{candidate_hash}/failures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Failures */
+        get: operations["failures_api_research_options_golden_search_studies__study_id__candidate_evidence__candidate_hash__failures_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/options-golden-search/studies/{study_id}/candidate-evidence/{candidate_hash}/failures/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Inspect Failure */
+        get: operations["inspect_failure_api_research_options_golden_search_studies__study_id__candidate_evidence__candidate_hash__failures_inspect_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/options-golden-search/studies/{study_id}/candidates/{candidate_hash}/sessions/{session_open_ms}": {
         parameters: {
             query?: never;
@@ -25499,6 +25533,115 @@ export interface components {
             expirations?: number[];
             /** Success */
             success: boolean;
+        };
+        /** OptionsFailureEvent */
+        OptionsFailureEvent: {
+            /** At Ms */
+            at_ms: number;
+            /** Close Filled At Ms */
+            close_filled_at_ms: number | null;
+            /**
+             * Code
+             * @enum {string}
+             */
+            code: "missing_held_mark" | "unclosed_position";
+            /** Contract */
+            contract: string;
+            /** Expected Input Sha256 */
+            expected_input_sha256: string | null;
+            /** Explanation */
+            explanation: string;
+            /** Id */
+            id: string;
+            /** Leg Id */
+            leg_id: string;
+            /** Retained Path */
+            retained_path: string;
+            /** Session Open Ms */
+            session_open_ms: number;
+        };
+        /** OptionsFailureEvidence */
+        OptionsFailureEvidence: {
+            /** Candidate Hash */
+            candidate_hash: string;
+            /** Eligible Fold Winners */
+            eligible_fold_winners: number;
+            /** End Ms */
+            end_ms: number;
+            /** Evidence Blob Sha256 */
+            evidence_blob_sha256: string;
+            /** Evidence Identity */
+            evidence_identity: string;
+            /**
+             * Final Exposure
+             * @enum {string}
+             */
+            final_exposure: "not_opened" | "opened" | "not_recorded";
+            /** Forward Fold Count */
+            forward_fold_count: number;
+            /** Items */
+            items: components["schemas"]["OptionsFailureEvent"][];
+            /** Limit */
+            limit: number;
+            /** Missing Held Marks */
+            missing_held_marks: number;
+            /** Offset */
+            offset: number;
+            /** Present Held Marks */
+            present_held_marks: number;
+            /** Replayed Sessions */
+            replayed_sessions: number;
+            /** Required Held Marks */
+            required_held_marks: number;
+            /** Risk Complete */
+            risk_complete: boolean;
+            /** Scheduled Sessions */
+            scheduled_sessions: number;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "development" | "final";
+            /** Setup Name */
+            setup_name: string;
+            /** Start Ms */
+            start_ms: number;
+            /** Study Id */
+            study_id: string;
+            /** Technical Failures */
+            technical_failures: string[];
+            /** Total */
+            total: number;
+            /** Traded Sessions */
+            traded_sessions: number;
+        };
+        /** OptionsFailureInspection */
+        OptionsFailureInspection: {
+            /** Candidate Hash */
+            candidate_hash: string;
+            /**
+             * Code
+             * @enum {string}
+             */
+            code: "no_eligible_trade_bar" | "retained_file_unavailable" | "retained_file_corrupt" | "retained_file_unreadable" | "retained_input_changed" | "retained_input_not_recorded" | "retained_input_recorded_absent" | "retained_mark_input_disagreement";
+            /** Contains Eligible Trade Bar */
+            contains_eligible_trade_bar: boolean | null;
+            /** Event Id */
+            event_id: string;
+            /** Evidence Identity */
+            evidence_identity: string;
+            /** Expected Input Sha256 */
+            expected_input_sha256: string | null;
+            /** Explanation */
+            explanation: string;
+            /** Input Verified */
+            input_verified: boolean;
+            /** Retained Path */
+            retained_path: string;
+            /** Snapshot Input Sha256 */
+            snapshot_input_sha256: string | null;
+            /** Study Id */
+            study_id: string;
         };
         /**
          * OptionsResumeRequest
@@ -45154,6 +45297,79 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OptionsCandidateEvidence"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    failures_api_research_options_golden_search_studies__study_id__candidate_evidence__candidate_hash__failures_get: {
+        parameters: {
+            query?: {
+                window?: "development" | "final";
+                offset?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                study_id: string;
+                candidate_hash: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsFailureEvidence"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    inspect_failure_api_research_options_golden_search_studies__study_id__candidate_evidence__candidate_hash__failures_inspect_get: {
+        parameters: {
+            query: {
+                session_open_ms: number;
+                at_ms: number;
+                leg_id: string;
+                window?: "development" | "final";
+            };
+            header?: never;
+            path: {
+                study_id: string;
+                candidate_hash: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsFailureInspection"];
                 };
             };
             /** @description Validation Error */

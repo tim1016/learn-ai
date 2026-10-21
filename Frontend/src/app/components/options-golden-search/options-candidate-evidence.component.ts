@@ -4,6 +4,7 @@ import type { components } from '../../api/broker.types';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
 import { OptionsSearchCandidateComponent } from './options-search-candidate.component';
+import { OptionsFailureEvidenceComponent } from './options-failure-evidence.component';
 import type { EvidenceWindow, SessionLoader } from './options-golden-search.types';
 import { optionsSearchErrorMessage } from './options-golden-search.service';
 
@@ -14,7 +15,7 @@ export type CandidatePageLoader = (study: string, offset: number) => Promise<Can
 
 @Component({
   selector: 'app-options-candidate-evidence',
-  imports: [OptionsSearchCandidateComponent, ReceiptLabelPipe, TimestampDisplayComponent],
+  imports: [OptionsSearchCandidateComponent, OptionsFailureEvidenceComponent, ReceiptLabelPipe, TimestampDisplayComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './options-candidate-evidence.component.html',
   styleUrl: './options-golden-search.component.scss',
@@ -26,6 +27,10 @@ export class OptionsCandidateEvidenceComponent {
   readonly loader = input.required<CandidateLoader>();
   readonly sessionLoader = input<SessionLoader | null>(null);
   private readonly identity = computed(() => `${this.studyId()}:${this.digest()}:${this.window()}`);
+  protected readonly diagnosticsOpen = linkedSignal({ source: this.identity, computation: () => false });
+  protected toggleDiagnostics(event: Event): void {
+    if (event.target instanceof HTMLDetailsElement) this.diagnosticsOpen.set(event.target.open);
+  }
   protected readonly offset = linkedSignal({ source: this.identity, computation: () => 0 });
   protected readonly evidence = resource({ params: () => ({ identity: this.identity(), study: this.studyId(), digest: this.digest(), window: this.window(), offset: this.offset() }),
     loader: ({ params }) => this.loader()(params.study, params.digest, params.window, params.offset) });
