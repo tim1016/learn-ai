@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from typing import Any
 
 import asyncpg
@@ -168,5 +169,44 @@ async def test_failed_activation_releases_only_its_own_initial_lease(
         assert client.get(progress.lease_key(new.job_id)) == ("replacement" if replace_lease else None)
         assert await scratch_db.fetchval("SELECT status FROM research_options_backtest_runs WHERE id=$1", run_id) == "failed"
         assert not await saved_runs._start_runtime_worker(run_id, new.job_id, 2, lambda *args: None)
+    finally:
+        client.delete(progress.lease_key(new.job_id), progress.state_key(new.job_id))
+
+
+async def test_a_worker_thread_that_cannot_start_leaves_no_live_lease(
+    scratch_db: asyncpg.Connection, isolated_redis: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``run_in_thread`` writes the job's lease over the activation's claim before the thread starts (#3440).
+
+    The claim's token is gone by then, so a release by that token freed nothing and the failed run kept a live
+    lease for ``JOB_LEASE_TTL_SECONDS``. The real ``run_in_thread`` runs here: only the thread start fails.
+    """
+    from app.jobs import progress
+    from app.research.persistence import ownership
+
+    await ensure_schema(scratch_db)
+    await scratch_db.execute("INSERT INTO research_runtime_owners VALUES('coordinator','current','research',2,1)")
+    await scratch_db.execute("SELECT pg_advisory_lock($1,$2)", COORDINATOR_LOCK_CLASSID, COORDINATOR_LOCK_OBJID)
+    authority = ownership.RuntimeAuthority("current", "research", 2, scratch_db)
+    monkeypatch.setattr(ownership, "process_authority", lambda: authority)
+    client = redis.Redis.from_url(isolated_redis, decode_responses=True)
+    monkeypatch.setattr(progress, "get_redis", lambda: client)
+    result = a_busy_run()
+    new = NewRun("unstartable-worker", 1791800000000, result.setup, None,
+                 result.sessions[0].session_open_ms, result.sessions[-1].session_open_ms, len(result.sessions))
+    run_id = await saved_runs._create_runtime_run(new, 2)
+    start = threading.Thread.start
+
+    def refuse_the_worker(self: threading.Thread) -> None:
+        if self.name.startswith("options-backtest-"):
+            raise RuntimeError("can't start new thread")
+        start(self)
+
+    monkeypatch.setattr(threading.Thread, "start", refuse_the_worker)
+    try:
+        with pytest.raises(RuntimeError, match="can't start new thread"):
+            await saved_runs._start_runtime_worker(run_id, new.job_id, 2, lambda *args: None)
+        assert client.get(progress.lease_key(new.job_id)) is None
+        assert await scratch_db.fetchval("SELECT status FROM research_options_backtest_runs WHERE id=$1", run_id) == "failed"
     finally:
         client.delete(progress.lease_key(new.job_id), progress.state_key(new.job_id))
