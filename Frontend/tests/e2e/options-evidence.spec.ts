@@ -24,9 +24,17 @@ test('opens source-76 performance, exact Golden lineage and frozen PUT search wi
   const workspace = page.locator('app-options-evidence-page');
   await expect(workspace.getByRole('heading', { name: RUN_WORKSPACE.headline })).toBeVisible();
   await expect(workspace.locator('app-options-backtest-run-daily-chart')).toBeVisible();
+  await expect(workspace.getByRole('button', { name: 'Max dollar drawdown' }).locator('..').locator('..')).toContainText('$1,754.10');
+  await expect(workspace.getByRole('button', { name: 'Max percentage drawdown' }).locator('..').locator('..')).toContainText('12.4%');
+  const chart = workspace.locator('app-options-backtest-run-daily-chart');
+  await expect(chart.locator('.episode')).toContainText('2025-04-24 → trough 2025-07-01');
+  await chart.getByRole('button', { name: 'Show largest percentage drawdown' }).click();
+  await expect(chart.locator('.episode')).toContainText('2025-02-21 → trough 2025-03-25');
+  await chart.screenshot({ path: 'test-results/options-risk-episodes-desktop.png' });
   await page.screenshot({ path: 'test-results/options-evidence-performance-desktop.png', fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await workspace.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await chart.screenshot({ path: 'test-results/options-risk-episodes-narrow.png' });
   await page.screenshot({ path: 'test-results/options-evidence-performance-narrow.png', fullPage: true });
   await workspace.getByRole('link', { name: 'Research lineage', exact: true }).click();
   await expect(workspace.getByRole('heading', { name: 'Approved from backtest' })).toBeVisible();

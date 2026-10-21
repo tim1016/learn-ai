@@ -35,5 +35,8 @@ svg { display: block; width: 100%; }
 .months { position: relative; height: 2rem; margin-top: var(--space-2); color: var(--text-secondary); font-size: var(--fs-xs); }
 .months span { position: absolute; white-space: nowrap; }
 .chart-foot { margin-top: var(--space-3); }
+.episode-controls { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.episode-controls button { font: inherit; font-size: var(--fs-xs); color: var(--text-secondary); background: var(--bg-secondary); border: 1px solid var(--border-light); border-radius: var(--radius-sm); padding: var(--space-2); cursor: pointer; }
+.episode-controls button.active { color: var(--accent); border-color: var(--accent); }
 .chart-foot button { background: none; border: 0; color: var(--accent); cursor: pointer; font: inherit; }
 @media (max-width: 600px) { .chart-frame { grid-template-columns: minmax(4rem, 6rem) minmax(0, 1fr); gap: var(--space-2); } }

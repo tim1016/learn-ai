@@ -80,7 +80,7 @@ const cashRows = () => [...screen.getByRole('region', { name: 'Cash ladder' }).q
 const PLACES: readonly (readonly [string, () => string | string[], string | string[]])[] = [
   ['the banner’s price step', () => reads(screen.getByRole('note', { name: 'How these figures were made' }).querySelectorAll('p')[2] ?? null), `Slippage assumed: 0.3%. Price step: ${SHOWN}.`],
   ['net profit', () => reads(tile('Net profit')), `Net profit ${SHOWN} After modeled costs`],
-  ['headline max drawdown', () => reads(tile(/^Max drawdown/)), `Max drawdown ${SHOWN} 50.0% of peak · session closes`],
+  ['headline max drawdown', () => reads(tile(/^Max dollar drawdown/)), `Max dollar drawdown ${SHOWN} 50.0% of peak in this episode · session closes`],
   ['ending cash', () => reads(tile('Ending cash')), `Ending cash ${SHOWN}`],
   ['total fees', () => reads(tile('Total fees')), `Total fees ${SHOWN}`],
   ['slippage paid', () => reads(tile('Slippage paid')), `Slippage paid ${SHOWN}`],

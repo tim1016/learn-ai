@@ -4,7 +4,7 @@
     @for (metric of summary(); track metric.key) {
       <div class="tile" [class.primary]="metric.key === 'profit'" [class.negative]="metric.key === 'profit' && loss()">
         <dt><button type="button" (click)="inspect(metric.key)" [attr.aria-expanded]="inspected() === metric.key">{{ metric.label }}</button></dt>
-        <dd class="big">@if (metric.value !== null) { @switch (metric.unit) { @case ('usd') { {{ metric.value | authoredUsd }} } @default { {{ metric.value }} } } } @else { <span class="unavailable">{{ metric.missing ?? 'Not recorded' }}</span> }</dd>
+        <dd class="big">@if (metric.value !== null) { @switch (metric.unit) { @case ('usd') { {{ metric.value | authoredUsd }} } @case ('percent') { {{ metric.value }}% } @default { {{ metric.value }} } } } @else { <span class="unavailable">{{ metric.missing ?? 'Not recorded' }}</span> }</dd>
         <dd class="sub">{{ metric.context }}</dd>
       </div>
     }
