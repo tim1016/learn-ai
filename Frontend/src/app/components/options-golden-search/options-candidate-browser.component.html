@@ -1,4 +1,5 @@
 <section class="card"><h3>All candidate outcomes</h3><p>Selection loads one retained evaluation. Profitable rejected candidates remain diagnostics; eligibility comes from the frozen rules.</p>
+  <button type="button" [disabled]="page.isLoading()" (click)="page.reload()">Refresh candidates</button>
   @if (page.isLoading()) { <p>Reading candidate outcomes…</p> }
   @if (problem(); as why) { <p class="problem">{{ why }}</p><button type="button" (click)="page.reload()">Retry candidates</button> }
   @if (page.hasValue()) { @let results = page.value();

@@ -45392,6 +45392,8 @@
             "$ref": "#/components/schemas/OptionsCandidateCoverage"
           },
           "end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
             "title": "End Ms",
             "type": "integer"
           },
@@ -45426,10 +45428,19 @@
             "title": "Session Total",
             "type": "integer"
           },
+          "settings_description": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Settings Description",
+            "type": "array"
+          },
           "setup": {
             "$ref": "#/components/schemas/OptionsBacktestSetup-Output"
           },
           "start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
             "title": "Start Ms",
             "type": "integer"
           },
@@ -45452,6 +45463,7 @@
           "start_ms",
           "end_ms",
           "setup",
+          "settings_description",
           "candidate",
           "coverage",
           "sampling",

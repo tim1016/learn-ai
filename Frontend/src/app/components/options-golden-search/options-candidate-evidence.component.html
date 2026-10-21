@@ -8,6 +8,7 @@
     @if (!read.coverage.complete) { <p class="warning">Partial diagnostic performance. Minute risk is incomplete and cannot qualify this candidate.</p> }
     <p>Minute-close equity and drawdown in USD; risk gates use fixed starting capital {{ read.setup.starting_cash_usd }} USD. Each chart retains this scope.</p>
   </section>
+  <details><summary>Exact candidate settings and costs</summary>@for (line of read.settings_description; track $index) { <p>{{ line }}</p> }</details>
   @if (candidate(); as value) { <app-options-search-candidate [candidate]="value" [studyId]="studyId()" [window]="window()" [sessionLoader]="sessionLoader()" /> }
   <div class="actions"><button type="button" [disabled]="offset() === 0" (click)="offset.set(offset() - 50)">Previous sessions</button><span>Session rows {{ offset() + 1 }}–{{ offset() + read.candidate.sessions.length }} of {{ read.session_total }}</span><button type="button" [disabled]="offset() + 50 >= read.session_total" (click)="offset.set(offset() + 50)">Next sessions</button></div>
   <details><summary>Retained evidence receipt</summary><p>Evaluation <code>{{ read.evidence_identity }}</code></p><p>Artifact <code>{{ read.evidence_blob_sha256 }}</code></p></details>

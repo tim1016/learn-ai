@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from app.options_backtest.setup import OptionsBacktestSetup
 from app.schemas.options_golden_search import Candidate
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
 class OptionsCandidateListItem(BaseModel):
@@ -48,9 +49,10 @@ class OptionsCandidateEvidence(BaseModel):
     evidence_identity: str
     evidence_blob_sha256: str
     scope: Literal["development", "final"]
-    start_ms: int
-    end_ms: int
+    start_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    end_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     setup: OptionsBacktestSetup
+    settings_description: list[str]
     candidate: Candidate
     coverage: OptionsCandidateCoverage
     sampling: OptionsCandidateSampling

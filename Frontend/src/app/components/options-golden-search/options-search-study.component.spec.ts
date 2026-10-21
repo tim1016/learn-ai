@@ -84,12 +84,15 @@ it('keeps failing candidates inspectable without offering them for final selecti
   await render(OptionsSearchStudyComponent, { inputs: { study: study({ candidates: [candidate(), failed], allowed_commands: ['open_final'] }), step: 4, candidateLoader, candidatePageLoader }, providers: [provideRouter([])] });
   expect(screen.queryByRole('checkbox', { name: 'Include Failed timing candidate in final test' })).toBeNull();
   const user = userEvent.setup();
-  const label = await screen.findByText('Failed timing candidate', { exact: true });
+  const browser = screen.getByRole('heading', { name: 'All candidate outcomes' }).closest('section');
+  if (!browser) throw new Error('Candidate browser is missing.');
+  const label = await within(browser).findByText('Failed timing candidate', { exact: true });
   const row = label.closest('tr');
   if (!row) throw new Error('Candidate outcome row is missing.');
   expect(candidateLoader).not.toHaveBeenCalled();
   await user.click(within(row).getByRole('button', { name: 'Inspect evidence' }));
   expect(await screen.findByRole('heading', { name: 'Failed timing candidate' })).toBeTruthy();
   expect(candidateLoader).toHaveBeenCalledWith('study-1', failed.candidate_hash, 'development', 0);
-  expect(screen.getByText('Drawdown exceeds the frozen limit.')).toBeTruthy();
+  await user.click(screen.getByText('Show me why', { exact: true }));
+  expect(screen.getByText('Drawdown exceeds the frozen limit.', { exact: false })).toBeTruthy();
 });

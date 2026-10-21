@@ -50,6 +50,8 @@ def test_rejected_candidate_restores_null_gaps_and_partial_scope_from_retained_b
     assert all(not s.attempts for s in result.candidate.sessions)
     assert result.candidate.sessions[0].status == "no_trade"
     assert result.candidate.sessions[0].net_profit_usd == "0"
+    assert any("entry is read" in line for line in result.settings_description)
+    assert any("exit is read" in line for line in result.settings_description)
 
 
 def test_unopened_final_undeclared_point_and_changed_evaluation_identity_are_refused(retained: tuple) -> None:

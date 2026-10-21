@@ -25025,6 +25025,8 @@ export interface components {
             session_offset: number;
             /** Session Total */
             session_total: number;
+            /** Settings Description */
+            settings_description: string[];
             setup: components["schemas"]["OptionsBacktestSetup-Output"];
             /** Start Ms */
             start_ms: number;

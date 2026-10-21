@@ -9,7 +9,9 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from app.options_backtest.describe import leg_sentences
+from app.options_backtest.describe import describe_setup, leg_sentences
+from app.options_backtest.phrases import distance
+from app.options_backtest.session_clock import full_session_clock
 from app.options_backtest.setup import OptionsBacktestSetup
 from app.options_bots.golden_proof import setup_sha256
 from app.research.golden_search.proof import BlobStore
@@ -44,6 +46,7 @@ class RetainedOptionsEvidence:
     result: EvaluationResult
     evidence_identity: str
     evidence_blob_sha256: str
+    final_outcome: Candidate | None = None
 
 
 def resolve(row: dict[str, Any], digest: str, scope: Scope) -> tuple[OptionsSearchProtocol, OptionsBacktestSetup, Window, str]:
@@ -67,7 +70,9 @@ def resolve(row: dict[str, Any], digest: str, scope: Scope) -> tuple[OptionsSear
 
 def label(setup: OptionsBacktestSetup, original: bool) -> str:
     legs = " / ".join(" ".join(leg_sentences(leg)) for leg in setup.legs)
-    return ("Original: " if original else "Candidate: ") + legs
+    timing = f"Entry {distance(setup.entry)}; exit {distance(setup.exit)}."
+    cutoff = f" No re-entry after {distance(setup.no_reentry_after)}." if setup.no_reentry_after else ""
+    return ("Original: " if original else "Candidate: ") + timing + cutoff + " " + legs
 
 
 async def page(study_id: str, *, offset: int = 0, limit: int = 50) -> OptionsCandidatePage:
@@ -95,7 +100,8 @@ def load_record(row: dict[str, Any], recorded: dict[str, Any], digest: str, scop
     if recorded["key"] != key or hash_payload(recorded["identity"]) != key or recorded.get("result") is None:
         raise LookupError("The exact retained evaluation is unavailable.")
     result = StudyEvaluator(row, lambda: None, lambda _done, _total: None, blobs=blobs).load(recorded["result"], window)
-    return RetainedOptionsEvidence(row["id"], protocol, setup, window, scope, result, key, recorded["result"]["evidence_blob"])
+    final_outcome = Candidate.model_validate(next(c for c in row["final_results"] if c["candidate_hash"] == digest)) if scope == "final" else None
+    return RetainedOptionsEvidence(row["id"], protocol, setup, window, scope, result, key, recorded["result"]["evidence_blob"], final_outcome)
 
 
 def project(evidence: RetainedOptionsEvidence, *, session_offset: int = 0, session_limit: int = 50) -> OptionsCandidateEvidence:
@@ -104,7 +110,11 @@ def project(evidence: RetainedOptionsEvidence, *, session_offset: int = 0, sessi
     complete = len(result.sessions) == len(window.session_ms)
     verdict = classify(result.metrics, protocol.policy, window, scope, complete=complete)
     projected = candidate(result, verdict, digest, original=digest == setup_sha256(protocol.setup))
+    if evidence.final_outcome is not None:
+        # Final qualification includes the frozen stress outcomes (#3397).
+        projected.update(evidence.final_outcome.model_dump(include={"verdict", "gate_outcomes", "evidence"}))
     projected["label"] = label(setup, projected["is_original"])
+    description = describe_setup(setup, full_session=full_session_clock(as_of_ms=window.start_ms))
     # The legacy display subset omits unknown valuations. Restore explicit break
     # markers without changing its financial values or recomputing any gate.
     missing = {point.at_ms for session in result.sessions for point in session.observations if point.equity_usd is None}
@@ -116,7 +126,8 @@ def project(evidence: RetainedOptionsEvidence, *, session_offset: int = 0, sessi
     return OptionsCandidateEvidence(
         study_id=evidence.study_id, candidate_hash=digest, evidence_identity=evidence.evidence_identity,
         evidence_blob_sha256=evidence.evidence_blob_sha256, scope=scope, start_ms=window.start_ms, end_ms=window.end_ms,
-        setup=setup, candidate=Candidate.model_validate(projected),
+        setup=setup, settings_description=[*description.window, *(line for leg in description.legs for line in leg.sentences),
+            *description.square_off, *description.costs, *description.notices], candidate=Candidate.model_validate(projected),
         coverage=OptionsCandidateCoverage(scheduled_sessions=len(window.session_ms), replayed_sessions=len(result.sessions),
             traded_sessions=result.metrics.completed_traded_sessions, required_held_marks=result.metrics.required_held_marks,
             missing_held_marks=result.metrics.missing_held_marks, complete=complete and not result.metrics.technical_failures),

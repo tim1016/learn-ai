@@ -36,7 +36,7 @@
 @if (step() === 5) {
   <section class="card"><h3>Final outcomes and approval</h3><p>These are final results. Development and forward totals remain separate. Approval publishes one exact immutable version and starts no bot.</p>
     <div class="table-scroll"><table><thead><tr><th>Frozen finalist</th><th>Verdict</th><th>Net profit (USD)</th></tr></thead><tbody>@for (candidate of study().final_results; track candidate.candidate_hash) { <tr><td>{{ candidate.label }}</td><td>{{ candidate.verdict | receiptLabel }}</td><td>{{ candidate.net_profit_usd ?? 'Unavailable' }}</td></tr> }</tbody></table></div>
-    @if (approvalCandidate(); as selected) { <p>Selected candidate net profit: {{ selected.net_profit_usd ?? 'Unavailable' }} USD</p>@if (candidateLoader(); as loader) { <app-options-candidate-evidence [studyId]="study().id" [digest]="selected.candidate_hash" window="final" [loader]="loader" [sessionLoader]="sessionLoader()" /> } }
+    @if (approvalCandidate(); as selected) { <p>Selected candidate net profit: <strong>{{ selected.net_profit_usd ?? 'Unavailable' }} USD</strong></p>@if (candidateLoader(); as loader) { <app-options-candidate-evidence [studyId]="study().id" [digest]="selected.candidate_hash" window="final" [loader]="loader" [sessionLoader]="sessionLoader()" /> } }
     @if (study().final_results.length > 0) {
       <label>Exact candidate to approve<select [formField]="fields.hash"><option value="">Choose a candidate</option>@for (candidate of study().final_results; track candidate.candidate_hash) { <option [value]="candidate.candidate_hash">{{ candidate.label }}</option> }</select></label>
       <label>Owner review comment<textarea [formField]="fields.comment"></textarea></label>

@@ -1,7 +1,7 @@
 import type { Page } from '@playwright/test';
 
 import type { SavedSetup, ServedSetup } from '../../../src/app/components/options-backtest/options-backtest.types';
-import { retainedCandidate } from '../../../src/app/components/options-golden-search/testing';
+import type { CandidateEvidence } from '../../../src/app/components/options-golden-search/options-candidate-evidence.component';
 import type { OptionsStudy, PlanRequest, Preflight, SearchCandidate, SearchDeclarations, SessionResult, StudyCommand } from '../../../src/app/components/options-golden-search/options-golden-search.types';
 
 export const OPTIONS_SEARCH_API = '/api/research/options-golden-search';
@@ -32,6 +32,17 @@ const PREFLIGHT: Preflight = {
 export const OPTION_SESSION: SessionResult = { session_open_ms: 1789738200000, net_profit_usd: '19.95', status: 'traded', detail: 'One completed setup session.', attempts: [{ leg_id: 'call', attempt: 1, contract: 'O:SPY260918C00600000', side: 'buy', contracts: 1, entry_ms: 1789738500000, exit_ms: 1789757400000, entry_price_usd: '2.50', exit_price_usd: '2.7125', entry_fee_usd: '0.65000000000000000001', exit_fee_usd: '0.64999999999999999999', net_profit_usd: '19.95', exit_reason: 'scheduled_exit' }] };
 function candidate(original = false, changes: Partial<SearchCandidate> = {}): SearchCandidate {
   return { candidate_hash: original ? 'e'.repeat(64) : OPTIONS_CANDIDATE_HASH, label: original ? 'Original saved setup' : 'Candidate one', is_original: original, verdict: 'meets_rules', net_profit_usd: original ? '100.01' : '200.01234567890123456789', drawdown_usd: '100', drawdown_fraction: '0.01', drawdown_percent: '1', sharpe: 1.2, completed_sessions: 40, recovery: 'Longest underwater spell: 5 sessions', gate_outcomes: [{ gate_id: 'net_profit', status: 'meets_rules', actual: original ? '100.01' : '200.01234567890123456789', required: '>0', reason: 'Meets the frozen positive-net rule.' }], evidence: [{ label: 'Forward evidence', value: 'Complete reset-capital forward coverage; three folds.' }], monthly: [{ month_ms: 1789738200000, net_profit_usd: '19.95', completed_sessions: 1 }], equity: [{ timestamp_ms: 1789738500000, equity_usd: '10000', drawdown_usd: '0' }, { timestamp_ms: 1789757400000, equity_usd: '10019.95', drawdown_usd: '0' }], sessions: [{ ...OPTION_SESSION, attempts: [] }], ...changes };
+}
+function retainedCandidate(value: SearchCandidate): CandidateEvidence {
+  return {
+    study_id: OPTIONS_SEARCH_ID, candidate_hash: value.candidate_hash, scope: 'development',
+    evidence_identity: 'd'.repeat(64), evidence_blob_sha256: 'e'.repeat(64),
+    start_ms: 1704171600000, end_ms: 1789790400000, setup: OPTION_SETUP, settings_description: ['Fixture setup settings.'],
+    candidate: { ...value, gate_outcomes: [...value.gate_outcomes], evidence: [...value.evidence], monthly: [...value.monthly], equity: [...value.equity], sessions: value.sessions.map(s => ({ ...s, attempts: [...s.attempts] })) },
+    coverage: { scheduled_sessions: 1, replayed_sessions: 1, traded_sessions: 1, required_held_marks: 10, missing_held_marks: 0, complete: true },
+    sampling: { state: 'available', raw_observations: 2, displayed_observations: 2, maximum_observations: 2000, explanation: 'Synthetic browser trace.' },
+    session_offset: 0, session_limit: 50, session_total: 1, unobserved_sessions: 0,
+  };
 }
 export function lockedOptionsStudy(changes: Partial<OptionsStudy> = {}): OptionsStudy {
   return { id: OPTIONS_SEARCH_ID, revision: 1, phase: 'locked', status: 'ready', protocol_hash: 'd'.repeat(64), approval_reviews: {}, protocol_summary: [{ label: 'Starting capital', value: '10000 USD' }, { label: 'Search dimension', value: 'Call stop loss: 20, 25; order 5' }], setup_name: SAVED_OPTION_SETUP.name, underlying: 'SPY', progress: { stage: 'locked', completed: 0, queued: 0, running: 0, cache_hits: 0, execution_attempts: 0, spent: 0, reserved: 20, capacity_message: 'Width one; capacity qualification remains separate.' }, candidates: [], final_results: [], gate_outcomes: [], exposure: { classification: 'not_opened', explanation: 'Recorded study exposure only; outside research cannot be observed.' }, allowed_commands: ['run_research'], dispatch: null, failure_reason: null, qualification_id: null, qualification_status: null, ...changes };
