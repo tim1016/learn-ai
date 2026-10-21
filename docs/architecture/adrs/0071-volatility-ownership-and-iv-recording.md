@@ -1,4 +1,4 @@
-# ADR 0071 — Python computes implied volatility from raw quotes; an opt-in .NET schedule records it, and gaps stay visible
+# ADR 0071 — Python computes implied volatility from raw quotes; recording it is opt-in, and gaps stay visible
 
 **Status:** Accepted 2026-09-30
 **Provenance:** Entry 8 of [#2745](https://github.com/tim1016/learn-ai/issues/2745), merged from #2742 E, #2743 B and #2741 kept why 6. The decisions are §7.1–§7.11 of `docs/architecture/iv-ownership-research.md` (2026-04 to 2026-04-29, including two external reviews), recorded here so that section can be cut. Owner rulings on map [#2700](https://github.com/tim1016/learn-ai/issues/2700) (2026-09-30): ☆ the opt-in Backend IV recorder is not dead; ◇ validated volatility math stays even when nothing uses it. Written by [#2749](https://github.com/tim1016/learn-ai/issues/2749).
@@ -32,3 +32,23 @@ A historical implied-volatility series cannot be bought back later. Polygon serv
 - The volatility math stays importable and tested even when no route calls it (◇). Retiring a route does not retire the solver, IV30 replication, realized volatility, basis conversion or `iv30_health`.
 - Changing a slot, the floor, the quality formula or the fallback rule is a new decision recorded here, not a config tweak.
 - The research doc keeps its tolerances (§6), its sources (§11) and its worked examples (Appendix A). Those are receipts, not decisions.
+
+## Amendment 2026-10-21 — the .NET cron is retired ([ADR 0081](0081-python-owns-the-api-and-the-database-schema.md))
+
+The C# backend was removed. This ADR stays Accepted; one decision is
+superseded and one is reworded.
+
+- **Decision 6 no longer has an owner for the schedule.** The Quartz jobs
+  (`IvRecorderJob`, `IvRecorderRegistration`, `IvRecorderOptions`) live, unused
+  and uncompiled, in `references/csharp-jobs/`; its README names where a
+  Python clock could plug in. The half of decision 6 that stands: the Python
+  recorder stays stateless, and records only when something calls
+  `POST /api/iv-recorder/snapshot` (`app/routers/iv_recorder.py`,
+  `app/services/iv_recorder.py`), both of which remain. The cron was opt-in and
+  was never enabled in this stack (`IvRecorder:Enabled` defaulted to `false`
+  and compose did not set it), so no recording that ran has stopped.
+- **Decision 7's slots** (09:35, 12:30, 15:55, 16:00 ET) are still the slots
+  the recorder accepts (`SLOT_CHOICES`). They were set in the retired .NET
+  configuration, so a future clock supplies them.
+- The title no longer names a .NET schedule. When a Python clock is built,
+  record it here as a new amendment and delete `references/csharp-jobs/`.

@@ -9,12 +9,6 @@
       "cwd": "Frontend"
     },
     {
-      "name": "Backend (.NET GraphQL)",
-      "runtimeExecutable": "dotnet",
-      "runtimeArgs": ["watch", "run", "--non-interactive"],
-      "port": 5000
-    },
-    {
       "name": "Python Data Service (FastAPI)",
       "runtimeExecutable": "uvicorn",
       "runtimeArgs": ["app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"],

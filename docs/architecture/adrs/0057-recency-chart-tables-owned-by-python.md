@@ -37,3 +37,19 @@ The "eight worker threads" above describes the sweep runners as first written. M
 ## Amendment 2026-09-06 — the study guard moved home
 
 Decision 1's "one permitted cross-owner read" — `StudiesApi.IsRecencyMemberAsync` reading `RecencyRuns` by name — no longer exists. ADR 0058 moved backtest runs onto Python-owned tables; the hard-delete guard now lives in `app/research/backtest_runs/repository.delete_run`, where both tables are locally owned, and the `.NET` reach-across is gone. Schema version 5 also nulled every `RecencyRuns.StudyId`, since those ids named rows of the retired EF table.
+
+## Amendment 2026-10-21 — no EF side is left ([ADR 0081](0081-python-owns-the-api-and-the-database-schema.md))
+
+The C# backend was removed, so the EF half of this ADR is history: decision 3's
+no-op migration (`TransferRecencyTablesToPython`), the cutover protocol's
+"Backend startup applies" step and its rollback paragraph ("re-registers the
+.NET writers") have no live counterpart. A database the runner built fresh
+cannot be opened by an older C# release, so rolling back past ADR 0081 means
+restoring a backup taken before it; an adopted database keeps its EF history
+(ADR 0081, Consequences). What stands: Python owns the four tables, and a
+future schema change to them is a new numbered statement list in
+`research/persistence/schema.py`. The baseline
+SQL (`app/db_schema/migrations/0001_baseline.sql`) also creates the four tables
+(`RecencyLaunches`, `RecencyRuns`, `RecencyTradeMemberships`,
+`RecencyTrades`), so a database the runner builds has them from the start;
+`schema.py` still declares them `IF NOT EXISTS` and carries every later change.

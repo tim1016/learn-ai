@@ -99,7 +99,7 @@ Rules:
 - `pd.to_datetime(...)` without `utc=True` — produces naive objects that lie when `.strftime("...Z")` is appended.
 - `DateTime.Parse(...)` in any timestamp-canonicalization path — **disallowed**. Naive strings parse as `Kind=Unspecified`, and `DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal` **silently coerces** them to UTC. For string input, require `DateTimeOffset.ParseExact` (or `DateTime.ParseExact`) with `CultureInfo.InvariantCulture` and an explicit offset designator; reject ambiguous/naive strings. Prefer: accept timestamps as numeric `long` (ms since epoch) and skip string parsing entirely.
 - `new Date(string)` in TypeScript where the string is not an ISO-8601 with tz designator — parses as local in Chrome/Safari, `Invalid Date` in Firefox. If the input is a timestamp, it should have been typed `number` and passed directly.
-- `string` or `DateTime` typing on any field literally named `timestamp` / `ts` / `time` / `*_at` / `*At` in a GraphQL DTO, C# DTO, Pydantic model, or TS interface. The type is `long` / `int` / `number`.
+- `string` or `DateTime` typing on any field literally named `timestamp` / `ts` / `time` / `*_at` / `*At` in a Pydantic model or TS interface. The type is `int` / `number`.
 - `time(9, 30)` / `time(16, 0)` (and equivalent `datetime.time` / minutes-past-midnight literals) in market/session logic — derive from the canonical calendar module.
 - `mcal.get_calendar(...)` outside the canonical calendar module — import the module instead.
 

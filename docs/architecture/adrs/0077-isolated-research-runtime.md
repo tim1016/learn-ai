@@ -125,3 +125,13 @@ assumed.
   smaller seam.
 - **In-API child process pool with raised limits:** explicitly rejected by
   the PRD — an in-API pool does not satisfy the separate-container decision.
+
+## Amendment 2026-10-21 — the jobs API is Python's ([ADR 0081](0081-python-owns-the-api-and-the-database-schema.md))
+
+The first rejected alternative says "the PRD names the API as the forwarder,
+.NET stays the transport that mints job ids". The public jobs API is now Python's
+`/api/jobs` facade (`app/jobs/facade.py`): it mints the job id and dispatches
+in-process to the `/api/jobs-internal/*` routes, which pass through the same
+research-runtime forwarding a socket call would. The API is still the
+forwarder, so the rejected alternative (a transport dispatching straight to the
+runtime beside it) stays rejected; only the layer that mints ids has changed.

@@ -316,7 +316,7 @@ podman run --rm -e POLYGON_API_KEY=standin \
 #
 # DATA_PLANE_CONTROL_SECRET is DIFFERENT — do NOT remove it from the root
 # .env, even though coordinator.env.example also lists it. compose.yaml's
-# OWN `environment:` entries on python-service, backend, and frontend all
+# OWN `environment:` entries on python-service and frontend both
 # interpolate `${DATA_PLANE_CONTROL_SECRET:?Set ... before starting the
 # stack}` directly from the root .env / process environment, and that
 # `environment:` entry always outranks whatever coordinator.env's `env_file:`
@@ -332,12 +332,14 @@ chmod 600 deploy/fleet/env/coordinator.env deploy/fleet/env/paper.env deploy/fle
 
 # M4 — the deletion. Remove the fleet content from compose.override.yaml
 # entirely — it now lives in the committed compose.fleet.dev.yaml. Keep ONLY
-# the dev ergonomics that were never fleet-specific: the backend port 5050
-# remap, the frontend 6G memory bump, and the Frontend/angular.json bind.
+# the dev ergonomics that were never fleet-specific: the frontend 6G memory
+# bump and the Frontend/angular.json bind. An override that still names a
+# `backend` service (a port remap, say) names one compose.yaml no longer
+# declares (ADR 0081); drop it.
 
 # M4a — verify the deletion actually took. Skipping this is how the old
 # literal credentials keep silently overriding the new env files with
-# nothing detecting it: M5's `config --services` reports the same seven
+# nothing detecting it: M5's `config --services` reports the same six
 # service names whether or not the override still carries fleet content
 # (the override never added or removed a service, only environment/volumes
 # on ones compose.yaml already declares); render_fleet_topology.py is
@@ -363,7 +365,7 @@ echo "M4 verified: compose.override.yaml carries no fleet service or credential 
 podman compose --project-name learn-ai \
   -f compose.yaml -f compose.fleet.dev.yaml -f compose.override.yaml \
   config --services | sort > "$SAFE/services.after.txt"
-diff -u <(printf '%s\n' alpaca-live-clerk alpaca-paper-clerk backend db frontend python-service redis | sort) \
+diff -u <(printf '%s\n' alpaca-live-clerk alpaca-paper-clerk db frontend python-service redis | sort) \
         "$SAFE/services.after.txt"
 python scripts/render_fleet_topology.py --engine "podman compose" --check   # must exit 0
 ```

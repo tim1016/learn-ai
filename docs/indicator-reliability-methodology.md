@@ -63,12 +63,11 @@ The Indicator Reliability feature answers two overlapping operator questions:
 > literature do not transfer cleanly; the tradeability caveat (§3.12) calls out
 > the specific assumptions that break.
 
-The codebase splits across three services:
+The codebase splits across two services:
 
 | Service | Stack | Role in this feature |
 |---------|-------|----------------------|
 | PythonDataService | FastAPI + pandas + scipy | IC computation, corrections, baseline, regime split, IR proxy |
-| Backend | .NET + HotChocolate (GraphQL) | Not involved in this feature today |
 | Frontend | Angular 22 + PrimeNG 22 + Chart.js | Mission-control UI, app shell, navigation |
 
 The backend statistics were shipped in three Python tranches (P1–P3 — hit-rate
@@ -680,7 +679,7 @@ below still renders.
   disabled. A companion backend (route + page + persistence) is a prerequisite
   before wiring this up.
 - **Save-verdict persistence.** The "Save to tested indicators" CTA is
-  rendered disabled. Requires a database table, a GraphQL mutation, and a
+  rendered disabled. Requires a database table, a route to save it, and a
   tested-indicators index page to land together.
 
 ### 8.2 Known design compromises / minor bugs

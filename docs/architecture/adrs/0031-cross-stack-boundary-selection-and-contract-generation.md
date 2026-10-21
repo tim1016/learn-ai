@@ -5,6 +5,10 @@
 - **Date:** 2026-07-20
 - **Context:** Issue #1126
 
+> **Amended 2026-10-21:** the GraphQL/.NET path described below was retired with
+> the C# backend. Only the Angular → FastAPI path remains; see the amendment at
+> the end and [ADR 0081](0081-python-owns-the-api-and-the-database-schema.md).
+
 ## Decision
 
 The platform has two supported browser-to-service boundary paths. A feature
@@ -77,3 +81,29 @@ fixture are `int64 ms UTC`.
   hand-copying its Pydantic fields.
 - SSE and other non-OpenAPI envelopes remain explicit exceptions until a
   transport-specific generator is adopted.
+
+## Amendment 2026-10-21 — the GraphQL/.NET path is retired ([ADR 0081](0081-python-owns-the-api-and-the-database-schema.md))
+
+The C# backend and its GraphQL layer were removed. This ADR stays Accepted: its
+standing now covers the one browser-to-service boundary that remains, Angular →
+FastAPI. What is superseded:
+
+- The first row of the Decision table (Angular → GraphQL/.NET → FastAPI) and
+  everything that served it: the Hot Chocolate schema, the GraphQL Code
+  Generator client preset, the checked-in `.graphql` operations,
+  `contracts/graphql/backend.schema.graphql` and `dotnet run --project Backend
+  -- schema export`. None of them exists, and there is no `/graphql` route.
+- The GraphQL half of the Rationale (GraphQL as the ".NET presentation
+  boundary") and the GraphQL consequences ("New GraphQL browser work adds a
+  checked-in `.graphql` operation"). New browser work is a Python route whose
+  Pydantic model is the contract.
+- The second Verification check (the Backend GraphQL schema export) and the
+  .NET half of the fixtures paragraph: no .NET code reads `contracts/fixtures/`.
+
+What stands, unchanged: FastAPI/Pydantic OpenAPI is the contract authority;
+`contracts/openapi/python-data-service.openapi.json` is the reviewable snapshot
+(`PythonDataService/scripts/export_openapi_contract.py --check` in the Python CI
+shard); `openapi-typescript` writes the Angular types
+(`Frontend/src/app/api/broker.types.ts`, checked by `npm run codegen:check` in
+the Frontend Type Check job); and the two kinds of allowed handwritten frontend
+contract code. "A direct FastAPI flow remains direct" is now the only flow.

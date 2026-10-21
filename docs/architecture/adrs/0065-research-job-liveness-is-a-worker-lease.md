@@ -41,3 +41,14 @@ is the deployment's, not the route's.
 - A hung worker (stuck mid-cell past the lease TTL) reads `interrupted` while its thread still exists; a resume claimed concurrently is kept correct by the attempt fence, and the stale writer's writes are refused. The record stays truthful either way.
 - Jobs that go silent longer than the lease TTL without emitting or checking cancellation would read `interrupted` while alive — today every research job checks cancellation per cell and emits per run; the contract docstring (`app/jobs/__init__.py`) states the obligation for future job types.
 - The launches list (`GET /api/research/recency/launches`) is the first reader of `RecencyLaunches.Status`; presentation follows the shared rule (`running` + not live → `interrupted`) with lowercase vocabulary.
+
+## Amendment 2026-10-21 — the API mints job ids, not .NET ([ADR 0081](0081-python-owns-the-api-and-the-database-schema.md))
+
+Decision 7 says ".NET stays the transport that mints job ids, writes initial
+state and serves SSE". That was true when written. The public `/api/jobs`
+facade is now Python's (`app/routers/jobs_facade.py`, `app/jobs/facade.py`): it
+mints the job id, writes the initial `job:{id}:state` record under the same
+Redis keys, serves the SSE events and dispatches in-process to the
+`/api/jobs-internal/*` routes. The decision is otherwise unchanged: a resume
+rides the same start path as any launch, so the drawer follows the new id and
+the new event stream.

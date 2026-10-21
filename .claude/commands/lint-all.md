@@ -11,4 +11,4 @@ Run both local linters and report results.
    ```
 
 Run both. Report a summary: linter name, errors found, warnings.
-If a tool is not installed, note it and skip. CI runs `dotnet format`; there is no `dotnet` on the owner's Mac.
+If a tool is not installed, note it and skip.
