@@ -22,10 +22,10 @@ def get_lineage_service() -> ModuleType:
 async def read_lineage(study_id: StudyId, service: ModuleType = Depends(get_lineage_service)) -> OptionsResearchLineage:
     try:
         return await service.read(study_id)
+    except (KeyError, IndexError, TypeError, ValueError) as error:
+        raise HTTPException(status_code=503, detail={"code": "RETAINED_PROCEDURE_UNAVAILABLE", "message": "The retained procedure fails its identity or shape checks."}) from error
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-    except ValueError as error:
-        raise HTTPException(status_code=503, detail={"code": "RETAINED_PROCEDURE_UNAVAILABLE", "message": "The retained procedure fails its identity or shape checks."}) from error
 
 
 @router.get("/studies/{study_id}/lineage/trials", response_model=OptionsLineageTrialPage)
@@ -35,7 +35,7 @@ async def read_trials(study_id: StudyId, after: Annotated[str, Query(pattern=r"^
         raise HTTPException(status_code=422, detail="The trial cursor exceeds its recorded ID range.")
     try:
         return await service.trials(study_id, after=after, limit=limit)
+    except (KeyError, IndexError, TypeError, ValueError) as error:
+        raise HTTPException(status_code=503, detail={"code": "RETAINED_TRIALS_UNAVAILABLE", "message": "The retained trial ledger could not be decoded."}) from error
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-    except ValueError as error:
-        raise HTTPException(status_code=503, detail={"code": "RETAINED_TRIALS_UNAVAILABLE", "message": "The retained trial ledger could not be decoded."}) from error

@@ -78,13 +78,19 @@ def project(row: dict[str, Any], retained: dict[str, Any]) -> OptionsResearchLin
         observed = recorded_folds.get(fold.index, {})
         selected = observed.get("selection", {})
         winner = selected.get("winner")
-        digest = observed.get("winner_hash") or (winner or {}).get("point_hash")
+        digest = (winner or {}).get("point_hash")
+        forward = observed.get("forward")
+        if observed.get("winner_hash") is not None and observed["winner_hash"] != digest:
+            raise ValueError("The retained fold winner disagrees with its training selection.")
+        if observed.get("status") == "evaluated" and (not digest or forward is None):
+            raise ValueError("An evaluated fold lacks its selected winner or forward receipt.")
+        if observed.get("status") == "no_eligible_point" and (winner is not None or forward is not None):
+            raise ValueError("A no-winner fold cannot contain selected forward evidence.")
         written = None
         if digest:
             written = protocol.setup if digest == setup_sha256(protocol.setup) else materialize(protocol, selected["points"][digest])
             if setup_sha256(written) != digest:
                 raise ValueError("A retained fold winner does not match its exact settings.")
-        forward = observed.get("forward")
         if forward is not None and forward.get("point_hash") != digest:
             raise ValueError("Retained forward evidence belongs to another fold winner.")
         folds.append(OptionsLineageFold(index=fold.index, training=window_view(fold.training), forward=window_view(fold.forward),

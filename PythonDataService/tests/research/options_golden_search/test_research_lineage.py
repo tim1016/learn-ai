@@ -49,6 +49,7 @@ def test_distinct_fold_winners_and_final_stress_remain_exact_recorded_facts() ->
     row["research"]["selection"]["winner"] = {"point_hash": hashes[0]}
     for index, observed in enumerate(row["research"]["folds"][:2]):
         digest = hashes[index]
+        observed["selection"]["winner"] = {"point_hash": digest}
         observed.update(status="evaluated", winner_hash=digest,
             forward={"point_hash": digest, "net_profit_usd": "10.01234567890123456789", "eligible": False})
     frozen = copy.deepcopy(row["candidates"][0])
@@ -64,6 +65,13 @@ def test_distinct_fold_winners_and_final_stress_remain_exact_recorded_facts() ->
     assert view.finalists[0].verdict == frozen["verdict"]
     assert view.stress[0].mandatory == protocol.policy.stress_gate
     assert view.stress[0].key == protocol.stress[0].key
+    conflicting = row["research"]["folds"][0]
+    conflicting.update(winner_hash=hashes[1], forward={"point_hash": hashes[1], "net_profit_usd": "123.45", "eligible": True})
+    with pytest.raises(ValueError, match="disagrees with its training selection"):
+        lineage.project(row, fixture("lineage-receipts"))
+    conflicting["winner_hash"] = hashes[0]
+    with pytest.raises(ValueError, match="another fold winner"):
+        lineage.project(row, fixture("lineage-receipts"))
 
 
 def test_legacy_absent_results_are_not_zero_or_inferred_final_success() -> None:
@@ -115,3 +123,10 @@ async def test_http_is_bounded_scope_fenced_and_reads_no_blobs(monkeypatch: pyte
         broken = await client.get(base)
     assert broken.status_code == 503
     assert broken.json()["detail"]["code"] == "RETAINED_PROCEDURE_UNAVAILABLE"
+    async def missing_setting(_fn: Any, *_args: Any) -> Any:
+        raise KeyError("missing-candidate-hash")
+    monkeypatch.setattr(lineage, "with_connection", missing_setting)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        broken_setting = await client.get(base)
+    assert broken_setting.status_code == 503
+    assert "missing-candidate-hash" not in broken_setting.text
