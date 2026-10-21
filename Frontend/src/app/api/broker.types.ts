@@ -9374,14 +9374,16 @@ export interface components {
             /** Worker Width */
             worker_width: number;
         };
-        /** BenchmarkResultResponse */
+        /**
+         * BenchmarkResultResponse
+         * @description A complete saved run of a pooled replay: when it was accepted and saved, and what its replay measured.
+         */
         BenchmarkResultResponse: {
             /** Accepted At Ms */
             accepted_at_ms: number;
-            /** Execution Metadata */
-            execution_metadata: Record<string, never>;
             /** Phase Timings */
             phase_timings: components["schemas"]["PhaseTiming"][];
+            replay: components["schemas"]["ReplayObservations"];
             /** Result Digest */
             result_digest: string;
             /** Run Id */
@@ -19868,21 +19870,12 @@ export interface components {
         /** HistoryGuidanceRequest */
         HistoryGuidanceRequest: {
             bounds: components["schemas"]["HistoryBounds"];
-            /**
-             * Final Months
-             * @default 6
-             */
-            final_months?: number;
-            /**
-             * Test Months
-             * @default 2
-             */
-            test_months?: number;
-            /**
-             * Train Months
-             * @default 6
-             */
-            train_months?: number;
+            /** Final Months */
+            final_months: number;
+            /** Test Months */
+            test_months: number;
+            /** Train Months */
+            train_months: number;
         };
         /**
          * HoldState
@@ -24676,8 +24669,6 @@ export interface components {
             calendar_package_version: string;
             /** Created At Ms */
             created_at_ms: number;
-            /** Execution Metadata */
-            execution_metadata?: Record<string, never> | null;
             failure?: components["schemas"]["OptionsBacktestRunFailureResponse"] | null;
             /** Fee Policy */
             fee_policy: string;
@@ -24693,8 +24684,7 @@ export interface components {
             job_id: string;
             /** Last Session Open Ms */
             last_session_open_ms: number;
-            /** Phase Timings */
-            phase_timings?: components["schemas"]["PhaseTiming"][];
+            observations?: components["schemas"]["RunObservations"] | null;
             /** Sessions Requested */
             sessions_requested: number;
             setup?: components["schemas"]["OptionsBacktestSetup-Output"] | null;
@@ -26729,7 +26719,7 @@ export interface components {
              * Reason
              * @description The lake's typed reason, when it failed. `lease_timeout` is not missing data: another request is fetching the same thing at this moment and it will be stored when that one finishes, so show it as 'being fetched by another request; ask again' and read the chain again.
              */
-            reason: ("provider_auth_error" | "provider_entitlement_error" | "provider_rate_limited" | "provider_api_error" | "provider_no_data" | "unknown_symbol" | "validation_failed" | "io_error" | "launcher_unreachable" | "lease_timeout" | "fetch_timeout" | "unsupported_resolution" | "unsupported_artifact_kind" | "corp_action_revision_mismatch" | "data_contract_mismatch" | "internal_error" | "session_not_produced" | "run_aborted") | ("outside_data_plan" | "session_not_over" | "not_a_session" | "symbol_too_long" | "listing_not_captured" | "not_listed") | ("underlying_not_fetched" | "underlying_unreadable") | null;
+            reason: ("provider_auth_error" | "provider_entitlement_error" | "provider_rate_limited" | "provider_api_error" | "provider_no_data" | "unknown_symbol" | "validation_failed" | "io_error" | "launcher_unreachable" | "lease_timeout" | "fetch_timeout" | "unsupported_resolution" | "unsupported_artifact_kind" | "corp_action_revision_mismatch" | "data_contract_mismatch" | "internal_error" | "session_not_produced" | "run_aborted") | ("outside_data_plan" | "session_not_over" | "not_a_session" | "symbol_too_long" | "listing_not_captured" | "not_listed" | "staging_capacity" | "paused") | ("underlying_not_fetched" | "underlying_unreadable") | null;
             /** Subject */
             subject: string;
         };
@@ -28626,6 +28616,28 @@ export interface components {
              */
             kind: "remove";
         };
+        /**
+         * ReplayObservations
+         * @description What a pooled replay of frozen inputs measured: its identities and its workers' decoded-cache use.
+         */
+        ReplayObservations: {
+            /** Cache Bytes Peak */
+            cache_bytes_peak: number;
+            /** Cache Epoch */
+            cache_epoch: string | null;
+            /** Cache Hits */
+            cache_hits: number;
+            /** Cache Misses */
+            cache_misses: number;
+            /** Execution Identity Digest */
+            execution_identity_digest: string;
+            /** Frozen Input Digest */
+            frozen_input_digest: string;
+            /** Runtime Boot Generation */
+            runtime_boot_generation: number;
+            /** Worker Width */
+            worker_width: number;
+        };
         /** ReproveGoldenOptionSetupRequest */
         ReproveGoldenOptionSetupRequest: {
             /** Idempotency Key */
@@ -29129,6 +29141,20 @@ export interface components {
             win_rate?: number | null;
             /** Winning Trades */
             winning_trades: number;
+        };
+        /**
+         * RunObservations
+         * @description One run's sealed operational record: its phases, its wall time and, for a pooled replay, what that measured.
+         *
+         *     The run-scope phases sum to ``wall_duration_ms``; chain-scope phases overlap them. Stored as the phase rows and
+         *     one flat metadata object, which a run replayed in the data service fills with its wall time alone.
+         */
+        RunObservations: {
+            /** Phase Timings */
+            phase_timings: components["schemas"]["PhaseTiming"][];
+            replay?: components["schemas"]["ReplayObservations"] | null;
+            /** Wall Duration Ms */
+            wall_duration_ms: number;
         };
         /** RunReadinessResponse */
         RunReadinessResponse: {
@@ -32298,8 +32324,11 @@ export interface components {
             partial_sessions: number;
             /** Pending Sessions */
             pending_sessions: number;
-            /** Phase */
-            phase: string;
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "capture" | "waiting" | "complete" | "rth_pause" | "snapshot_pause" | "capacity_pause" | "interrupted" | "failed";
             /** Reason */
             reason: string;
             /**

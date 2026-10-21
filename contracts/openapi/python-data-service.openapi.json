@@ -4599,6 +4599,7 @@
         "type": "object"
       },
       "BenchmarkResultResponse": {
+        "description": "A complete saved run of a pooled replay: when it was accepted and saved, and what its replay measured.",
         "properties": {
           "accepted_at_ms": {
             "maximum": 253402300799999.0,
@@ -4606,16 +4607,15 @@
             "title": "Accepted At Ms",
             "type": "integer"
           },
-          "execution_metadata": {
-            "title": "Execution Metadata",
-            "type": "object"
-          },
           "phase_timings": {
             "items": {
               "$ref": "#/components/schemas/PhaseTiming"
             },
             "title": "Phase Timings",
             "type": "array"
+          },
+          "replay": {
+            "$ref": "#/components/schemas/ReplayObservations"
           },
           "result_digest": {
             "pattern": "^[a-f0-9]{64}$",
@@ -4639,7 +4639,7 @@
           "saved_at_ms",
           "result_digest",
           "phase_timings",
-          "execution_metadata"
+          "replay"
         ],
         "title": "BenchmarkResultResponse",
         "type": "object"
@@ -31623,21 +31623,18 @@
             "$ref": "#/components/schemas/HistoryBounds"
           },
           "final_months": {
-            "default": 6,
             "maximum": 60.0,
             "minimum": 1.0,
             "title": "Final Months",
             "type": "integer"
           },
           "test_months": {
-            "default": 2,
             "maximum": 60.0,
             "minimum": 1.0,
             "title": "Test Months",
             "type": "integer"
           },
           "train_months": {
-            "default": 6,
             "maximum": 120.0,
             "minimum": 1.0,
             "title": "Train Months",
@@ -31645,7 +31642,10 @@
           }
         },
         "required": [
-          "bounds"
+          "bounds",
+          "train_months",
+          "test_months",
+          "final_months"
         ],
         "title": "HistoryGuidanceRequest",
         "type": "object"
@@ -43777,17 +43777,6 @@
             "title": "Created At Ms",
             "type": "integer"
           },
-          "execution_metadata": {
-            "anyOf": [
-              {
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Execution Metadata"
-          },
           "failure": {
             "anyOf": [
               {
@@ -43857,12 +43846,15 @@
             "title": "Last Session Open Ms",
             "type": "integer"
           },
-          "phase_timings": {
-            "items": {
-              "$ref": "#/components/schemas/PhaseTiming"
-            },
-            "title": "Phase Timings",
-            "type": "array"
+          "observations": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunObservations"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "sessions_requested": {
             "title": "Sessions Requested",
@@ -49541,7 +49533,9 @@
                   "not_a_session",
                   "symbol_too_long",
                   "listing_not_captured",
-                  "not_listed"
+                  "not_listed",
+                  "staging_capacity",
+                  "paused"
                 ],
                 "type": "string"
               },
@@ -54578,6 +54572,67 @@
         "title": "RemoveAction",
         "type": "object"
       },
+      "ReplayObservations": {
+        "additionalProperties": false,
+        "description": "What a pooled replay of frozen inputs measured: its identities and its workers' decoded-cache use.",
+        "properties": {
+          "cache_bytes_peak": {
+            "minimum": 0.0,
+            "title": "Cache Bytes Peak",
+            "type": "integer"
+          },
+          "cache_epoch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Epoch"
+          },
+          "cache_hits": {
+            "minimum": 0.0,
+            "title": "Cache Hits",
+            "type": "integer"
+          },
+          "cache_misses": {
+            "minimum": 0.0,
+            "title": "Cache Misses",
+            "type": "integer"
+          },
+          "execution_identity_digest": {
+            "title": "Execution Identity Digest",
+            "type": "string"
+          },
+          "frozen_input_digest": {
+            "title": "Frozen Input Digest",
+            "type": "string"
+          },
+          "runtime_boot_generation": {
+            "title": "Runtime Boot Generation",
+            "type": "integer"
+          },
+          "worker_width": {
+            "minimum": 1.0,
+            "title": "Worker Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "frozen_input_digest",
+          "execution_identity_digest",
+          "runtime_boot_generation",
+          "worker_width",
+          "cache_epoch",
+          "cache_hits",
+          "cache_misses",
+          "cache_bytes_peak"
+        ],
+        "title": "ReplayObservations",
+        "type": "object"
+      },
       "ReproveGoldenOptionSetupRequest": {
         "additionalProperties": false,
         "properties": {
@@ -55873,6 +55928,40 @@
           "total_return_pct"
         ],
         "title": "RunMetrics",
+        "type": "object"
+      },
+      "RunObservations": {
+        "additionalProperties": false,
+        "description": "One run's sealed operational record: its phases, its wall time and, for a pooled replay, what that measured.\n\nThe run-scope phases sum to ``wall_duration_ms``; chain-scope phases overlap them. Stored as the phase rows and\none flat metadata object, which a run replayed in the data service fills with its wall time alone.",
+        "properties": {
+          "phase_timings": {
+            "items": {
+              "$ref": "#/components/schemas/PhaseTiming"
+            },
+            "title": "Phase Timings",
+            "type": "array"
+          },
+          "replay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReplayObservations"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "wall_duration_ms": {
+            "minimum": 0.0,
+            "title": "Wall Duration Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "phase_timings",
+          "wall_duration_ms"
+        ],
+        "title": "RunObservations",
         "type": "object"
       },
       "RunReadinessResponse": {
@@ -63894,6 +63983,16 @@
             "type": "integer"
           },
           "phase": {
+            "enum": [
+              "capture",
+              "waiting",
+              "complete",
+              "rth_pause",
+              "snapshot_pause",
+              "capacity_pause",
+              "interrupted",
+              "failed"
+            ],
             "title": "Phase",
             "type": "string"
           },
