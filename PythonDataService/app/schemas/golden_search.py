@@ -2,7 +2,7 @@
 
 Every temporal value on the wire is ``int64 ms UTC``; interval boundaries are
 ET-midnight instants with exclusive ends. Requests accept snake_case and
-camelCase (the .NET jobs passthrough) and refuse unknown keys. A plan's
+camelCase (the jobs facade's verbatim passthrough) and refuse unknown keys. A plan's
 *problems* are not schema errors: the request models type the plan's shape
 only, and every reason a well-formed plan cannot run comes back from
 ``/preflight`` as a refusal in the body. Parameters travel as plain
@@ -61,7 +61,7 @@ _EXECUTION = ExecutionAssumptions()
 
 
 class _CamelTolerantModel(BaseModel):
-    """Accepts camelCase (the .NET jobs passthrough) and snake_case; refuses unknown keys and non-finite numbers."""
+    """Accepts camelCase (the jobs facade's verbatim passthrough) and snake_case; refuses unknown keys and non-finite numbers."""
 
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid", allow_inf_nan=False)
 

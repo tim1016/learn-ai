@@ -1,10 +1,10 @@
 """Verify the live Postgres schema matches catalog_schema.py.
 
-Authoritative source of the schema: EF Core migrations in Backend/Migrations.
-This test asserts that the Python typed expectation is in sync with what
-EF actually applied. A failure here means either:
-  - the EF migration changed but catalog_schema.py wasn't updated, OR
-  - catalog_schema.py was edited without a matching EF migration.
+Authoritative source of the schema: the SQL files in app/db_schema/migrations
+(ADR 0081). This test asserts that the Python typed expectation is in sync with
+what the runner applied. A failure here means either:
+  - a migration file changed but catalog_schema.py wasn't updated, OR
+  - catalog_schema.py was edited without a matching migration file.
 
 Either way, the PR should not merge until they agree.
 """

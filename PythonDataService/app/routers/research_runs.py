@@ -9,9 +9,9 @@ Three endpoints under ``/api/research/strategy-runs``:
   * ``GET    /{run_id}``        — load a previously-persisted run.
   * ``GET    /``                — list ledgers, with filters and limit.
 
-GraphQL passthrough is intentionally not wired here. Phase B (research
-workbench) will decide whether to add one based on whether the UI is
-GraphQL-only or willing to call FastAPI directly.
+There is no UI passthrough here yet: GraphQL is retired (ADR 0081), so
+Phase B (research workbench) will call these FastAPI endpoints directly when
+it needs them.
 
 The data-source dependency mirrors ``app/routers/spec_strategy.py``:
 production injects a real ``LeanMinuteDataReader``; tests override via

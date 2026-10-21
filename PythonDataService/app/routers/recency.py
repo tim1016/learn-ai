@@ -5,7 +5,7 @@ with a live membership), ``GET /hero`` the visible-window winners (trades
 that *entered* inside the window), ``GET /launches`` the recent launches
 with their presented status and resume gate (#1938), and the run
 soft-delete verb replaces the GraphQL mutation. Storage is the
-four tables adopted from EF (ADR 0057); the numerical selection stays in
+four tables adopted from the retired EF schema (ADR 0057); the numerical selection stays in
 ``app.research.recency.stats``.
 """
 

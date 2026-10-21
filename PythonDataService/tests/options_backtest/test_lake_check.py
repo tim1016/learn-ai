@@ -157,7 +157,7 @@ async def test_a_day_the_plan_does_not_reach_is_asked_again_however_often_it_was
 
 # ── On the real catalog table ────────────────────────────────────────────
 # The twins of the tests above, against the real SQL. They skip without a database attested as disposable, and the
-# catalog table must exist (it is created by a .NET migration; see test_option_lake_catalog.py).
+# catalog table must exist (it is created by the SQL migrations; see test_option_lake_catalog.py).
 
 
 @respx.mock

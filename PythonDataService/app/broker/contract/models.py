@@ -2,7 +2,7 @@
 
 These are the **only** broker types allowed to cross the router boundary — no
 vendor SDK object escapes ``app/broker/<vendor>/``. Every model is Pydantic v2,
-snake_case (the .NET/Angular consumers expect snake_case), and constructed by a
+snake_case (the generated Angular types keep snake_case), and constructed by a
 vendor adapter at the ingestion boundary.
 
 Two conventions are load-bearing:

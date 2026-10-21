@@ -1,7 +1,7 @@
 """Public broker endpoints (curated subset).
 
 This is the *only* place outside ``app.broker.*`` that touches IBKR.
-The .NET backend and Angular frontend reach IBKR via these endpoints —
+The Angular frontend reaches IBKR via these endpoints —
 no tight coupling to ``ib_async`` types crosses this boundary.
 """
 

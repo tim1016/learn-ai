@@ -28,7 +28,7 @@ class SanitizationSummary(BaseModel):
 
 
 class SanitizedDataResponse(BaseModel):
-    """Typed response for the Python-to-.NET aggregate-bars boundary."""
+    """Typed response for the aggregate-bars boundary."""
 
     success: bool
     data: list[AggregateBar]

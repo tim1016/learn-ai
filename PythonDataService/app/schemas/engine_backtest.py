@@ -168,7 +168,7 @@ class EngineBacktestRequest(BaseModel):
     # so legacy callers (any pre-PR-B UI build) still work; when omitted, a
     # default block is synthesized from ``params.symbol`` + ``resolution``.
     # The shape mirrors ``app.lean_sidecar.data_policy.DataPolicy`` so the
-    # GraphQL/engine compare-view sees an identical schema on both engines.
+    # compare-view sees an identical schema on both engines.
     data_policy: _EngineDataPolicyModel | None = Field(
         None,
         description=(
@@ -392,9 +392,10 @@ class EngineTradeResponse(BaseModel):
     exit_time: int
     exit_price: float
     # Filled share/contract count from the engine's fill model. Required for
-    # downstream dollar-PnL persistence — without it, ``BacktestTrade.Quantity``
-    # defaults to 1 on the .NET side and the persisted PnL silently diverges
-    # from the actual run by a factor of ``quantity``. See
+    # downstream dollar-PnL persistence — without it, the persisted trade's
+    # quantity (``app.research.backtest_runs.records``) defaults to 1 and the
+    # persisted PnL silently diverges from the actual run by a factor of
+    # ``quantity``. See
     # ADR 0069 §6 → ``QUANTITY_MISMATCH``.
     quantity: int
     # Per-trade indicator snapshot captured at the entry signal. Keys depend

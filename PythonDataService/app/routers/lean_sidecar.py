@@ -328,8 +328,9 @@ class TrustedRunRequestModel(BaseModel):
 
     # Engine Lab parity — set when this run is the LEAN validating
     # companion of a Python engine run. Written onto the persisted
-    # StrategyExecution row; the .NET persist step computes the frozen
-    # ParityVerdict for the group when it lands.
+    # backtest-run row; the settle that follows the insert
+    # (app.research.backtest_runs.service) freezes the parity verdict for the
+    # group when it lands.
     parity_group_id: str | None = Field(
         default=None,
         max_length=64,
@@ -537,7 +538,7 @@ class TrustedRunResponseModel(BaseModel):
     normalized_parser_version: str | None = None
     total_order_events: int | None = None
     total_equity_points: int | None = None
-    # Task 1.10: the StrategyExecution.Id assigned by the .NET backend.
+    # Task 1.10: the backtest-run id the Python persist assigned.
     # ``None`` when persistence failed (logged; the run is not aborted).
     strategy_execution_id: int | None = None
     # The typed save outcome (#2464): ``saved``, ``failed``, or ``unknown``

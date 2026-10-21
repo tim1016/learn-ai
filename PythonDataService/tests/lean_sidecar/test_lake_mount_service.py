@@ -1,7 +1,7 @@
 """Orchestrator behavior when a run retains admitted lake inputs (#2455).
 
 Drives the real ``run_trusted_sample`` with only the process boundaries
-faked (the launcher HTTP call, the .NET persist call, and — for the
+faked (the launcher HTTP call, the persist call, and — for the
 flag-off comparison — the image-metadata extraction and the bar store's
 Polygon refill). No container is launched.
 

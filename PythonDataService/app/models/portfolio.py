@@ -84,7 +84,7 @@ class ScenarioRequest(BaseModel):
     """Request a portfolio scenario evaluation.
 
     `as_of_ms` is the evaluation timestamp; it determines TTM via
-    (expiration_ms - as_of_ms). The .NET caller passes `now()` for live
+    (expiration_ms - as_of_ms). The caller passes `now()` for live
     Greeks; passes a specific timestamp for what-if at a future date.
     """
 

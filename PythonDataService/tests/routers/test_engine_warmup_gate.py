@@ -52,7 +52,7 @@ def seeded_lake(monkeypatch, tmp_path: Path) -> Path:
 
 @pytest.fixture
 def recorded_persistence(monkeypatch) -> dict[str, list]:
-    """Capture the study save and parity dispatch instead of calling .NET."""
+    """Capture the study save and parity dispatch instead of calling the persistence step."""
     calls: dict[str, list] = {"save": [], "parity": []}
 
     def _save(**kwargs):

@@ -1,8 +1,8 @@
 """Recency Chart persistence and reads on the Python-owned tables (PRD #1927).
 
 Runs against the ephemeral database only (same attestation as the Grid
-Search suites). The semantics under test are the ones the .NET service and
-GraphQL query established — tombstone no-op, fingerprint sharing with
+Search suites). The semantics under test are the ones the retired C# service
+and GraphQL query established — tombstone no-op, fingerprint sharing with
 memberships, deleted-owner visibility, overlap-vs-entry windows,
 representative selection — plus the newer rules: a redelivered cell returns
 the existing run instead of creating a second one, and every launch write is

@@ -16,7 +16,7 @@ These tests pin the contract two ways:
    phase ids outside the registry.
    This is a static-source inspection rather than a runtime exercise —
    the workflow requires a registered strategy, a data
-   reader, the LEAN data root, and the .NET persistence shim, which
+   reader, the LEAN data root, and the persistence step, which
    are too expensive and brittle to mock from a unit test. The static
    check still catches the regression we care about (someone editing
    one place without the other) at well under 1 ms.

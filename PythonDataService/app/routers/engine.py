@@ -171,8 +171,8 @@ def run_engine_backtest(
 
     Used by tests, curl, and any caller that doesn't need streamed
     progress. The Engine Lab UI uses the Jobs system instead — see
-    ``POST /api/jobs/engine_backtest`` (defined in the .NET layer) which
-    forwards to ``/api/jobs-internal/engine-backtest`` here.
+    ``POST /api/jobs/engine_backtest`` (the jobs facade, ``app.jobs.facade``)
+    which forwards to ``/api/jobs-internal/engine-backtest`` here.
 
     The engine reads LEAN-format minute zips from the configured data
     root and produces trades that reproduce LEAN's reference log

@@ -280,8 +280,8 @@ def _data_policy_json_from_manifest(
     Accepts either a ``RunManifest`` dataclass (the in-process call-site
     has it as a typed object) or a manifest dict (the backfill CLI loads
     ``manifest.json`` from disk via ``json.loads``). Returns ``None`` if
-    the manifest isn't available, in which case the .NET persistence
-    layer preserves the row's ``DataPolicyJson`` as NULL.
+    the manifest isn't available, in which case ``record_from_payload``
+    (``app.research.backtest_runs.records``) synthesises the legacy data policy.
     """
     if manifest is None:
         return None
@@ -302,8 +302,8 @@ def _brokerage_policy_from_manifest(
     """Read the LEAN manifest's ``brokerage_policy`` enum.
 
     Returns ``None`` when the manifest is unavailable (legacy path / failed
-    runs that never built one) — the .NET persistence layer preserves NULL
-    rather than fabricating ``algorithm_default``, because LEAN runs may
+    runs that never built one) — ``record_from_payload`` leaves the brokerage
+    policy unknown rather than fabricating ``algorithm_default``, because LEAN runs may
     actually use Interactive Brokers (reconciliation template) and silently
     labeling them ``algorithm_default`` would corrupt compare-view gating.
     """
@@ -571,8 +571,8 @@ def build_persist_payload(
     PR B P1 fix (2026-05-20) — ``manifest`` (optional) lets the caller forward
     the LEAN ``RunManifest`` so the persist payload carries the true
     ``brokerage_policy`` and ``data_policy_json`` from the run. When omitted,
-    both fields are ``None`` on the payload and the .NET service preserves
-    NULL on the row (truthful "unknown") rather than fabricating
+    both fields are ``None`` on the payload and ``record_from_payload`` leaves
+    the brokerage policy unknown (truthful "unknown") rather than fabricating
     ``algorithm_default`` — which would mislabel Interactive Brokers
     reconciliation runs.
     """
@@ -759,7 +759,7 @@ def build_persist_payload(
         ),
         "lean_analysis_json": json.dumps(normalized.analysis, sort_keys=True),
         # PR B P1 fix — forward the manifest's brokerage/data_policy so the
-        # .NET row is the truthful record. ``commission_per_order`` stays at
+        # persisted row is the truthful record. ``commission_per_order`` stays at
         # 0 for LEAN: LEAN charges per-fill (captured in ``total_fees``),
         # not per-order, so there is no single configured-commission value
         # to surface here. The engine path is the one that actually
@@ -974,8 +974,8 @@ def _failed_run_payload(
         # for this row, at the appropriately lower "inferred" confidence.
         "metric_documentation_json": json.dumps((), sort_keys=True),
         # Even on failed runs we forward the manifest fields if available;
-        # the .NET service preserves NULL when the manifest is unavailable
-        # rather than fabricating ``algorithm_default``.
+        # ``record_from_payload`` leaves the brokerage policy unknown when the
+        # manifest is unavailable rather than fabricating ``algorithm_default``.
         "data_policy_json": _data_policy_json_from_manifest(manifest),
         "brokerage_policy": _brokerage_policy_from_manifest(manifest),
         "commission_per_order": 0.0,

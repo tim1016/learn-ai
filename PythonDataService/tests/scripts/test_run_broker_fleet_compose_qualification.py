@@ -91,7 +91,7 @@ def test_compose_topology_has_lane_budgets_and_live_mutation_stays_disabled() ->
     assert "POLYGON_API_KEY: ${POLYGON_API_KEY:-}" in compose
     assert "healthcheck:" in compose
     assert "/app/cache:size=256m,mode=1777" in compose
-    assert "TRUSTED_HOSTS: localhost,127.0.0.1,fleet-coordinator,backend" in compose
+    assert "TRUSTED_HOSTS: localhost,127.0.0.1,fleet-coordinator" in compose
     assert "alpaca-paper-clerk,alpaca-live-clerk,fleet-coordinator" in compose
     coordinator_env = (qualification.REPOSITORY_ROOT / "deploy/fleet/env/coordinator.env.example").read_text(encoding="utf-8")
     assert "POSTGRES_URL=" in coordinator_env
@@ -391,7 +391,7 @@ def test_command_admission_client_fails_loudly_if_the_read_hold_is_not_provably_
 
 
 def test_full_stack_overlay_suppresses_combined_and_retargets_ingress() -> None:
-    """The shipped Backend/Frontend resolve the coordinator, never combined mode."""
+    """The shipped Frontend resolves the coordinator, never combined mode."""
     if shutil.which("docker") is None and shutil.which("podman") is None:
         pytest.skip("requires Docker or Podman for a real Compose render")
     compose_command = qualification.ComposeCommand.discover().compose
@@ -437,7 +437,8 @@ def test_full_stack_overlay_suppresses_combined_and_retargets_ingress() -> None:
     )
     services = set(result.stdout.splitlines())
     assert "python-service" not in services
-    assert {"fleet-coordinator", "backend", "frontend"} <= services
+    assert {"fleet-coordinator", "frontend"} <= services
+    assert "backend" not in services
 
     rendered = subprocess.run(
         [
@@ -459,7 +460,6 @@ def test_full_stack_overlay_suppresses_combined_and_retargets_ingress() -> None:
         text=True,
         timeout=30,
     ).stdout
-    assert "PolygonService__BaseUrl: http://fleet-coordinator:8000" in rendered
     assert "DATA_PLANE_PROXY_TARGET: http://fleet-coordinator:8000" in rendered
 
 

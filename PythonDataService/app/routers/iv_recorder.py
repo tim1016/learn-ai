@@ -1,14 +1,14 @@
-"""IV recorder router — POST endpoint that .NET cron calls per slot.
+"""IV recorder router — POST endpoint that records one snapshot per ticker per slot.
 
-The .NET host's Quartz scheduler
-(``AddIvRecorder`` in ``Backend/Jobs/IvRecorderRegistration.cs``)
-registers one cron trigger per configured slot per ticker (default
-09:35 / 12:30 / 15:55 / 16:00 ET — 15:55 runs alongside 16:00 for the
-trial-month experiment in ADR 0071 decision 7) and calls this
-endpoint at each slot time. The endpoint is idempotent on
-``(ticker, snapshot_ts_ms)``: a duplicate fire writes a duplicate row,
-which is acceptable for the forward-only history use case (the read
-side de-dupes on ``snapshot_ts_ms``).
+A scheduler calls this endpoint at each slot time (default 09:35 / 12:30 /
+15:55 / 16:00 ET — 15:55 runs alongside 16:00 for the trial-month
+experiment in ADR 0071 decision 7). The cron that did so was a Quartz job in
+the C# backend; it was retired with that backend (ADR 0081) and nothing
+schedules this endpoint today. ``references/csharp-jobs/README.md`` keeps the
+old job and says where a Python clock could plug in. The endpoint is
+idempotent on ``(ticker, snapshot_ts_ms)``: a duplicate fire writes a
+duplicate row, which is acceptable for the forward-only history use case (the
+read side de-dupes on ``snapshot_ts_ms``).
 """
 
 from __future__ import annotations

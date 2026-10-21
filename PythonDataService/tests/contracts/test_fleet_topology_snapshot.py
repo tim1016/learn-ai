@@ -109,7 +109,7 @@ def test_snapshot_pins_lake_catalog_access_for_every_clerk_lane() -> None:
     not declare it at all -- ``environment:`` outranks ``env_file:``
     key-for-key, so even a ${}-templated superuser URL there would silently
     defeat the lane env files and hand a lane that also carries Alpaca
-    execution credentials the password the backend itself uses. The env
+    execution credentials the data plane's own superuser password. The env
     example files deliberately carry the documented line COMMENTED (the
     production rollout copies them verbatim and its clerks cannot reach
     ``db``), so the merged snapshot render resolves no value for the key --

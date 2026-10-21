@@ -10,7 +10,7 @@ the contract:
 
 Static-source inspection rather than a runtime exercise. The
 orchestrator needs the launcher process running, a fixture-staging
-file tree, and the .NET persist shim — too much I/O for a unit-level
+file tree, and the persist step — too much I/O for a unit-level
 contract test. The regression we care about (someone editing the
 registry without updating the call sites, or vice versa) is caught at
 well under 1 ms here. End-to-end behaviour is exercised by the

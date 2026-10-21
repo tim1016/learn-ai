@@ -27,7 +27,7 @@ SYMBOL_PATTERN = r"^[A-Z][A-Z0-9.\-]{0,11}$"
 
 
 class _CamelTolerantModel(BaseModel):
-    """Accepts camelCase (the .NET jobs passthrough) and snake_case (direct FastAPI calls)."""
+    """Accepts camelCase (the jobs facade's verbatim passthrough) and snake_case (direct FastAPI calls)."""
 
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
 

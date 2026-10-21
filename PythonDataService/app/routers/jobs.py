@@ -1,19 +1,20 @@
 """Internal job-execution endpoints.
 
-These routes are called by the .NET ``JobsController``, never directly
-from the browser. The .NET layer owns the public ``/jobs/{type}``
-endpoints, mints the ``job_id``, and writes the initial state record to
-Redis. Python receives the ``job_id`` and runs the actual work, emitting
-progress events to the same Redis keys.
+These routes are called by the jobs facade (``app.jobs.facade``, mounted at
+``/api/jobs`` by ``app.routers.jobs_facade``), never directly from the
+browser. The facade owns the public ``/api/jobs/{type}`` endpoints, mints
+the ``job_id``, writes the initial state record to Redis and dispatches the
+request here in-process. These routes receive the ``job_id`` and run the
+actual work, emitting progress events to the same Redis keys.
 
-The split keeps the architecture aligned with ADR 0068: Python
-owns the math, .NET is transport.
+The split keeps the type-agnostic lifecycle (state, events, cancel, result)
+in the facade and each type's schema and math here (ADR 0068).
 
 Field naming
 ------------
-Models accept **camelCase** at the wire because .NET hands the request
-body through verbatim (it doesn't transcode field names). Internally the
-fields are still ``snake_case`` per Python convention; Pydantic v2's
+Models accept **camelCase** at the wire because the facade hands the browser's
+request body through verbatim (it doesn't transcode field names). Internally
+the fields are still ``snake_case`` per Python convention; Pydantic v2's
 ``alias_generator=to_camel`` + ``populate_by_name=True`` lets the
 ingress route accept either form, so the same model works for in-process
 tests using snake_case kwargs.
@@ -64,7 +65,7 @@ polygon_client = PolygonClientService()
 
 
 class _CamelCaseModel(BaseModel):
-    """Base for job request bodies — accepts camelCase from .NET while
+    """Base for job request bodies — accepts the browser's camelCase while
     preserving snake_case in code."""
 
     model_config = ConfigDict(
@@ -75,7 +76,7 @@ class _CamelCaseModel(BaseModel):
 
 class _CamelCaseTickerRequest(TickerRequest):
     """Composes ``TickerRequest`` with the camelCase wire convention
-    used by .NET-forwarded job bodies.
+    used by the jobs facade's forwarded bodies.
 
     Pydantic quirk: a field-level ``validation_alias`` overrides the
     class's ``alias_generator``, so the base's ``from_date`` /
@@ -96,7 +97,7 @@ class _CamelCaseTickerRequest(TickerRequest):
     )
 
     # Re-declare with AliasChoices covering snake_case canonical + the
-    # camelCase wire variant the .NET JobsApi sends. Legacy snake_case
+    # camelCase wire variant the browser sends through the facade. Legacy snake_case
     # names (start_date / end_date / ticker) are no longer accepted
     # post-PR (iii).
     from_date: str = Field(
@@ -159,7 +160,7 @@ class EngineBacktestJobRequest(_CamelCaseModel):
 
     Mirrors the existing synchronous EngineBacktestRequest shape but
     accepts it as a ``backtest`` sub-object so the field validation
-    remains the single source of truth. The .NET JobsApi forwards the
+    remains the single source of truth. The jobs facade forwards the
     Engine Lab POST body verbatim plus an injected ``job_id``.
     """
 
@@ -173,7 +174,7 @@ class LeanEngineRunJobRequest(_CamelCaseModel):
     Wraps the existing synchronous ``TrustedRunRequestModel`` shape as a
     ``request`` sub-object so the lean-sidecar router's Pydantic
     validation remains the single source of truth for the payload. The
-    .NET JobsApi forwards the Engine Lab POST body verbatim plus an
+    jobs facade forwards the Engine Lab POST body verbatim plus an
     injected ``job_id``.
     """
 
@@ -185,7 +186,7 @@ class CrossSectionalJobRequest(_CamelCaseMultiTickerRequest):
     """Body of POST /api/jobs-internal/cross-sectional.
 
     The Frontend's research request, plus an injected ``job_id`` from the
-    .NET JobsApi.
+    jobs facade.
     """
 
     job_id: str = Field(..., min_length=1)
@@ -201,7 +202,7 @@ class FeatureResearchJobRequest(_CamelCaseTickerRequest):
 
     The runner fetches bars from Polygon itself — the Frontend sends only
     the symbol + date range + feature, no payload of OHLCV. This keeps
-    the .NET round-trip small and matches the cross-sectional pattern.
+    the request small and matches the cross-sectional pattern.
 
     Inherits all defaults from the base (``multiplier=1``,
     ``timespan="minute"``, ``session="rth"``) — those match the
@@ -247,8 +248,8 @@ async def start_dataset_zip_job(req: DatasetZipJobRequest) -> dict:
     plug those into :class:`ProgressEmitter` and
     :class:`CancellationCheck` respectively, so the inner code is
     unchanged. The final ZIP bytes go through ``completed_blob`` which
-    parks them at ``job:{id}:result-blob``; the .NET ``GET /api/jobs/
-    {id}/download`` streams them with the right Content-Disposition.
+    parks them at ``job:{id}:result-blob``; the jobs facade's ``GET /api/jobs/
+    {id}/download`` serves them with the right Content-Disposition.
     """
     # Validate the embedded dataset payload through the existing schema.
     try:
@@ -345,7 +346,7 @@ async def start_dataset_zip_job(req: DatasetZipJobRequest) -> dict:
 async def start_engine_backtest_job(req: EngineBacktestJobRequest) -> dict:
     """Kick off a LEAN-engine backtest in a worker thread. Returns 202.
 
-    The Engine Lab UI is the primary caller; the .NET JobsApi forwards
+    The Engine Lab UI is the primary caller; the jobs facade forwards
     the request after minting the ``job_id`` and writing the initial
     state record to Redis. The worker emits ``phase`` and ``log`` events
     to the same Redis stream, then ``completed`` with the

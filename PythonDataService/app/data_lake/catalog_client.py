@@ -724,16 +724,13 @@ class CatalogSchemaNotReadyError(RuntimeError):
     """A claim_* INSERT references a column or ON CONFLICT target the
     connected database doesn't have yet.
 
-    Wraps two Postgres SQLSTATEs, both symptoms of the same mid-deploy race:
-    python-service started serving traffic before Backend's EF Core
-    migrations finished applying. compose.yaml health-gates Backend on
-    python-service, not the other way around, and Backend applies migrations
-    during its own startup -- so there is a real window, on every deploy
-    that ships a migration a claim_* query depends on (e.g.
-    20260830120000_ActivateDataRootScopedCatalogIdentity's partial unique
-    indexes, or 20260830130000_AddLeaseGenerationToDataLakeArtifacts' new
-    column), where python-service is already reachable but the schema it
-    expects does not exist yet:
+    Wraps two Postgres SQLSTATEs, both symptoms of the same mismatch: the
+    schema the code expects does not exist in the connected database. The
+    data plane migrates its own schema (``app.db_schema``, ADR 0081) before it
+    serves, so what remains is a database restored from a backup older than
+    the code (a column or partial unique index a later migration adds is
+    missing) or one opened by a process before the data plane has migrated
+    it:
 
     - **42P10** (``invalid_column_reference`` / asyncpg's
       ``InvalidColumnReferenceError``): an ``ON CONFLICT (...) WHERE ...``
@@ -746,8 +743,8 @@ class CatalogSchemaNotReadyError(RuntimeError):
       later migration adds the matching index, the column error is the one
       that actually surfaces first for a schema pinned before either lands.
 
-    Safe to retry after a short delay once the migration completes; not
-    safe to retry immediately in a tight loop.
+    Safe to retry after a short delay once the database has been migrated;
+    not safe to retry immediately in a tight loop.
     """
 
 
@@ -759,7 +756,7 @@ async def _claim_fetchval(conn: asyncpg.Connection, query: str, *args: Any) -> i
     translate a schema-not-ready mismatch (Postgres 42P10 or 42703) into
     :class:`CatalogSchemaNotReadyError` instead of letting the raw asyncpg
     exception surface as an opaque 500. Any other ``PostgresError`` is
-    re-raised unchanged -- this narrowly targets the mid-deploy race
+    re-raised unchanged -- this narrowly targets the schema mismatch
     described in :class:`CatalogSchemaNotReadyError`'s docstring, not
     Postgres errors in general.
     """

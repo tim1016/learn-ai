@@ -1,4 +1,4 @@
-"""The parity verdict a LEAN companion freezes — ported from Backend.Tests ParityVerdictServiceTests."""
+"""The parity verdict a LEAN companion freezes — ported from the retired C# ParityVerdictServiceTests."""
 
 from __future__ import annotations
 

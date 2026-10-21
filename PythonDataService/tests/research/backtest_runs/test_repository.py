@@ -1,8 +1,8 @@
 """Backtest runs, trades and parity verdicts on the Python-owned tables (PRD #1929).
 
 Runs against the ephemeral database only (same attestation as the Grid
-Search and Recency suites). The semantics under test are the ones the .NET
-persistence service, GraphQL queries and parity API established: a
+Search and Recency suites). The semantics under test are the ones the retired
+C# persistence service, GraphQL queries and parity API established: a
 write-then-read round trip with every field intact, LEAN idempotency on the
 run id, newest-first history with an engine filter, the five-hundred-trade
 report bound, the Recency hard-delete guard, and first-terminal-state-wins

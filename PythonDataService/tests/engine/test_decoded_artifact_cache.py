@@ -442,7 +442,7 @@ def test_a_cached_engine_run_matches_the_uncached_run_exactly(reference_store, m
     from app.research.backtest_runs.service import SAVE_FAILED
     from app.services import engine_backtest_service as engine_service
 
-    # The .NET study save is best-effort and not what this test is about.
+    # The study save is best-effort and not what this test is about.
     monkeypatch.setattr(engine_service, "persist_engine_response_sync", lambda **kwargs: SAVE_FAILED)
 
     def normalized(response) -> dict:

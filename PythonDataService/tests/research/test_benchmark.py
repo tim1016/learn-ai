@@ -328,12 +328,11 @@ def test_the_connection_inventory_reports_and_never_repairs(monkeypatch: pytest.
     assert inventory["research_cap"] == 12
     assert inventory["required_free"] == 20
     # Every deployed pool is counted from its own source: the coordinator's
-    # two loops, the Backend's Npgsql default, and the fleet's clerk lanes.
+    # two loops and the fleet's clerk lanes.
     names = {pool["name"] for pool in inventory["pools"]}
     assert any("python-service" in name for name in names)
-    assert any("backend" in name for name in names)
     assert any("clerk" in name for name in names)
-    assert inventory["reserved_by_configured_pools"] == 20 + 100 + 10 + 10
+    assert inventory["reserved_by_configured_pools"] == 20 + 10 + 10
     assert inventory["vm_limits"] and "db" in inventory["vm_limits"], "VM maxima come from the fleet topology"
     # An unknown deployed server maximum leaves the verdict unverified —
     # never a pass guessed against an assumed limit.
@@ -345,17 +344,17 @@ def test_the_connection_inventory_reports_and_never_repairs(monkeypatch: pytest.
     monkeypatch.setenv("POSTGRES_SERVER_MAX_CONNECTIONS", "300")
     verified = connection_inventory()
     assert verified["verified"] is True
-    assert verified["free_at_server_without_research"] == 300 - 140
-    assert verified["free_after_research_cap"] == 300 - 140 - 12
+    assert verified["free_at_server_without_research"] == 300 - 40
+    assert verified["free_after_research_cap"] == 300 - 40 - 12
     assert verified["meets_required_free"] is True and verified["mismatch"] is None
 
 
 def test_an_under_provisioned_server_is_reported_as_a_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("POSTGRES_SERVER_MAX_CONNECTIONS", "150")
+    monkeypatch.setenv("POSTGRES_SERVER_MAX_CONNECTIONS", "70")
     inventory = connection_inventory()
 
     assert inventory["verified"] is True
-    assert inventory["free_after_research_cap"] == 150 - 140 - 12
+    assert inventory["free_after_research_cap"] == 70 - 40 - 12
     assert inventory["meets_required_free"] is False
     assert inventory["mismatch"] is not None and "research cap of 12" in inventory["mismatch"]
 

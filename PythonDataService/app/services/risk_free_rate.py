@@ -5,7 +5,7 @@ for example a pricing request that omits the field. It is also the rate
 ``app.services.fred_service.get_risk_free_rate`` returns when FRED cannot
 answer, so a caller that omits the rate and a caller whose lookup fails price
 at the same number. The live rate comes from FRED; this is only the default.
-.NET and Angular never restate it: they omit the field and let Python fill it.
+Angular never restates it: it omits the field and lets Python fill it.
 
 It is not the LEAN-parity Sharpe rate. The Sharpe and Sortino rate in
 ``app/engine/results/lean_statistics.py`` (0.0 by default, to match LEAN's

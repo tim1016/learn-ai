@@ -16,7 +16,7 @@ Canonical implementation: this file.
 Validated against: tests/research/recency/test_stats.py.
 
 Every number here is Python-authored per ADR 0068 (Python owns the
-canonical math) — .NET only passes these through and Angular only renders them.
+canonical math) — Angular only renders them.
 """
 
 from __future__ import annotations

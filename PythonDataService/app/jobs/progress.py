@@ -56,9 +56,10 @@ JOB_LEASE_TTL_SECONDS = 300
 MAX_STREAM_LENGTH = 50_000
 
 # How long any caller waits to connect to the job store, and then for any one
-# command to answer, before giving up. Every Python call here is a short
-# command (HSET, XADD, HGET, SMEMBERS, SET); the only long stream reads are
-# the .NET jobs facade's, on its own client.
+# command to answer, before giving up. Every call here is a short command
+# (HSET, XADD, HGET, SMEMBERS, SET); the jobs facade's event stream
+# (``app.jobs.facade``) polls with non-blocking XREAD rather than holding a
+# command open, so it fits the same bound.
 JOB_STORE_TIMEOUT_SECONDS = 5.0
 
 
@@ -123,15 +124,40 @@ def _active_set_key() -> str:
     return "jobs:active"
 
 
-def _bytes_redis() -> redis.Redis:
+# The key names above, for readers of this contract outside the module (the
+# public jobs facade, ``app.jobs.facade``).
+state_key = _state_key
+events_key = _events_key
+result_key = _result_key
+result_meta_key = _result_meta_key
+active_set_key = _active_set_key
+
+
+def _bytes_redis(timeout_s: float | None = None) -> redis.Redis:
     """A second client that does NOT decode responses — for binary blobs.
 
     The default pool decodes everything as utf-8, which is correct for
     the JSON-shaped event/state schema but corrupts ZIP/PDF/Parquet
     bytes. We open a parallel single-shot connection in raw bytes mode
-    when a job stores a binary result.
+    when a job stores a binary result. ``timeout_s`` bounds connecting and
+    each command; the writer leaves it unbounded (a large blob is one long
+    command), the reader passes ``JOB_STORE_TIMEOUT_SECONDS``.
     """
-    return redis.Redis.from_url(_redis_url(), decode_responses=False)
+    return redis.Redis.from_url(
+        _redis_url(),
+        decode_responses=False,
+        socket_connect_timeout=timeout_s,
+        socket_timeout=timeout_s,
+    )
+
+
+def read_result_blob(job_id: str) -> bytes | None:
+    """The binary result a job parked with :meth:`ProgressEmitter.completed_blob`, or None when absent or expired."""
+    bytes_client = _bytes_redis(JOB_STORE_TIMEOUT_SECONDS)
+    try:
+        return bytes_client.get(_result_blob_key(job_id))
+    finally:
+        bytes_client.close()
 
 
 # ---------------------------------------------------------------------------
@@ -386,8 +412,8 @@ class ProgressEmitter:
             completed_at=str(int(time.time() * 1000)),
             result_kind="json",
         )
-        # Public URL is served by the .NET layer at /api/jobs/{id}/result;
-        # the frontend never hits Python directly.
+        # Public URL is served by the jobs facade (app.jobs.facade) at
+        # /api/jobs/{id}/result.
         self._emit("job.completed", {"result_url": f"/api/jobs/{self.job_id}/result"})
         # Drop from active set — the events stream remains for late
         # subscribers, but the active list shouldn't carry this anymore.
@@ -399,8 +425,8 @@ class ProgressEmitter:
 
         The binary lives at ``job:{id}:result-blob`` (raw bytes — no JSON
         decoding) and the metadata at ``job:{id}:result-meta`` (filename,
-        content_type, size_bytes). The .NET layer's
-        ``GET /api/jobs/{id}/download`` reads both and streams the blob
+        content_type, size_bytes). The jobs facade's
+        ``GET /api/jobs/{id}/download`` reads both and serves the blob
         with a proper ``Content-Disposition`` header. This split keeps
         the JSON ``/result`` endpoint clean for value-bearing jobs and
         gives binary jobs a separate ``/download`` URL.

@@ -1,9 +1,9 @@
 """The API's forwarding client for research dispatches to the isolated runtime (#3043).
 
 When ``RESEARCH_EXECUTION_MODE=research``, the API keeps its HTTP contract
-with the job transport (.NET mints ids and still posts ``/api/jobs-internal``)
-but hands each research dispatch to the isolated research runtime over the
-internal boundary — the same private-target-enforced, redirect-refusing
+with the job transport (the jobs facade mints ids and still dispatches to
+``/api/jobs-internal``) but hands each research dispatch to the isolated
+research runtime over the internal boundary — the same private-target-enforced, redirect-refusing
 client the fleet uses, authenticated with the data-plane control secret both
 containers already share.
 

@@ -430,11 +430,10 @@ class BackfillJobRequest(BaseModel):
 
     Wraps the existing DataRunSpec ensure contract as a job submission:
     the same snake_case fields and validation as /ensure-data's body
-    (this router isn't behind the .NET-forwards-camelCase-verbatim
-    convention app/routers/jobs.py uses — it's called the same direct way
-    /ensure-data already is), plus a job_id the caller mints ahead of
-    dispatch, per the established job pattern's convention of the caller
-    minting the id before the worker starts writing progress against it.
+    (this router isn't behind the camelCase-verbatim convention
+    app/routers/jobs.py uses), plus a job_id the jobs facade mints ahead of
+    dispatch, per the established job pattern's convention of the id
+    existing before the worker starts writing progress against it.
     """
 
     model_config = ConfigDict(extra="forbid")

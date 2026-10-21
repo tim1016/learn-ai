@@ -66,7 +66,7 @@ def job_is_live(job_id: str | None) -> bool | None:
 
 
 def request_cancel(job_id: str) -> None:
-    """Set the same flag the .NET DELETE /api/jobs/{id} sets; the worker acknowledges by finishing the record."""
+    """Set the same flag DELETE /api/jobs/{id} (the jobs facade) sets; the worker acknowledges by finishing the record."""
     get_redis().hset(_state_key(job_id), "cancel_requested", "1")
 
 

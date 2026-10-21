@@ -179,7 +179,7 @@ class ResolvedRunConfiguration(BaseModel):
 # differ only in how progress is reported: the sync path passes no-op
 # callbacks (the response is the only signal); the Jobs worker forwards
 # every phase/log into a ProgressEmitter that writes Redis events the
-# .NET SSE layer streams to the browser. Keeping this as a callback pair
+# jobs facade's SSE stream sends to the browser. Keeping this as a callback pair
 # avoids importing ProgressEmitter into the hot path.
 # ---------------------------------------------------------------------------
 PhaseCallback = Callable[[str], None]
