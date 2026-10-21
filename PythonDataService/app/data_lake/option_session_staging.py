@@ -19,6 +19,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.config import settings
+from app.data_lake.path_policy import option_session_staged_files
 from app.engine.live.identity import confine_path_to_root
 from app.utils.advisory_lock import advisory_file_lock, try_advisory_file_lock
 from app.utils.atomic_file import atomic_write_bytes
@@ -112,7 +113,7 @@ class OptionSessionStaging:
         # Session publications made before the dedicated namespace also count;
         # stock/legacy option writers keep their existing independent policy.
         paths = chain(walk(self.root), walk(self.publication_root),
-                      self.base.glob("*/*/attempt_*/option/usa/session/v1/**/*.tmp"))
+                      option_session_staged_files(self.base))
         used = _METADATA_BYTES
         for path in paths:
             self._path(path)
