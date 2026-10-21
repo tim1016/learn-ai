@@ -1365,13 +1365,14 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
         dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
     )
     app.include_router(golden_search.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])
-    from app.routers import options_golden_search
+    from app.routers import options_failure_evidence, options_golden_search
 
     app.include_router(
         options_golden_search.router, prefix="/api/research/options-golden-search",
         tags=["research-options-golden-search"], dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
     )
     app.include_router(options_golden_search.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])
+    app.include_router(options_failure_evidence.router, prefix="/api/research/options-golden-search", tags=["options-golden-search"])
     # Options Backtest, reading a saved run closely (#3030): trades, one session, the export, two runs compared.
     # Registered BEFORE ``options_backtest_runs`` so the literal ``/runs/compare`` wins against its ``/runs/{run_id}``.
     from app.routers import options_backtest_run_detail

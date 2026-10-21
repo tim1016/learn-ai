@@ -46610,6 +46610,324 @@
         "title": "OptionsExpirationsResponse",
         "type": "object"
       },
+      "OptionsFailureEvent": {
+        "properties": {
+          "at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "At Ms",
+            "type": "integer"
+          },
+          "close_filled_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Close Filled At Ms"
+          },
+          "code": {
+            "enum": [
+              "missing_held_mark",
+              "unclosed_position"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "contract": {
+            "title": "Contract",
+            "type": "string"
+          },
+          "expected_input_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Input Sha256"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "leg_id": {
+            "title": "Leg Id",
+            "type": "string"
+          },
+          "retained_path": {
+            "title": "Retained Path",
+            "type": "string"
+          },
+          "session_open_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Session Open Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "session_open_ms",
+          "at_ms",
+          "leg_id",
+          "contract",
+          "retained_path",
+          "expected_input_sha256",
+          "close_filled_at_ms",
+          "explanation"
+        ],
+        "title": "OptionsFailureEvent",
+        "type": "object"
+      },
+      "OptionsFailureEvidence": {
+        "properties": {
+          "candidate_hash": {
+            "title": "Candidate Hash",
+            "type": "string"
+          },
+          "eligible_fold_winners": {
+            "title": "Eligible Fold Winners",
+            "type": "integer"
+          },
+          "end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "evidence_blob_sha256": {
+            "title": "Evidence Blob Sha256",
+            "type": "string"
+          },
+          "evidence_identity": {
+            "title": "Evidence Identity",
+            "type": "string"
+          },
+          "final_exposure": {
+            "enum": [
+              "not_opened",
+              "opened",
+              "not_recorded"
+            ],
+            "title": "Final Exposure",
+            "type": "string"
+          },
+          "forward_fold_count": {
+            "title": "Forward Fold Count",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsFailureEvent"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "missing_held_marks": {
+            "title": "Missing Held Marks",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "present_held_marks": {
+            "title": "Present Held Marks",
+            "type": "integer"
+          },
+          "replayed_sessions": {
+            "title": "Replayed Sessions",
+            "type": "integer"
+          },
+          "required_held_marks": {
+            "title": "Required Held Marks",
+            "type": "integer"
+          },
+          "risk_complete": {
+            "title": "Risk Complete",
+            "type": "boolean"
+          },
+          "scheduled_sessions": {
+            "title": "Scheduled Sessions",
+            "type": "integer"
+          },
+          "scope": {
+            "enum": [
+              "development",
+              "final"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "setup_name": {
+            "title": "Setup Name",
+            "type": "string"
+          },
+          "start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Start Ms",
+            "type": "integer"
+          },
+          "study_id": {
+            "title": "Study Id",
+            "type": "string"
+          },
+          "technical_failures": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Technical Failures",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "traded_sessions": {
+            "title": "Traded Sessions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "study_id",
+          "setup_name",
+          "candidate_hash",
+          "scope",
+          "evidence_identity",
+          "evidence_blob_sha256",
+          "start_ms",
+          "end_ms",
+          "scheduled_sessions",
+          "replayed_sessions",
+          "traded_sessions",
+          "required_held_marks",
+          "present_held_marks",
+          "missing_held_marks",
+          "forward_fold_count",
+          "eligible_fold_winners",
+          "final_exposure",
+          "risk_complete",
+          "technical_failures",
+          "items",
+          "total",
+          "offset",
+          "limit"
+        ],
+        "title": "OptionsFailureEvidence",
+        "type": "object"
+      },
+      "OptionsFailureInspection": {
+        "properties": {
+          "candidate_hash": {
+            "title": "Candidate Hash",
+            "type": "string"
+          },
+          "code": {
+            "enum": [
+              "no_eligible_trade_bar",
+              "retained_file_unavailable",
+              "retained_file_corrupt",
+              "retained_file_unreadable",
+              "retained_input_changed",
+              "retained_input_not_recorded",
+              "retained_input_recorded_absent",
+              "retained_mark_input_disagreement"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "contains_eligible_trade_bar": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contains Eligible Trade Bar"
+          },
+          "event_id": {
+            "title": "Event Id",
+            "type": "string"
+          },
+          "evidence_identity": {
+            "title": "Evidence Identity",
+            "type": "string"
+          },
+          "expected_input_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Input Sha256"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "input_verified": {
+            "title": "Input Verified",
+            "type": "boolean"
+          },
+          "retained_path": {
+            "title": "Retained Path",
+            "type": "string"
+          },
+          "snapshot_input_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Input Sha256"
+          },
+          "study_id": {
+            "title": "Study Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "study_id",
+          "candidate_hash",
+          "evidence_identity",
+          "event_id",
+          "code",
+          "retained_path",
+          "expected_input_sha256",
+          "snapshot_input_sha256",
+          "input_verified",
+          "contains_eligible_trade_bar",
+          "explanation"
+        ],
+        "title": "OptionsFailureInspection",
+        "type": "object"
+      },
       "OptionsResumeRequest": {
         "additionalProperties": false,
         "description": "An explicit recovery command; its key never authorizes a second active run.",
@@ -89265,6 +89583,196 @@
         "summary": "Candidate Evidence",
         "tags": [
           "research-options-golden-search"
+        ]
+      }
+    },
+    "/api/research/options-golden-search/studies/{study_id}/candidate-evidence/{candidate_hash}/failures": {
+      "get": {
+        "operationId": "failures_api_research_options_golden_search_studies__study_id__candidate_evidence__candidate_hash__failures_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "study_id",
+            "required": true,
+            "schema": {
+              "pattern": "^os_[a-f0-9]{40}$",
+              "title": "Study Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "candidate_hash",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-f0-9]{64}$",
+              "title": "Candidate Hash",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window",
+            "required": false,
+            "schema": {
+              "default": "development",
+              "enum": [
+                "development",
+                "final"
+              ],
+              "title": "Window",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsFailureEvidence"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Failures",
+        "tags": [
+          "options-golden-search"
+        ]
+      }
+    },
+    "/api/research/options-golden-search/studies/{study_id}/candidate-evidence/{candidate_hash}/failures/inspect": {
+      "get": {
+        "operationId": "inspect_failure_api_research_options_golden_search_studies__study_id__candidate_evidence__candidate_hash__failures_inspect_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "study_id",
+            "required": true,
+            "schema": {
+              "pattern": "^os_[a-f0-9]{40}$",
+              "title": "Study Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "candidate_hash",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-f0-9]{64}$",
+              "title": "Candidate Hash",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "session_open_ms",
+            "required": true,
+            "schema": {
+              "maximum": 253402300799999,
+              "minimum": 0,
+              "title": "Session Open Ms",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "at_ms",
+            "required": true,
+            "schema": {
+              "maximum": 253402300799999,
+              "minimum": 0,
+              "title": "At Ms",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "leg_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Leg Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window",
+            "required": false,
+            "schema": {
+              "default": "development",
+              "enum": [
+                "development",
+                "final"
+              ],
+              "title": "Window",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsFailureInspection"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Inspect Failure",
+        "tags": [
+          "options-golden-search"
         ]
       }
     },
