@@ -213,8 +213,8 @@ cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest 
 The Python suite runs from a host venv; create it once with
 `./bootstrap-host-venv.sh`. Locally, run the tests your change touches. CI runs
 every quick test (Python in 16 shards, Frontend in 6), each job sized to finish
-in two minutes and failed only past three, and applies the same three-minute
-limit to backend tests. Slow and
+in two minutes and warned about past that (time never fails a job), and holds
+backend tests to the same two minutes. Slow and
 PostgreSQL-backed Python tests, PostgreSQL-backed .NET integration tests, and
 browser end-to-end coverage run daily in GitHub Actions. See
 [`.claude/rules/testing.md`](../../.claude/rules/testing.md).

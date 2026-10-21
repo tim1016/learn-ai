@@ -1,9 +1,13 @@
-"""Run the quick Python tests: balanced to finish in two minutes, failed past three.
+"""Run the quick Python tests: balanced to finish in two minutes, warned past that.
 
 A quick test is any test not marked ``slow``, wherever it lives: the runner
 collects pytest.ini's ``testpaths``, the same roots the daily run collects.
 Tests that need PostgreSQL skip without ``POSTGRES_URL`` and run daily, with
 the ``slow`` ones.
+
+Time never fails the run (owner decision, 2026-10-20): only the tests decide
+the exit code. A shard past its target says so in the log, the step summary
+and a GitHub warning annotation, and is the next one to trim.
 """
 
 from __future__ import annotations
@@ -11,7 +15,6 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import signal
 import subprocess
 import sys
 import time
@@ -20,12 +23,9 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-#: What a shard is balanced to finish within. A run past it still passes, but
-#: says so in the log and the step summary: rebalance or move slow tests.
+#: What a shard is balanced to finish within. A run past it still passes or
+#: fails on its tests alone, and warns: trim its slowest tests into the daily run.
 TEST_TARGET_SECONDS = 120
-
-#: The hard limit: a run still going here is killed and fails with 124.
-TEST_BUDGET_SECONDS = 180
 
 
 def pytest_command(
@@ -70,30 +70,18 @@ def pytest_command(
     return command
 
 
-def _stop_process_group(process: subprocess.Popen[bytes]) -> None:
-    try:
-        if os.name == "posix":
-            os.killpg(process.pid, signal.SIGKILL)
-        else:  # pragma: no cover - CI and supported developer hosts are POSIX
-            process.kill()
-    except ProcessLookupError:
-        # The coordinator can finish between wait(timeout=...) expiring and the
-        # kill. It still crossed the budget and returns 124 below.
-        pass
-
-
 def report_elapsed_seconds(
     elapsed: float,
     *,
     shard_index: int | None,
     shard_count: int | None,
-    exceeded_budget: bool,
 ) -> str:
     """Report the run's wall time to the log and the CI step summary.
 
     Each shard prints its own time (#2682) so budget drift is visible in a
-    run's summary page before a shard fails a PR at 99 % with no test
-    failure. ``GITHUB_STEP_SUMMARY`` is set by GitHub Actions only.
+    run's summary page. A shard past its target also raises a GitHub warning
+    annotation, which shows on the run without opening the log.
+    ``GITHUB_STEP_SUMMARY`` and ``GITHUB_ACTIONS`` are set by GitHub Actions only.
     """
     scope = (
         f"shard {shard_index}/{shard_count}"
@@ -103,10 +91,18 @@ def report_elapsed_seconds(
     over_target = elapsed > TEST_TARGET_SECONDS
     message = (
         f"Python PR tests ({scope}) took {elapsed:.1f}s of the "
-        f"{TEST_TARGET_SECONDS}-second target ({TEST_BUDGET_SECONDS}-second limit)"
-        + (" (limit exceeded)" if exceeded_budget else " (over target)" if over_target else "")
+        f"{TEST_TARGET_SECONDS}-second target" + (" (over target)" if over_target else "")
     )
     logger.log(logging.WARNING if over_target else logging.INFO, "%s", message)
+    if over_target and os.environ.get("GITHUB_ACTIONS") == "true":
+        # A workflow command is read from stdout; the log above goes to stderr.
+        sys.stdout.write(
+            f"::warning title=Python PR tests ({scope}) are over their "
+            f"{TEST_TARGET_SECONDS}-second target::Took {elapsed:.1f}s. This does not fail "
+            "the run. To trim it, mark its slowest tests slow so they run in the daily "
+            "suite, or rebalance the shards.\n"
+        )
+        sys.stdout.flush()
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
         try:
@@ -128,34 +124,20 @@ def run_fast_tests(
     shard_count: int | None = None,
     junitxml: Path | None = None,
 ) -> int:
-    """Run pytest and return 124 when the suite passes the hard limit."""
+    """Run pytest and return pytest's own exit code, however long it took."""
     started = time.monotonic()
-    process = subprocess.Popen(
+    returncode = subprocess.run(
         pytest_command(
             shard_index=shard_index,
             shard_count=shard_count,
             junitxml=junitxml,
         ),
-        start_new_session=os.name == "posix",
-    )
-    exceeded = False
-    try:
-        returncode = process.wait(timeout=TEST_BUDGET_SECONDS)
-    except subprocess.TimeoutExpired:
-        _stop_process_group(process)
-        process.wait()
-        returncode = 124
-        exceeded = True
-        logger.error(
-            "Python PR tests exceeded the hard %d-second limit. "
-            "Move expensive coverage to the daily suite or make it faster.",
-            TEST_BUDGET_SECONDS,
-        )
+        check=False,
+    ).returncode
     report_elapsed_seconds(
         time.monotonic() - started,
         shard_index=shard_index,
         shard_count=shard_count,
-        exceeded_budget=exceeded,
     )
     return returncode
 

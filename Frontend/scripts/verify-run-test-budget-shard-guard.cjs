@@ -11,11 +11,11 @@ const { spawnSync } = require('node:child_process');
 // the caller already passed a --runner-config), preselect that shard's specs
 // before Angular compiles them, and run them without
 // the guard scripts CI runs once elsewhere (#2882), and default
-// NG_BUILD_MAX_WORKERS=2 on the spawned child. It also holds a run to two
-// time limits (#2873): past the two-minute target the run keeps its own exit
-// code and says so, and past the three-minute limit it is killed and fails.
-// In CI both are measured from the job's start, which the workflow records as
-// the job's first step; locally, from the wrapper's own start.
+// NG_BUILD_MAX_WORKERS=2 on the spawned child. It also times a run against a
+// two-minute target (#2873): time never fails the run, so past the target the
+// run keeps its own exit code and warns. In CI the time is measured from the
+// job's start, which the workflow records as the job's first step; locally,
+// from the wrapper's own start.
 // This stubs the "npm" the wrapper spawns so each case runs in milliseconds
 // and asserts on the exact argv/env/exit status the wrapper produces.
 
@@ -62,13 +62,14 @@ const CASE_DRIVEN_ENV_VARS = [
   'FAKE_NPM_EXIT_CODE',
   'FAKE_NPM_RUN_MS',
   'GITHUB_STEP_SUMMARY',
+  'GITHUB_ACTIONS',
 ];
 
 // Runs the real wrapper as a child process with a stubbed "npm" ahead of the
 // real one on PATH, so we assert on what the wrapper actually spawns rather
-// than on its source text. `limits` swaps the wrapper's two-minute target and
-// three-minute limit for ones a case can cross in milliseconds; without it
-// the wrapper runs exactly as `npm test` runs it.
+// than on its source text. `limits` swaps the wrapper's two-minute target for
+// one a case can cross in milliseconds; without it the wrapper runs exactly
+// as `npm test` runs it.
 function runWrapper({ args = [], env = {}, limits = null } = {}) {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'run-test-budget-guard-'));
   const captureFile = path.join(scratch, 'capture.json');
@@ -192,7 +193,7 @@ function runWrapper({ args = [], env = {}, limits = null } = {}) {
 // appends the same line to the CI step summary when GitHub Actions provides
 // the path — one line per shard so budget drift is readable from a run's
 // summary page without opening each job. A run under its target says nothing
-// more than that line, which names both limits `npm test` runs under.
+// more than that line, and raises no annotation.
 {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'run-test-budget-summary-'));
   const summaryFile = path.join(scratch, 'summary.md');
@@ -202,16 +203,18 @@ function runWrapper({ args = [], env = {}, limits = null } = {}) {
         TEST_SHARD_INDEX: '2',
         TEST_SHARD_COUNT: '6',
         GITHUB_STEP_SUMMARY: summaryFile,
+        GITHUB_ACTIONS: 'true',
       },
     });
     assert.equal(result.status, 0);
-    const expected = /^Frontend tests shard 2\/6: \d+(\.\d+)?s of the 120s target \(180s limit\)\n$/;
+    const expected = /^Frontend tests shard 2\/6: \d+(\.\d+)?s of the 120s target\n$/;
     assert.match(
       fs.readFileSync(summaryFile, 'utf8'),
       expected,
       'the wrapper must append the shard time to the step summary',
     );
     assert.match(result.stderr, expected, 'a run under its target must print its time and nothing else');
+    assert.equal(result.stdout, '', 'a run under its target must raise no annotation');
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
   }
@@ -226,7 +229,7 @@ function runWrapper({ args = [], env = {}, limits = null } = {}) {
   assert.equal(result.status, 0);
   assert.match(
     result.stderr,
-    /Frontend tests shard 3\/6: \d+(\.\d+)?s of the 120s target \(180s limit\)\n$/,
+    /Frontend tests shard 3\/6: \d+(\.\d+)?s of the 120s target\n$/,
   );
 }
 
@@ -245,30 +248,33 @@ function runWrapper({ args = [], env = {}, limits = null } = {}) {
   }
 }
 
-// Past the target and inside the limit (#2873): the run is not failed for
-// its time. It keeps the child's own exit code, here a failing one (the job
-// case below keeps a passing one), and says so on stderr and in the step
-// summary.
+// Past the target (#2873): the run is not failed for its time, however far
+// past it goes. It keeps the child's own exit code, here a failing one (the
+// job cases below keep a passing one), and says so on stderr, in the step
+// summary and, on GitHub Actions, as a warning annotation. The fake runs four
+// times the target, which an enforced limit would have stopped.
 {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'run-test-budget-summary-'));
   const summaryFile = path.join(scratch, 'summary.md');
   try {
     const { result, finished } = runWrapper({
-      limits: { targetMs: 0 },
+      limits: { targetMs: 100 },
       env: {
         TEST_SHARD_INDEX: '4',
         TEST_SHARD_COUNT: '6',
         FAKE_NPM_EXIT_CODE: '7',
+        FAKE_NPM_RUN_MS: '400',
         GITHUB_STEP_SUMMARY: summaryFile,
+        GITHUB_ACTIONS: 'true',
       },
     });
     assert.equal(result.status, 7, 'a run past its target must keep the exit code of its tests');
     assert.ok(finished, 'a run past its target must be left to finish');
-    const timeLine = /Frontend tests shard 4\/6: \d+(\.\d+)?s of the 0s target \(180s limit\) \(over target\)\n$/;
+    const timeLine = /Frontend tests shard 4\/6: \d+(\.\d+)?s of the 0\.1s target \(over target\)\n$/;
     assert.match(result.stderr, timeLine);
     assert.match(
       result.stderr,
-      /Frontend tests shard 4\/6 took longer than the 0-second target\. That alone does not fail the run; only the 180-second limit does\./,
+      /Frontend tests shard 4\/6 took longer than the 0\.1-second target\. That does not fail the run\./,
       'a run past its target must say so',
     );
     assert.match(
@@ -276,40 +282,19 @@ function runWrapper({ args = [], env = {}, limits = null } = {}) {
       new RegExp(`^${timeLine.source}`),
       'a run past its target must say so in the step summary',
     );
-  } finally {
-    fs.rmSync(scratch, { recursive: true, force: true });
-  }
-}
-
-// Past the limit (#2873): the run is killed where it stands and fails with
-// 124, and the message names both numbers.
-{
-  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'run-test-budget-summary-'));
-  const summaryFile = path.join(scratch, 'summary.md');
-  try {
-    const { result, finished } = runWrapper({
-      limits: { targetMs: 100, limitMs: 300 },
-      env: { FAKE_NPM_RUN_MS: '30000', GITHUB_STEP_SUMMARY: summaryFile },
-    });
-    assert.equal(result.status, 124, 'a run past its limit must exit 124');
-    assert.ok(!finished, 'a run past its limit must be killed, not waited for');
     assert.match(
-      result.stderr,
-      /Frontend tests exceeded the hard 0\.3-second limit \(the target is 0\.1 seconds\)\./,
+      result.stdout,
+      /^::warning title=Frontend tests shard 4\/6 are over their 0\.1-second target::The run took \d+\.\ds\. This does not fail the run\. .+\n$/,
+      'a run past its target must raise a warning annotation on GitHub Actions',
     );
-    const timeLine = /Frontend tests: \d+(\.\d+)?s of the 0\.1s target \(0\.3s limit\) \(limit exceeded\)\n$/;
-    assert.match(result.stderr, timeLine);
-    assert.doesNotMatch(result.stderr, /does not fail the run/);
-    assert.match(fs.readFileSync(summaryFile, 'utf8'), new RegExp(`^${timeLine.source}`));
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
   }
 }
 
-// In CI the target and the limit bind the whole job, not only its test step
-// (#2873): the workflow records the job's start as its first step, and the
-// time the job spent before the tests counts. `agoMs` is how long ago that
-// first step ran.
+// In CI the target binds the whole job, not only its test step (#2873): the
+// workflow records the job's start as its first step, and the time the job
+// spent before the tests counts. `agoMs` is how long ago that first step ran.
 const jobStartedAgo = (agoMs) => ({ CI_JOB_STARTED_AT_MS: String(Date.now() - agoMs) });
 
 // A job that started 20 s ago and is still under its target: one quiet line
@@ -320,7 +305,7 @@ const jobStartedAgo = (agoMs) => ({ CI_JOB_STARTED_AT_MS: String(Date.now() - ag
   });
   assert.equal(result.status, 0);
   const line = result.stderr.match(
-    /^Frontend tests shard 2\/6: job (\d+\.\d)s of the 120s target \(180s limit\), tests (\d+\.\d)s\n$/,
+    /^Frontend tests shard 2\/6: job (\d+\.\d)s of the 120s target, tests (\d+\.\d)s\n$/,
   );
   assert.ok(line, `a job under its target must print its time and nothing else, got ${JSON.stringify(result.stderr)}`);
   assert.ok(Number(line[1]) >= 20, 'the time the job spent before the tests must count');
@@ -328,7 +313,8 @@ const jobStartedAgo = (agoMs) => ({ CI_JOB_STARTED_AT_MS: String(Date.now() - ag
 }
 
 // A job already past its target before the tests start: the tests run, the
-// job passes on their exit code, and it says so.
+// job passes on their exit code, and it says so. Off GitHub Actions (no
+// GITHUB_ACTIONS) the run writes no workflow command.
 {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'run-test-budget-summary-'));
   const summaryFile = path.join(scratch, 'summary.md');
@@ -344,11 +330,11 @@ const jobStartedAgo = (agoMs) => ({ CI_JOB_STARTED_AT_MS: String(Date.now() - ag
     assert.equal(result.status, 0, 'a job past its target before its tests start must still pass');
     assert.ok(finished, 'a job past its target must have its tests left to finish');
     const timeLine =
-      /Frontend tests shard 4\/6: job 1[3-7]\d\.\ds of the 120s target \(180s limit\), tests \d+\.\ds \(over target\)\n$/;
+      /Frontend tests shard 4\/6: job 1[3-7]\d\.\ds of the 120s target, tests \d+\.\ds \(over target\)\n$/;
     assert.match(result.stderr, timeLine);
     assert.match(
       result.stderr,
-      /The CI job for frontend tests shard 4\/6 took longer than the 120-second target\. That alone does not fail the run; only the 180-second limit does\./,
+      /The CI job for frontend tests shard 4\/6 took longer than the 120-second target\. That does not fail the run\./,
       'a job past its target must say so',
     );
     assert.match(
@@ -356,45 +342,27 @@ const jobStartedAgo = (agoMs) => ({ CI_JOB_STARTED_AT_MS: String(Date.now() - ag
       new RegExp(`^${timeLine.source}`),
       'a job past its target must say so in the step summary',
     );
+    assert.doesNotMatch(result.stdout, /::warning/, 'a run off GitHub Actions must write no workflow command');
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
   }
 }
 
-// The kill comes when the JOB reaches its limit: the tests get what the
-// job's earlier steps left of it, not a fresh limit of their own. Here the
-// job is 20 s into a 20.5 s limit, and tests that need 4 s are stopped.
+// A job already past three minutes before the tests start is not stopped
+// either: they run, and their exit code is the job's. This used to fail the
+// job with 124 without running them.
 {
-  const { result, finished } = runWrapper({
-    limits: { targetMs: 10_000, limitMs: 20_500 },
-    env: { FAKE_NPM_RUN_MS: '4000', ...jobStartedAgo(20_000) },
+  const { result, capture, finished } = runWrapper({
+    env: { ...jobStartedAgo(200_000), GITHUB_ACTIONS: 'true' },
   });
-  assert.equal(result.status, 124, 'a job that reaches its limit during its tests must exit 124');
-  assert.ok(!finished, 'the tests must be killed when the job reaches its limit');
+  assert.equal(result.status, 0, 'a job past three minutes before its tests start must still pass');
+  assert.ok(capture, 'a job far past its target must still start its tests');
+  assert.ok(finished, 'a job far past its target must have its tests left to finish');
   assert.match(
     result.stderr,
-    /The CI job for frontend tests exceeded the hard 20\.5-second limit \(the target is 10 seconds\)/,
+    /Frontend tests: job 2\d\d\.\ds of the 120s target, tests \d+\.\ds \(over target\)\n$/,
   );
-  assert.match(
-    result.stderr,
-    /Frontend tests: job 2\d\.\ds of the 10s target \(20\.5s limit\), tests \d+\.\ds \(limit exceeded\)\n$/,
-  );
-}
-
-// A job already past its limit before the tests start fails without running
-// them, and says that is why.
-{
-  const { result, capture } = runWrapper({ env: jobStartedAgo(200_000) });
-  assert.equal(result.status, 124, 'a job already past its limit must exit 124');
-  assert.equal(capture, null, 'a job already past its limit must not start its tests');
-  assert.match(
-    result.stderr,
-    /The CI job for frontend tests exceeded the hard 180-second limit \(the target is 120 seconds\) before the tests started, so they were not run\./,
-  );
-  assert.match(
-    result.stderr,
-    /Frontend tests: job 2\d\d\.\ds of the 120s target \(180s limit\), tests \d+\.\ds \(limit exceeded\)\n$/,
-  );
+  assert.match(result.stdout, /^::warning title=Frontend tests are over their 120-second target::The job took 2\d\d\.\ds\. /);
 }
 
 // A recorded start that cannot be this job's is named in one line and
@@ -414,7 +382,7 @@ for (const [unusable, problem] of [
     new RegExp(
       `^CI_JOB_STARTED_AT_MS="${unusable}" ${problem}, so the job's earlier steps are not counted: ` +
         'timing the frontend tests from their own start\\.\\n' +
-        'Frontend tests: \\d+\\.\\ds of the 120s target \\(180s limit\\)\\n$',
+        'Frontend tests: \\d+\\.\\ds of the 120s target\\n$',
     ),
     `a job start that ${problem} must be named and ignored`,
   );
