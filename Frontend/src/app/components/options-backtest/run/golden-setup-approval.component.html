@@ -1,6 +1,7 @@
 <section class="golden-approval">
   <h3>Golden setup</h3>
   @if (golden(); as version) {
+    <a [routerLink]="['/options-evidence/golden', version.id]" [queryParams]="{ view: 'lineage' }">Inspect this exact version and its origin</a>
     <p><strong>{{ version.status | receiptLabel }}</strong> · {{ version.status_explanation }}</p>
     <app-options-qualification-evidence [evidence]="version.evidence" />
     <p>Approved by {{ version.approved_by }}: {{ version.note }}</p>

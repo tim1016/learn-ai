@@ -2,6 +2,7 @@
 <main class="workbench">
   @if (error(); as message) { <p class="notice problem">{{ message }}</p> }
   @if (study(); as value) {
+    <a [routerLink]="['/options-evidence/study', value.id]">Open this study's evidence workspace</a>
     <nav class="steps">@for (label of steps; track label; let i = $index) { <button type="button" [class.active]="step() === i + 3" (click)="chooseStep(i + 3)">{{ label }}</button> }</nav>
     <div class="actions"><button type="button" [disabled]="busy()" (click)="refresh()">Refresh study</button><a class="action-link" routerLink="/options-golden-search">New study and history</a></div>
     <app-options-search-study [study]="value" [step]="step()" [busy]="busy()" [sessionLoader]="sessionLoader" (action)="command($event)" />

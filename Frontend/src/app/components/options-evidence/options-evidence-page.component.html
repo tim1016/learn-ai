@@ -1,0 +1,51 @@
+<main class="workspace">
+  <nav class="return"><a routerLink="/options-backtest">Options Backtest</a><a routerLink="/options-golden-search">Options Search</a><button type="button" (click)="workspace.reload()">Refresh evidence</button></nav>
+  @if (workspace.isLoading()) { <p>Reading exact strategy evidence…</p> }
+  @if (problem(); as why) { <p class="problem">{{ why }}</p><button type="button" (click)="workspace.reload()">Retry evidence</button> }
+  @if (evidence(); as item) {
+    <header><app-asset-identity [symbol]="item.setup.underlying" size="sm" /><h1>{{ item.name }}</h1><p>{{ item.subject_kind | receiptLabel }} {{ item.subject_id }}</p></header>
+    <div class="legs">@for (leg of item.setup.legs; track leg.leg_id) { <p><strong>{{ leg.right | receiptLabel }}</strong> {{ leg.contracts }} contract(s). Momentum {{ leg.momentum?.value ?? 'Off' }} {{ leg.momentum?.kind | receiptLabel }}; stop {{ leg.stop_loss?.value ?? 'Off' }} {{ leg.stop_loss?.kind | receiptLabel }}. @if (leg.reentry_on_stop) { Re-entry {{ leg.reentry_on_stop.kind | receiptLabel }}. } @else { No re-entry. }</p> }</div>
+    <section class="verdict"><div><h2>{{ item.headline }}</h2><p>{{ item.replay.explanation }}</p><p>{{ item.approval.explanation }} {{ item.research.explanation }}</p></div>
+      <dl><div><dt>Coverage</dt><dd>{{ item.coverage.explanation }}</dd></div><div><dt>Final research</dt><dd>{{ item.final.status | receiptLabel }}</dd></div></dl>
+    </section>
+    <p class="scope"><app-timestamp-display [value]="item.period.first_session_open_ms" mode="date-et" granularity="date" /> – <app-timestamp-display [value]="item.period.last_session_open_ms" mode="date-et" granularity="date" />. {{ item.period.observed_sessions ?? 'Unknown' }} observed / {{ item.period.scheduled_sessions }} scheduled sessions. New York dates.</p>
+    <nav class="tabs">
+      <a [routerLink]="['/options-evidence', kind(), subjectId()]" [queryParams]="query()" [class.active]="activeView() === 'performance'">Performance</a>
+      <a [routerLink]="['/options-evidence', kind(), subjectId()]" [queryParams]="lineageQuery()" [class.active]="activeView() === 'lineage'">Research lineage</a>
+      @if (item.study_id) { <a [routerLink]="['/options-golden-search', item.study_id]">Blocked-study detail and research</a> }
+    </nav>
+    @if (activeView() === 'lineage') {
+      <section class="lineage"><h2>Recorded origin</h2><p>{{ item.research.explanation }}</p><p>{{ item.final.explanation }}</p>
+        @if (item.approval_history_complete === false) { <p>The newest 200 approval versions are shown. This list does not establish the absence of earlier lineage. Open an exact pinned version for its complete approval receipt.</p> }
+        @for (version of item.approvals; track version.golden_id) {
+          <article><h3>{{ version.source === 'backtest' ? 'Approved from backtest' : version.source === 'search' ? 'Approved from search' : 'Approval origin not recorded' }}</h3>
+            @if (!version.identity_matches) { <p class="problem">Identity mismatch. This approval does not match the selected source setup.</p> }
+            <a [routerLink]="['/options-evidence/golden', version.golden_id]" [queryParams]="{ view: 'lineage' }">Open exact Golden version</a>
+            <p>Source run {{ version.source_run_id }}. {{ version.note }}</p><p>Execution proof: {{ version.proof_status | receiptLabel }}. {{ version.proof_explanation }}</p>
+            @if (version.study_id && version.identity_matches) { <a [routerLink]="['/options-golden-search', version.study_id]">Open recorded search</a> }
+            @if (version.study_manifest_sha256) { <p>Study manifest <code>{{ version.study_manifest_sha256 }}</code></p> }
+            @if (version.research_verdict) { <p>Historical research: {{ version.research_verdict | receiptLabel }}</p> }
+            @if (version.exposure; as exposure) { <p>Final history: {{ exposure.classification | receiptLabel }}. {{ exposure.explanation }}</p> }
+            @for (gate of version.failed_rules; track gate.gate_id) { <p>{{ gate.gate_id | receiptLabel }}: {{ gate.reason }}</p> }
+            @for (gate of version.waived_gate_ids; track gate) { <p>Owner acknowledged: {{ gate | receiptLabel }}</p> }
+          </article>
+        } @empty { <p>{{ item.approval.explanation }}</p> }
+      </section>
+    } @else {
+      @if (performance.isLoading()) { <p>Reading retained replay…</p> }
+      @if (performanceProblem(); as why) { <p class="problem">{{ why }}</p><button type="button" (click)="performance.reload()">Retry replay</button> }
+      @if (performance.hasValue()) { <app-options-backtest-run-result [run]="performance.value()" /> }
+      @if (item.subject_kind === 'study') { <p>This is a search procedure. Inspect its candidates and partial evidence in the study; it is not the combined strategy's replay.</p><a [routerLink]="['/options-golden-search', item.study_id]">Inspect this study</a> }
+    }
+    <details class="settings"><summary>Exact strategy settings and costs</summary>
+      @if (setup.hasValue()) { <app-options-backtest-setup-sentences [summary]="setup.value()" /> } @else { @for (sentence of item.settings_description; track $index) { <p>{{ sentence }}</p> } }
+      @for (setting of item.frozen_search_settings; track setting.path) { <p><strong>{{ setting.path | receiptLabel }}</strong>: {{ setting.values.join(', ') }} ({{ setting.mode | receiptLabel }})</p> }
+    </details>
+    @for (relation of item.relations; track relation.kind + relation.subject_id) { <section class="relation"><h3>{{ relation.kind | receiptLabel }}</h3><p>{{ relation.explanation }}</p>
+      <a [routerLink]="['/options-evidence', relation.kind === 'inspected_search' ? 'study' : 'run', relation.subject_id]">Open compared evidence</a>
+    </section> }
+    <details class="receipt"><summary>Evidence identity receipt</summary><p>Setup <code>{{ item.setup_sha256 }}</code></p><p><code>{{ item.evidence_identity }}</code></p>
+      @for (version of item.approvals; track version.golden_id) { <p>Golden <code>{{ version.golden_id }}</code></p> }
+    </details>
+  }
+</main>

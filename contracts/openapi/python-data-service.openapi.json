@@ -45859,6 +45859,388 @@
         "title": "OptionsDeploymentReview",
         "type": "object"
       },
+      "OptionsEvidenceApproval": {
+        "properties": {
+          "exposure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Exposure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "failed_rules": {
+            "items": {
+              "$ref": "#/components/schemas/GateOutcome"
+            },
+            "title": "Failed Rules",
+            "type": "array"
+          },
+          "golden_id": {
+            "title": "Golden Id",
+            "type": "string"
+          },
+          "identity_matches": {
+            "title": "Identity Matches",
+            "type": "boolean"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "proof_explanation": {
+            "title": "Proof Explanation",
+            "type": "string"
+          },
+          "proof_status": {
+            "enum": [
+              "ready",
+              "stale",
+              "revoked"
+            ],
+            "title": "Proof Status",
+            "type": "string"
+          },
+          "research_verdict": {
+            "anyOf": [
+              {
+                "enum": [
+                  "meets_rules",
+                  "owner_exception"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Research Verdict"
+          },
+          "setup_sha256": {
+            "title": "Setup Sha256",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "backtest",
+              "search",
+              "not_recorded"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "source_run_id": {
+            "title": "Source Run Id",
+            "type": "integer"
+          },
+          "study_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Study Id"
+          },
+          "study_manifest_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Study Manifest Sha256"
+          },
+          "waived_gate_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Waived Gate Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "golden_id",
+          "source_run_id",
+          "setup_sha256",
+          "source",
+          "identity_matches",
+          "proof_status",
+          "proof_explanation",
+          "note",
+          "study_id",
+          "study_manifest_sha256",
+          "research_verdict",
+          "failed_rules",
+          "waived_gate_ids",
+          "exposure"
+        ],
+        "title": "OptionsEvidenceApproval",
+        "type": "object"
+      },
+      "OptionsEvidenceDimension": {
+        "properties": {
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "explanation"
+        ],
+        "title": "OptionsEvidenceDimension",
+        "type": "object"
+      },
+      "OptionsEvidencePeriod": {
+        "properties": {
+          "first_session_open_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "First Session Open Ms",
+            "type": "integer"
+          },
+          "last_session_open_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Last Session Open Ms",
+            "type": "integer"
+          },
+          "observed_sessions": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed Sessions"
+          },
+          "scheduled_sessions": {
+            "minimum": 0.0,
+            "title": "Scheduled Sessions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "first_session_open_ms",
+          "last_session_open_ms",
+          "scheduled_sessions",
+          "observed_sessions"
+        ],
+        "title": "OptionsEvidencePeriod",
+        "type": "object"
+      },
+      "OptionsEvidenceRelation": {
+        "properties": {
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "inspected_search",
+              "historical_comparator"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "settings_match": {
+            "title": "Settings Match",
+            "type": "boolean"
+          },
+          "setup_sha256": {
+            "title": "Setup Sha256",
+            "type": "string"
+          },
+          "subject_id": {
+            "title": "Subject Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "subject_id",
+          "setup_sha256",
+          "settings_match",
+          "explanation"
+        ],
+        "title": "OptionsEvidenceRelation",
+        "type": "object"
+      },
+      "OptionsEvidenceSearchSetting": {
+        "properties": {
+          "mode": {
+            "enum": [
+              "fixed",
+              "search"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "values": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "required": [
+          "path",
+          "mode",
+          "values"
+        ],
+        "title": "OptionsEvidenceSearchSetting",
+        "type": "object"
+      },
+      "OptionsEvidenceWorkspace": {
+        "properties": {
+          "approval": {
+            "$ref": "#/components/schemas/OptionsEvidenceDimension"
+          },
+          "approval_history_complete": {
+            "default": true,
+            "title": "Approval History Complete",
+            "type": "boolean"
+          },
+          "approvals": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsEvidenceApproval"
+            },
+            "title": "Approvals",
+            "type": "array"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/OptionsEvidenceDimension"
+          },
+          "evidence_identity": {
+            "title": "Evidence Identity",
+            "type": "string"
+          },
+          "final": {
+            "$ref": "#/components/schemas/OptionsEvidenceDimension"
+          },
+          "frozen_search_settings": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsEvidenceSearchSetting"
+            },
+            "title": "Frozen Search Settings",
+            "type": "array"
+          },
+          "headline": {
+            "title": "Headline",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "period": {
+            "$ref": "#/components/schemas/OptionsEvidencePeriod"
+          },
+          "relations": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsEvidenceRelation"
+            },
+            "title": "Relations",
+            "type": "array"
+          },
+          "replay": {
+            "$ref": "#/components/schemas/OptionsEvidenceDimension"
+          },
+          "research": {
+            "$ref": "#/components/schemas/OptionsEvidenceDimension"
+          },
+          "settings_description": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Settings Description",
+            "type": "array"
+          },
+          "setup": {
+            "$ref": "#/components/schemas/OptionsBacktestSetup-Output"
+          },
+          "setup_sha256": {
+            "title": "Setup Sha256",
+            "type": "string"
+          },
+          "source_run_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Run Id"
+          },
+          "study_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Study Id"
+          },
+          "subject_id": {
+            "title": "Subject Id",
+            "type": "string"
+          },
+          "subject_kind": {
+            "enum": [
+              "run",
+              "golden",
+              "study"
+            ],
+            "title": "Subject Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "subject_kind",
+          "subject_id",
+          "evidence_identity",
+          "name",
+          "setup",
+          "setup_sha256",
+          "source_run_id",
+          "study_id",
+          "period",
+          "headline",
+          "replay",
+          "coverage",
+          "research",
+          "final",
+          "approval",
+          "approvals",
+          "relations",
+          "settings_description"
+        ],
+        "title": "OptionsEvidenceWorkspace",
+        "type": "object"
+      },
       "OptionsExpirationsRequest": {
         "description": "Request schema for listing unique options expiration dates",
         "properties": {
@@ -83729,7 +84111,7 @@
             "name": "qualification_id",
             "required": true,
             "schema": {
-              "pattern": "^ogs_[a-f0-9]{32}$",
+              "pattern": "^ogs_[a-f0-9]{32}(?:[a-f0-9]{8})?$",
               "title": "Qualification Id",
               "type": "string"
             }
@@ -83818,7 +84200,7 @@
             "name": "qualification_id",
             "required": true,
             "schema": {
-              "pattern": "^ogs_[a-f0-9]{32}$",
+              "pattern": "^ogs_[a-f0-9]{32}(?:[a-f0-9]{8})?$",
               "title": "Qualification Id",
               "type": "string"
             }
@@ -83917,7 +84299,7 @@
             "name": "qualification_id",
             "required": true,
             "schema": {
-              "pattern": "^ogs_[a-f0-9]{32}$",
+              "pattern": "^ogs_[a-f0-9]{32}(?:[a-f0-9]{8})?$",
               "title": "Qualification Id",
               "type": "string"
             }
@@ -88584,6 +88966,114 @@
           }
         },
         "summary": "Command",
+        "tags": [
+          "research-options-golden-search"
+        ]
+      }
+    },
+    "/api/research/options-golden-search/workspace/{kind}/{subject_id}": {
+      "get": {
+        "operationId": "workspace_evidence_api_research_options_golden_search_workspace__kind___subject_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "enum": [
+                "run",
+                "golden",
+                "study"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "subject_id",
+            "required": true,
+            "schema": {
+              "pattern": "^(?:[1-9][0-9]{0,15}|ogs_[a-f0-9]{32}(?:[a-f0-9]{8})?|os_[a-f0-9]{40})$",
+              "title": "Subject Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "inspected_study_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^os_[a-f0-9]{40}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Inspected Study Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "comparator_run_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Comparator Run Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsEvidenceWorkspace"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Workspace Evidence",
         "tags": [
           "research-options-golden-search"
         ]

@@ -229,6 +229,10 @@ export const routes: Routes = [
       ),
   },
   {
+    path: "options-evidence/:kind/:subjectId",
+    loadComponent: () => import("./components/options-evidence/options-evidence-page.component").then((m) => m.OptionsEvidencePageComponent),
+  },
+  {
     path: "options-golden-search",
     loadComponent: () => import("./components/options-golden-search/options-golden-search-page.component").then((m) => m.OptionsGoldenSearchPageComponent),
   },

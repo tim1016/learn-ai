@@ -24,7 +24,7 @@ from app.schemas.options_backtest_runs import RUN_ID_MAX
 logger = logging.getLogger(__name__)
 router = APIRouter()
 _REFUSALS = {code: {"model": GoldenOptionSetupRefusal} for code in (404, 409, 503)}
-QualificationId = Annotated[str, Path(pattern=r"^ogs_[a-f0-9]{32}$")]
+QualificationId = Annotated[str, Path(pattern=r"^ogs_[a-f0-9]{32}(?:[a-f0-9]{8})?$")]
 
 
 def service() -> GoldenOptionsSetups:
