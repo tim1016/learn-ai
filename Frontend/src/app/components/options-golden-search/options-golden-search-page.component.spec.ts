@@ -8,16 +8,17 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import { provideFakeDateWorld } from '../../shared/date-picker/testing/fake-trading-calendar';
+import { etMidnightMs } from '../../shared/date/et-midnight';
 import { servedSaved } from '../options-backtest/testing/fixtures';
 import { OptionsBacktestService } from '../options-backtest/options-backtest.service';
 import { OptionsGoldenSearchPageComponent } from './options-golden-search-page.component';
 import { OptionsGoldenSearchService } from './options-golden-search.service';
-import type { PlanRequest } from './options-golden-search.types';
+import type { HistoryGuidanceRequest, PlanRequest } from './options-golden-search.types';
 import type { JobState } from '../../services/jobs.service';
-import { declarations, preflight, study } from './testing';
+import { declarations, historyGuidance, preflight, study } from './testing';
 
 function service() {
-  return { declarations: vi.fn(async () => declarations()), list: vi.fn(async () => []), preflight: vi.fn(async () => preflight()), captureHistory: vi.fn(async () => 'history-job'), activeHistoryCapture: vi.fn((_request: PlanRequest): JobState | null => null), refreshHistoryCaptures: vi.fn(async () => {}), onHistoryCapture: vi.fn((_id: string, _handler: (event: { type: string; [key: string]: unknown }) => void) => () => {}), cancelHistoryCapture: vi.fn(async () => {}), create: vi.fn(async () => study()), get: vi.fn(async () => study()), command: vi.fn(async () => study()) };
+  return { declarations: vi.fn(async () => declarations()), historyGuidance: vi.fn(async (_request: HistoryGuidanceRequest) => historyGuidance()), list: vi.fn(async () => []), preflight: vi.fn(async () => preflight()), captureHistory: vi.fn(async () => 'history-job'), activeHistoryCapture: vi.fn((_request: PlanRequest): JobState | null => null), refreshHistoryCaptures: vi.fn(async () => {}), onHistoryCapture: vi.fn((_id: string, _handler: (event: { type: string; [key: string]: unknown }) => void) => () => {}), cancelHistoryCapture: vi.fn(async () => {}), create: vi.fn(async () => study()), get: vi.fn(async () => study()), command: vi.fn(async () => study()) };
 }
 
 async function page(fake = service(), inputs = {}) {
@@ -48,6 +49,22 @@ async function preparePlan(fake = service()) {
 }
 
 describe('Options Golden Search workbench', () => {
+  it('restores default-compatible automatic dates when reloading a setup after changing forward months', async () => {
+    const fake = service();
+    fake.historyGuidance.mockImplementation(async (request) => request.test_months === 3 ? { ...historyGuidance(), start_ms: etMidnightMs('2024-03-05'), end_ms: etMidnightMs('2026-09-05') } : historyGuidance());
+    await page(fake, { setup_name: 'Saved two-leg setup' });
+    await screen.findByRole('heading', { name: 'Maximum study interval selected' });
+    fireEvent.input(screen.getByRole('spinbutton', { name: 'Forward test months' }), { target: { value: '3' } });
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Start date' })).toHaveProperty('value', '2024-03-05'));
+
+    await userEvent.click(screen.getByRole('button', { name: 'Use saved setup' }));
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Start date' })).toHaveProperty('value', '2024-01-02'));
+    expect(screen.getByRole('spinbutton', { name: 'Forward test months' })).toHaveProperty('value', '2');
+    fireEvent.input(screen.getByRole('spinbutton', { name: 'entry maximum minutes' }), { target: { value: '1' } });
+    await userEvent.click(screen.getByRole('button', { name: 'Check plan' }));
+    await waitFor(() => expect(fake.preflight).toHaveBeenCalledWith(expect.objectContaining({ history: expect.objectContaining({ start_ms: etMidnightMs('2024-01-02'), end_ms: etMidnightMs('2026-09-02'), train_months: 6, test_months: 2, final_months: 6 }) })));
+  });
+
   it('opens the selected saved setup in the editor', async () => {
     await page(service(), { setup_name: 'Saved two-leg setup' });
     const link = await screen.findByRole('link', { name: 'Edit setup and name in the setup editor', hidden: true });

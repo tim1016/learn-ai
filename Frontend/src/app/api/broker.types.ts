@@ -6488,6 +6488,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/options-golden-search/history-guidance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** History Guidance */
+        post: operations["history_guidance_api_research_options_golden_search_history_guidance_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/options-golden-search/preflight": {
         parameters: {
             query?: never;
@@ -19589,6 +19606,38 @@ export interface components {
             /** Job Id */
             job_id: string;
             request: components["schemas"]["PlanRequest"];
+        };
+        /** HistoryGuidance */
+        HistoryGuidance: {
+            /** End Ms */
+            end_ms: number | null;
+            /** Explanation */
+            explanation: string;
+            /** Final Start Ms */
+            final_start_ms: number | null;
+            /** Fold Count */
+            fold_count: number;
+            /** Start Ms */
+            start_ms: number | null;
+        };
+        /** HistoryGuidanceRequest */
+        HistoryGuidanceRequest: {
+            bounds: components["schemas"]["HistoryBounds"];
+            /**
+             * Final Months
+             * @default 6
+             */
+            final_months?: number;
+            /**
+             * Test Months
+             * @default 2
+             */
+            test_months?: number;
+            /**
+             * Train Months
+             * @default 6
+             */
+            train_months?: number;
         };
         /**
          * HoldState
@@ -45497,6 +45546,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Declarations"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    history_guidance_api_research_options_golden_search_history_guidance_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HistoryGuidanceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HistoryGuidance"];
                 };
             };
             /** @description Validation Error */

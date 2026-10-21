@@ -20,12 +20,15 @@
 </section>
 <section class="search-section">
   <h2>History</h2>
-  <app-date-range-picker [from]="range().from" [to]="range().to" [bounds]="bounds()" [exactRanges]="true" label="Options study history" (changed)="rangeChanged.emit($event)" />
-  <details><summary>Search budget and advanced settings</summary>
+  <p>Walk-forward windows use complete calendar months. Choose their lengths first; Max updates the dates to the longest interval that fits.</p>
   <div class="controls">
     <label>Training months<input type="number" [formField]="fields.trainMonths" /></label>
     <label>Forward test months<input type="number" [formField]="fields.testMonths" /></label>
     <label>Final test months<input type="number" [formField]="fields.finalMonths" /></label>
+  </div>
+  <app-options-search-history [request]="historyRequest()" [range]="range()" (rangeChanged)="rangeChanged.emit($event)" />
+  <details><summary>Search budget and advanced settings</summary>
+  <div class="controls">
     <label>Finalists plus frozen original<input type="number" [formField]="fields.finalists" /></label>
     <label>Evaluation cap<input type="number" [formField]="fields.budget" /></label>
     <label>Method<select [formField]="fields.method"><option value="zoom">Zoom</option><option value="grid">Grid</option></select></label>
