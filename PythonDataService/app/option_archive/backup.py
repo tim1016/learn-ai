@@ -13,8 +13,9 @@ import logging
 import os
 import shutil
 import threading
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
+from functools import partial
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -147,15 +148,23 @@ def validate_destination(destination: Path, *, checkout: Path, roots: Mapping[st
         raise BackupRefusedError("backup destination marker does not name the configured host mount")
 
 
-async def dump_catalog(path: Path) -> CatalogSnapshot:
+async def dump_catalog(path: Path, root_ids: Sequence[str]) -> CatalogSnapshot:
+    """The catalog rows of ``root_ids`` only: the roots whose files this generation copies.
+
+    A shared catalog may hold other roots' rows. Their bytes are not in this
+    generation, so dumping them would restore catalog entries with no file
+    behind them, not the checked lake/catalog pair ADR 0049 (A1) requires.
+    """
     async with catalog_client.connection() as connection, connection.transaction(isolation="repeatable_read", readonly=True):
         schema = await lake_restore.catalog_schema_hash(connection)
         migrations = await connection.fetch("SELECT version FROM public.schema_migrations ORDER BY version")
         rows = await connection.fetch('''SELECT "Id", "DataRootId", "PriceAdjustmentMode", "FilePath",
-            "FileSha256", "FileSizeBytes" FROM "DataLakeArtifacts" WHERE "Status"='complete' ORDER BY "Id"''')
-        count = await connection.fetchval('SELECT COUNT(*) FROM "DataLakeArtifacts"')
+            "FileSha256", "FileSizeBytes" FROM "DataLakeArtifacts"
+            WHERE "Status"='complete' AND "DataRootId" = ANY($1::uuid[]) ORDER BY "Id"''', list(root_ids))
+        count = await connection.fetchval('SELECT COUNT(*) FROM "DataLakeArtifacts" WHERE "DataRootId" = ANY($1::uuid[])', list(root_ids))
         with path.open("xb") as output:
-            await connection.copy_from_query('SELECT * FROM "DataLakeArtifacts" ORDER BY "Id"', output=output, format="binary")
+            await connection.copy_from_query('SELECT * FROM "DataLakeArtifacts" WHERE "DataRootId" = ANY($1::uuid[]) ORDER BY "Id"',
+                                             list(root_ids), output=output, format="binary")
             output.flush()
             os.fsync(output.fileno())
     return CatalogSnapshot(schema_hash=schema, row_count=count, migration_ids=[row["version"] for row in migrations],
@@ -237,8 +246,9 @@ def _copy_snapshot_files(destination: Path, roots: Mapping[str, Path], snapshot:
 
 
 async def create_generation(*, destination: Path, roots: Mapping[str, Path], clock: Callable[[], int],
-                            should_pause: Callable[[], bool], snapshot: Callable[[Path], Any] = dump_catalog,
+                            should_pause: Callable[[], bool], snapshot: Callable[[Path], Any] | None = None,
                             restore_files: Mapping[str, Path] | None = None, attempts: int = 3) -> BackupManifest:
+    take_snapshot = snapshot or partial(dump_catalog, root_ids=sorted(roots))
     last_error: Exception | None = None
     original_stat = destination.stat()
     original_identity = (original_stat.st_dev, original_stat.st_ino)
@@ -260,7 +270,7 @@ async def create_generation(*, destination: Path, roots: Mapping[str, Path], clo
                 with ExitStack() as locks:
                     for root in roots.values():
                         locks.enter_context(lake_activity(lake_root_within(root, "raw")))
-                    inventory = await snapshot(dump)
+                    inventory = await take_snapshot(dump)
                     files = await bounded_file_work(lambda paused, current=inventory: _copy_snapshot_files(destination, roots, current, paused), should_pause)
                 require_work_window(should_pause)
                 require_same_destination()

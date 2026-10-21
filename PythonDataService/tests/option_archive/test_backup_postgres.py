@@ -124,7 +124,7 @@ async def test_real_catalog_source_replacement_never_completes_wrong_generation(
     original = await create_generation(destination=destination, roots={root_id: root}, clock=lambda: 1000, should_pause=lambda: False)
 
     async def snapshot_then_refresh(path: Path) -> CatalogSnapshot:
-        result = await dump_catalog(path)
+        result = await dump_catalog(path, [root_id])
         source.write_text('{"changed":true}')
         return result
     with pytest.raises(BackupRefusedError, match="bounded attempts"):
@@ -217,3 +217,26 @@ async def test_weekly_restore_check_passes_only_what_the_restored_catalog_admits
         await service.restore_pass()
     restore_job = service.state.read().job("restore")
     assert restore_job.receipt is None and restore_job.last_success_ms is None
+
+
+async def test_backup_covers_the_configured_root_when_the_catalog_also_holds_another_roots_artifacts(
+    isolated_catalog: asyncpg.Connection, tmp_path: Path,
+) -> None:
+    root_id, other_root_id = str(uuid4()), str(uuid4())
+    root = tmp_path / "source"
+    init_empty_root(root, UUID(root_id))
+    source = root / "lake/raw/test.json"
+    source.parent.mkdir(parents=True)
+    source.write_text('{}')
+    artifact_id = await insert(isolated_catalog, root_id, "test.json", source.read_bytes())
+    await insert(isolated_catalog, other_root_id, "elsewhere.json", b"bytes in a lake this service does not hold")
+    destination = tmp_path / "backup"
+    destination.mkdir()
+    manifest = await create_generation(destination=destination, roots={root_id: root}, clock=lambda: 1000, should_pause=lambda: False)
+    generation = destination / "generations" / manifest.generation_id
+    assert verify_generation(generation).catalog_rows == manifest.catalog_rows == 1
+    assert [item.artifact_ids for item in manifest.files if item.artifact_ids] == [[artifact_id]]
+    await isolated_catalog.execute('CREATE SCHEMA restored')
+    await isolated_catalog.execute('CREATE TABLE restored."DataLakeArtifacts" (LIKE public."DataLakeArtifacts" INCLUDING ALL)')
+    await restore_generation(generation=generation, roots={root_id: tmp_path / "restored"}, connection=isolated_catalog, schema="restored")
+    assert [str(row["DataRootId"]) for row in await isolated_catalog.fetch('SELECT "DataRootId" FROM restored."DataLakeArtifacts"')] == [root_id]
