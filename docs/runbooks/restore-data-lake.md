@@ -87,16 +87,22 @@ unreferenced objects.
 
 Retirement is a separate, owner-approved operation (#3432). Stop every process
 that reads or writes the selected lake before applying it. The root maintenance
-lock also refuses an active reader, publisher or backup; do not bypass it.
+lock also refuses an active reader or publisher, and the backup destination's
+lock refuses an apply while a backup or pruning runs ("retry later"); do not
+bypass either.
 
-1. Select a completed backup generation containing the exact original contract
-   ZIPs and catalog receipts. Complete a successful isolated restore test of
-   that generation within the preceding seven days. Keep its receipt file.
+1. The restore point is the backup generation the archive's restore check last
+   passed on: the `restore` receipt in `option-archive-state.json` at the base
+   of the lake. It must contain the exact original contract ZIPs and catalog
+   receipts, and the check must be under seven days old both when the plan is
+   made and when it is applied. Plan soon after a weekly restore check, or
+   trigger `/restore` first.
 2. From `PythonDataService/`, run `python scripts/retire_option_files.py
-   --raw-root /ABSOLUTE/BASE/lake/raw --generation /BACKUP/generations/GENERATION
-   --restore-receipt /ABSOLUTE/restore-receipt.json --plan /ABSOLUTE/retirement.json`.
+   --raw-root /ABSOLUTE/BASE/lake/raw --backup-destination /ABSOLUTE/BACKUP
+   --plan /ABSOLUTE/retirement.json`.
    Supply the catalog credential through `POSTGRES_URL`. This writes a dry-run
-   plan and its digest; it deletes nothing and refuses to overwrite a plan.
+   plan, including the restore receipt, and its digest; it deletes nothing and
+   refuses to overwrite a plan.
 3. Post that exact plan on #3432. Verify saved-run pins, retained study inputs,
    approved Golden Options proofs and complete golden results through the normal
    readers with provider HTTP blocked. Record the tested revision. Obtain the
@@ -108,11 +114,14 @@ lock also refuses an active reader, publisher or backup; do not bypass it.
    --approval /ABSOLUTE/approval.json --journal /ABSOLUTE/retirement-journal.json`.
    Keep both the approval and journal. Every source and replacement is rechecked
    under root exclusion before unlinking and deleting its catalog row.
-5. The plan expires after seven days. Its restore generation is pinned through
-   that rollback deadline. Repeating an interrupted apply with the same plan,
-   approval and journal is idempotent. A changed source or replacement requires
-   a fresh plan and fresh approval. Roll back into an empty root/catalog pair
-   using the procedure above; never refetch irreplaceable history from the vendor.
+5. The plan can be applied for seven days. Its restore generation is pinned for
+   seven days past that, so every deletion keeps a full rollback interval.
+   Repeat an interrupted apply with the same plan, approval and journal: only
+   that journal lets a retry accept a source the interrupted apply already
+   unlinked, and a fresh journal refuses it. A changed source or replacement
+   requires a fresh plan and fresh approval. Roll back into an empty
+   root/catalog pair using the procedure above; never refetch irreplaceable
+   history from the vendor.
 
 Clerk stores, money trails and retained proofs are outside the deletion scope.
 Partial sessions remain partial, and original per-contract byte pins continue
@@ -135,9 +144,13 @@ Use the actual private service URLs and an operational read route that is safe
 to sample. The harness refuses missing archive coverage, changed input inventory,
 another resource profile or an unqualified width before accepting measurements.
 
-It performs five cold and five warm decoded-cache runs per case. The OS page
-cache is uncontrolled; memory, staging, connection and service-latency peaks are
-observed samples at one-second intervals. For each separately qualified width,
+It performs five cold and five warm decoded-cache runs per case. A cold run
+clears each worker's whole decoded cache, stock entries included, once. The OS
+page cache is uncontrolled; memory, staging, connection and service-latency
+peaks are observed samples at one-second intervals. The decoded-cache peak is
+sized from fixed per-bar, per-contract and per-session estimates, so it is not
+comparable with figures measured another way. Staging bytes include each lock
+file's one-byte sentinel. For each separately qualified width,
 run against that deployed width and pass the same `--qualified-widths` set to
 measurement and reporting. Do not change resource caps to obtain a passing time.
 Generate the report with `python scripts/benchmark_options_archive.py report

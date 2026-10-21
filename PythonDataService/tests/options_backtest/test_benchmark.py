@@ -9,7 +9,6 @@ import pytest
 from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms_utc
 from app.options_backtest.benchmark import (
     BENCHMARK_END_MS,
-    RESEARCH_PROFILE_MEMORY_BYTES,
     BenchmarkObservation,
     benchmark_cases,
     summarize_measurements,
@@ -27,14 +26,13 @@ def observations() -> list[BenchmarkObservation]:
                     archive_inventory_digest="d" * 64,
                     code_revision="revision", worker_width=1, cache_mode=mode,
                     runtime_instance=f"cold-{len(result)}" if mode == "cold" else "warm-1",
-                    cache_generation=f"cold-{len(result)}" if mode == "cold" else "warm-1",
+                    cache_epoch=f"cold-{len(result)}" if mode == "cold" else None,
                     run_id=len(result) + 1, accepted_at_ms=1_000_000, saved_at_ms=1_000_000 + duration,
-                    phase_duration_ms={"check": 100, "fetch": 0, "freeze": 200, "queue": 300,
+                    phase_duration_ms={"check": 100, "download": 0, "input_freeze": 200, "queue": 300,
                                        "admit_decode": 400, "replay": 500, "save": 100},
                     cache_bytes_peak=900, cgroup_memory_peak_bytes=1_000_000,
                     cache_hits=0 if mode == "cold" else 480, cache_misses=480 if mode == "cold" else 0,
                     staging_bytes_peak=1000, database_connections_peak=8, operational_latency_ms=(10, 20),
-                    profile_cpus=8, profile_memory_bytes=RESEARCH_PROFILE_MEMORY_BYTES,
                 ))
     return result
 
@@ -62,34 +60,36 @@ def test_cases_cover_480_real_sessions_and_eight_leg_sold_cover_workload() -> No
 def test_report_separates_modes_and_does_not_qualify_capacity() -> None:
     reports = summarize_measurements(observations())
     assert len(reports) == 4
-    assert {(r["case"], r["cache_mode"]) for r in reports} == {
+    assert {(r.case, r.cache_mode) for r in reports} == {
         (case.name, mode) for case in benchmark_cases() for mode in ("cold", "warm")
     }
     for report in reports:
-        assert report["median_end_to_end_ms"] == 60_000
-        assert report["worst_end_to_end_ms"] == 90_000
-        assert report["worst_operational_latency_ms"] == 20
-        assert report["target_met"] is True
-        assert report["capacity_qualified"] is False
-        assert report["instrumentation_complete"] is True
+        assert report.median_end_to_end_ms == 60_000
+        assert report.worst_end_to_end_ms == 90_000
+        assert report.worst_operational_latency_ms == 20
+        assert report.target_met is True
+        assert report.capacity_qualified is False
+        assert report.instrumentation_complete is True
 
 
 @pytest.mark.parametrize("mutation", ["changed_results", "changed_inputs", "duplicate", "missing_repetition",
-                                          "unqualified_width", "fake_cold", "missing_phase", "wrong_profile"])
+                                          "unqualified_width", "fake_cold", "warm_restart", "missing_phase"])
 def test_report_refuses_unusable_evidence(mutation: str) -> None:
     samples = observations()
     updates = {
         "changed_results": {"result_digest": "c" * 64},
         "changed_inputs": {"frozen_input_digest": "c" * 64},
         "unqualified_width": {"worker_width": 4},
-        "fake_cold": {"cache_generation": samples[1].cache_generation},
+        "fake_cold": {"cache_epoch": samples[1].cache_epoch},
         "missing_phase": {"phase_duration_ms": {"replay": 5}},
-        "wrong_profile": {"profile_cpus": 16},
     }
     if mutation == "duplicate":
         samples[0] = samples[1]
     elif mutation == "missing_repetition":
         samples.pop()
+    elif mutation == "warm_restart":
+        warm = next(index for index, sample in enumerate(samples) if sample.cache_mode == "warm")
+        samples[warm] = samples[warm].model_copy(update={"runtime_instance": "restarted"})
     else:
         samples[0] = samples[0].model_copy(update=updates[mutation])
     with pytest.raises(ValueError):
@@ -99,22 +99,16 @@ def test_report_refuses_unusable_evidence(mutation: str) -> None:
 def test_missing_resource_observations_remain_unknown() -> None:
     samples = [sample.model_copy(update={"cache_bytes_peak": None}) for sample in observations()]
     for report in summarize_measurements(samples):
-        assert report["cache_bytes_peak"] is None
-        assert report["instrumentation_complete"] is False
-
-
-def test_warm_report_refuses_a_working_set_with_no_decoded_reuse() -> None:
-    samples = [sample.model_copy(update={"cache_hits": 0, "cache_misses": 480})
-               if sample.cache_mode == "warm" else sample for sample in observations()]
-    with pytest.raises(ValueError, match=r"warm.*reuse"):
-        summarize_measurements(samples)
+        assert report.cache_bytes_peak is None
+        assert report.target_met is None
+        assert report.instrumentation_complete is False
 
 
 def test_report_exposes_decoded_cache_counters() -> None:
     for report in summarize_measurements(observations()):
-        if report["cache_mode"] == "warm":
-            assert report["cache_hits"] == [480] * 5
-            assert report["cache_misses"] == [0] * 5
+        if report.cache_mode == "warm":
+            assert report.cache_hits == [480] * 5
+            assert report.cache_misses == [0] * 5
         else:
-            assert report["cache_hits"] == [0] * 5
-            assert report["cache_misses"] == [480] * 5
+            assert report.cache_hits == [0] * 5
+            assert report.cache_misses == [480] * 5

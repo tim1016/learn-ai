@@ -1,10 +1,11 @@
 """Dry-run, then apply an owner-approved retirement plan (#3432).
 
 The first invocation writes a reviewable JSON plan without deleting anything.
-Post that exact output on #3432 and obtain owner approval before applying.
-The approval JSON names the plan digest, approval comment and compatibility
-checks; it does not replace those checks. Keep the original backup and its
-successful isolated restore receipt through the bounded rollback interval.
+Its restore point is the backup generation the archive's own restore check
+last passed on, read from the lake's archive receipts. Post that exact output
+on #3432 and obtain owner approval before applying. The approval JSON names the
+plan digest, approval comment and compatibility checks; it does not replace
+those checks. Keep the backup destination through the plan's rollback deadline.
 """
 
 from __future__ import annotations
@@ -24,7 +25,6 @@ from app.data_lake.option_retirement import (
     legacy_sources,
     plan_retirement,
 )
-from app.data_lake.root_identity import read_marker
 from app.research.runs.hashing import canonical_json
 from app.utils.atomic_file import atomic_write_bytes
 from app.utils.timestamps import now_ms_utc
@@ -33,9 +33,6 @@ logger = logging.getLogger(__name__)
 
 
 async def _run(args: argparse.Namespace) -> int:
-    marker = read_marker(args.raw_root.parent.parent)
-    if marker is None:
-        raise RetirementRefusedError("raw root has no root identity marker")
     await catalog_client.init_pool()
     try:
         if args.apply:
@@ -47,17 +44,17 @@ async def _run(args: argparse.Namespace) -> int:
                 raise RetirementRefusedError("apply requires the owner's approval receipt and a persistent journal")
             count = await apply_retirement(
                 plan=plan, approval=RetirementApproval.model_validate_json(args.approval.read_bytes()),
-                mode_root=args.raw_root, generation=args.generation, restore_receipt=args.restore_receipt,
+                mode_root=args.raw_root, destination=args.backup_destination,
                 journal=args.journal, now_ms=now_ms_utc(),
             )
             logger.info("Approved retirement finished", extra={"action": "option_retirement_complete", "files": count})
         else:
             if args.plan.exists():
                 raise RetirementRefusedError("dry run will not overwrite an existing reviewable plan")
-            sources = await legacy_sources(marker.data_root_id)
+            sources = await legacy_sources(args.raw_root)
             plan = await asyncio.to_thread(
-                plan_retirement, mode_root=args.raw_root, sources=sources, generation=args.generation,
-                restore_receipt=args.restore_receipt, now_ms=now_ms_utc(),
+                plan_retirement, mode_root=args.raw_root, sources=sources, destination=args.backup_destination,
+                now_ms=now_ms_utc(),
             )
             atomic_write_bytes(args.plan, canonical_json({
                 "plan_sha256": plan.digest, "plan": plan.model_dump(mode="json"),
@@ -74,8 +71,7 @@ async def _run(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--raw-root", type=Path, required=True)
-    parser.add_argument("--generation", type=Path, required=True)
-    parser.add_argument("--restore-receipt", type=Path, required=True)
+    parser.add_argument("--backup-destination", type=Path, required=True)
     parser.add_argument("--plan", type=Path, required=True)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--approval", type=Path)

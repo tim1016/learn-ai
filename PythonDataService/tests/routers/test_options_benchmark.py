@@ -13,11 +13,16 @@ from fastapi import FastAPI
 from app.config import settings
 from app.data_lake.option_session_repack import repack_option_session
 from app.options.contract import OptionContract
-from app.options_backtest.benchmark import benchmark_cases
+from app.options_backtest import benchmark_runtime, saved_runs
+from app.options_backtest.benchmark import REQUIRED_PHASES, benchmark_cases
+from app.options_backtest.timings import PhaseTiming, ReplayObservations, RunObservations
+from app.options_bots.golden_proof import result_sha256
 from app.routers.options_backtest_benchmark import router
 from app.security.data_plane_control import CONTROL_SECRET_HEADER
 from app.utils.error_handlers import install_fleet_control_error_handler
 from scripts.benchmark_options_archive import _measure, _preflight, main
+from tests.options_backtest._a_run import a_busy_run
+from tests.options_backtest._headers import CREATED_AT_MS, a_record
 from tests.options_backtest._lake import (
     FRIDAY,
     FRIDAY_OPEN_MS,
@@ -88,10 +93,25 @@ def test_cases_command_exports_exact_hash_bound_choices(tmp_path: Path) -> None:
     assert all(len(row["case"]["session_open_ms"]) == 480 for row in cases)
 
 
-@pytest.mark.parametrize("cache", ["reused", "zero_hits", "missing_counters"])
-async def test_harness_requires_observed_warm_reuse_and_allows_long_archive_preflight(cache: str) -> None:
+@pytest.mark.parametrize(("cache", "refusal"), [
+    ("reused", None), ("zero_hits", r"warm repetitions must demonstrate decoded cache reuse"),
+    ("missing_counters", r"cache_hits\n\s+Field required"), ("cold_without_epoch", r"cold repetition needs"),
+])
+async def test_harness_requires_observed_cache_behaviour_and_allows_long_archive_preflight(
+    cache: str, refusal: str | None,
+) -> None:
     case = benchmark_cases()[0]
+    mode = "cold" if cache == "cold_without_epoch" else "warm"
     preflight_timeouts = []
+
+    def span(phase: str, duration_ms: int, chain_key: str | None = None) -> dict:
+        return {"phase": phase, "started_at_ms": 1_000_000, "finished_at_ms": 1_000_000 + duration_ms,
+                "duration_ms": duration_ms, "scope": "run" if chain_key is None else "chain", "chain_key": chain_key}
+
+    # The phases as the run records them; two chains replay in parallel and each decodes.
+    spans = [span(phase, 1000) for phase in ("check", "download", "input_freeze", "queue", "replay",
+                                             "aggregation", "save", "coordination")]
+    spans += [span(phase, 700, chain) for chain in ("a", "b") for phase in ("replay", "admit_decode")]
 
     def respond(request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -105,15 +125,14 @@ async def test_harness_requires_observed_warm_reuse_and_allows_long_archive_pref
                 "cpu_quota_us": 800_000, "cpu_period_us": 100_000, "frozen_input_bytes": 512,
                 "database_connections": 4, "database_connection_limit": 10})
         if path.endswith("/benchmark-result/1"):
-            metadata = {"worker_width": 1, "frozen_input_digest": "a" * 64,
-                        "execution_identity_digest": "c" * 64, "cache_epoch": "",
-                        "cache_bytes_peak": 512}
+            replay = {"worker_width": 1, "frozen_input_digest": "a" * 64, "execution_identity_digest": "c" * 64,
+                      "runtime_boot_generation": 3, "cache_epoch": None, "cache_bytes_peak": 512}
             if cache != "missing_counters":
-                metadata.update(cache_hits=480 if cache == "reused" else 0, cache_misses=480)
+                replay.update(cache_hits=480 if cache in ("reused", "cold_without_epoch") else 0, cache_misses=480)
             return httpx.Response(200, json={"run_id": 1, "accepted_at_ms": 1_000_000,
-                "saved_at_ms": 1_062_000, "result_digest": "b" * 64,
-                "phase_timings": [], "execution_metadata": metadata})
+                "saved_at_ms": 1_062_000, "result_digest": "b" * 64, "phase_timings": spans, "replay": replay})
         if request.method == "POST" and path.endswith("/options-backtest"):
+            assert json.loads(request.content)["benchmark_cache_mode"] == mode
             return httpx.Response(200, json={"run_id": 1})
         if path == "/healthz":
             return httpx.Response(200, json={"status": "ok"})
@@ -121,11 +140,51 @@ async def test_harness_requires_observed_warm_reuse_and_allows_long_archive_pref
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond), timeout=120) as transport:
         args = dict(api="http://api", runtime="http://runtime", operational="http://api/healthz",
-                    case=case, mode="warm", qualified_widths=[1], timeout_seconds=901)
-        if cache == "reused":
+                    case=case, mode=mode, qualified_widths=[1], timeout_seconds=901)
+        if refusal is None:
             result = await _measure(transport, **args)
             assert result.cache_hits == result.cache_misses == 480
+            # Chain replay overlaps the run's replay span and is left out; nested decode is summed over chains.
+            assert result.phase_duration_ms == {
+                "check": 1000, "download": 1000, "input_freeze": 1000, "queue": 1000, "replay": 1000,
+                "aggregation": 1000, "save": 1000, "coordination": 1000, "admit_decode": 1400,
+            }
+            assert result.phase_duration_ms.keys() >= REQUIRED_PHASES
         else:
-            with pytest.raises(ValueError, match=r"warm.*reuse|required.*measurement"):
+            with pytest.raises(ValueError, match=refusal):
                 await _measure(transport, **args)
-    assert preflight_timeouts == [901, 901]
+    # Admitting 480 archived days may take longer than the client's default read timeout.
+    assert set(preflight_timeouts) == {901}
+
+
+@pytest.mark.parametrize("replayed_in", ["research_runtime", "data_service"])
+async def test_saved_result_measurement_needs_the_pooled_replay_it_measures(
+    monkeypatch: pytest.MonkeyPatch, replayed_in: str,
+) -> None:
+    result = a_busy_run()
+    replay = ReplayObservations(frozen_input_digest="a" * 64, execution_identity_digest="c" * 64,
+        runtime_boot_generation=3, worker_width=1, cache_epoch=None, cache_hits=4, cache_misses=0,
+        cache_bytes_peak=512)
+    save = PhaseTiming(phase="save", started_at_ms=CREATED_AT_MS + 99_000, finished_at_ms=CREATED_AT_MS + 102_000,
+                       duration_ms=3000)
+    observed = RunObservations(phase_timings=(save,), wall_duration_ms=102_000,
+                               replay=replay if replayed_in == "research_runtime" else None)
+    stored = saved_runs.StoredRun(record=a_record(), setup=result.setup, figures=None,
+        phase_timings=observed.phase_timings, execution_metadata=observed.stored_metadata())
+
+    async def get_run(connection: object, run_id: int, *, is_live: object) -> saved_runs.StoredRun:
+        return stored
+
+    async def read_result(connection: object, run_id: int) -> object:
+        return result
+
+    monkeypatch.setattr(saved_runs, "get_run", get_run)
+    monkeypatch.setattr(saved_runs, "read_result", read_result)
+    measured = await benchmark_runtime._result(None, 1)
+    if replayed_in == "data_service":
+        # No worker cache or frozen-input identity was measured: the endpoint answers 409.
+        assert measured is None
+        return
+    assert measured.replay == replay
+    assert measured.saved_at_ms - measured.accepted_at_ms == 102_000
+    assert measured.result_digest == result_sha256(result)
