@@ -204,3 +204,27 @@ async def test_late_snapshot_cannot_replace_newer_resolved_container_member(fake
     assert native.failure is None
     after_capture = await asyncio.to_thread(read_option_session, "SPY", FRIDAY)
     assert after_capture.complete and after_capture.legacy_bytes(CALL.occ_symbol) == refreshed
+
+
+@pytest.mark.parametrize("escape", ["root", "underlying", "lock_file"])
+def test_publication_lock_refuses_symlink_escape_before_opening_outside_file(tmp_lake, tmp_path, escape):
+    from app.data_lake.option_lake import option_read_root
+    from app.data_lake.option_session import option_session_publication_lock
+    from app.lean_sidecar.trading_calendar import session_open_ms_utc
+
+    lock_root = option_read_root().parent.parent / ".option-session-publication"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel"
+    sentinel.write_bytes(b"")
+    if escape == "root":
+        lock_root.symlink_to(outside, target_is_directory=True)
+    elif escape == "underlying":
+        lock_root.mkdir(parents=True)
+        (lock_root / "spy").symlink_to(outside, target_is_directory=True)
+    else:
+        (lock_root / "spy").mkdir(parents=True)
+        (lock_root / "spy" / f".{session_open_ms_utc(FRIDAY)}.lock").symlink_to(sentinel)
+    with pytest.raises(ValueError, match="escapes root"), option_session_publication_lock("SPY", FRIDAY):
+        pytest.fail("an escaping lock must never be acquired")
+    assert list(outside.iterdir()) == [sentinel] and sentinel.read_bytes() == b""

@@ -46,6 +46,7 @@ from app.data_lake.option_session_repack import _complete, admitted_legacy_membe
 from app.data_lake.path_policy import resolve_staging_root
 from app.data_lake.polygon_fetcher import PolygonFetchError
 from app.data_lake.polygon_option_bars import fetch_listed_option_minute_bars, require_listed_option_symbol
+from app.engine.live.identity import confine_path_to_root
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.options_backtest.chain_download import Outcome, _capture_underlying
 from app.utils.advisory_lock import try_advisory_file_lock
@@ -56,8 +57,13 @@ from app.utils.session_anchors import et_date_at_ms
 logger = logging.getLogger(__name__)
 
 
-async def _clear_committed_staging(generation: Path, result: OptionCaptureResult) -> OptionCaptureResult:
-    if result.failure is None and generation.is_dir():
+async def _clear_committed_staging(
+    generation: Path, result: OptionCaptureResult, *, staging_root: Path,
+) -> OptionCaptureResult:
+    if result.failure is not None:
+        return result
+    generation = confine_path_to_root(generation, staging_root, label="option capture cleanup")
+    if generation.is_dir():
         try:
             await asyncio.to_thread(shutil.rmtree, generation)
         except OSError as exc:
@@ -92,8 +98,13 @@ async def capture_option_session(
     if trading_date < (history_floor or option_history_floor(et_date_at_ms(now))):
         return failed("outside_data_plan", "session is older than the archive fetch boundary")
     paused = should_pause or (lambda: False)
-    staging = resolve_staging_root("raw") / "option_sessions" / underlying / str(session_open_ms_utc(trading_date))
-    with try_advisory_file_lock(staging / "collector") as owns:
+    staging_root = resolve_staging_root("raw")
+    capture_root = confine_path_to_root(staging_root / "option_sessions", staging_root, label="option capture root")
+    staging = confine_path_to_root(capture_root / underlying / str(session_open_ms_utc(trading_date)),
+                                  capture_root, label="option capture session")
+    collector = confine_path_to_root(staging / "collector", staging, label="option capture collector")
+    confine_path_to_root(staging / ".collector.lock", staging, label="option capture collector lock")
+    with try_advisory_file_lock(collector) as owns:
         if not owns:
             return failed("lease_timeout", "this session already has a running collector")
         if paused():
@@ -105,7 +116,8 @@ async def capture_option_session(
         listing = await asyncio.to_thread(read_option_listing, underlying, trading_date)
         if listing is None:
             return failed("listing_not_captured", "listing was not admitted after capture")
-        generation = staging / option_session_dch() / listing.sha256
+        generation = confine_path_to_root(staging / option_session_dch() / listing.sha256,
+                                         staging, label="option capture generation")
         try:
             existing = await asyncio.to_thread(read_option_session, underlying, trading_date, listing=listing)
         except LakeAdmissionError:
@@ -120,23 +132,28 @@ async def capture_option_session(
                     "outside_data_plan": "outside_data_plan",
                 }.get(underlying_result.reason, "provider_api_error")
                 return failed(reason, underlying_result.detail or "underlying bars could not be captured")
-            return await _clear_committed_staging(generation, await publish_option_session(listing, dict(existing.original_bytes)))
+            return await _clear_committed_staging(generation, await publish_option_session(listing, dict(existing.original_bytes)),
+                                                  staging_root=staging_root)
+        generation = confine_path_to_root(generation, staging_root, label="option capture generation")
         generation.mkdir(parents=True, exist_ok=True)
         captured = {} if existing is None else dict(existing.original_bytes)
         for symbol, payload in (await asyncio.to_thread(admitted_legacy_members, listing)).items():
             captured.setdefault(symbol, payload)
         listed_symbols = frozenset(row.ticker.removeprefix("O:") for row in listing.rows)
         for row in listing.rows:
+            generation = confine_path_to_root(generation, staging_root, label="option capture generation")
             symbol = row.ticker.removeprefix("O:")
             # The parser rejects unsafe or mismatched symbols before URL or path use.
             try:
                 require_listed_option_symbol(symbol, listed_symbols)
             except ValueError as exc:
                 return failed("validation_failed", f"listed ticker cannot be captured: {exc}")
-            path = generation / f"{symbol}.zip"
+            path = confine_path_to_root(generation / f"{symbol}.zip", generation, label="option capture member")
+            receipt_path = confine_path_to_root(generation / f"{symbol}.json", generation, label="option capture receipt")
+            attempts_path = confine_path_to_root(generation / f"{symbol}.attempts", generation, label="option capture attempts")
             if path.is_file():
                 payload = path.read_bytes()
-                receipt = json.loads(path.with_suffix(".json").read_bytes())
+                receipt = json.loads(receipt_path.read_bytes())
                 if receipt != {"sha256": hashlib.sha256(payload).hexdigest(), "listing_sha256": listing.sha256,
                                "recipe": option_session_dch()}:
                     return failed("validation_failed", "staged ticker receipt does not match its exact bytes")
@@ -146,7 +163,6 @@ async def capture_option_session(
                 continue
             if paused():
                 return failed("lease_timeout", "capture paused; validated ticker outcomes retained")
-            attempts_path = generation / f"{symbol}.attempts"
             attempts = int(attempts_path.read_text()) if attempts_path.is_file() else 0
             if attempts >= MAX_CLAIM_RETRIES and not retry_exhausted:
                 return failed("fetch_timeout", "ticker exhausted its transient retries; explicit recovery is required")
@@ -166,6 +182,7 @@ async def capture_option_session(
                                                        bars=[_minute_trade_bar(bar) for bar in bars])
                 parse_option_day_zip(payload, symbol, trading_date)
             except PolygonFetchError as exc:
+                attempts_path = confine_path_to_root(attempts_path, staging_root, label="option capture attempts")
                 atomic_write_bytes(attempts_path, str(attempts + 1).encode())
                 reason = vendor_reason(exc)
                 if captured and reason in {"outside_data_plan", "provider_auth_error", "provider_entitlement_error"}:
@@ -174,9 +191,12 @@ async def capture_option_session(
                         return partial
                 return failed(reason, str(exc))
             except (CorruptVendorBarsError, ArithmeticError, ValueError) as exc:
+                attempts_path = confine_path_to_root(attempts_path, staging_root, label="option capture attempts")
                 atomic_write_bytes(attempts_path, str(attempts + 1).encode())
                 return failed("validation_failed", str(exc))
-            atomic_write_bytes(path.with_suffix(".json"), json.dumps({"sha256": hashlib.sha256(payload).hexdigest(),
+            receipt_path = confine_path_to_root(receipt_path, staging_root, label="option capture receipt")
+            path = confine_path_to_root(path, staging_root, label="option capture member")
+            atomic_write_bytes(receipt_path, json.dumps({"sha256": hashlib.sha256(payload).hexdigest(),
                 "listing_sha256": listing.sha256, "recipe": option_session_dch()}, sort_keys=True).encode())
             atomic_write_bytes(path, payload)
             captured[symbol] = payload
@@ -185,4 +205,5 @@ async def capture_option_session(
         underlying_result = await _capture_underlying(underlying, trading_date, now, allow_before_floor=history_floor is not None)
         if underlying_result.outcome is Outcome.FAILED:
             return failed("provider_api_error", underlying_result.detail or "underlying bars could not be captured")
-        return await _clear_committed_staging(generation, await publish_option_session(listing, captured))
+        return await _clear_committed_staging(generation, await publish_option_session(listing, captured),
+                                              staging_root=staging_root)

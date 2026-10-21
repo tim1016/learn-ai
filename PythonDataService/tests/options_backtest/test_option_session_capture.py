@@ -192,3 +192,109 @@ async def test_cancelled_collection_after_five_minutes_resumes_without_refetch(f
     assert outcome.failure is None and call.call_count == 1 and second_attempts == 2
     assert put.call_count == 1, "only the successful response is recorded; cancellation preserves prior progress"
     assert (await asyncio.to_thread(read_option_session, "SPY", FRIDAY)).complete
+
+
+@pytest.mark.parametrize("escape", ["SPY/../../escape", "../escape", "root_symlink", "session_symlink", "lock_symlink"])
+async def test_capture_refuses_escape_before_creating_a_collector(fake_catalog, tmp_lake: Path, tmp_path: Path, escape: str) -> None:
+    from app.data_lake.path_policy import resolve_staging_root
+    from app.lean_sidecar.trading_calendar import session_open_ms_utc
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel"
+    sentinel.write_bytes(b"")
+    capture_root = resolve_staging_root("raw") / "option_sessions"
+    underlying = escape if "/" in escape else "SPY"
+    if escape == "root_symlink":
+        capture_root.parent.mkdir(parents=True, exist_ok=True)
+        capture_root.symlink_to(outside, target_is_directory=True)
+    elif escape == "session_symlink":
+        capture_root.mkdir(parents=True)
+        (capture_root / "SPY").symlink_to(outside, target_is_directory=True)
+    elif escape == "lock_symlink":
+        staging = capture_root / "SPY" / str(session_open_ms_utc(FRIDAY))
+        staging.mkdir(parents=True)
+        (staging / ".collector.lock").symlink_to(sentinel)
+    with pytest.raises(ValueError, match="escapes root"):
+        await capture_option_session(underlying, FRIDAY, now_ms=NOW_2026_10_12_MS)
+    assert list(outside.iterdir()) == [sentinel] and sentinel.read_bytes() == b""
+    assert not (resolve_staging_root("raw") / "escape").exists()
+
+
+@pytest.mark.parametrize("escape", ["generation", "zip", "json", "attempts"])
+@respx.mock
+async def test_capture_refuses_symlinked_generation_and_members_before_provider_work(
+    fake_catalog, tmp_lake: Path, tmp_path: Path, escape: str,
+) -> None:
+    from app.data_lake.option_listing import read_option_listing
+    from app.data_lake.option_session import option_session_dch
+    from app.data_lake.path_policy import resolve_staging_root
+    from app.lean_sidecar.trading_calendar import session_open_ms_utc
+
+    await prepare(fake_catalog, tmp_lake, CALL)
+    listing = await asyncio.to_thread(read_option_listing, "SPY", FRIDAY)
+    staging = resolve_staging_root("raw") / "option_sessions" / "SPY" / str(session_open_ms_utc(FRIDAY))
+    generation = staging / option_session_dch() / listing.sha256
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel"
+    sentinel.write_bytes(b"0")
+    if escape == "generation":
+        generation.parent.mkdir(parents=True)
+        generation.symlink_to(outside, target_is_directory=True)
+    else:
+        generation.mkdir(parents=True)
+        (generation / f"{CALL.occ_symbol}.{escape}").symlink_to(sentinel)
+    request = respx.get(url(CALL)).mock(return_value=no_trades(CALL.occ_symbol))
+    with pytest.raises(ValueError, match="escapes root"):
+        await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS)
+    assert request.call_count == 0
+    assert list(outside.iterdir()) == [sentinel] and sentinel.read_bytes() == b"0"
+
+
+@pytest.mark.parametrize("provider_failure", [False, True])
+@respx.mock
+async def test_capture_rechecks_confinement_after_a_provider_await(
+    fake_catalog, tmp_lake: Path, tmp_path: Path, provider_failure: bool,
+) -> None:
+    from app.data_lake.option_listing import read_option_listing
+    from app.data_lake.option_session import option_session_dch
+    from app.data_lake.path_policy import resolve_staging_root
+    from app.lean_sidecar.trading_calendar import session_open_ms_utc
+
+    await prepare(fake_catalog, tmp_lake, CALL)
+    listing = await asyncio.to_thread(read_option_listing, "SPY", FRIDAY)
+    staging = resolve_staging_root("raw") / "option_sessions" / "SPY" / str(session_open_ms_utc(FRIDAY))
+    outside = tmp_path / "outside"
+    outside_generation = outside / option_session_dch() / listing.sha256
+    outside_generation.mkdir(parents=True)
+    sentinel = outside_generation / "sentinel"
+    sentinel.write_bytes(b"retained")
+    def replace_session_directory(request: httpx.Request) -> httpx.Response:
+        staging.rename(staging.with_name(staging.name + "-original"))
+        staging.symlink_to(outside, target_is_directory=True)
+        return httpx.Response(500) if provider_failure else no_trades(CALL.occ_symbol)
+    respx.get(url(CALL)).mock(side_effect=replace_session_directory)
+    with pytest.raises(ValueError, match="escapes root"):
+        await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS)
+    assert list(outside_generation.iterdir()) == [sentinel] and sentinel.read_bytes() == b"retained"
+
+
+@respx.mock
+async def test_capture_cleanup_refuses_a_parent_symlink_before_deleting_outside_bytes(fake_catalog, tmp_lake: Path, tmp_path: Path) -> None:
+    from app.data_lake.option_session_capture import _clear_committed_staging
+    from app.data_lake.path_policy import resolve_staging_root
+
+    captured = await store_listing([vendor_listing_row(CALL)])
+    staging_root = resolve_staging_root("raw")
+    capture_root = staging_root / "option_sessions"
+    capture_root.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside_generation = outside / "generation"
+    outside_generation.mkdir(parents=True)
+    sentinel = outside_generation / "sentinel"
+    sentinel.write_bytes(b"keep")
+    (capture_root / "SPY").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="escapes root"):
+        await _clear_committed_staging(capture_root / "SPY" / "generation", captured, staging_root=staging_root)
+    assert sentinel.read_bytes() == b"keep"

@@ -32,6 +32,7 @@ from app.data_lake.option_lake import OPTION_PROVIDER, option_read_root
 from app.data_lake.option_listing import OptionListing, parse_option_listing_zip, read_option_listing
 from app.data_lake.path_policy import OptionSessionPath
 from app.data_lake.root_identity import active_root_id, read_marker
+from app.engine.live.identity import confine_path_to_root
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.utils.advisory_lock import try_advisory_file_lock
 from app.utils.session_anchors import et_date_at_ms
@@ -54,8 +55,14 @@ def option_session_publication_lock(underlying: str, trading_date: date) -> Abst
     No provider operation or transaction waits while this lock is held.
     """
     OptionSessionPath(underlying, trading_date)  # validate the path segment before using it
-    return try_advisory_file_lock(option_read_root().parent.parent / ".option-session-publication" /
-                                 underlying.lower() / str(session_open_ms_utc(trading_date)))
+    base_root = option_read_root().parent.parent
+    lock_root = confine_path_to_root(base_root / ".option-session-publication", base_root,
+                                    label="option publication lock root")
+    target = confine_path_to_root(lock_root / underlying.lower() / str(session_open_ms_utc(trading_date)),
+                                 lock_root, label="option publication lock")
+    confine_path_to_root(target.with_name(f".{target.name}.lock"), lock_root,
+                        label="option publication lock file")
+    return try_advisory_file_lock(target)
 
 
 class OptionSessionFileError(OptionBarsFileError):
