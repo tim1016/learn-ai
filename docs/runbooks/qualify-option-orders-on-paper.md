@@ -1322,3 +1322,39 @@ IBKR remained enabled/read-only, window override absent and line budget 84.
 Deploy again refused the two-leg plan. The Mac locked again before a final
 Alpaca Home recheck. Nothing was promoted; the owner-dashboard buy-back
 remains outstanding.
+
+## Run record: 2026-10-21, October 16's posted fees (#3225)
+
+The Paper journal's activity feed carries 64 distinct `FEE` rows dated
+2026-10-16 and 60 distinct `FILL` activities for the same day: 30 buys, 15
+sells and 15 short sells, every one a single contract, across 11 SPY Oct 19
+contracts. The feed of 2026-10-17 and the feed of 2026-10-19 show the same rows
+with the same ids and amounts, so the day's fees were complete by the 17th. A
+two-page read beginning at 1792259524612 ms UTC (204 ms long) shows all 124
+rows at once. Each of the 60 OCC rows names exactly one of the 60 fills by its
+`execution_id`, and every fill has one, so the account-day figures are directly
+observed. The journal days stay offline and no recording is committed for this
+check; it is the same kind of check as the 2026-10-15 spread fee check above.
+
+| Component | Canonical model, 60 fills | Alpaca posted | Posted less model |
+|---|---:|---:|---:|
+| OCC clearing | $1.80 | $1.80 (sixty $0.03 rows) | $0.00 |
+| OPT TAF | $0.00 | $0.09 (one row) | +$0.09 |
+| ORF | $0.90 | $0.90 | $0.00 |
+| CAT | $0.02 | $0.02 | $0.00 |
+| OPT REG/SEC | $0.09 | $0.09 | $0.00 |
+| Total | $2.81 | $2.90 | +$0.09 |
+
+The model figure is `fees_for_option_fill` over the 60 fills at a multiplier of
+100, settled by `settle_option_session`, with OCC rounded per execution as it
+now is. The one difference is OPT TAF: Alpaca posted $0.09 for the day's 30
+sold contracts, $0.003 each, the per-contract figure #3306 recorded on 10-13,
+10-14 and 10-15 and still inside FINRA's pause (SR-FINRA-2026-021), where the
+model pins TAF to zero. It is classified as a fee posting; no rate, rounding
+rule or tolerance was changed. Whether the model follows the regulator or what
+Paper posts, and at what rate, is the owner's decision on #3306.
+
+OCC, ORF, CAT and OPT REG/SEC agree to the cent. Every execution this day was
+one contract, so how Alpaca rounds the OCC fee of a fill of several contracts
+(n × $0.025 or n × $0.03) is still unobserved. This record settles October 16's
+posted fees; it supplies no reading of when each row first became visible.
