@@ -8,12 +8,17 @@ from contextlib import contextmanager
 from pathlib import Path
 
 
+def lock_file_for(target: Path) -> Path:
+    """The sibling file whose advisory lock serializes ``target``."""
+    return target.with_name(f".{target.name}.lock")
+
+
 @contextmanager
 def _advisory_file_lock(target: Path, *, blocking: bool, shared: bool = False) -> Iterator[bool]:
     """Acquire one sibling lock, or report contention for a non-blocking caller."""
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = target.with_name(f".{target.name}.lock")
+    lock_path = lock_file_for(target)
     handle = open(lock_path, "a+b")  # noqa: SIM115
     try:
         handle.seek(0, 2)

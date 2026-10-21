@@ -18,7 +18,7 @@ from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 from app.engine.live.identity import confine_path_to_root
-from app.utils.advisory_lock import advisory_file_lock, try_advisory_file_lock
+from app.utils.advisory_lock import advisory_file_lock, lock_file_for, try_advisory_file_lock
 from app.utils.atomic_file import atomic_write_bytes
 
 MAX_STAGED_BYTES = 8 * 1024**3
@@ -46,7 +46,10 @@ def _collector_target(base: Path, job_id: str) -> Path:
     locks = base.resolve() / ".collector-locks"
     if locks.is_symlink():
         raise ValueError("collector lock directory cannot be a symlink")
-    return confine_path_to_root(locks, base, label="collector lock directory") / job_id
+    target = confine_path_to_root(locks, base, label="collector lock directory") / job_id
+    if lock_file_for(target).is_symlink():
+        raise ValueError("a collector lock file cannot be a symlink")
+    return target
 
 
 @contextmanager

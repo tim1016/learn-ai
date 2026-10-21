@@ -196,13 +196,12 @@ async def test_contract_reads_of_one_admitted_session_share_one_decode_and_every
     from app.data_lake import option_session
     from app.data_lake.option_listing import OptionListingFileError
     from app.data_lake.path_policy import OptionListingPath
-    from app.engine.data.decoded_cache import DecodedArtifactCache
 
     listing = await listing_of(CALL, PUT, OTHER)
     await store_option_day(CALL, [{"t": FRIDAY_OPEN_MS, "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}])
     await store_option_day(PUT, [])
     assert (await repack_option_session("SPY", FRIDAY)).failure is None
-    monkeypatch.setattr(option_session, "_SESSION_MEMO", DecodedArtifactCache(max_bytes=option_session.SESSION_MEMO_MAX_BYTES))
+    monkeypatch.setattr(option_session, "_LAST_SESSION", option_session._LastDecodedSession())
     decodes = []
     real_decode = option_session.parse_option_session
     monkeypatch.setattr(option_session, "parse_option_session", lambda *a, **k: decodes.append(1) or real_decode(*a, **k))

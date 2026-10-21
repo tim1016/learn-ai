@@ -11,9 +11,9 @@ import os
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.data_lake.atomic import _fsync_path
 from app.option_archive.backup import RestoreReceipt
@@ -37,15 +37,6 @@ class SessionReceipt(_Receipt):
     empty: int | None = None
     with_bars: int | None = None
 
-    @model_validator(mode="before")
-    @classmethod
-    def _read_complete_flag(cls, data: Any) -> Any:
-        # A row written before outcomes were stored says only whether it completed.
-        if isinstance(data, dict) and "outcome" not in data and data.get("complete") is True:
-            return {**data, "outcome": SessionOutcome.COMPLETE}
-        return data
-
-    @computed_field  # type: ignore[prop-decorator]
     @property
     def complete(self) -> bool:
         return self.outcome is SessionOutcome.COMPLETE

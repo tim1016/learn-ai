@@ -51,7 +51,6 @@ class ArchiveJobHealth(BaseModel):
     severity: ArchiveSeverity
     reason: str
     last_success_ms: TimestampMs | None = None
-    age_ms: int | None = None
     generation_id: str | None = None
     last_failure: str | None = None
     size_bytes: int | None = None

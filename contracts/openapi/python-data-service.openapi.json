@@ -2301,17 +2301,6 @@
       },
       "ArchiveJobHealth": {
         "properties": {
-          "age_ms": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Age Ms"
-          },
           "free_bytes": {
             "anyOf": [
               {

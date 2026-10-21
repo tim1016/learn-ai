@@ -354,6 +354,17 @@ def parse_option_listing_zip(payload: bytes, underlying: str, as_of: date) -> tu
     return tuple(rows)
 
 
+def listing_from_admitted_bytes(underlying: str, as_of: date, payload: bytes) -> OptionListing:
+    """The listing a file's admitted bytes describe (:class:`OptionListingFileError` when they are not what the lake writes)."""
+    return OptionListing(
+        underlying=underlying,
+        as_of=as_of,
+        rows=parse_option_listing_zip(payload, underlying, as_of),
+        sha256=hashlib.sha256(payload).hexdigest(),
+        source_bytes=payload,
+    )
+
+
 def read_admitted_listing_bytes(
     underlying: str,
     as_of: date,
@@ -407,13 +418,7 @@ def read_option_listing(
     payload = read_admitted_listing_bytes(underlying, as_of, admission=admission, lake_root=lake_root)
     if payload is None:
         return None
-    return OptionListing(
-        underlying=underlying,
-        as_of=as_of,
-        rows=parse_option_listing_zip(payload, underlying, as_of),
-        sha256=hashlib.sha256(payload).hexdigest(),
-        source_bytes=payload,
-    )
+    return listing_from_admitted_bytes(underlying, as_of, payload)
 
 
 async def _stale_other_formats(identity: ArtifactIdentity, rel_path: PurePosixPath, *, keep_artifact_id: int) -> None:

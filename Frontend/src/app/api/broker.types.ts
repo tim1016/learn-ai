@@ -8524,8 +8524,6 @@ export interface components {
         };
         /** ArchiveJobHealth */
         ArchiveJobHealth: {
-            /** Age Ms */
-            age_ms?: number | null;
             /** Free Bytes */
             free_bytes?: number | null;
             /** Generation Id */

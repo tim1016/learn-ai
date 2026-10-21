@@ -17,6 +17,7 @@ import logging
 from pathlib import Path
 
 from app.data_lake import catalog_client
+from app.data_lake.admission import LakeAdmissionError
 from app.data_lake.option_retirement import (
     RetirementApproval,
     RetirementPlan,
@@ -80,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO)
     try:
         return asyncio.run(_run(args))
-    except (RetirementRefusedError, OSError, ValueError) as exc:
+    except (RetirementRefusedError, LakeAdmissionError, OSError, ValueError) as exc:
         logger.error("Retirement refused", extra={"action": "option_retirement_refused", "reason": str(exc)})
         return 1
 

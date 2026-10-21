@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import date
@@ -291,17 +290,5 @@ async def test_provider_block_survives_other_retries_and_new_nights_until_correc
     assert "SPY" not in service.state.read().provider_blocks
     await service.capture_pass()
     assert ("SPY", DAY) in calls
-
-
-def test_receipts_written_before_session_outcomes_keep_their_completed_sessions(tmp_path: Path) -> None:
-    session = session_open_ms_utc(DAY)
-    path = tmp_path / "state.json"
-    path.write_text(json.dumps({"version": 1, "baseline_ms": session, "jobs": {"capture": {
-        "phase": "complete", "completed_day_ms": NOW, "pause_reason": None, "retry_after_ms": NOW}},
-        "sessions": {"SPY": {str(session): {"complete": True, "failed": False, "lost": False, "retryable": False,
-                                            "capacity_paused": False, "blocked_day_ms": None, "ended_ms": NOW}}},
-        "snapshots": {}, "provider_blocks": {}}))
-    state = ArchiveState(path).read()
-    assert state.sessions["SPY"][session].complete and state.job("capture").completed_day_ms == NOW
 
 

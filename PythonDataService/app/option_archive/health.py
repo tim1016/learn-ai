@@ -42,7 +42,7 @@ def _job_health(receipt: JobReceipt, *, now_ms: int, stale_ms: int, name: str, p
                                        "and are kept for diagnosis; follow the restore runbook.")
     else:
         severity, reason = "healthy", f"The latest {name} passed verification."
-    return ArchiveJobHealth(severity=severity, reason=reason, last_success_ms=completed, age_ms=age,
+    return ArchiveJobHealth(severity=severity, reason=reason, last_success_ms=completed,
         generation_id=receipt.generation_id, last_failure=receipt.failure, size_bytes=receipt.size_bytes,
         free_bytes=receipt.free_bytes, manifest_sha256=receipt.manifest_sha256)
 

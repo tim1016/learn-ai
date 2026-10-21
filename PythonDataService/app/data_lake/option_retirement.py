@@ -53,7 +53,6 @@ APPLY_WINDOW_MS = 7 * _DAY_MS
 ROLLBACK_INTERVAL_MS = 7 * _DAY_MS
 #: The oldest restore test a plan may rest on, when it is made and when it is applied.
 RESTORE_TEST_MAX_AGE_MS = 7 * _DAY_MS
-#: The archive service's receipts, at the base of the lake it preserves (``OptionArchiveService.state``).
 _Digest = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 _Ms = Annotated[int, Field(strict=True, ge=0, le=MAX_TIMESTAMP_MS)]
 _Model = ConfigDict(frozen=True, extra="forbid")
