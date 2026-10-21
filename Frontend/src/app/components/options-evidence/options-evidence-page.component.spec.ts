@@ -8,6 +8,21 @@ import { OptionsEvidenceService, type EvidenceWorkspace } from './options-eviden
 import { RUN_WORKSPACE, STUDY_WORKSPACE } from './testing';
 
 describe('Options evidence workspace', () => {
+  it.each([
+    ['/brokers/alpaca/clerks/paper/accounts/PA9/bots/options-1', true],
+    ['https://outside.example/bots/options-1', false],
+    ['/brokers/alpaca/clerks/paper/accounts/PA9/deploy', false],
+  ])('returns only to an exact in-app bot route: %s', async (bot_return, allowed) => {
+    await render(OptionsEvidencePageComponent, {
+      inputs: { kind: 'golden', subjectId: RUN_WORKSPACE.approvals[0].golden_id, view: 'lineage', bot_return },
+      providers: [provideRouter([]), { provide: OptionsEvidenceService, useValue: { read: async () => RUN_WORKSPACE } },
+        { provide: OptionsBacktestService, useValue: { describe: () => new Promise(() => undefined) } }],
+    });
+    await screen.findByRole('heading', { name: RUN_WORKSPACE.headline });
+    const back = screen.queryByRole('link', { name: 'Back to bot' });
+    expect(back?.getAttribute('href') ?? null).toBe(allowed ? bot_return : null);
+    expect(screen.getByRole('link', { name: 'Performance' }).getAttribute('href')?.includes('bot_return=')).toBe(allowed);
+  });
   it('opens performance by default and keeps its exact identity visible when the replay read fails', async () => {
     const run = vi.fn().mockRejectedValue(new Error('Retained replay offline'));
     await render(OptionsEvidencePageComponent, {

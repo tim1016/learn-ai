@@ -1,4 +1,5 @@
 import { HttpErrorResponse } from '@angular/common/http';
+import { provideRouter } from '@angular/router';
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -38,6 +39,7 @@ async function setup(state: OptionsBotSession = SESSION, configuration = CONFIGU
   const result = await render(OptionsBotSessionComponent, {
     inputs: { target: TARGET, sid: 'spy-options-1', configuration, revision: 1 },
     providers: [
+      provideRouter([]),
       directory,
       { provide: OptionsBacktestService, useValue: { describe: async () => summaryFor('Tested setup') } },
       { provide: OptionsBotDeployService, useValue: { session, resume, reviewResume } },
@@ -52,8 +54,8 @@ describe('Options session recovery', () => {
   it('explains when the retained proof belongs to a different sealed setup', async () => {
     await setup(SESSION, { ...CONFIGURATION, setup_sha256: '0'.repeat(64) });
     fireEvent.click(screen.getByRole('button', { name: 'Build proof' }));
-    await screen.findByText('The retained proof does not match this deployment’s exact setup and rules.');
-    expect(screen.queryByText(goldenSetup().status_explanation)).toBeNull();
+    await screen.findByText(/The retained proof does not match this deployment’s exact setup and rules/);
+    expect(screen.getByText('Retained setup', { exact: false }).textContent).toContain(goldenSetup().setup_sha256);
   });
   it('says when saved premiums and leg P&L are unavailable', async () => {
     await setup({ ...SESSION, legs: [{ ...SESSION.legs[0], realized_pnl_usd: null, open_pnl_usd: null,
@@ -78,7 +80,7 @@ describe('Options session recovery', () => {
     expect(screen.getByText('45 minutes')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Build proof' }));
     await screen.findByRole('heading', { name: 'Build proof' });
-    await screen.findByText(goldenSetup().status_explanation);
+    await screen.findByText(new RegExp(goldenSetup().status_explanation));
   });
   it('refuses Resume when the lane moves beyond the inherited frozen target', async () => {
     const { directory, fixture, resume } = await setup();

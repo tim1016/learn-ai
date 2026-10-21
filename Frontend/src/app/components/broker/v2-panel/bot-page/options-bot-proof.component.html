@@ -3,10 +3,38 @@
   <p>Golden version <code>{{ configuration().golden_setup_id }}</code></p>
   <p>Exact setup <code>{{ configuration().setup_sha256 }}</code> <app-copy-button [text]="configuration().setup_sha256" ariaLabel="Copy setup hash" /></p>
   <p>Rules <code>{{ configuration().rules_digest }}</code></p>
+  <a [routerLink]="['/options-evidence/golden', configuration().golden_setup_id]" [queryParams]="evidenceQuery()">Inspect pinned Golden evidence</a>
   @if (proof.hasValue()) { @let retained = proof.value();
-    <p>{{ retained.status_explanation }}</p>
-    <p>Source backtest {{ retained.source_run_id }} · Proof <code>{{ retained.proof_sha256 }}</code></p>
+    @if (!identityMatches()) {
+      <div class="problem" role="status">
+        <p>The retained proof does not match this deployment’s exact setup and rules. This receipt does not establish execution readiness for the bot.</p>
+        <p>Returned Golden <code>{{ retained.id }}</code></p>
+        <p>Retained setup <code>{{ retained.setup_sha256 }}</code></p>
+        <p>Retained rules <code>{{ retained.rules_digest }}</code></p>
+      </div>
+    }
+    <h5>Historical approval</h5>
+    <p>{{ retained.name }}</p>
+    <p>Approved by {{ retained.approved_by }} · <app-timestamp-display [value]="retained.created_at_ms" mode="et" /></p>
+    <p>Approval note: {{ retained.note }}</p>
+    <p>Source backtest {{ retained.source_run_id }}</p>
+    @if (retained.evidence.options_search_study_id; as study) {
+      @if (retained.evidence.study_manifest_sha256 && retained.evidence.verdict) {
+        <p>Approved from search. Historical research: {{ retained.evidence.verdict | receiptLabel }}</p>
+      } @else {
+        <p>Approval origin is incompletely recorded. The study reference alone does not establish search qualification for this version.</p>
+      }
+      <a [routerLink]="['/options-golden-search', study]">Open recorded search</a>
+      <p>Study manifest <code>{{ retained.evidence.study_manifest_sha256 ?? 'Not recorded' }}</code></p>
+    } @else {
+      <p>Approved from backtest. No linked search qualification is recorded.</p>
+    }
     <app-options-qualification-evidence [evidence]="retained.evidence" />
+    <h5>Current execution proof for this Golden version</h5>
+    <p>{{ retained.status | receiptLabel }}. {{ retained.status_explanation }}</p>
+    <p>Proof <code>{{ retained.proof_sha256 }}</code></p>
+    <p>Refreshing this check does not change the recorded research or this bot’s pinned version.</p>
   } @else if (proof.isLoading()) { <p>Reading retained proof…</p> }
-  @if (problem(); as why) { <p role="status">{{ why }}</p><button type="button" (click)="proof.reload()">Read proof again</button> }
+  @if (problem(); as why) { <p role="status">{{ why }}</p> }
+  <button type="button" (click)="proof.reload()" [disabled]="proof.isLoading()">Refresh execution proof</button>
 </section>

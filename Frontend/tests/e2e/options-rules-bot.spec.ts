@@ -1,9 +1,14 @@
 import { expect, test, type Page } from '@playwright/test';
 
+import retainedGolden76 from '../../../PythonDataService/tests/fixtures/options_evidence/golden76.json';
+import run76 from '../../../PythonDataService/tests/fixtures/options_evidence/run76.json';
+import description76 from '../../../PythonDataService/tests/fixtures/options_evidence/description76.json';
+
 import type { components } from '../../src/app/api/broker.types';
 import { OPTION_CATALOGUE } from '../../src/app/components/broker/broker-deploy-page/option-structure/option-structure.fixtures';
 import { previewAnswer } from '../../src/app/components/options-backtest/position/testing';
 import { fakeBotPanelView, fakeChartFeed } from '../../src/app/testing/bot-panel-fixtures';
+import { RUN_WORKSPACE } from '../../src/app/components/options-evidence/testing';
 import { OwnerWalkWorld, PAPER_ACCOUNT, PAPER_API, PAPER_WORKSPACE, WALKED_BOT } from './support/owner-walk-world';
 
 type Schemas = components['schemas'];
@@ -22,12 +27,11 @@ const GOLDEN: Schemas['GoldenOptionSetupView'] = {
     sessions_tested: 3, trades: 4, net_profit_usd: '25.00', starting_cash_usd: '10000',
     slippage_percent: '0.3', limitations: ['Trade bars do not prove live fills.'] },
 };
-const CONFIGURATION: Schemas['OptionsBotConfiguration'] = {
-  version: 1, golden_setup_id: GOLDEN.id, setup_sha256: GOLDEN.setup_sha256,
-  rules_digest: GOLDEN.rules_digest, setup: GOLDEN.setup,
-};
-
-async function optionsWorld(page: Page, loseAnswer = false) {
+async function optionsWorld(page: Page, loseAnswer = false, golden = GOLDEN) {
+  const configuration: Schemas['OptionsBotConfiguration'] = {
+    version: 1, golden_setup_id: golden.id, setup_sha256: golden.setup_sha256,
+    rules_digest: golden.rules_digest, setup: golden.setup,
+  };
   const world = new OwnerWalkWorld();
   await world.install(page);
   const deployments: Schemas['OptionsDeploySubmission'][] = [];
@@ -35,7 +39,7 @@ async function optionsWorld(page: Page, loseAnswer = false) {
   let interrupted = false;
   const receipt: Schemas['BudgetDeployCommandReceipt'] = {
     status: 'deployed', outcome: 'success', receipt_id: 'options-command', command_id: 'options-command',
-    recorded_at_ms: GOLDEN.created_at_ms, first_deployed_at_ms: GOLDEN.created_at_ms,
+    recorded_at_ms: golden.created_at_ms, first_deployed_at_ms: golden.created_at_ms,
     strategy_instance_id: WALKED_BOT, run_id: 'options-run', account_id: PAPER_ACCOUNT,
     world: 'real_paper', committed_usd: '10000.00', message: 'Options bot is deployed',
     explanation: 'The approved setup is on duty.', next_action: 'Open the bot.',
@@ -44,12 +48,12 @@ async function optionsWorld(page: Page, loseAnswer = false) {
     const request = route.request();
     const path = new URL(request.url()).pathname;
     if (path === '/api/research/golden-option-setups') {
-      await route.fulfill({ json: [GOLDEN] });
-    } else if (path === `/api/research/golden-option-setups/${GOLDEN.id}`) {
-      await route.fulfill({ json: GOLDEN });
+      await route.fulfill({ json: [golden] });
+    } else if (path === `/api/research/golden-option-setups/${golden.id}`) {
+      await route.fulfill({ json: golden });
     } else if (path === '/api/research/options-backtest/setups/describe') {
       const summary: Schemas['SetupDescriptionResponse'] = {
-        setup: GOLDEN.setup, window: ['The setup follows its approved trading session.'],
+        setup: golden.setup, window: ['The setup follows its approved trading session.'],
         legs: [{ leg_id: 'call', sentences: ['Buys one call with its approved stop and re-entry.'] }],
         square_off: ['Closes at the approved daily exit.'], costs: [], notices: [],
       };
@@ -61,8 +65,8 @@ async function optionsWorld(page: Page, loseAnswer = false) {
     } else if (path === `${PAPER_API}/options-bots/review`) {
       const body: Schemas['OptionsDeployRequest'] = request.postDataJSON();
       const review: Schemas['OptionsDeploymentReview'] = {
-        golden: GOLDEN, allowed: body.budget != null, explanation: 'The exact setup is approved for this account.',
-        first_eligible_session_open_ms: GOLDEN.evidence.last_session_open_ms,
+        golden, allowed: body.budget != null, explanation: 'The exact setup is approved for this account.',
+        first_eligible_session_open_ms: golden.evidence.last_session_open_ms,
         rules_summary: ['Daily session rules and tested contract quantities are fixed.'],
         budget: { state: 'ready', world: 'real_paper', detail: 'Future entries need current Clerk admission.',
           risk_revision: 8, budget_usd: body.budget?.amount_usd ?? null,
@@ -79,19 +83,19 @@ async function optionsWorld(page: Page, loseAnswer = false) {
     } else if (path === `${PAPER_API}/bots/${WALKED_BOT}/panel` || path === `${PAPER_API}/bots/${WALKED_BOT}/live-snapshot`) {
       const panel = fakeBotPanelView({
         strategy_instance_id: WALKED_BOT, account_id: PAPER_ACCOUNT, symbol: 'SPY',
-        bot_kind: 'options', options_bot: CONFIGURATION,
+        bot_kind: 'options', options_bot: configuration,
       });
       const snapshot: Schemas['BotPanelLiveSnapshot'] = {
         panel, stream_epoch: 'options-browser', surface_version: interrupted ? 2 : 3,
-        live_chart: { as_of_ms: GOLDEN.created_at_ms, bars: [], feed: fakeChartFeed(),
+        live_chart: { as_of_ms: golden.created_at_ms, bars: [], feed: fakeChartFeed(),
           fill_markers: [], overlay_notices: [], resolution: '5s', strategy_instance_id: WALKED_BOT, symbol: 'SPY',
-          trading_date_open_ms: GOLDEN.evidence.last_session_open_ms, trading_date_close_ms: GOLDEN.created_at_ms },
+          trading_date_open_ms: golden.evidence.last_session_open_ms, trading_date_close_ms: golden.created_at_ms },
       };
       await route.fulfill({ json: path.endsWith('/live-snapshot') ? snapshot : panel });
     } else if (path === `${PAPER_API}/options-bots/${WALKED_BOT}/session`) {
       const session: Schemas['OptionsBotSessionView'] = {
-        strategy_instance_id: WALKED_BOT, golden_setup_id: GOLDEN.id,
-        session_open_ms: GOLDEN.evidence.last_session_open_ms, last_minute_ms: GOLDEN.created_at_ms,
+        strategy_instance_id: WALKED_BOT, golden_setup_id: golden.id,
+        session_open_ms: golden.evidence.last_session_open_ms, last_minute_ms: golden.created_at_ms,
         pending_decisions: 0, entries_enabled: !interrupted, resume_allowed: interrupted,
         resume_explanation: interrupted ? 'Resume the interrupted session from its recorded state.' : 'The session is on duty.',
         legs: [{ leg_id: 'call', side: 'buy', phase: 'held', entries_filled: 1, reentries_left: 1,
@@ -158,4 +162,64 @@ test('resumes interrupted position management with no new entry consent', async 
   expect(state.resumes).toHaveLength(1);
   expect(state.resumes[0]?.budget).toBeNull();
   expect(state.world.unexpected()).toEqual([]);
+});
+
+test('follows the bot’s exact source-76 version to evidence and back without commands', async ({ page }) => {
+  const golden: Schemas['GoldenOptionSetupView'] = { ...retainedGolden76, status: 'ready', setup: RUN_WORKSPACE.setup };
+  const state = await optionsWorld(page, false, golden);
+  state.world.phase = 'running';
+  const newer = { ...golden, id: 'ogs_' + '2'.repeat(32), source_run_id: 99, setup_sha256: 'f'.repeat(64) };
+  let proof = golden;
+  const commands: string[] = [];
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('request', request => {
+    const path = new URL(request.url()).pathname;
+    if (path.startsWith('/api/') && request.method() !== 'GET' && !path.endsWith('/setups/describe')) commands.push(path);
+  });
+  await page.route('**/api/research/**', async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === '/api/research/golden-option-setups') await route.fulfill({ json: [newer, proof] });
+    else if (path === `/api/research/golden-option-setups/${golden.id}`) await route.fulfill({ json: proof });
+    else if (path === `/api/research/options-golden-search/workspace/golden/${golden.id}`) await route.fulfill({ json: {
+      ...RUN_WORKSPACE, subject_kind: 'golden', subject_id: golden.id,
+    } });
+    else if (path.endsWith('/runs/76')) await route.fulfill({ json: run76 });
+    else if (path.endsWith('/setups/describe')) await route.fulfill({ json: description76 });
+    else await route.fallback();
+  });
+  const botPath = `${PAPER_WORKSPACE}/bots/${WALKED_BOT}`;
+  await page.goto(botPath);
+  await page.getByRole('button', { name: 'Build proof', exact: true }).click();
+  const card = page.locator('app-options-bot-proof');
+  await expect(card.getByText('Source backtest 76', { exact: true })).toBeVisible();
+  await expect(card.getByText(`Approval note: ${golden.note}`)).toBeVisible();
+  await expect(card.getByRole('link', { name: 'Open recorded search' })).toHaveCount(0);
+  await card.screenshot({ path: 'test-results/options-bot-evidence-desktop.png' });
+  await card.getByRole('heading', { name: 'Current execution proof for this Golden version' }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: 'test-results/options-bot-current-proof-desktop.png' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await card.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await card.screenshot({ path: 'test-results/options-bot-evidence-narrow.png' });
+  await card.getByRole('button', { name: 'Refresh execution proof' }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: 'test-results/options-bot-current-proof-narrow.png' });
+  await card.getByRole('link', { name: 'Inspect pinned Golden evidence' }).click();
+  await expect(page).toHaveURL(new RegExp(`/options-evidence/golden/${golden.id}`));
+  const workspace = page.locator('app-options-evidence-page');
+  await expect(workspace.getByRole('heading', { name: 'Approved from backtest' })).toBeVisible();
+  await expect(workspace.getByText('Source run 76.', { exact: false })).toBeVisible();
+  await workspace.getByRole('link', { name: 'Performance', exact: true }).click();
+  await expect(workspace.locator('app-options-backtest-run-daily-chart')).toBeVisible();
+  expect(await workspace.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await workspace.getByRole('link', { name: 'Back to bot', exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(botPath + '$'));
+  await page.getByRole('button', { name: 'Build proof', exact: true }).click();
+  await expect(card.getByText('Source backtest 76', { exact: true })).toBeVisible();
+  proof = { ...golden, status: 'revoked', status_explanation: 'Execution approval has been revoked.' };
+  await card.getByRole('button', { name: 'Refresh execution proof' }).click();
+  await expect(card.getByText(/Revoked. Execution approval has been revoked/)).toBeVisible();
+  await expect(card.getByText(`Approval note: ${golden.note}`)).toBeVisible();
+  expect(commands).toEqual([]);
+  expect(state.world.unexpected()).toEqual([]);
+  expect(errors).toEqual([]);
 });

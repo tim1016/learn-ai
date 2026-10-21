@@ -1,5 +1,5 @@
 <main class="workspace">
-  <nav class="return"><a routerLink="/options-backtest">Options Backtest</a><a routerLink="/options-golden-search">Options Search</a><button type="button" (click)="workspace.reload()">Refresh evidence</button></nav>
+  <nav class="return">@if (botReturn(); as path) { <a [routerLink]="path">Back to bot</a> }<a routerLink="/options-backtest">Options Backtest</a><a routerLink="/options-golden-search">Options Search</a><button type="button" (click)="workspace.reload()">Refresh evidence</button></nav>
   @if (workspace.isLoading()) { <p>Reading exact strategy evidence…</p> }
   @if (problem(); as why) { <p class="problem">{{ why }}</p><button type="button" (click)="workspace.reload()">Retry evidence</button> }
   @if (evidence(); as item) {
@@ -20,7 +20,7 @@
         @for (version of item.approvals; track version.golden_id) {
           <article><h3>{{ version.source === 'backtest' ? 'Approved from backtest' : version.source === 'search' ? 'Approved from search' : 'Approval origin not recorded' }}</h3>
             @if (!version.identity_matches) { <p class="problem">Identity mismatch. This approval does not match the selected source setup.</p> }
-            <a [routerLink]="['/options-evidence/golden', version.golden_id]" [queryParams]="{ view: 'lineage' }">Open exact Golden version</a>
+            <a [routerLink]="['/options-evidence/golden', version.golden_id]" [queryParams]="lineageQuery()">Open exact Golden version</a>
             <p>Source run {{ version.source_run_id }}. {{ version.note }}</p><p>Execution proof: {{ version.proof_status | receiptLabel }}. {{ version.proof_explanation }}</p>
             @if (version.study_id && version.identity_matches) { <a [routerLink]="['/options-golden-search', version.study_id]">Open recorded search</a> }
             @if (version.study_manifest_sha256) { <p>Study manifest <code>{{ version.study_manifest_sha256 }}</code></p> }
