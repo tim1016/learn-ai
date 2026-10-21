@@ -292,12 +292,12 @@ async def test_pruning_removes_a_dead_staging_folder_but_never_runs_beside_a_liv
 def test_destination_must_be_an_identified_external_mount(source: tuple, tmp_path: Path) -> None:
     destination, roots, _, _ = source
     host = host_paths(tmp_path)
-    validate_destination(destination, mount=destination, checkout=tmp_path / "checkout", roots=roots, **host)
+    validate_destination(destination, checkout=tmp_path / "checkout", roots=roots, **host)
     with pytest.raises(BackupRefusedError, match="outside"):
-        validate_destination(destination, mount=destination, checkout=tmp_path, roots=roots, **host)
+        validate_destination(destination, checkout=tmp_path, roots=roots, **host)
     (destination / ".backup-destination.json").unlink()
     with pytest.raises(BackupRefusedError, match="marker"):
-        validate_destination(destination, mount=destination, checkout=tmp_path / "checkout", roots=roots, **host)
+        validate_destination(destination, checkout=tmp_path / "checkout", roots=roots, **host)
 
 
 @pytest.mark.parametrize("host_destination", ["~/learn-ai-lake-backup", "learn-ai-lake-backup"])
@@ -305,7 +305,7 @@ def test_host_destination_is_never_expanded_inside_the_container(source: tuple, 
     destination, roots, _, _ = source
     (destination / ".backup-destination.json").write_text(json.dumps({"host_destination": host_destination}))
     with pytest.raises(BackupRefusedError, match="absolute"):
-        validate_destination(destination, mount=destination, checkout=tmp_path / "checkout", roots=roots,
+        validate_destination(destination, checkout=tmp_path / "checkout", roots=roots,
                              **{**host_paths(tmp_path), "expected_host_destination": host_destination})
 
 
@@ -354,7 +354,7 @@ def test_host_mount_alias_cannot_hide_a_backup_inside_the_checkout(source: tuple
     aliased_inside = host_checkout / "backup"
     (destination / ".backup-destination.json").write_text(json.dumps({"host_destination": str(aliased_inside)}))
     with pytest.raises(BackupRefusedError, match="host destination"):
-        validate_destination(destination, mount=destination, checkout=tmp_path / "container-checkout", roots=roots,
+        validate_destination(destination, checkout=tmp_path / "container-checkout", roots=roots,
             expected_host_destination=str(aliased_inside), host_checkout=host_checkout, host_lake_root=host_checkout / "lake")
 
 

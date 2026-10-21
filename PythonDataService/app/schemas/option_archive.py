@@ -3,13 +3,17 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-from app.utils.session_anchors import MAX_TIMESTAMP_MS
+from app.lean_sidecar.trading_calendar import session_open_ms_utc
+from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms
 
 TimestampMs = Annotated[int, Field(ge=0, le=MAX_TIMESTAMP_MS)]
 
 ArchiveSeverity = Literal["healthy", "catching_up", "waiting", "at_risk", "failed", "unavailable"]
+ArchiveJobName = Literal["capture", "snapshot", "backup", "restore"]
+#: Where the nightly capture stands: what the plan found, why a pass stopped, or how it ended.
+ArchivePhase = Literal["capture", "waiting", "complete", "rth_pause", "snapshot_pause", "capacity_pause", "interrupted", "failed"]
 
 
 class ArchiveGap(BaseModel):
@@ -31,7 +35,7 @@ class UnderlyingArchiveHealth(BaseModel):
     partial_sessions: int
     lost_sessions: int
     gaps: list[ArchiveGap]
-    phase: str
+    phase: ArchivePhase
     last_success_ms: TimestampMs | None = None
     last_failure: str | None = None
     last_pass_started_ms: TimestampMs | None = None
@@ -68,7 +72,7 @@ class OptionArchiveHealth(BaseModel):
 
 class ArchiveTriggerReceipt(BaseModel):
     accepted: bool
-    job: Literal["capture", "snapshot", "backup", "restore"]
+    job: ArchiveJobName
     status_url: str = "/api/option-archive/status"
 
 
@@ -76,3 +80,10 @@ class ArchiveSessionCaptureRequest(BaseModel):
     underlying: Literal["SPY", "QQQ", "IWM"]
     session_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     retry_exhausted: bool = False
+
+    @field_validator("session_ms")
+    @classmethod
+    def _canonical_session_open(cls, session_ms: int) -> int:
+        if session_open_ms_utc(et_date_at_ms(session_ms)) != session_ms:
+            raise ValueError("session_ms must be the canonical session open")
+        return session_ms

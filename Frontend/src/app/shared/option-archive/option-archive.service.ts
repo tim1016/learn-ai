@@ -5,6 +5,14 @@ import { firstValueFrom } from 'rxjs';
 import type { components } from '../../api/broker.types';
 
 export type OptionArchiveHealth = components['schemas']['OptionArchiveHealth'];
+type ArchiveSeverity = components['schemas']['ArchiveJobHealth']['severity'];
+
+/** The severities the server counts toward `attention`. */
+const ATTENTION: ReadonlySet<ArchiveSeverity> = new Set<ArchiveSeverity>(['at_risk', 'failed', 'unavailable']);
+
+export function needsAttention(severity: ArchiveSeverity): boolean {
+  return ATTENTION.has(severity);
+}
 
 @Injectable({ providedIn: 'root' })
 export class OptionArchiveService {
@@ -17,7 +25,6 @@ export class OptionArchiveService {
   });
   readonly health = computed(() => this.request.hasValue() ? this.request.value() : null);
   readonly unavailable = computed(() => this.request.error() !== undefined);
-  readonly loading = computed(() => this.request.isLoading());
 
   retry(): void { this.request.reload(); }
 }

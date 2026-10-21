@@ -15,9 +15,9 @@ Moving a backup to an SSD remains a separate owner action.
    or relative path is refused, because the container cannot expand it.
 2. Set `OPTION_ARCHIVE_BACKUP_HOST_DESTINATION` to that absolute host path and
    `OPTION_ARCHIVE_ENABLED=true` in the data service's environment. Compose
-   mounts it at `/lake-backup`. Compose also declares the absolute host
-   checkout and lake paths for containment checks across bind-mount aliases. Both `OPTION_ARCHIVE_BACKUP_DESTINATION` and
-   `OPTION_ARCHIVE_BACKUP_MOUNT` must name that same container path.
+   mounts it at `/lake-backup`, the path `OPTION_ARCHIVE_BACKUP_DESTINATION` names.
+   Compose also declares the absolute host checkout and lake paths for
+   containment checks across bind-mount aliases.
 3. Read `GET /api/option-archive/status` or the Option archive card on Data Lab.
    `POST /api/option-archive/trigger/capture`, `/snapshot`, `/backup`, and `/restore`
    require the normal data-plane control-secret header. They return acceptance;
@@ -32,7 +32,7 @@ Moving a backup to an SSD remains a separate owner action.
    capture clears the block. A transient recovery failure leaves it blocked.
    A full `OPTION_ARCHIVE_STAGING_MAX_BYTES` budget pauses the pass and appears
    as `capacity_pause` with its recovery reason. Inspect available disk space and
-   retained staging before raising this setting in Compose's environment and
+   retained staging before raising this setting in `PythonDataService/.env` and
    recreating the data service; repeat the capture trigger afterward.
 5. Evening observations are reference data. Compare a week's observations under
    `lake/raw/usa_options/<underlying>/observations/` to investigate rollover.
@@ -77,7 +77,8 @@ Moving a backup to an SSD remains a separate owner action.
 ## A damaged backup generation
 
 Pruning never removes a generation that fails verification and never counts it
-as a good one; it logs `backup_generation_unverified` with the generation id.
+as a good one; it logs `backup_generation_unverified` with the generation id, and
+the archive status reports the backup at risk, naming that generation.
 Diagnose it, then delete that `generations/<id>` folder yourself. Until then, a
 damaged generation whose `manifest.json` cannot be read stops the removal of
 unreferenced objects.

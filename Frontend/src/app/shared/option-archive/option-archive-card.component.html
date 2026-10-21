@@ -6,7 +6,7 @@
   } @else if (archive.health(); as health) {
     @if (!health.enabled) { <p>Preservation is awaiting operator activation.</p> }
     @for (item of health.underlyings; track item.underlying) {
-      <article [id]="'option-archive-' + item.underlying" [class.needs-attention]="item.severity === 'at_risk' || item.severity === 'failed'">
+      <article [id]="'option-archive-' + item.underlying" [class.needs-attention]="needsAttention(item.severity)">
         <h3><app-asset-identity [symbol]="item.underlying" size="sm" /></h3>
         <p>{{ item.reason }}</p>
         <dl>
@@ -33,14 +33,12 @@
     <article id="option-archive-backup">
       <h3>Lake backup</h3><p>{{ health.backup.reason }}</p>
       <p>Last checked: <app-timestamp-display [value]="health.backup.last_success_ms" mode="local" /></p>
-      <p>Backup age: {{ formatAge(health.backup.age_ms) }}</p>
       <p>Oldest capture awaiting backup: <app-timestamp-display [value]="health.backup.oldest_unbacked_capture_ms" mode="local" /></p>
       @if (health.backup.generation_id; as generation) { <p>Generation: {{ generation }}</p> }
       @if (health.backup.free_bytes !== null) { <p>Destination free space: {{ health.backup.free_bytes }} bytes</p> }
     </article>
     <article id="option-archive-restore">
       <h3>Weekly restore check</h3><p>{{ health.test_restore.reason }}</p>
-      <p>Restore check age: {{ formatAge(health.test_restore.age_ms) }}</p>
       <p>Last passed: <app-timestamp-display [value]="health.test_restore.last_success_ms" mode="local" /></p>
     </article>
     <p>Vendor retention permission is awaiting a reply. Capture and backup stay on this Mac.</p>

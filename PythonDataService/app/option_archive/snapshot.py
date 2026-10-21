@@ -6,7 +6,8 @@ import hashlib
 import json
 import math
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import aclosing, asynccontextmanager
 from datetime import date
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
@@ -33,12 +34,16 @@ from app.data_lake.option_lake import (
     vendor_request_gate,
 )
 from app.data_lake.polygon_fetcher import PolygonFetchError
-from app.data_lake.polygon_option_http import get_json_object, require_confirmed_status
+from app.data_lake.polygon_option_http import option_pages
 from app.data_lake.types import ArtifactIdentity
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms
 
 SNAPSHOT_RECIPE_VERSION = 1
+
+
+class SnapshotOutsideWindowError(RuntimeError):
+    """An evening observation was asked for outside its bounded due window."""
 
 
 class ReferenceMetric(BaseModel):
@@ -111,48 +116,37 @@ async def observe_chain(
     should_pause: Callable[[], bool] = lambda: False,
 ) -> ChainObservation:
     started = clock()
-    path = f"/v3/snapshot/options/{underlying}"
-    url = "https://api.polygon.io" + path
-    next_url: str | None = url
-    seen: set[str] = set()
     contracts: dict[str, ContractObservation] = {}
     page_receipts: list[str] = []
     reason: str | None = None
+
+    @asynccontextmanager
+    async def request_slot(pages_read: int) -> AsyncIterator[None]:
+        if should_pause():
+            raise ValueError("snapshot paused before starting the next request")
+        if et_date_at_ms(clock()) != session:
+            raise ValueError("snapshot crossed the capture-session date")
+        async with vendor_request_gate():
+            if should_pause():
+                raise ValueError("snapshot paused while waiting for a request slot")
+            yield
+
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            while next_url is not None:
-                cursor = httpx.URL(next_url)
-                if (cursor.scheme != "https" or cursor.host != "api.polygon.io" or cursor.path != path
-                        or "apiKey" in cursor.params or cursor.userinfo or cursor.fragment):
-                    raise ValueError("snapshot cursor left its authenticated endpoint")
-                if next_url in seen or len(seen) >= max_pages:
-                    raise ValueError("snapshot paging repeated a cursor or exceeded its page bound")
-                if should_pause():
-                    raise ValueError("snapshot paused before starting the next request")
-                if et_date_at_ms(clock()) != session:
-                    raise ValueError("snapshot crossed the capture-session date")
-                seen.add(next_url)
-                async with vendor_request_gate():
-                    if should_pause():
-                        raise ValueError("snapshot paused while waiting for a request slot")
-                    body = await get_json_object(client, cursor, params={"limit": 250} if next_url == url else None,
-                                                 api_key=settings.POLYGON_API_KEY, label=underlying)
-                require_confirmed_status(body, underlying, 200)
-                rows = body.get("results")
-                if not isinstance(rows, list):
-                    raise ValueError("snapshot page has no results list")
+        async with (
+            httpx.AsyncClient(timeout=30) as client,
+            aclosing(option_pages(client, f"https://api.polygon.io/v3/snapshot/options/{underlying}", params={"limit": 250},
+                                  api_key=settings.POLYGON_API_KEY, label=underlying, max_pages=max_pages,
+                                  around_request=request_slot)) as pages,
+        ):
+            async for body in pages:
                 page_receipts.append(hashlib.sha256(json.dumps(body, default=str, sort_keys=True).encode()).hexdigest())
-                for row in rows:
+                for row in body["results"]:
                     if not isinstance(row, dict):
                         raise ValueError("snapshot contains a malformed contract")
                     contract = _contract(row)
                     if contract.ticker in contracts:
                         raise ValueError("snapshot contains a duplicate contract")
                     contracts[contract.ticker] = contract
-                cursor_value = body.get("next_url")
-                if cursor_value is not None and (not isinstance(cursor_value, str) or not cursor_value or not rows):
-                    raise ValueError("snapshot has a missing or malformed page")
-                next_url = cursor_value
     except (PolygonFetchError, ValueError) as exc:
         reason = str(exc)
     gaps = Counter(f"{name}:{metric.state}" for contract in contracts.values()

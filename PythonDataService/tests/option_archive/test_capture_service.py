@@ -1,28 +1,48 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
 import respx
 
 from app.data_lake.ensure_data import _minute_trade_dch
-from app.lean_sidecar.trading_calendar import session_open_ms_utc
-from app.option_archive.planner import wall_clock_ms
+from app.data_lake.option_lake import OptionCaptureResult, OptionDataFailure
+from app.lean_sidecar.trading_calendar import session_open_ms_utc, session_window_for_date
+from app.option_archive import service as service_module
+from app.option_archive.planner import SessionOutcome
 from app.option_archive.service import OptionArchiveService
 from app.option_archive.settings import ArchiveSettings
-from app.option_archive.state import ArchiveState
+from app.option_archive.state import ArchiveState, ArchiveStateDoc
 from app.options.contract import OptionContract
 from app.options_backtest.option_session_capture import read_session_completeness
+from app.services.session_authority import et_minute_of_day_ms
 from tests._helpers.option_vendor import no_trades, traded
 from tests.options_backtest._lake import fake_catalog as fake_catalog
 from tests.options_backtest._lake import stock_bar, store_listing, store_underlying_day, vendor_listing_row
 from tests.options_backtest._lake import tmp_lake as tmp_lake
 
 DAY = date(2026, 10, 9)
-NOW = wall_clock_ms(date(2026, 10, 12), 120)
+NOW = et_minute_of_day_ms(date(2026, 10, 12), 120)
+
+
+class Owned:
+    @asynccontextmanager
+    async def hold(self, name: str) -> AsyncIterator[bool]:
+        yield True
+
+
+def with_baseline(state: ArchiveState, baseline_ms: int) -> ArchiveState:
+    def seed(doc: ArchiveStateDoc) -> None:
+        doc.baseline_ms = baseline_ms
+    state.update(seed)
+    return state
 
 
 async def seed(fake_catalog, tmp_lake: Path, underlying: str) -> tuple[OptionContract, OptionContract]:
@@ -50,8 +70,7 @@ async def test_full_pass_captures_all_three_roots_traded_and_empty_and_keeps_fai
                 response = no_trades(contract.occ_symbol) if empty else traded(contract.occ_symbol,
                     [{"t": session_open_ms_utc(DAY), "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}])
             respx.get(url).mock(return_value=response)
-    state = ArchiveState(tmp_lake / "state.json")
-    state.update(lambda data: data.update(baseline_ms=session_open_ms_utc(DAY)))
+    state = with_baseline(ArchiveState(tmp_lake / "state.json"), session_open_ms_utc(DAY))
     service = OptionArchiveService(config=ArchiveSettings(ENABLED=True), state=state, clock=lambda: NOW)
     await service.capture_pass()
     health = service.health()
@@ -67,17 +86,16 @@ async def test_full_pass_captures_all_three_roots_traded_and_empty_and_keeps_fai
 
 
 async def test_window_rollover_records_permanent_gaps_once_and_never_erases_them(tmp_path: Path) -> None:
-    state = ArchiveState(tmp_path / "state.json")
     baseline = session_open_ms_utc(date(2024, 10, 18))
-    state.update(lambda data: data.update(baseline_ms=baseline))
-    current = wall_clock_ms(date(2026, 10, 21), 600)
+    state = with_baseline(ArchiveState(tmp_path / "state.json"), baseline)
+    current = et_minute_of_day_ms(date(2026, 10, 21), 600)
     service = OptionArchiveService(config=ArchiveSettings(ENABLED=True), state=state, clock=lambda: current)
     await service.capture_pass()
-    original = state.read()["sessions"]["SPY"][str(baseline)]
-    assert original["lost"] and not original["complete"]
-    current = wall_clock_ms(date(2026, 10, 22), 600)
+    original = state.read().sessions["SPY"][baseline]
+    assert original.outcome is SessionOutcome.LOST and not original.complete
+    current = et_minute_of_day_ms(date(2026, 10, 22), 600)
     await service.capture_pass()
-    assert state.read()["sessions"]["SPY"][str(baseline)] == original
+    assert state.read().sessions["SPY"][baseline] == original
 
 
 async def mount_run(fake_catalog, tmp_lake: Path, *, spy_status: int) -> None:
@@ -90,9 +108,8 @@ async def mount_run(fake_catalog, tmp_lake: Path, *, spy_status: int) -> None:
 
 
 def service_for(state_path: Path, clock) -> OptionArchiveService:
-    state = ArchiveState(state_path)
-    state.update(lambda data: data.update(baseline_ms=session_open_ms_utc(DAY)))
-    return OptionArchiveService(config=ArchiveSettings(ENABLED=True), state=state, clock=clock)
+    state = with_baseline(ArchiveState(state_path), session_open_ms_utc(DAY))
+    return OptionArchiveService(config=ArchiveSettings(ENABLED=True), state=state, clock=clock, ownership=Owned())
 
 
 @respx.mock
@@ -107,10 +124,10 @@ async def test_transient_failure_retries_within_the_same_night_and_manual_recove
                      OptionContract.of(root="SPY", expiry_date=DAY, right="put", strike=500)):
         respx.get(f"https://api.polygon.io/v2/aggs/ticker/O:{contract.occ_symbol}/range/1/minute/{DAY}/{DAY}").mock(return_value=no_trades(contract.occ_symbol))
     recovered = await service.capture_session("SPY", session_open_ms_utc(DAY), retry_exhausted=True)
-    assert recovered.failure is None
+    assert recovered is SessionOutcome.COMPLETE
     spy = service.health().underlyings[0]
     assert spy.pending_sessions == 0 and spy.last_failure is None
-    assert service.state.read()["sessions"]["SPY"][str(session_open_ms_utc(DAY))]["complete"]
+    assert service.state.read().sessions["SPY"][session_open_ms_utc(DAY)].complete
 
 
 @respx.mock
@@ -153,51 +170,98 @@ async def test_owner_cancellation_and_shutdown_drain_the_session_collector(tmp_p
     assert stopped.is_set() and not service._session_tasks
 
 
+async def test_cancelling_a_pass_leaves_a_manual_recovery_it_did_not_start_running(tmp_path: Path) -> None:
+    entered = {"SPY": asyncio.Event(), "IWM": asyncio.Event()}
+    stopped: set[str] = set()
+    async def collector(symbol, day, **kwargs):
+        entered[symbol].set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            stopped.add(symbol)
+    service = service_for(tmp_path / "state.json", lambda: NOW)
+    service.capture = collector
+    manual = asyncio.create_task(service.capture_session("IWM", session_open_ms_utc(DAY)))
+    await entered["IWM"].wait()
+    scheduled = asyncio.create_task(service.capture_pass())
+    await entered["SPY"].wait()
+    scheduled.cancel()
+    await asyncio.gather(scheduled, return_exceptions=True)
+    assert stopped == {"SPY"} and not manual.done()
+    await service.stop()
+    await asyncio.gather(manual, return_exceptions=True)
+    assert stopped == {"SPY", "IWM"}
+
+
+async def test_a_failed_snapshot_pass_waits_out_the_retry_backoff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    now = session_window_for_date(DAY).close_ms_utc + 1_800_000
+    service = OptionArchiveService(config=ArchiveSettings(ENABLED=True), state=ArchiveState(tmp_path / "state.json"),
+                                   clock=lambda: now, ownership=Owned())
+    async def unavailable(*args, **kwargs):
+        raise RuntimeError("the evening snapshot could not be stored")
+    monkeypatch.setattr(service_module, "observe_chain", unavailable)
+    assert service.snapshot_due(now)
+    with pytest.raises(RuntimeError, match="could not be stored"):
+        await service.scheduler.trigger("snapshot")
+    receipt = service.state.read().job("snapshot")
+    assert receipt.failure == "the evening snapshot could not be stored" and receipt.retry_after_ms == now + 300_000
+    assert not service.snapshot_due(now) and service.snapshot_due(now + 300_000)
+
+
 @respx.mock
 async def test_full_staging_budget_pauses_the_pass_and_remains_actionable(
     fake_catalog, tmp_lake: Path,
 ) -> None:
-    from app.data_lake.option_lake import OptionCaptureResult, OptionDataFailure
-
     calls = []
-    budget = 256 * 1024**2
     detail = "Archive staging capacity reached; review disk space and raise OPTION_ARCHIVE_STAGING_MAX_BYTES."
     async def capture(symbol, day, **kwargs):
-        calls.append((symbol, day, kwargs["max_staging_bytes"]))
+        calls.append((symbol, day))
         return OptionCaptureResult.failed(OptionDataFailure("staging_capacity", detail, symbol, day))
     service = service_for(tmp_lake / "state.json", lambda: NOW)
-    service.config = ArchiveSettings(ENABLED=True, STAGING_MAX_BYTES=budget)
     service.capture = capture
-    await service.capture_pass()
-    assert calls == [("SPY", DAY, budget)]
-    receipt = service.state.read()["jobs"]["capture"]
-    assert receipt["phase"] == "capacity_pause" and receipt["completed_day_ms"] is None
+    await service.scheduler.trigger("capture")
+    assert calls == [("SPY", DAY)]
+    receipt = service.state.read().job("capture")
+    assert receipt.phase == "capacity_pause" and receipt.completed_day_ms is None
     assert not service.capture_due(NOW + 1)
     assert service.capture_due(NOW + 300_001)
-    row = service.state.read()["sessions"]["SPY"][str(session_open_ms_utc(DAY))]
-    assert not row["failed"] and row["retryable"] and row["capacity_paused"]
-    assert "provider_blocks" not in service.state.read() or not service.state.read()["provider_blocks"]
+    assert service.state.read().sessions["SPY"][session_open_ms_utc(DAY)].outcome is SessionOutcome.CAPACITY_PAUSED
+    assert not service.state.read().provider_blocks
     assert all(item.severity == "at_risk" and item.phase == "capacity_pause" and detail in item.reason
                for item in service.health().underlyings)
     await mount_run(fake_catalog, tmp_lake, spy_status=200)
     service.capture = None
-    service.config = ArchiveSettings(ENABLED=True)
-    assert (await service.capture_session("SPY", session_open_ms_utc(DAY))).failure is None
+    assert await service.capture_session("SPY", session_open_ms_utc(DAY)) is SessionOutcome.COMPLETE
     spy = service.health().underlyings[0]
     assert spy.phase == "waiting" and spy.severity == "healthy"
-    assert service.state.read()["jobs"]["capture"]["pause_reason"] is None
+
+
+def complete_sessions(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.options_backtest import option_session_capture
+    monkeypatch.setattr(option_session_capture, "read_session_completeness", lambda *args, **kwargs: (SimpleNamespace(
+        listed_count=1, answered_count=1, confirmed_empty=(), captured=("one",)), True))
+
+
+async def test_a_session_the_plan_no_longer_serves_is_a_lost_gap_not_a_standing_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    complete_sessions(monkeypatch)
+    async def capture(symbol, day, **kwargs):
+        if symbol == "SPY":
+            return OptionCaptureResult.failed(OptionDataFailure("outside_data_plan", "the plan no longer serves it", symbol, day))
+        return SimpleNamespace(failure=None)
+    service = service_for(tmp_path / "state.json", lambda: NOW)
+    service.capture = capture
+    await service.capture_pass()
+    spy = service.health().underlyings[0]
+    assert spy.severity == "at_risk" and spy.last_failure is None and spy.lost_sessions == 1
 
 
 @pytest.mark.parametrize("blocked_reason", ["provider_auth_error", "provider_entitlement_error"])
 async def test_provider_block_survives_other_retries_and_new_nights_until_correct_session_recovers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, blocked_reason: str,
 ) -> None:
-    from types import SimpleNamespace
-
-    from app.data_lake.option_lake import OptionCaptureResult, OptionDataFailure
-    from app.options_backtest import option_session_capture
-    monkeypatch.setattr(option_session_capture, "read_session_completeness", lambda *args, **kwargs: (SimpleNamespace(
-        listed_count=1, answered_count=1, confirmed_empty=(), captured=("one",)), True))
+    complete_sessions(monkeypatch)
     first = date(2026, 10, 8)
     calls = []
     spy_failure = blocked_reason
@@ -207,23 +271,37 @@ async def test_provider_block_survives_other_retries_and_new_nights_until_correc
         return OptionCaptureResult.failed(OptionDataFailure(reason, "provider response", symbol, day)) if reason else SimpleNamespace(failure=None)
     current = NOW
     service = service_for(tmp_path / "state.json", lambda: current)
-    service.state.update(lambda data: data.update(baseline_ms=session_open_ms_utc(first)))
+    with_baseline(service.state, session_open_ms_utc(first))
     service.capture = capture
     await service.capture_pass()
     assert [day for symbol, day in calls if symbol == "SPY"] == [first]
     current += 300_001
     assert service.capture_due(current)
     await service.capture_pass()
-    current = wall_clock_ms(date(2026, 10, 13), 120)
+    current = et_minute_of_day_ms(date(2026, 10, 13), 120)
     await service.capture_pass()
     assert [day for symbol, day in calls if symbol == "SPY"] == [first]
     await service.capture_session("SPY", session_open_ms_utc(DAY), retry_exhausted=True)
     assert [day for symbol, day in calls if symbol == "SPY"] == [first]
     spy_failure = "provider_rate_limited"
     await service.capture_session("SPY", session_open_ms_utc(first), retry_exhausted=True)
-    assert service.state.read()["provider_blocks"]["SPY"]["reason"] == blocked_reason
+    assert service.state.read().provider_blocks["SPY"].reason == blocked_reason
     spy_failure = None
     await service.capture_session("SPY", session_open_ms_utc(first), retry_exhausted=True)
-    assert "SPY" not in service.state.read()["provider_blocks"]
+    assert "SPY" not in service.state.read().provider_blocks
     await service.capture_pass()
     assert ("SPY", DAY) in calls
+
+
+def test_receipts_written_before_session_outcomes_keep_their_completed_sessions(tmp_path: Path) -> None:
+    session = session_open_ms_utc(DAY)
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps({"version": 1, "baseline_ms": session, "jobs": {"capture": {
+        "phase": "complete", "completed_day_ms": NOW, "pause_reason": None, "retry_after_ms": NOW}},
+        "sessions": {"SPY": {str(session): {"complete": True, "failed": False, "lost": False, "retryable": False,
+                                            "capacity_paused": False, "blocked_day_ms": None, "ended_ms": NOW}}},
+        "snapshots": {}, "provider_blocks": {}}))
+    state = ArchiveState(path).read()
+    assert state.sessions["SPY"][session].complete and state.job("capture").completed_day_ms == NOW
+
+

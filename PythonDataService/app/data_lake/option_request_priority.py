@@ -14,7 +14,8 @@ class OptionRequestGate:
         self._waiters: deque[tuple[asyncio.Future[None], bool]] = deque()
 
     def locked(self) -> bool:
-        return self._value == 0 or bool(self._waiters)
+        # A granted waiter that has not resumed yet already holds its slot; only pending ones queue new callers.
+        return self._value == 0 or any(not waiter.done() for waiter, _ in self._waiters)
 
     async def acquire(self) -> bool:
         if not self.locked():

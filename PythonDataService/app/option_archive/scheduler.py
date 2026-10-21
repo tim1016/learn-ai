@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from app.data_lake import catalog_client
+from app.schemas.option_archive import ArchiveJobName
 
 logger = logging.getLogger(__name__)
 
@@ -60,15 +61,23 @@ class PostgresJobOwnership:
 
 @dataclass(frozen=True)
 class ArchiveJob:
-    name: str
+    name: ArchiveJobName
     due: Callable[[int], bool]
     run: Callable[[], Awaitable[None]]
 
 
 class ArchiveScheduler:
-    def __init__(self, *, jobs: tuple[ArchiveJob, ...], ownership: JobOwnership,
-                 clock: Callable[[], int], sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> None:
+    """Runs each due job under ownership and records how every run started and ended.
+
+    ``record(name, **fields)`` writes the job's receipt. Whatever way a run ends
+    (done, failed or cancelled), the job is not due again before ``retry_backoff_ms``.
+    """
+
+    def __init__(self, *, jobs: tuple[ArchiveJob, ...], ownership: JobOwnership, clock: Callable[[], int],
+                 record: Callable[..., Awaitable[None]], retry_backoff_ms: int,
+                 sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> None:
         self.jobs, self.ownership, self.clock, self.sleep = jobs, ownership, clock, sleep
+        self.record, self.retry_backoff_ms = record, retry_backoff_ms
         self._task: asyncio.Task[None] | None = None
         self._running: dict[str, asyncio.Task[None]] = {}
 
@@ -83,26 +92,39 @@ class ArchiveScheduler:
         await asyncio.gather(*tasks, return_exceptions=True)
         self._task = None
 
-    async def trigger(self, name: str) -> None:
+    def _idle(self, name: str) -> bool:
         running = self._running.get(name)
-        if running is None or running.done():
-            job = next(job for job in self.jobs if job.name == name)
-            running = asyncio.create_task(self._owned(job), name=f"option-archive-{name}")
-            self._running[name] = running
-        await asyncio.shield(running)
+        return running is None or running.done()
+
+    def _spawn(self, job: ArchiveJob) -> asyncio.Task[None]:
+        if self._idle(job.name):
+            task = asyncio.create_task(self._owned(job), name=f"option-archive-{job.name}")
+            task.add_done_callback(self._finished)
+            self._running[job.name] = task
+        return self._running[job.name]
+
+    async def trigger(self, name: ArchiveJobName) -> None:
+        await asyncio.shield(self._spawn(next(job for job in self.jobs if job.name == name)))
 
     async def _owned(self, job: ArchiveJob) -> None:
         async with self.ownership.hold(job.name) as owned:
-            if owned:
+            if not owned:
+                return
+            await self.record(job.name, started_ms=self.clock(), ended_ms=None, failure=None)
+            failure: str | None = None
+            try:
                 await job.run()
+            except Exception as exc:
+                failure = str(exc)
+                raise
+            finally:
+                ended = self.clock()
+                await self.record(job.name, ended_ms=ended, failure=failure, retry_after_ms=ended + self.retry_backoff_ms)
 
     async def tick(self) -> None:
         for job in self.jobs:
-            running = self._running.get(job.name)
-            if job.due(self.clock()) and (running is None or running.done()):
-                task = asyncio.create_task(self._owned(job), name=f"option-archive-{job.name}")
-                self._running[job.name] = task
-                task.add_done_callback(self._finished)
+            if self._idle(job.name) and job.due(self.clock()):
+                self._spawn(job)
 
     @staticmethod
     def _finished(task: asyncio.Task[None]) -> None:

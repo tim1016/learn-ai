@@ -128,7 +128,7 @@ async def bounded_file_work[T](work: Callable[[Callable[[], bool]], T], should_p
         raise
 
 
-def validate_destination(destination: Path, *, mount: Path, checkout: Path, roots: Mapping[str, Path],
+def validate_destination(destination: Path, *, checkout: Path, roots: Mapping[str, Path],
                          expected_host_destination: str, host_checkout: Path | None,
                          host_lake_root: Path | None) -> None:
     # Host paths are compared as written: inside the container ``~`` names the
@@ -143,8 +143,7 @@ def validate_destination(destination: Path, *, mount: Path, checkout: Path, root
         if host_destination.is_relative_to(os.path.normpath(forbidden)):
             raise BackupRefusedError("backup host destination must be outside the checkout and the lake, including mount aliases")
     resolved = destination.resolve(strict=True)
-    expected = mount.resolve(strict=True)
-    if resolved != expected or destination.is_symlink() or not destination.is_dir():
+    if destination.is_symlink() or not destination.is_dir():
         raise BackupRefusedError("backup destination is not the configured mounted directory")
     for forbidden in (checkout, *roots.values()):
         if resolved.is_relative_to(forbidden.resolve()):

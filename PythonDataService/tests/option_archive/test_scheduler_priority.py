@@ -24,6 +24,14 @@ class Ownership:
             self.held.remove(name)
 
 
+async def record(name: str, **fields: object) -> None:
+    return None
+
+
+def scheduler(jobs: tuple[ArchiveJob, ...], ownership: Ownership) -> ArchiveScheduler:
+    return ArchiveScheduler(jobs=jobs, ownership=ownership, clock=lambda: 0, record=record, retry_backoff_ms=300_000)
+
+
 async def test_repeated_trigger_joins_and_second_scheduler_cannot_overlap() -> None:
     entered, finish = asyncio.Event(), asyncio.Event()
     count = 0
@@ -34,8 +42,8 @@ async def test_repeated_trigger_joins_and_second_scheduler_cannot_overlap() -> N
         await finish.wait()
     job = ArchiveJob("capture", lambda now: True, run)
     owner = Ownership()
-    first = ArchiveScheduler(jobs=(job,), ownership=owner, clock=lambda: 0)
-    second = ArchiveScheduler(jobs=(job,), ownership=owner, clock=lambda: 0)
+    first = scheduler((job,), owner)
+    second = scheduler((job,), owner)
     tasks = [asyncio.create_task(first.trigger("capture")) for _ in range(2)]
     await entered.wait()
     await second.trigger("capture")
@@ -52,13 +60,12 @@ async def test_backup_runs_independently_of_long_capture() -> None:
         await finish.wait()
     async def backup() -> None:
         backed_up.set()
-    scheduler = ArchiveScheduler(jobs=(ArchiveJob("capture", lambda now: True, capture),
-        ArchiveJob("backup", lambda now: True, backup)), ownership=Ownership(), clock=lambda: 0)
-    await scheduler.tick()
+    jobs = scheduler((ArchiveJob("capture", lambda now: True, capture), ArchiveJob("backup", lambda now: True, backup)), Ownership())
+    await jobs.tick()
     await entered.wait()
     await backed_up.wait()
     finish.set()
-    await scheduler.stop()
+    await jobs.stop()
 
 
 async def test_foreground_request_takes_next_slot_before_archive_backlog() -> None:
@@ -93,3 +100,16 @@ async def test_cancelled_waiter_does_not_leak_gate_capacity() -> None:
     async with gate:
         assert gate.locked()
     assert gate._value == 1
+
+
+async def test_a_slot_freed_while_the_only_waiter_is_granted_but_not_resumed_is_taken_at_once() -> None:
+    gate = OptionRequestGate(2)
+    await gate.acquire()
+    await gate.acquire()
+    granted = asyncio.create_task(gate.acquire())
+    await asyncio.sleep(0)
+    gate.release()  # hands this slot to the queued waiter, which has not resumed yet
+    gate.release()  # no one is pending: this slot is free
+    await asyncio.wait_for(gate.acquire(), timeout=1)
+    await granted
+    assert gate._value == 0

@@ -6,21 +6,19 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.data_lake.option_session_staging import DEFAULT_STAGING_MAX_BYTES
-
 
 class ArchiveSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="OPTION_ARCHIVE_", extra="ignore")
 
     ENABLED: bool = False
-    STAGING_MAX_BYTES: int = Field(default=DEFAULT_STAGING_MAX_BYTES, gt=0)
     CAPTURE_START_MINUTE_ET: int = Field(default=60, ge=0, le=1439)
     BACKUP_START_MINUTE_ET: int = Field(default=300, ge=0, le=1439)
     SNAPSHOT_DELAY_MS: int = Field(default=1_800_000, ge=0)
     SNAPSHOT_WINDOW_MS: int = Field(default=7_200_000, ge=60_000)
+    RETRY_BACKOFF_MS: int = Field(default=300_000, ge=1)
     BACKUP_DESTINATION: Path = Path("/lake-backup")
-    BACKUP_MOUNT: Path = Path("/lake-backup")
-    BACKUP_HOST_DESTINATION: str = "~/learn-ai-lake-backup"
+    #: The absolute host path Compose mounts at ``BACKUP_DESTINATION``; no backup runs without it.
+    BACKUP_HOST_DESTINATION: str | None = None
     HOST_CHECKOUT: Path | None = None
     HOST_LAKE_ROOT: Path | None = None
     BACKUP_DAILY_KEEP: int = Field(default=7, ge=1)

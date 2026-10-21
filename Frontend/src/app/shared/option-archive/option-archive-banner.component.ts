@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
-import { OptionArchiveService } from './option-archive.service';
+import { needsAttention, OptionArchiveService } from './option-archive.service';
 
 @Component({
   selector: 'app-option-archive-banner',
@@ -22,7 +22,7 @@ export class OptionArchiveBannerComponent {
   readonly archive = inject(OptionArchiveService);
   readonly target = computed(() => {
     const health = this.archive.health();
-    const underlying = health?.underlyings.find(item => ['at_risk', 'failed', 'unavailable'].includes(item.severity));
+    const underlying = health?.underlyings.find(item => needsAttention(item.severity));
     return underlying ? `option-archive-${underlying.underlying}` :
       health?.backup.severity !== 'healthy' ? 'option-archive-backup' : 'option-archive-restore';
   });
