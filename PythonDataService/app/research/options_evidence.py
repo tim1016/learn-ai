@@ -9,7 +9,7 @@ from typing import Any, Literal
 from app.options_backtest import saved_runs
 from app.options_backtest.describe import leg_sentences
 from app.options_backtest.setup import OptionsBacktestSetup
-from app.options_bots.golden import GoldenOptionsSetups
+from app.options_bots.golden import GoldenOptionsSetups, GoldenSetupError
 from app.options_bots.golden_proof import setup_sha256
 from app.research.options_golden_search import repository as repo
 from app.research.options_golden_search.protocol import OptionsSearchProtocol
@@ -46,11 +46,12 @@ def describe(setup: OptionsBacktestSetup) -> list[str]:
 
 
 def run_workspace(stored: OptionsBacktestRunDetailResponse, versions: list[GoldenOptionSetupView], *,
-                  golden_id: str | None = None) -> OptionsEvidenceWorkspace:
+                  golden_id: str | None = None, approvals_complete: bool = True) -> OptionsEvidenceWorkspace:
     if stored.setup is None:
         raise ValueError(stored.setup_cannot_open_reason)
     record, setup = stored, stored.setup
     digest = setup_sha256(setup)
+    source_digest = digest
     approvals = [approval(version, digest, record.id) for version in versions]
     valid = [entry for entry in approvals if entry.identity_matches]
     linked = [entry for entry in valid if entry.source == "search"]
@@ -62,6 +63,8 @@ def run_workspace(stored: OptionsBacktestRunDetailResponse, versions: list[Golde
         research = OptionsEvidenceDimension(status="recorded", explanation="Recorded search qualification; inspect the exact manifest and every owner exception below.")
     else:
         research = OptionsEvidenceDimension(status="not_recorded", explanation="No linked search qualification.")
+    if not linked and not approvals_complete:
+        research = OptionsEvidenceDimension(status="unavailable", explanation="The bounded approval history is incomplete; earlier search lineage cannot be ruled out. Open an exact pinned Golden version to inspect its origin.")
     summary = None if mismatch else stored.figures
     if summary is None:
         replay_status, lead = "unavailable", "Replay performance is unavailable."
@@ -75,13 +78,13 @@ def run_workspace(stored: OptionsBacktestRunDetailResponse, versions: list[Golde
     complete = observed == record.sessions_requested and record.status == "complete"
     return OptionsEvidenceWorkspace(
         subject_kind="golden" if golden_id else "run", subject_id=golden_id or str(record.id),
-        evidence_identity=f"run:{record.id}:{digest}", name=record.setup_name or f"Run {record.id}",
+        evidence_identity=f"golden:{golden_id}:{digest}:source_mismatch:run:{record.id}:{source_digest}" if mismatch else f"run:{record.id}:{digest}", name=record.setup_name or f"Run {record.id}",
         setup=setup, setup_sha256=digest, source_run_id=None if mismatch else record.id,
         study_id=linked[0].study_id if len(linked) == 1 else None,
         period=OptionsEvidencePeriod(first_session_open_ms=record.first_session_open_ms,
             last_session_open_ms=record.last_session_open_ms, scheduled_sessions=record.sessions_requested,
             observed_sessions=observed),
-        headline="Source setup identity mismatch. Replay evidence cannot be attributed to this Golden version." if mismatch else lead + (" Research qualification is missing." if not linked else " Recorded search qualification is available."),
+        headline="Source setup identity mismatch. Replay evidence cannot be attributed to this Golden version." if mismatch else lead + (" Research lineage is incomplete." if not linked and not approvals_complete else " Research qualification is missing." if not linked else " Recorded search qualification is available."),
         replay=OptionsEvidenceDimension(status=replay_status, explanation=(
             f"{summary.net_profit_usd} USD after recorded modeled costs across {observed} observed sessions. Descriptive replay evidence."
             if summary else f"Run status: {record.status}. No retained summary is available.")),
@@ -92,7 +95,7 @@ def run_workspace(stored: OptionsBacktestRunDetailResponse, versions: list[Golde
             explanation="See each recorded approval's final exposure and manifest." if linked else "Final research evidence is not recorded for this replay."),
         approval=OptionsEvidenceDimension(status="recorded" if valid else "identity_mismatch" if approvals else "not_recorded",
             explanation="Approved from search." if linked else "Approved from backtest." if any(v.source == "backtest" for v in valid) else "Approval origin is not recorded."),
-        approvals=approvals, relations=[], settings_description=describe(setup),
+        approvals=approvals, relations=[], settings_description=describe(setup), approval_history_complete=approvals_complete,
     )
 
 
@@ -120,6 +123,11 @@ def study_workspace(row: dict[str, Any]) -> OptionsEvidenceWorkspace:
         explanation = "Inspect development, forward and final outcomes separately; a selection winner alone does not qualify research."
     exposed = row.get("final_opened_at_ms") is not None or bool(row.get("finalists"))
     final_status = "not_opened" if not exposed else "unavailable" if not detail.final_results else "failed" if any(c.verdict != "meets_rules" for c in detail.final_results) else "meets_rules"
+    if exposed:
+        expected = row.get("finalists", [])
+        actual = [c.candidate_hash for c in detail.final_results]
+        if not expected or len(actual) != len(set(actual)) or set(actual) != set(expected):
+            final_status = "incomplete"
     return OptionsEvidenceWorkspace(
         subject_kind="study", subject_id=row["id"], evidence_identity=f"study:{row['id']}:{row['protocol_hash']}:{row['revision']}",
         name=row["setup_name"], setup=protocol.setup, setup_sha256=setup_sha256(protocol.setup),
@@ -148,7 +156,19 @@ async def read_run(run_id: int) -> OptionsBacktestRunDetailResponse:
 async def read(kind: Literal["run", "golden", "study"], subject_id: str, *,
                inspected_study_id: str | None = None, comparator_run_id: int | None = None) -> OptionsEvidenceWorkspace:
     if kind == "study":
-        view = study_workspace(await with_connection(repo.get, subject_id))
+        row = await with_connection(repo.get, subject_id)
+        view = study_workspace(row)
+        if row.get("qualification_id"):
+            try:
+                version = await GoldenOptionsSetups().get(row["qualification_id"])
+            except GoldenSetupError as exc:
+                if exc.http_status != 404:
+                    raise
+                view.approval = OptionsEvidenceDimension(status="unavailable", explanation="The recorded Golden version is not retained. Its historical reference has not been removed.")
+            else:
+                selected = approval(version, version.setup_sha256, version.source_run_id)
+                selected.identity_matches = selected.source == "search" and selected.study_id == subject_id
+                view.approvals = [selected]
     else:
         service = GoldenOptionsSetups()
         if kind == "golden":
@@ -158,7 +178,7 @@ async def read(kind: Literal["run", "golden", "study"], subject_id: str, *,
         else:
             run_id = int(subject_id)
             stored, versions = await asyncio.gather(read_run(run_id), service.list(source_run_id=run_id, limit=200))
-            view = run_workspace(stored, versions)
+            view = run_workspace(stored, versions, approvals_complete=len(versions) < 200)
     if inspected_study_id is not None:
         other = study_workspace(await with_connection(repo.get, inspected_study_id))
         matches = other.setup_sha256 == view.setup_sha256

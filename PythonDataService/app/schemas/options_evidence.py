@@ -73,3 +73,4 @@ class OptionsEvidenceWorkspace(BaseModel):
     relations: list[OptionsEvidenceRelation]
     settings_description: list[str]
     frozen_search_settings: list[OptionsEvidenceSearchSetting] = Field(default_factory=list)
+    approval_history_complete: bool = True

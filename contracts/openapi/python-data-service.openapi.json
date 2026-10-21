@@ -46115,6 +46115,11 @@
           "approval": {
             "$ref": "#/components/schemas/OptionsEvidenceDimension"
           },
+          "approval_history_complete": {
+            "default": true,
+            "title": "Approval History Complete",
+            "type": "boolean"
+          },
           "approvals": {
             "items": {
               "$ref": "#/components/schemas/OptionsEvidenceApproval"

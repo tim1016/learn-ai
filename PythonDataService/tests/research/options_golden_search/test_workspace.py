@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -16,7 +17,7 @@ from app.schemas.options_backtest_runs import OptionsBacktestRunDetailResponse
 FIXTURES = Path(__file__).parents[2] / "fixtures" / "options_evidence"
 
 
-def fixture(name: str) -> dict:
+def fixture(name: str) -> dict[str, Any]:
     return json.loads((FIXTURES / f"{name}.json").read_text())
 
 
@@ -68,6 +69,48 @@ def test_legacy_partial_link_and_same_name_mismatched_approval_never_qualify_sou
     assert pinned.source_run_id is None
     assert pinned.replay.status == "unavailable"
     assert "identity mismatch" in pinned.headline
+    assert pinned.evidence_identity.startswith("golden:")
+    assert workspace.setup_sha256(run().setup) in pinned.evidence_identity
+
+
+def test_bounded_approval_history_does_not_claim_absent_search_ancestry() -> None:
+    view = workspace.run_workspace(run(), [golden()], approvals_complete=False)
+    assert view.research.status == "unavailable"
+    assert view.headline == "Profitable in replay. Research lineage is incomplete."
+    assert not view.approval_history_complete
+
+
+def test_partial_final_batch_cannot_report_success() -> None:
+    row = fixture("study-record")
+    first, second = row["candidates"][:2]
+    row["finalists"] = [first["candidate_hash"], second["candidate_hash"]]
+    row["final_results"] = [{**first, "verdict": "meets_rules"}]
+    assert workspace.study_workspace(row).final.status == "incomplete"
+    row["final_results"].append({**second, "verdict": "meets_rules"})
+    assert workspace.study_workspace(row).final.status == "meets_rules"
+
+
+async def test_approved_study_retains_its_exact_selected_version_and_proof(monkeypatch: pytest.MonkeyPatch) -> None:
+    row = fixture("study-record")
+    version = golden()
+    version.status = "stale"
+    version.evidence.options_search_study_id = row["id"]
+    version.evidence.study_manifest_sha256 = "b" * 64
+    version.evidence.verdict = "owner_exception"
+    version.evidence.waived_gate_ids = ["final:exposure"]
+    row["qualification_id"] = version.id
+    async def get(_fn: Any, _id: str) -> dict[str, Any]:
+        return row
+    class Golden:
+        async def get(self, identifier: str) -> GoldenOptionSetupView:
+            assert identifier == version.id
+            return version
+    monkeypatch.setattr(workspace, "with_connection", get)
+    monkeypatch.setattr(workspace, "GoldenOptionsSetups", Golden)
+    view = await workspace.read("study", row["id"])
+    assert view.approvals[0].golden_id == version.id
+    assert view.approvals[0].proof_status == "stale"
+    assert view.approvals[0].waived_gate_ids == ["final:exposure"]
 
 
 def test_actual_blocked_search_never_inherits_combined_replay() -> None:
@@ -101,11 +144,11 @@ async def test_comparator_and_inspected_search_are_explicit_non_lineage_relation
     async def read_run(run_id: int) -> OptionsBacktestRunDetailResponse:
         return OptionsBacktestRunDetailResponse.model_validate(fixture(f"run{run_id}"))
 
-    async def get(_fn, _id):
+    async def get(_fn: Any, _id: str) -> dict[str, Any]:
         return fixture("study-record")
 
     class Golden:
-        async def list(self, **_kwargs):
+        async def list(self, **_kwargs: Any) -> list[GoldenOptionSetupView]:
             return [golden()]
 
     monkeypatch.setattr(workspace, "read_run", read_run)
@@ -120,7 +163,7 @@ async def test_comparator_and_inspected_search_are_explicit_non_lineage_relation
 
 
 async def test_workspace_endpoint_serializes_exact_money_ids_and_read_only_projection(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def read(kind, subject_id, **_kwargs):
+    async def read(kind: str, subject_id: str, **_kwargs: Any):
         assert (kind, subject_id) == ("run", "76")
         return workspace.run_workspace(run(), [golden()])
 

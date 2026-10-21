@@ -16,6 +16,7 @@
     </nav>
     @if (activeView() === 'lineage') {
       <section class="lineage"><h2>Recorded origin</h2><p>{{ item.research.explanation }}</p><p>{{ item.final.explanation }}</p>
+        @if (item.approval_history_complete === false) { <p>The newest 200 approval versions are shown. This list does not establish the absence of earlier lineage. Open an exact pinned version for its complete approval receipt.</p> }
         @for (version of item.approvals; track version.golden_id) {
           <article><h3>{{ version.source === 'backtest' ? 'Approved from backtest' : version.source === 'search' ? 'Approved from search' : 'Approval origin not recorded' }}</h3>
             @if (!version.identity_matches) { <p class="problem">Identity mismatch. This approval does not match the selected source setup.</p> }
@@ -28,7 +29,7 @@
             @for (gate of version.failed_rules; track gate.gate_id) { <p>{{ gate.gate_id | receiptLabel }}: {{ gate.reason }}</p> }
             @for (gate of version.waived_gate_ids; track gate) { <p>Owner acknowledged: {{ gate | receiptLabel }}</p> }
           </article>
-        } @empty { <p>No recorded Golden approval is linked to this exact source.</p> }
+        } @empty { <p>{{ item.approval.explanation }}</p> }
       </section>
     } @else {
       @if (performance.isLoading()) { <p>Reading retained replay…</p> }

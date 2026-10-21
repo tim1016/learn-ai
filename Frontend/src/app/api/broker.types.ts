@@ -25284,6 +25284,11 @@ export interface components {
         /** OptionsEvidenceWorkspace */
         OptionsEvidenceWorkspace: {
             approval: components["schemas"]["OptionsEvidenceDimension"];
+            /**
+             * Approval History Complete
+             * @default true
+             */
+            approval_history_complete?: boolean;
             /** Approvals */
             approvals: components["schemas"]["OptionsEvidenceApproval"][];
             coverage: components["schemas"]["OptionsEvidenceDimension"];
