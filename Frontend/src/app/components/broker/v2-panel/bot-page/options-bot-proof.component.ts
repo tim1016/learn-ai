@@ -1,5 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input, resource } from '@angular/core';
-import { Router, RouterLink } from '@angular/router';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { NavigationEnd, Router, RouterLink } from '@angular/router';
+import { filter, map } from 'rxjs';
 import { GoldenOptionSetupsService } from '../../../options-backtest/golden-option-setups.service';
 import { OptionsQualificationEvidenceComponent } from '../../../options-backtest/options-qualification-evidence.component';
 import { CopyButtonComponent } from '../../../../shared/copy-button/copy-button.component';
@@ -19,7 +21,10 @@ export class OptionsBotProofComponent {
   readonly configuration = input.required<OptionsBotConfiguration>();
   private readonly service = inject(GoldenOptionSetupsService);
   private readonly router = inject(Router);
-  protected readonly evidenceQuery = computed(() => ({ view: 'lineage', bot_return: this.router.url }));
+  private readonly botPath = toSignal(this.router.events.pipe(
+    filter(event => event instanceof NavigationEnd), map(event => event.urlAfterRedirects),
+  ), { initialValue: this.router.url });
+  protected readonly evidenceQuery = computed(() => ({ view: 'lineage', bot_return: this.botPath() }));
   protected readonly proof = resource({
     params: () => this.configuration().golden_setup_id,
     loader: ({ params }) => this.service.get(params),

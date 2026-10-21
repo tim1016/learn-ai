@@ -1,5 +1,6 @@
-import { provideRouter } from '@angular/router';
-import { render, screen } from '@testing-library/angular';
+import { TestBed } from '@angular/core/testing';
+import { provideRouter, Router } from '@angular/router';
+import { render, screen, waitFor } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -18,13 +19,24 @@ async function proofCard(retained = PINNED, configuration = CONFIGURATION) {
   const get = vi.fn().mockResolvedValue(retained);
   const result = await render(OptionsBotProofComponent, {
     inputs: { configuration },
-    providers: [provideRouter([]), { provide: GoldenOptionSetupsService, useValue: { get } }],
+    providers: [provideRouter([{ path: '**', children: [] }]), { provide: GoldenOptionSetupsService, useValue: { get } }],
   });
   await screen.findByText(`Approval note: ${retained.note}`);
   return { ...result, get };
 }
 
 describe('Options bot pinned evidence', () => {
+  it('updates the return destination when another bot shares the same pinned version', async () => {
+    const { get } = await proofCard();
+    const router = TestBed.inject(Router);
+    const base = '/brokers/alpaca/clerks/paper/accounts/PA9/bots/';
+    for (const bot of ['first', 'second']) {
+      await router.navigateByUrl(base + bot);
+      await waitFor(() => expect(screen.getByRole('link', { name: 'Inspect pinned Golden evidence' }).getAttribute('href'))
+        .toContain('bot_return=' + encodeURIComponent(base + bot)));
+    }
+    expect(get).toHaveBeenCalledExactlyOnceWith(PINNED.id);
+  });
   it('follows the pinned ID among same-name versions and never infers research from ordinary approval', async () => {
     const newer = goldenSetup({ id: 'ogs_' + '2'.repeat(32), name: PINNED.name, source_run_id: 99, setup_sha256: 'f'.repeat(64) });
     const versions = [newer, PINNED];
