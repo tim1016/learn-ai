@@ -65,6 +65,21 @@ describe('Options Golden Search workbench', () => {
     await waitFor(() => expect(fake.preflight).toHaveBeenCalledWith(expect.objectContaining({ history: expect.objectContaining({ start_ms: etMidnightMs('2024-01-02'), end_ms: etMidnightMs('2026-09-02'), train_months: 6, test_months: 2, final_months: 6 }) })));
   });
 
+  it('asks for date guidance only with whole-month window lengths in range', async () => {
+    const fake = service();
+    await page(fake, { setup_name: 'Saved two-leg setup' });
+    await screen.findByRole('heading', { name: 'Maximum study interval selected' });
+    const training = screen.getByRole('spinbutton', { name: 'Training months' });
+    const refusal = 'Use whole months: 1–120 for training and 1–60 for each test window.';
+    for (const value of ['1.5', '0', '121', '']) {
+      fireEvent.input(training, { target: { value } });
+      await screen.findByText(refusal);
+      fireEvent.input(training, { target: { value: '6' } });
+      await waitFor(() => expect(screen.queryByText(refusal)).toBeNull());
+    }
+    expect(fake.historyGuidance.mock.calls.every(([request]) => request.train_months === 6)).toBe(true);
+  });
+
   it('opens the selected saved setup in the editor', async () => {
     await page(service(), { setup_name: 'Saved two-leg setup' });
     const link = await screen.findByRole('link', { name: 'Edit setup and name in the setup editor', hidden: true });

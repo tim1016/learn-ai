@@ -7,9 +7,9 @@ import pytest
 
 from app.lean_sidecar.trading_calendar import expected_sessions
 from app.research.options_golden_search.history_guidance import history_guidance
-from app.research.options_golden_search.planning import freeze_protocol
+from app.research.options_golden_search.planning import final_window_start, freeze_protocol
 from app.research.options_golden_search.protocol import Knob
-from app.research.walk_forward_study.folds import add_months, whole_months_between
+from app.research.walk_forward_study.folds import whole_months_between
 from app.schemas.options_golden_search import HistoryGuidanceRequest
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 from tests.research.options_golden_search.test_protocol_search import setup
@@ -39,8 +39,8 @@ def test_maximum_span_matches_shared_planner_and_frozen_options_protocol(first: 
     assert et_date_at_ms(answer.end_ms - 1) in session_days
     for last_session in sessions:
         end = last_session + timedelta(days=1)
-        final_start = add_months(end, -final)
-        if add_months(final_start, final) != end:
+        final_start = final_window_start(end, final)
+        if final_start is None:
             continue
         for start in sessions:
             if start >= final_start:
@@ -57,13 +57,15 @@ def test_maximum_span_matches_shared_planner_and_frozen_options_protocol(first: 
     {"start_ms": et_midnight_ms(date(2026, 9, 1)), "end_ms": et_midnight_ms(date(2026, 10, 1))},
 ])
 def test_unknown_or_short_history_never_fabricates_dates(bounds: dict[str, int | None]) -> None:
-    answer = history_guidance(HistoryGuidanceRequest(bounds=bounds), now_ms=et_midnight_ms(date(2026, 10, 21)))
+    answer = history_guidance(HistoryGuidanceRequest(bounds=bounds, train_months=6, test_months=2, final_months=6),
+                              now_ms=et_midnight_ms(date(2026, 10, 21)))
     assert answer.start_ms is answer.end_ms is answer.final_start_ms is None
     assert answer.fold_count == 0
     assert answer.explanation
 
 
 def test_retained_current_session_is_excluded_until_it_has_closed() -> None:
-    request = HistoryGuidanceRequest(bounds={"start_ms": et_midnight_ms(date(2024, 1, 1)), "end_ms": et_midnight_ms(date(2027, 1, 1))})
+    request = HistoryGuidanceRequest(bounds={"start_ms": et_midnight_ms(date(2024, 1, 1)), "end_ms": et_midnight_ms(date(2027, 1, 1))},
+                                     train_months=6, test_months=2, final_months=6)
     before_open = history_guidance(request, now_ms=et_midnight_ms(date(2026, 10, 20)))
     assert et_date_at_ms(before_open.end_ms) <= date(2026, 10, 20)
