@@ -190,6 +190,54 @@ async def test_partial_repack_preserves_original_hash_and_empty_state_and_is_ide
 
 
 @respx.mock
+async def test_contract_reads_of_one_admitted_session_share_one_decode_and_every_read_is_admitted(
+    fake_catalog, tmp_lake, monkeypatch
+):
+    from app.data_lake import option_session
+    from app.data_lake.option_listing import OptionListingFileError
+    from app.data_lake.path_policy import OptionListingPath
+    from app.engine.data.decoded_cache import DecodedArtifactCache
+
+    listing = await listing_of(CALL, PUT, OTHER)
+    await store_option_day(CALL, [{"t": FRIDAY_OPEN_MS, "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}])
+    await store_option_day(PUT, [])
+    assert (await repack_option_session("SPY", FRIDAY)).failure is None
+    monkeypatch.setattr(option_session, "_SESSION_MEMO", DecodedArtifactCache(max_bytes=option_session.SESSION_MEMO_MAX_BYTES))
+    decodes = []
+    real_decode = option_session.parse_option_session
+    monkeypatch.setattr(option_session, "parse_option_session", lambda *a, **k: decodes.append(1) or real_decode(*a, **k))
+    raw, path = raw_root(tmp_lake), str(OptionSessionPath("SPY", FRIDAY).relative_path())
+
+    def read(contract):
+        return read_option_day_bars(contract, FRIDAY, listed_under="SPY")
+
+    for _ in range(3):
+        call, put, other = [await asyncio.to_thread(read, c) for c in (CALL, PUT, OTHER)]
+        assert len(call.bars) == 1 and put.bars == () and other is None
+    assert (await asyncio.to_thread(read_option_session, "SPY", FRIDAY, listing=listing)).captured == {CALL.occ_symbol}
+    assert len(decodes) == 1
+
+    # Other admitted container bytes are another session: decoded afresh, never the old decode.
+    original = (raw / path).read_bytes()
+    changed = build_option_session_bytes(listing, {CALL.occ_symbol: option_day_zip(CALL, [FRIDAY_OPEN_MS, FRIDAY_OPEN_MS + 60_000]),
+                                                   PUT.occ_symbol: option_day_zip(PUT, [])})
+    replace_the_stored_file(fake_catalog, raw, path, changed, admit=True)
+    read_again = await asyncio.to_thread(read, CALL)
+    assert len(read_again.bars) == 2 and read_again.reference.container_sha256 == hashlib.sha256(changed).hexdigest()
+    assert len(decodes) == 2
+    # A resident decode never stands in for admission: bytes the receipt does not name are refused.
+    replace_the_stored_file(fake_catalog, raw, path, original, admit=False)
+    with pytest.raises(LakeAdmissionError):
+        await asyncio.to_thread(read, CALL)
+    # The listing is admitted on every read too: other listing bytes miss the memo, so they are parsed and refused.
+    replace_the_stored_file(fake_catalog, raw, path, changed, admit=True)
+    listing_path = str(OptionListingPath("SPY", FRIDAY).relative_path())
+    replace_the_stored_file(fake_catalog, raw, listing_path, b"a refreshed listing", admit=True)
+    with pytest.raises(OptionListingFileError):
+        await asyncio.to_thread(read, CALL)
+
+
+@respx.mock
 async def test_published_corrupt_session_never_falls_back_to_good_legacy(fake_catalog, tmp_lake):
     await listing_of(CALL)
     await store_option_day(CALL, [])

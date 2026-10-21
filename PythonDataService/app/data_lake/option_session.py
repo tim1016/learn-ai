@@ -5,7 +5,9 @@ intact lets an old saved run verify its original byte pin after compaction.
 The manifest distinguishes validated empty answers from unresolved contracts.
 Every member is validated before any contract is returned, including members
 that the caller did not request. A damaged published container never falls
-back to legacy files.
+back to legacy files. Readers ask one contract at a time, so a read admits the
+container's bytes (and the listing's) every time and shares the decode of the
+same admitted bytes with every earlier read (#3435).
 """
 from __future__ import annotations
 
@@ -14,6 +16,7 @@ import io
 import json
 import lzma
 import re
+import threading
 import zipfile
 import zlib
 from collections.abc import Callable, Mapping
@@ -28,9 +31,10 @@ from app.data_lake.data_contract import data_contract_hash
 from app.data_lake.lean_writer import _DETERMINISTIC_ZIP_DATE_TIME
 from app.data_lake.option_bars import OptionBarsFileError, OptionDayBars, SessionMemberRef, parse_option_day_zip
 from app.data_lake.option_lake import OPTION_PROVIDER, option_read_root
-from app.data_lake.option_listing import OptionListing, parse_option_listing_zip, read_option_listing
+from app.data_lake.option_listing import OptionListing, parse_option_listing_zip, read_admitted_listing_bytes
 from app.data_lake.path_policy import OptionSessionPath
 from app.data_lake.root_identity import active_root_id, read_marker
+from app.engine.data.decoded_cache import DecodedArtifactCache
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.utils.session_anchors import et_date_at_ms
 
@@ -40,6 +44,12 @@ MAX_SESSION_COMPRESSED_BYTES = 128 * 1024 * 1024
 MAX_SESSION_DECODED_BYTES = 512 * 1024 * 1024
 MAX_TICKER_DECODED_BYTES = 8 * 1024 * 1024
 MAX_LISTING_DECODED_BYTES = 32 * 1024 * 1024
+#: Retention bound of the process's decoded-session memo: room for one or two large sessions. A session whose estimate
+#: is past it is decoded on every read, as before the memo.
+SESSION_MEMO_MAX_BYTES = 512 * 1024 * 1024
+_BAR_ESTIMATED_BYTES = 800  # an OptionBar, the frozen instance and its five numbers: ~690 bytes measured on CPython
+_CONTRACT_ESTIMATED_BYTES = 500  # a listed contract's symbol, day record and mapping slots
+_SESSION_OVERHEAD_BYTES = 1024
 _SYMBOL = re.compile(r"[A-Z][A-Z0-9.]*")
 _MANIFEST = "manifest.json"
 _LISTING = "listing.zip"
@@ -265,16 +275,70 @@ def _root_id(lake_root: Path | None) -> UUID:
     return marker.data_root_id
 
 
+@dataclass(frozen=True)
+class _SessionKey:
+    """All a decoded session depends on: the admitted container and listing bytes, and the root and session read as."""
+
+    content_digest: str
+    listing_sha256: str
+    root_id: str
+    underlying: str
+    trading_date: date
+
+    @property
+    def relative_path(self) -> str:
+        return str(OptionSessionPath(self.underlying, self.trading_date).relative_path())
+
+
+def _estimated_bytes(session: OptionSession) -> int:
+    """A fixed charge per bar, per listed contract and per retained member byte, so the accounting is deterministic."""
+    bars = sum(len(day.bars) for day in session.days.values())
+    retained = sum(len(raw) for raw in session.original_bytes.values())
+    return (_SESSION_OVERHEAD_BYTES + bars * _BAR_ESTIMATED_BYTES + session.listed_count * _CONTRACT_ESTIMATED_BYTES
+            + retained)
+
+
+# The canonical cache does no locking and readers run on worker threads, so one lock serializes the memo. It is held
+# through a decode: concurrent reads of one session decode it once. Every hit hands out the one resident session.
+_SESSION_MEMO_LOCK = threading.Lock()
+_SESSION_MEMO = DecodedArtifactCache(max_bytes=SESSION_MEMO_MAX_BYTES)
+
+
+def _decoded(payload: bytes, listing_sha256: str, listing: Callable[[], OptionListing], underlying: str,
+             trading_date: date, root_id: UUID) -> OptionSession:
+    """``parse_option_session`` of admitted bytes, shared by every read of the same admitted bytes (#3435).
+
+    The caller has admitted ``payload`` and the listing whose bytes hash to ``listing_sha256``; a hit reuses only
+    the decode. ``listing`` is called only on a miss, so a hit parses neither the container nor the listing.
+    """
+    key = _SessionKey(hashlib.sha256(payload).hexdigest(), listing_sha256, str(root_id), underlying, trading_date)
+    with _SESSION_MEMO_LOCK:
+        return _SESSION_MEMO.get_or_decode_value(
+            key, lambda: parse_option_session(payload, listing(), root_id=root_id), estimate=_estimated_bytes)
+
+
 def read_option_session(underlying: str, trading_date: date, *, admission: Callable[[Path], bytes] = read_committed_bytes,
                         lake_root: Path | None = None, listing: OptionListing | None = None) -> OptionSession | None:
-    """Read contract coverage. Option bytes remain readable when underlying bars are missing."""
+    """Read contract coverage. Option bytes remain readable when underlying bars are missing.
+
+    Every read admits the container's bytes, and the listing's unless one is handed in; the decode is shared with
+    every earlier read of the same admitted bytes (``SESSION_MEMO_MAX_BYTES`` bounds what is kept).
+    """
     payload = _admitted_session_bytes(underlying, trading_date, admission, lake_root)
     if payload is None:
         return None
-    listing = listing or read_option_listing(underlying, trading_date, admission=admission, lake_root=lake_root)
-    if listing is None:
+    if listing is not None:
+        return _decoded(payload, listing.sha256, lambda: listing, underlying, trading_date, _root_id(lake_root))
+    listing_bytes = read_admitted_listing_bytes(underlying, trading_date, admission=admission, lake_root=lake_root)
+    if listing_bytes is None:
         raise OptionSessionFileError("published session has no admitted listing")
-    return parse_option_session(payload, listing, root_id=_root_id(lake_root))
+    listing_sha256 = hashlib.sha256(listing_bytes).hexdigest()
+
+    def admitted_listing() -> OptionListing:
+        rows = parse_option_listing_zip(listing_bytes, underlying, trading_date)
+        return OptionListing(underlying, trading_date, rows, listing_sha256, listing_bytes)
+
+    return _decoded(payload, listing_sha256, admitted_listing, underlying, trading_date, _root_id(lake_root))
 
 
 def parse_retained_option_session(payload: bytes, listing: OptionListing) -> OptionSession:
@@ -290,7 +354,7 @@ def parse_retained_option_session(payload: bytes, listing: OptionListing) -> Opt
             root_id = UUID(_json(archive.read(_MANIFEST))["data_root_id"])
     except (KeyError, ValueError, TypeError, zipfile.BadZipFile) as exc:
         raise OptionSessionFileError("retained session has no valid original root identity") from exc
-    return parse_option_session(payload, listing, root_id=root_id)
+    return _decoded(payload, listing.sha256, lambda: listing, listing.underlying, listing.as_of, root_id)
 
 
 def read_option_session_for_listing_rebind(underlying: str, trading_date: date) -> OptionSession | None:

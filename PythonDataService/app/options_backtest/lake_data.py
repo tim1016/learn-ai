@@ -45,7 +45,8 @@ reader names no error of its own for a damaged file, so the failures it lets out
 
 Blocking. The readers ask the catalog through the lake's admission and need a thread with no running event loop, so
 call them from a worker thread, and from an ``async def`` only through ``asyncio.to_thread``. Each method says so at
-once and not only on a day that has a file. Nothing is cached: a day is read from its file on every ask.
+once and not only on a day that has a file. A day's bytes are read and admitted on every ask; only a session
+container's decode is shared, by its admitted sha256 (``option_session``).
 """
 
 from __future__ import annotations
