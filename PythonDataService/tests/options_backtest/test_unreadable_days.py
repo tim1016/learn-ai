@@ -11,6 +11,7 @@ file in place of Thursday's captured one, and ask the same place four things: Ch
 alone, and a whole run that meets the file as its download begins and as its replay begins. A day the lake replaces is
 repaired by one vendor request and then reads, and a run over it completes. A day it keeps costs no request and ends a
 run ``DATA_UNREADABLE``, naming the session by its open. None ends in a code the page cannot read (``INTERNAL_ERROR``).
+The last section is a published session container, which no download repairs (#3442).
 
 Hand-worked figures. The sessions are Wednesday 2026-10-07 and Thursday 2026-10-08, each opening at 09:30 New York (EDT,
 UTC-4) = 13:30 UTC. 2026-10-07 is epoch day 20733 (2026-01-01 is day 20454, and 2026-10-07 is the 280th day of the year:
@@ -47,10 +48,12 @@ import respx
 from httpx import ASGITransport
 
 from app.data_lake import catalog_client
+from app.data_lake.option_session_repack import repack_option_session
+from app.data_lake.path_policy import OptionSessionPath
 from app.main import app
 from app.options.contract import OptionContract
 from app.options_backtest.data_check import DataCheck, DataKind, ProblemCode, SessionVerdict, check_data
-from app.options_backtest.fetching import ensure_run_data
+from app.options_backtest.fetching import DownloadFailed, ensure_run_data
 from app.options_backtest.lake_check import LakeCheckData
 from app.options_backtest.lake_data import UnderlyingBarsCannotBePlaced, UnderlyingDayUnreadable
 from app.options_backtest.service import RunFailedError, RunHooks, execute_run
@@ -585,3 +588,83 @@ def _assert_failed_as_unreadable(store: FakeStore, spoil: Spoil) -> None:
     assert spoil.replay_says in failure.reason, "bars that break a rule and a file that cannot be read are told apart"
     assert_plain(failure.reason)
     assert_plain(item.message)
+
+
+# ── A published session container: the download refuses it, so Check data must too (#3442) ──────────────────────
+# Once a session is published as a container, every read of a contract's day goes through it first, and a download
+# never falls back to the day's own file to hide a container that does not read (#3416). So no download repairs one.
+
+
+def _the_container_path(day: date) -> str:
+    return str(OptionSessionPath("SPY", day).relative_path())
+
+
+async def a_lake_whose_thursday_is_published_as_a_container() -> Vendor:
+    vendor = await a_lake_that_holds_both_sessions()
+    assert (await repack_option_session("SPY", THU)).failure is None
+    return vendor
+
+
+@pytest.mark.parametrize(
+    ("payload", "admit"),
+    [
+        pytest.param(b"admitted, but not a container", True, id="damaged"),
+        pytest.param(b"bytes the catalog holds no receipt for", False, id="not admitted"),
+    ],
+)
+@respx.mock
+async def test_check_data_refuses_a_session_whose_container_the_lake_refuses_as_the_download_does_with_no_request(
+    payload: bytes, admit: bool, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    vendor = await a_lake_whose_thursday_is_published_as_a_container()
+    assert [s.verdict for s in (await asyncio.to_thread(_check, SESSIONS)).sessions] == [SessionVerdict.READY] * 2
+    asked = vendor.vendor_requests
+    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), _the_container_path(THU), payload, admit=admit)
+
+    wednesday, thursday = (await asyncio.to_thread(_check, SESSIONS)).sessions
+
+    assert wednesday.verdict is SessionVerdict.READY
+    assert thursday.verdict is SessionVerdict.CANNOT_BE_TESTED
+    [problem] = thursday.problems
+    assert problem.code is ProblemCode.STORED_DATA_IS_MALFORMED
+    assert "session file" in problem.message and the_500_call(THU).occ_symbol not in problem.message
+    assert_plain(problem.message)
+    assert not any("fetched again" in note for note in thursday.notes), "the lake would not fetch such a session again"
+
+    with pytest.raises(DownloadFailed) as refused:
+        await asyncio.to_thread(
+            ensure_run_data, the_setup(), SESSIONS, now_ms=NOW_2026_10_12_MS, should_stop=lambda: False
+        )
+    assert (refused.value.session, refused.value.reason) == (THU, "validation_failed")
+    assert vendor.vendor_requests == asked, "the fetch Check data would have promised is never made"
+
+
+@respx.mock
+async def test_check_data_still_promises_a_fetch_of_a_contract_day_a_readable_container_leaves_unresolved(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    # Only the container is refused whole. A contract it leaves unresolved is read from its own file, and a download
+    # fetches that day again when the file does not read: the check must not mistake that fault for the container's.
+    vendor = await a_lake_that_holds_both_sessions()
+    # Forget Thursday's capture of the call, so that the container is published with the call unresolved, then put a
+    # file the catalog holds no receipt for where the call's own day was.
+    own_file = option_bars_path(the_500_call(THU), THU)
+    (raw_root(tmp_lake) / own_file).unlink()
+    for artifact_id in [id_ for id_, row in fake_catalog.rows.items() if row["file_path"] == own_file]:
+        del fake_catalog.rows[artifact_id]
+    fake_catalog.keys = {key: id_ for key, id_ in fake_catalog.keys.items() if id_ in fake_catalog.rows}
+    assert (await repack_option_session("SPY", THU)).failure is None
+    (raw_root(tmp_lake) / own_file).write_bytes(b"bytes the catalog holds no receipt for")
+    asked = vendor.vendor_requests
+
+    [thursday] = (await asyncio.to_thread(_check, [THU])).sessions
+
+    assert thursday.verdict is SessionVerdict.NEEDS_DOWNLOAD
+    assert (thursday.missing, thursday.problems) == ((DataKind.CONTRACTS,), ())
+    [note] = [note for note in thursday.notes if "will be fetched again" in note]
+    assert_plain(note)
+
+    await asyncio.to_thread(ensure_run_data, the_setup(), SESSIONS, now_ms=NOW_2026_10_12_MS, should_stop=lambda: False)
+
+    assert vendor.vendor_requests == asked + 1
+    assert [s.verdict for s in (await asyncio.to_thread(_check, SESSIONS)).sessions] == [SessionVerdict.READY] * 2

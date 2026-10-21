@@ -58,10 +58,20 @@ also in ``test_lake_check.py``):
                                                        replace it:     error, so the capture stops
                                                        the capture     with it
                                                        stops
+    session container: does not read (damaged, not     does not        ``option_bars.ensure_option_    cannot_be_tested
+      admitted, or a member that does not hold); a     replace it:     day_bars`` reads it before
+      contract's day is read through it first          the download    any day file and answers
+                                                       fails           ``validation_failed`` (#3416)
 
 The gate is the one the stock capture runs on a stored day it is about to reuse, so a download of the underlying keeps
 exactly what the check calls ``cannot_be_tested``. A run is never told to fetch what its download keeps: it fails
 ``DATA_UNREADABLE`` and names the session by its open (``service``).
+
+A session container is the one file a published session keeps its contracts' bars in. A contract's day is read through
+it first, so one that does not read stops every contract of the session, and a download refuses it with no vendor request
+(#3416, #3442): the check says so of the session and names no contract. ``LakeAdmissionError`` is the same class for a
+container and for a day's own file, so the container is asked (``_the_lake_refuses_the_container``) before the error is
+taken for a day's.
 
 No sentence here names a date. A session is identified by its open in ms beside the sentence, and a thing the lake
 could not fetch is named by what it is (the underlying's bars, the contract listing, a contract's bars) and described by
@@ -84,6 +94,7 @@ from app.data_lake.admission import LakeAdmissionError
 from app.data_lake.option_bars import OptionBarsFileError
 from app.data_lake.option_lake import option_history_floor, plan_window_refusal, session_refusal
 from app.data_lake.option_listing import OptionListingFileError
+from app.data_lake.option_session import OptionSessionFileError, read_option_session
 from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.options.contract import OptionContract
 from app.options_backtest.data import Captured, RunData
@@ -412,8 +423,12 @@ class _KeptUnusable(Exception):
         self.cause = cause
 
 
+class _SessionContainerRefused(Exception):
+    """The lake refuses the session's published container, which a contract's day is read through first (#3442)."""
+
+
 # What a stored day can be refused with: the reader's errors, and bars it reads and the market would refuse.
-_UNUSABLE = (*STORED_FILE_ERRORS, MalformedBars)
+_UNUSABLE = (*STORED_FILE_ERRORS, MalformedBars, _SessionContainerRefused)
 # What the rules of a bar refuse. Any other refusal is of the file's form.
 _BREAKS_THE_RULES_OF_A_BAR = (MalformedBars, *BARS_CANNOT_BE_PLACED)
 
@@ -438,8 +453,24 @@ def _stored[T](
 
 def _a_contract_day_replaced(exc: Exception) -> bool:
     """The lake's parser of a contract's day is the reuse gate's too, so it refuses what a download fetches again;
-    what it accepts and the reader still refuses (a close on another day) the lake holds as good."""
-    return not isinstance(exc, _BREAKS_THE_RULES_OF_A_BAR)
+    what it accepts and the reader still refuses (a close on another day) the lake holds as good. A container that does
+    not read is refused whole and never replaced by a fetch."""
+    return not isinstance(exc, (*_BREAKS_THE_RULES_OF_A_BAR, _SessionContainerRefused))
+
+
+def _the_lake_refuses_the_container(underlying: str, day: date) -> bool:
+    """Whether the lake refuses the session's published container, as a download does before it looks at any contract.
+
+    ``ensure_option_day_bars`` reads the container first and answers ``validation_failed`` for one that does not read;
+    it is asked the same here, so the check cannot promise a fetch that answer rules out. No container is not a refusal.
+    Reads the file and asks the catalog, so a worker thread, from the configured lake root where ``LakeCheckData`` reads.
+    Raises ``CatalogUnavailableError`` when the catalog cannot be asked, which says nothing of the file.
+    """
+    try:
+        read_option_session(underlying, day)
+    except (LakeAdmissionError, OptionSessionFileError):
+        return True
+    return False
 
 
 def _the_underlying_as_the_run_reads_it(data: CheckableData, day: date) -> Captured[Sequence[MinuteBar]] | None:
@@ -450,9 +481,14 @@ def _the_underlying_as_the_run_reads_it(data: CheckableData, day: date) -> Captu
 
 
 def _a_contract_day_as_the_run_reads_it(
-    data: CheckableData, contract: OptionContract, day: date
+    data: CheckableData, underlying: str, contract: OptionContract, day: date
 ) -> Captured[Sequence[MinuteBar]] | None:
-    stored = data.option_day(contract, day)
+    try:
+        stored = data.option_day(contract, day)
+    except (LakeAdmissionError, OptionSessionFileError) as exc:
+        if _the_lake_refuses_the_container(underlying, day):
+            raise _SessionContainerRefused from exc
+        raise
     if stored is not None:
         bars_by_close(stored.value, trading_date=day, what=contract.occ_symbol)
     return stored
@@ -500,7 +536,7 @@ def _inspect_what_is_stored(
     for contract in sorted(needs.contracts, key=lambda each: each.occ_symbol):
         try:
             stored = _stored(
-                lambda c=contract: _a_contract_day_as_the_run_reads_it(data, c, day),
+                lambda c=contract: _a_contract_day_as_the_run_reads_it(data, setup.underlying, c, day),
                 f"bars of {contract.occ_symbol}",
                 notes,
                 replaced=lambda exc: fetchable and _a_contract_day_replaced(exc),
@@ -519,7 +555,12 @@ def _inspect_what_is_stored(
 
 def _malformed(outline: _Outline, what: str, cause: Exception) -> SessionCheck:
     """A stored day the run cannot use and a download would not replace. What the fault was, and on which day, is not said."""
-    if isinstance(cause, _BREAKS_THE_RULES_OF_A_BAR):
+    if isinstance(cause, _SessionContainerRefused):
+        message = (
+            "The stored bars of the session's contracts are kept in one session file, and it cannot be read (it is "
+            "damaged, or the lake holds no record of it), so the run cannot use them, and a download does not replace it."
+        )
+    elif isinstance(cause, _BREAKS_THE_RULES_OF_A_BAR):
         message = (
             f"The stored bars of {what} break the rules of a bar (a minute twice or out of order, a bar not on a "
             "whole minute, a price of zero or less, or bars of another day), so the run cannot use them, and a "
