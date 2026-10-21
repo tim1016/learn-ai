@@ -1,0 +1,36 @@
+<section class="card">
+  <h3>Retained evidence diagnostics</h3>
+  @if (failures.isLoading()) { <p>Reading this candidate's retained failure facts…</p> }
+  @if (problem(); as why) { <p class="problem">{{ why }}</p><button type="button" (click)="failures.reload()">Retry diagnostics</button> }
+  @if (failures.hasValue()) { @let view = failures.value();
+    <p>{{ view.scope | receiptLabel }}: <app-timestamp-display [value]="view.start_ms" mode="date-et" /> to <app-timestamp-display [value]="view.end_ms" mode="date-et" /> (end exclusive).</p>
+    <p>{{ view.replayed_sessions }} / {{ view.scheduled_sessions }} scheduled sessions replayed; {{ view.traded_sessions }} completed traded sessions.</p>
+    <p>{{ view.present_held_marks }} / {{ view.required_held_marks }} required held marks present; {{ view.missing_held_marks }} missing.</p>
+    <p>{{ view.eligible_fold_winners }} / {{ view.forward_fold_count }} eligible forward-fold winners. Final test: {{ view.final_exposure | receiptLabel }}.</p>
+    <p [class.warning]="!view.risk_complete">Selected base trace: {{ view.risk_complete ? 'complete' : 'incomplete' }}. A finished compute job does not establish sufficient research. Final stress gates remain separate.</p>
+    @for (point of view.items; track point.id) {
+      <article class="card">
+        <h4>{{ point.code | receiptLabel }}</h4>
+        <p>Session <app-timestamp-display [value]="point.session_open_ms" mode="date-et" /> · <app-timestamp-display [value]="point.at_ms" mode="et" /> · leg {{ point.leg_id }} · <code>{{ point.contract }}</code></p>
+        <p>{{ point.explanation }}</p>
+        @if (point.close_filled_at_ms; as filled) { <p>Real closing fill: <app-timestamp-display [value]="filled" mode="et" />. This closes the trade; it leaves the missing intermediate risk valuation unresolved.</p> }
+        <details><summary>Retained input receipt</summary><p><code>{{ point.retained_path }}</code></p><p>Expected file: <code>{{ point.expected_input_sha256 ?? 'Not recorded' }}</code></p></details>
+        @if (point.code === 'missing_held_mark') { <button type="button" (click)="target.set(point)">Inspect retained input</button> }
+      </article>
+    } @empty { <p>No missing held-mark or unclosed-position events are retained for this trace.</p> }
+    <div class="actions"><button type="button" [disabled]="offset() === 0" (click)="offset.set(offset() - 50)">Previous failures</button><span>{{ view.total }} retained failure events</span><button type="button" [disabled]="offset() + 50 >= view.total" (click)="offset.set(offset() + 50)">Next failures</button></div>
+    @if (target(); as point) {
+      <section class="card"><h4>Selected input inspection</h4><p><app-timestamp-display [value]="point.at_ms" mode="et" /> · {{ point.contract }}</p>
+        @if (inspection.isLoading()) { <p>Verifying the selected archived file…</p> }
+        @if (inspectionProblem(); as why) { <p class="problem">{{ why }}</p><button type="button" (click)="inspection.reload()">Retry input inspection</button> }
+        @if (inspection.hasValue()) { @let result = inspection.value(); <p><strong>{{ result.code | receiptLabel }}</strong></p><p>{{ result.explanation }}</p><p>Archived input verified: {{ result.input_verified ? 'Yes' : 'No' }}.</p> }
+      </section>
+    }
+    <details><summary>All retained technical failures</summary>@for (reason of view.technical_failures; track $index) { <p><code>{{ reason }}</code></p> } @empty { <p>No technical failures recorded.</p> }</details>
+    <h4>Next valid action</h4>
+    <p>Opening diagnostics and inspecting an archived input only read evidence. Existing study files and verdicts stay frozen.</p>
+    <p>A new linked study can use newly captured inputs. Capturing data is a separate explicit action while checking that new plan; it affects future work and cannot promise to fill a naturally sparse minute.</p>
+    <a routerLink="/options-golden-search" [queryParams]="{ setup_name: view.setup_name, parent_study_id: view.study_id }">Prepare a new linked plan</a>
+    <details><summary>Diagnostic scope receipt</summary><p>Evaluation <code>{{ view.evidence_identity }}</code></p><p>Artifact <code>{{ view.evidence_blob_sha256 }}</code></p></details>
+  }
+</section>

@@ -68,6 +68,14 @@ export class OptionsGoldenSearchService {
     return firstValueFrom(this.http.get<components['schemas']['OptionsCandidatePage']>(`${this.base}/studies/${encodeURIComponent(studyId)}/candidate-evidence`, { params: { offset, limit: 50 } }));
   }
 
+  failurePage(studyId: string, digest: string, window: EvidenceWindow, offset = 0): Promise<components['schemas']['OptionsFailureEvidence']> {
+    return firstValueFrom(this.http.get<components['schemas']['OptionsFailureEvidence']>(`${this.base}/studies/${encodeURIComponent(studyId)}/candidate-evidence/${encodeURIComponent(digest)}/failures`, { params: { window, offset, limit: 50 } }));
+  }
+
+  inspectFailure(studyId: string, digest: string, window: EvidenceWindow, point: components['schemas']['OptionsFailureEvent']): Promise<components['schemas']['OptionsFailureInspection']> {
+    return firstValueFrom(this.http.get<components['schemas']['OptionsFailureInspection']>(`${this.base}/studies/${encodeURIComponent(studyId)}/candidate-evidence/${encodeURIComponent(digest)}/failures/inspect`, { params: { window, session_open_ms: point.session_open_ms, at_ms: point.at_ms, leg_id: point.leg_id } }));
+  }
+
   candidateEvidence(studyId: string, digest: string, window: EvidenceWindow, sessionOffset = 0): Promise<components['schemas']['OptionsCandidateEvidence']> {
     return firstValueFrom(this.http.get<components['schemas']['OptionsCandidateEvidence']>(`${this.base}/studies/${encodeURIComponent(studyId)}/candidate-evidence/${encodeURIComponent(digest)}`, { params: { window, session_offset: sessionOffset, session_limit: 50 } }));
   }
