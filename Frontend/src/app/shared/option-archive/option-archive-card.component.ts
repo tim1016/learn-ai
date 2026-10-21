@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
 
+import { formatDurationMs } from '../run-dock/run-duration';
 import { AssetIdentityComponent } from '../asset-identity/asset-identity.component';
 import { TimestampDisplayComponent } from '../timestamp/timestamp-display.component';
 import { OptionArchiveService } from './option-archive.service';
@@ -13,4 +14,5 @@ import { OptionArchiveService } from './option-archive.service';
 })
 export class OptionArchiveCardComponent {
   readonly archive = inject(OptionArchiveService);
+  readonly formatAge = formatDurationMs;
 }

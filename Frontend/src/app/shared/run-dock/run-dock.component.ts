@@ -1,3 +1,4 @@
+import { formatDurationMs } from './run-duration';
 import { Component, ChangeDetectionStrategy, computed, effect, inject, signal, viewChild, ElementRef, DestroyRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import {
@@ -104,9 +105,7 @@ export class RunDockComponent {
   formatDuration(startedAt: number | null, finishedAt: number | null): string {
     if (startedAt === null) return '—';
     const durationMs = Math.max(0, (finishedAt ?? Date.now()) - startedAt);
-    const seconds = Math.floor(durationMs / 1000);
-    if (seconds < 60) return `${seconds}s`;
-    return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`;
+    return formatDurationMs(durationMs);
   }
 
   /** Track-by for `@for` so DOM nodes are stable across appends. */

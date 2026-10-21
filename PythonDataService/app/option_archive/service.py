@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from app.config import settings
 from app.data_lake import catalog_client
+from app.data_lake.admission import LakeAdmissionError
 from app.data_lake.option_lake import OptionCaptureResult, OptionDataFailure
 from app.data_lake.option_request_priority import archive_request
 from app.data_lake.root_identity import active_root_id
@@ -21,6 +22,7 @@ from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms
 from app.option_archive.backup import (
     BackupRefusedError,
     RestoreReceipt,
+    bounded_file_work,
     create_generation,
     decode_restored_artifacts,
     manifest_digest,
@@ -58,6 +60,8 @@ class OptionArchiveService:
                  capture: Callable[..., Awaitable[OptionCaptureResult]] | None = None) -> None:
         self.config, self.clock = config, clock
         self.root = Path(settings.LEAN_DATA_WRITE_ROOT)
+        self.service_root = Path(__file__).resolve().parents[2]
+        self.checkout = self.service_root.parent if (self.service_root.parent / "compose.yaml").is_file() else self.service_root
         self.state = state or ArchiveState(self.root / "option-archive-state.json")
         self.capture = capture
         self.scheduler = ArchiveScheduler(jobs=(
@@ -78,8 +82,16 @@ class OptionArchiveService:
         await asyncio.to_thread(self.state.update, initialize)
         self.scheduler.start()
 
+    async def _cancel_collectors(self) -> None:
+        tasks = tuple(self._session_tasks.values())
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self._session_tasks.clear()
+
     async def stop(self) -> None:
         await self.scheduler.stop()
+        await self._cancel_collectors()
 
     def daily_due(self, name: str, now: int, minute_et: int) -> bool:
         receipt = self.state.read().get("jobs", {}).get(name, {})
@@ -123,28 +135,59 @@ class OptionArchiveService:
         await asyncio.to_thread(self.state.update, update)
         self._health = None
 
+    async def _capture_and_record(self, underlying: str, session_ms: int, *, retry_exhausted: bool) -> OptionCaptureResult:
+        from app.data_lake.option_session import read_option_session
+        from app.data_lake.option_session_capture import capture_option_session
+        await self._record_session(underlying, session_ms, started_ms=self.clock(), complete=False, recorded_ms=self.clock())
+        token = archive_request.set(True)
+        counts: dict[str, int] = {}
+        try:
+            try:
+                result = await (self.capture or capture_option_session)(underlying, et_date_at_ms(session_ms), now_ms=self.clock(),
+                    should_pause=self.should_pause, history_floor=archive_history_boundary(et_date_at_ms(self.clock())),
+                    retry_exhausted=retry_exhausted)
+                stored = await asyncio.to_thread(read_option_session, underlying, et_date_at_ms(session_ms))
+                if stored is not None:
+                    counts = {"listed": stored.listed_count, "answered": stored.answered_count,
+                              "empty": len(stored.confirmed_empty), "with_bars": len(stored.captured)}
+                if result.failure is None and (stored is None or not stored.complete):
+                    raise ValueError("capture returned success without a readable complete session container")
+            except (LakeAdmissionError, ValueError, OSError) as exc:
+                result = OptionCaptureResult.failed(OptionDataFailure("validation_failed", str(exc), underlying, et_date_at_ms(session_ms)))
+            failure = result.failure
+            retryable = failure is not None and failure.reason in {
+                "provider_rate_limited", "provider_api_error", "lease_timeout", "io_error",
+            }
+            paused = failure is not None and failure.reason == "lease_timeout" and self.should_pause()
+            reason = f"{failure.reason}: {failure.detail}" if failure is not None else None
+            await self._record_session(underlying, session_ms, **counts, complete=failure is None,
+                failed=failure is not None and not paused, lost=failure is not None and failure.reason == "outside_data_plan",
+                reason=reason, ended_ms=self.clock(), retryable=retryable,
+                blocked_day_ms=None if retryable or failure is None else et_midnight_ms(et_date_at_ms(self.clock())))
+            if failure is not None:
+                logger.warning("Option archive could not complete a session", extra={"action": "option_archive_session_failed",
+                    "underlying": underlying, "session_ms": session_ms, "reason": reason})
+            return result
+        except asyncio.CancelledError:
+            await self._record_session(underlying, session_ms, complete=False, failed=False, retryable=True,
+                reason="Archive collection was interrupted; verified progress is retained.", ended_ms=self.clock())
+            raise
+        finally:
+            archive_request.reset(token)
+
     async def capture_session(self, underlying: str, session_ms: int, *, retry_exhausted: bool = False) -> OptionCaptureResult:
         key = (underlying, session_ms)
         task = self._session_tasks.get(key)
         if task is not None and not task.done():
             return await asyncio.shield(task)
-
-        async def run() -> OptionCaptureResult:
-            from app.data_lake.option_session_capture import capture_option_session
-            token = archive_request.set(True)
-            try:
-                return await (self.capture or capture_option_session)(underlying, et_date_at_ms(session_ms), now_ms=self.clock(),
-                    should_pause=self.should_pause, history_floor=archive_history_boundary(et_date_at_ms(self.clock())),
-                    retry_exhausted=retry_exhausted)
-            finally:
-                archive_request.reset(token)
-        task = asyncio.create_task(run())
+        task = asyncio.create_task(self._capture_and_record(underlying, session_ms, retry_exhausted=retry_exhausted))
         self._session_tasks[key] = task
         try:
-            return await asyncio.shield(task)
+            # The creator owns the collector lifetime. Joining requests may
+            # leave independently, but ownership loss cancels and drains it.
+            return await task
         finally:
-            if task.done():
-                self._session_tasks.pop(key, None)
+            self._session_tasks.pop(key, None)
 
     async def capture_pass(self) -> None:
         started = self.clock()
@@ -184,45 +227,28 @@ class OptionArchiveService:
                     break
                 if work.underlying in blocked:
                     continue
-                begin = self.clock()
-                await self._record_session(work.underlying, work.session_ms, started_ms=begin, complete=False, recorded_ms=begin)
-                counts: dict[str, int] = {}
-                try:
-                    result = await self.capture_session(work.underlying, work.session_ms)
-                    failure = result.failure
-                    from app.data_lake.option_session import read_option_session
-                    stored = await asyncio.to_thread(read_option_session, work.underlying, et_date_at_ms(work.session_ms))
-                    if stored is not None:
-                        counts = {"listed": stored.listed_count, "answered": stored.answered_count,
-                                  "empty": len(stored.confirmed_empty), "with_bars": len(stored.captured)}
-                    if failure is None and (stored is None or not stored.complete):
-                        raise ValueError("capture returned success without a readable complete session container")
-                except (ValueError, OSError) as exc:
-                    failure = OptionDataFailure("validation_failed", str(exc), work.underlying, et_date_at_ms(work.session_ms))
-                if failure is not None:
-                    reason = f"{failure.reason}: {failure.detail}"
-                    permanent = failure.reason == "outside_data_plan"
-                    await self._record_session(work.underlying, work.session_ms, **counts, complete=False, failed=not paused,
-                        lost=permanent, reason=reason, recorded_ms=self.clock(), ended_ms=self.clock())
-                    logger.warning("Option archive could not complete a session", extra={"action": "option_archive_session_failed",
-                        "underlying": work.underlying, "session_ms": work.session_ms, "reason": reason})
-                    if failure.reason in ("provider_auth_error", "provider_entitlement_error"):
-                        blocked.add(work.underlying)
-                    if failure.reason == "lease_timeout" and self.should_pause():
-                        paused = True
-                        break
-                else:
-                    await self._record_session(work.underlying, work.session_ms, **counts, complete=True, failed=False,
-                        lost=False, reason=None, ended_ms=self.clock())
+                prior = state.get("sessions", {}).get(work.underlying, {}).get(str(work.session_ms), {})
+                if prior.get("blocked_day_ms") == et_midnight_ms(et_date_at_ms(started)):
+                    continue
+                result = await self.capture_session(work.underlying, work.session_ms)
+                failure = result.failure
+                if failure is not None and failure.reason in ("provider_auth_error", "provider_entitlement_error"):
+                    blocked.add(work.underlying)
+                if failure is not None and failure.reason == "lease_timeout" and self.should_pause():
+                    paused = True
+                    break
                 await asyncio.sleep(0)
         except asyncio.CancelledError:
+            await self._cancel_collectors()
             await self._job_update("capture", ended_ms=self.clock(), phase="interrupted", retry_after_ms=self.clock() + 300_000)
             raise
         except Exception as exc:
             await self._job_update("capture", ended_ms=self.clock(), phase="failed", failure=str(exc), retry_after_ms=self.clock()+300_000)
             raise
+        retryable = any(row.get("retryable") and not row.get("complete") and not row.get("lost")
+            for entries in self.state.read().get("sessions", {}).values() for row in entries.values())
         await self._job_update("capture", ended_ms=self.clock(), phase=("snapshot_pause" if self.snapshot_due(self.clock()) else "rth_pause") if paused else "complete",
-            completed_day_ms=None if paused else et_midnight_ms(et_date_at_ms(started)), retry_after_ms=self.clock() + 300_000)
+            completed_day_ms=None if paused or retryable else et_midnight_ms(et_date_at_ms(started)), retry_after_ms=self.clock() + 300_000)
 
     async def snapshot_pass(self) -> None:
         start = self.clock()
@@ -257,17 +283,23 @@ class OptionArchiveService:
     def _backup_roots(self) -> dict[str, Path]:
         return {str(active_root_id()): self.root}
 
+    def _maintenance_pause(self) -> bool:
+        return regular_hours_pause(self.clock(), self.config.REQUEST_OPEN_MARGIN_MS)
+
     async def backup_pass(self) -> None:
         config = self.config
         try:
             await asyncio.to_thread(validate_destination, config.BACKUP_DESTINATION, mount=config.BACKUP_MOUNT,
-                checkout=Path(__file__).resolve().parents[3], roots=self._backup_roots(),
-                expected_host_destination=config.BACKUP_HOST_DESTINATION)
-            checkout = Path(__file__).resolve().parents[3]
+                checkout=self.checkout, roots=self._backup_roots(),
+                expected_host_destination=config.BACKUP_HOST_DESTINATION,
+                host_checkout=config.HOST_CHECKOUT, host_lake_root=config.HOST_LAKE_ROOT)
+            runbook = self.service_root / "restore-data-lake.md"
+            if not runbook.is_file():
+                runbook = self.checkout / "docs/runbooks/restore-data-lake.md"
             manifest = await create_generation(destination=config.BACKUP_DESTINATION, roots=self._backup_roots(),
                 clock=self.clock, should_pause=lambda: regular_hours_pause(self.clock(), config.REQUEST_OPEN_MARGIN_MS),
-                restore_files={"restore_lake_generation.py": checkout / "PythonDataService/scripts/restore_lake_generation.py",
-                               "restore-data-lake.md": checkout / "docs/runbooks/restore-data-lake.md"})
+                restore_files={"restore_lake_generation.py": self.service_root / "scripts/restore_lake_generation.py",
+                               "restore-data-lake.md": runbook})
             generation = config.BACKUP_DESTINATION / "generations" / manifest.generation_id
             await asyncio.to_thread(prune_generations, config.BACKUP_DESTINATION,
                 daily_keep=config.BACKUP_DAILY_KEEP, weekly_keep=config.BACKUP_WEEKLY_KEEP)
@@ -287,7 +319,7 @@ class OptionArchiveService:
             if generation_id is None:
                 raise BackupRefusedError("there is no checked backup generation to test")
             generation = self.config.BACKUP_DESTINATION / "generations" / generation_id
-            manifest = await asyncio.to_thread(verify_generation, generation)
+            manifest = await asyncio.to_thread(verify_generation, generation, should_pause=self._maintenance_pause)
             schema = "archive_restore_" + uuid4().hex
             async with catalog_client.connection() as connection:
                 await connection.execute(f'CREATE SCHEMA "{schema}"')
@@ -295,8 +327,9 @@ class OptionArchiveService:
                     await connection.execute(f'CREATE TABLE "{schema}"."DataLakeArtifacts" (LIKE public."DataLakeArtifacts" INCLUDING ALL)')
                     with tempfile.TemporaryDirectory(prefix="lake-restore-") as folder:
                         roots = {root_id: Path(folder) / root_id for root_id in manifest.root_ids}
-                        await restore_generation(generation=generation, roots=roots, connection=connection, schema=schema)
-                        counts = await asyncio.to_thread(decode_restored_artifacts, manifest, roots)
+                        await restore_generation(generation=generation, roots=roots, connection=connection, schema=schema, should_pause=self._maintenance_pause)
+                        counts = await bounded_file_work(lambda paused: decode_restored_artifacts(manifest, roots, should_pause=paused),
+                                                         self._maintenance_pause)
                         restored_count = await connection.fetchval(f'SELECT COUNT(*) FROM "{schema}"."DataLakeArtifacts"')
                         if restored_count != manifest.catalog_rows:
                             raise BackupRefusedError("restored catalog row count differs from the generation")
@@ -318,8 +351,9 @@ class OptionArchiveService:
             if self.config.ENABLED:
                 try:
                     validate_destination(self.config.BACKUP_DESTINATION, mount=self.config.BACKUP_MOUNT,
-                        checkout=Path(__file__).resolve().parents[3], roots=self._backup_roots(),
-                        expected_host_destination=self.config.BACKUP_HOST_DESTINATION)
+                        checkout=self.checkout, roots=self._backup_roots(),
+                        expected_host_destination=self.config.BACKUP_HOST_DESTINATION,
+                        host_checkout=self.config.HOST_CHECKOUT, host_lake_root=self.config.HOST_LAKE_ROOT)
                 except (OSError, ValueError, BackupRefusedError):
                     state.setdefault("jobs", {}).setdefault("backup", {})["failure"] = (
                         "The configured backup destination is unavailable; verify its mount and identity marker.")

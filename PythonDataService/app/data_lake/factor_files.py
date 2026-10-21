@@ -104,7 +104,7 @@ from __future__ import annotations
 import hashlib
 import json
 from bisect import bisect_left
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -615,7 +615,8 @@ class RecordedFactorFile:
     unpriced_sessions: tuple[tuple[date, str], ...] = ()
 
 
-def read_recorded_factor_file(lake_root: Path, *, market: str, symbol: str) -> RecordedFactorFile:
+def read_recorded_factor_file(lake_root: Path, *, market: str, symbol: str,
+                              admission: Callable[[Path], bytes] | None = None) -> RecordedFactorFile:
     """The symbol's factor file, only if its coverage record vouches for its exact bytes.
 
     Raises :class:`FactorFileNotCoveringError` for a missing file, a missing
@@ -641,7 +642,7 @@ def read_recorded_factor_file(lake_root: Path, *, market: str, symbol: str) -> R
     from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
 
     try:
-        csv_bytes = read_committed_bytes(csv_path)
+        csv_bytes = (admission or read_committed_bytes)(csv_path)
     except LakeAdmissionError as exc:
         raise FactorFileNotCoveringError(symbol, str(exc)) from exc
     file_sha256 = hashlib.sha256(csv_bytes).hexdigest()

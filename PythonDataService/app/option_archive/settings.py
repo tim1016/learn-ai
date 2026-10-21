@@ -18,6 +18,8 @@ class ArchiveSettings(BaseSettings):
     BACKUP_DESTINATION: Path = Path("/lake-backup")
     BACKUP_MOUNT: Path = Path("/lake-backup")
     BACKUP_HOST_DESTINATION: str = "~/learn-ai-lake-backup"
+    HOST_CHECKOUT: Path | None = None
+    HOST_LAKE_ROOT: Path | None = None
     BACKUP_DAILY_KEEP: int = Field(default=7, ge=1)
     BACKUP_WEEKLY_KEEP: int = Field(default=4, ge=1)
     BACKUP_STALE_MS: int = Field(default=172_800_000, ge=1)

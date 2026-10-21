@@ -60,6 +60,14 @@ async def capture_archive_session(body: ArchiveSessionCaptureRequest,
         raise HTTPException(status_code=422, detail="session_ms must be the canonical session open")
     # Completion remains on the normal receipt/status path. Explicit retry
     # resets only this session's exhausted transient outcomes.
-    asyncio.run_coroutine_threadsafe(service.capture_session(body.underlying, body.session_ms,
+    future = asyncio.run_coroutine_threadsafe(service.capture_session(body.underlying, body.session_ms,
                                     retry_exhausted=body.retry_exhausted), background_loop())
+    def report(done: object) -> None:
+        import logging
+        try:
+            future.result()
+        except Exception:
+            logging.getLogger(__name__).exception("Manual session recovery failed", extra={
+                "action": "manual_archive_session_failed", "underlying": body.underlying, "session_ms": body.session_ms})
+    future.add_done_callback(report)
     return ArchiveTriggerReceipt(accepted=True, job="capture")

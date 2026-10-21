@@ -4,6 +4,7 @@ import { render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 import { OptionArchiveBannerComponent } from './option-archive-banner.component';
 import { OptionArchiveCardComponent } from './option-archive-card.component';
+import { formatTimestampDisplay } from '../timestamp/timestamp-display';
 import { OptionArchiveService, type OptionArchiveHealth } from './option-archive.service';
 
 function status(): OptionArchiveHealth {
@@ -63,4 +64,26 @@ describe('option archive health', () => {
     expect(screen.getByRole('link', { name: 'Inspect archive health' })).toBeTruthy();
     expect(screen.queryByRole('button')).toBeNull();
   });
+  it('renders deadlines, failure, capture and recovery freshness from server evidence', async () => {
+    const health = status();
+    health.underlyings[0] = { ...health.underlyings[0], earliest_required_session_ms: 1729517400000,
+      next_due_ms: 1792645200000, last_success_ms: 1792558800000, last_failure: 'A retained receipt could not be admitted.',
+      gaps: [{ session_ms: 1729517400000, permanent: false, days_left: 5, reason: 'Capture pending.', recorded_ms: 1792558800000 }] };
+    health.backup = { ...health.backup, age_ms: 120000, oldest_unbacked_capture_ms: 1792558000000 };
+    health.test_restore = { ...health.test_restore, age_ms: 180000 };
+    await render(OptionArchiveCardComponent, { providers: [{ provide: OptionArchiveService, useValue: world(health) }] });
+    expect(screen.getByText('Earliest required session').nextElementSibling?.textContent?.trim())
+      .toBe(formatTimestampDisplay(1729517400000, { mode: 'date-et' }));
+    expect(screen.getByText('Next capture due').nextElementSibling?.textContent?.trim())
+      .toBe(formatTimestampDisplay(1792645200000, { mode: 'local' }));
+    expect(screen.getByText('Last successful capture').nextElementSibling?.textContent?.trim())
+      .toBe(formatTimestampDisplay(1792558800000, { mode: 'local' }));
+    expect(screen.getByText('A retained receipt could not be admitted.')).toBeTruthy();
+    expect(screen.getByText(/5 calendar days remain/)).toBeTruthy();
+    expect(screen.getByText(/Backup age: 2m 00s/)).toBeTruthy();
+    expect(screen.getByText(/Restore check age: 3m 00s/)).toBeTruthy();
+    expect(screen.getByText(/Oldest capture awaiting backup/).textContent)
+      .toContain(formatTimestampDisplay(1792558000000, { mode: 'local' }));
+  });
+
 });

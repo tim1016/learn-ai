@@ -19,8 +19,8 @@ def test_archive_boundary_preserves_vendor_edge_without_moving_interactive_floor
         anniversary = today.replace(year=today.year - 2)
     except ValueError:
         anniversary = today.replace(year=today.year - 2, day=28)
-    assert anniversary < boundary <= floor
-    assert expected_sessions(boundary, floor + timedelta(days=7))[0] > anniversary
+    assert anniversary <= boundary <= floor
+    assert expected_sessions(boundary, floor + timedelta(days=7))[0] >= anniversary
 
 
 def test_planner_oldest_first_fairness_and_holidays() -> None:
@@ -83,3 +83,10 @@ def test_snapshot_health_keeps_missed_evening_and_field_gaps() -> None:
     health = project_health(state, now_ms=wall_clock_ms(date(2026, 10, 21), 60), config=ArchiveSettings(ENABLED=True))
     spy = health.underlyings[0]
     assert spy.snapshot_missed_evenings == 1 and spy.snapshot_incomplete == 1 and spy.snapshot_field_gaps == 3
+
+
+def test_account_probe_pins_inclusive_weekday_anniversary() -> None:
+    # #3418: read-only observed_at_ms=1792557343508; 270 bars served for
+    # SPY241025C00580000 on session1729517400000, earlier Oct17/18 refused.
+    assert archive_history_boundary(date(2026, 10, 21)) == date(2024, 10, 21)
+    assert session_open_ms_utc(archive_history_boundary(date(2026, 10, 21))) == 1729517400000

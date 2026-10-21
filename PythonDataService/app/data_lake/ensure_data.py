@@ -34,7 +34,7 @@ from app.data_lake.adjustment_versions import (
     current_snapshot_path,
     verify_adjustment_receipt,
 )
-from app.data_lake.admission import LakeAdmissionError
+from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
 from app.data_lake.atomic import ArtifactLeaseLostError, atomic_write_and_promote, publish_artifact
 from app.data_lake.bar_validation import (
     CorruptVendorBarsError,
@@ -517,7 +517,8 @@ def _minute_trade_cache_matches(row: ArtifactRecord, dch: str, lake_root: Path, 
 STORED_MINUTE_DAY_ERRORS = (CorruptVendorBarsError, ValueError, OSError, zipfile.BadZipFile, IndexError)
 
 
-def check_stored_minute_day(file_path: str, lake_root: Path, *, symbol: str, trading_date: date) -> None:
+def check_stored_minute_day(file_path: str, lake_root: Path, *, symbol: str, trading_date: date,
+                            admission: Callable[[Path], bytes] = read_committed_bytes) -> None:
     """The gate a cache hit passes: a stored minute day is read as the capture reads it and held to the contract.
 
     Raises one of :data:`STORED_MINUTE_DAY_ERRORS` when the day fails it, or ``LakeAdmissionError`` when the catalog
@@ -527,7 +528,7 @@ def check_stored_minute_day(file_path: str, lake_root: Path, *, symbol: str, tra
     day and another symbol (only the date in a member's name is read). Blocking.
     """
     assert_publishable_stored_minute_bars(
-        read_minute_trade_bars(file_path, lake_root), symbol=symbol, trading_date=trading_date
+        read_minute_trade_bars(file_path, lake_root, admission=admission), symbol=symbol, trading_date=trading_date
     )
 
 

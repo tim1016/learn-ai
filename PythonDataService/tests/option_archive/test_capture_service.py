@@ -77,3 +77,76 @@ async def test_window_rollover_records_permanent_gaps_once_and_never_erases_them
     current = wall_clock_ms(date(2026, 10, 22), 600)
     await service.capture_pass()
     assert state.read()["sessions"]["SPY"][str(baseline)] == original
+
+
+async def mount_run(fake_catalog, tmp_lake: Path, *, spy_status: int) -> None:
+    for symbol in ("SPY", "QQQ", "IWM"):
+        call, put = await seed(fake_catalog, tmp_lake, symbol)
+        for contract in (call, put):
+            url = f"https://api.polygon.io/v2/aggs/ticker/O:{contract.occ_symbol}/range/1/minute/{DAY}/{DAY}"
+            response = httpx.Response(spy_status, json={"status": "ERROR"}) if symbol == "SPY" and spy_status != 200 else no_trades(contract.occ_symbol)
+            respx.get(url).mock(return_value=response)
+
+
+def service_for(state_path: Path, clock) -> OptionArchiveService:
+    state = ArchiveState(state_path)
+    state.update(lambda data: data.update(baseline_ms=session_open_ms_utc(DAY)))
+    return OptionArchiveService(config=ArchiveSettings(ENABLED=True), state=state, clock=clock)
+
+
+@respx.mock
+async def test_transient_failure_retries_within_the_same_night_and_manual_recovery_updates_health(fake_catalog, tmp_lake: Path) -> None:
+    await mount_run(fake_catalog, tmp_lake, spy_status=429)
+    current = NOW
+    service = service_for(tmp_lake / "state.json", lambda: current)
+    await service.capture_pass()
+    current += 300_001
+    assert service.capture_due(current), "a transient edge failure must remain eligible tonight"
+    for contract in (OptionContract.of(root="SPY", expiry_date=DAY, right="call", strike=500),
+                     OptionContract.of(root="SPY", expiry_date=DAY, right="put", strike=500)):
+        respx.get(f"https://api.polygon.io/v2/aggs/ticker/O:{contract.occ_symbol}/range/1/minute/{DAY}/{DAY}").mock(return_value=no_trades(contract.occ_symbol))
+    recovered = await service.capture_session("SPY", session_open_ms_utc(DAY), retry_exhausted=True)
+    assert recovered.failure is None
+    spy = service.health().underlyings[0]
+    assert spy.pending_sessions == 0 and spy.last_failure is None
+    assert service.state.read()["sessions"]["SPY"][str(session_open_ms_utc(DAY))]["complete"]
+
+
+@respx.mock
+async def test_unadmitted_container_fails_only_its_underlying_and_is_visible(fake_catalog, tmp_lake: Path) -> None:
+    from app.data_lake.path_policy import OptionSessionPath
+    await mount_run(fake_catalog, tmp_lake, spy_status=200)
+    from app.data_lake.option_session_capture import capture_option_session
+    assert (await capture_option_session("SPY", DAY, now_ms=NOW)).failure is None
+    path = tmp_lake / "lake/raw" / str(OptionSessionPath("SPY", DAY).relative_path())
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"unadmitted container")
+    service = service_for(tmp_lake / "state.json", lambda: NOW)
+    await service.capture_pass()
+    spy, qqq, iwm = service.health().underlyings
+    assert spy.severity == "failed" and spy.last_failure
+    assert qqq.pending_sessions == iwm.pending_sessions == 0
+
+
+async def test_owner_cancellation_and_shutdown_drain_the_session_collector(tmp_path: Path) -> None:
+    entered, stopped = asyncio.Event(), asyncio.Event()
+    async def collector(*args, **kwargs):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            stopped.set()
+    service = service_for(tmp_path / "state.json", lambda: NOW)
+    service.capture = collector
+    task = asyncio.create_task(service.capture_pass())
+    await entered.wait()
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    assert stopped.is_set() and not service._session_tasks
+    entered.clear()
+    stopped.clear()
+    manual = asyncio.create_task(service.capture_session("SPY", session_open_ms_utc(DAY)))
+    await entered.wait()
+    await service.stop()
+    await asyncio.gather(manual, return_exceptions=True)
+    assert stopped.is_set() and not service._session_tasks

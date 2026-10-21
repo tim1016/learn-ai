@@ -11,8 +11,8 @@ import io
 import json
 import os
 import shutil
+import threading
 import time
-from collections import Counter
 from collections.abc import Callable, Mapping
 from datetime import date
 from pathlib import Path, PurePosixPath
@@ -33,6 +33,10 @@ class BackupRefusedError(RuntimeError):
     """The chosen generation cannot establish a recoverable lake/catalog pair."""
 
 
+class BackupPausedError(BackupRefusedError):
+    """A calendar pause left no completed backup or restore."""
+
+
 class BackupFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
     root_id: str
@@ -46,6 +50,7 @@ class BackupFile(BaseModel):
     resolution: str | None = None
     data_type: str | None = None
     market: str | None = None
+    row_count: int | None = None
 
 
 class BackupManifest(BaseModel):
@@ -69,6 +74,23 @@ class CatalogSnapshot(BaseModel):
     row_count: int
     migration_ids: list[str]
     files: list[dict[str, Any]]
+
+
+def _require_work_window(should_pause: Callable[[], bool]) -> None:
+    if should_pause():
+        raise BackupPausedError("Lake maintenance paused before the canonical regular open.")
+
+
+async def bounded_file_work[T](work: Callable[[Callable[[], bool]], T], should_pause: Callable[[], bool]) -> T:
+    """Drain a bounded file worker before releasing ownership or temporary roots."""
+    stopped = threading.Event()
+    task = asyncio.create_task(asyncio.to_thread(work, lambda: stopped.is_set() or should_pause()))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        stopped.set()
+        await asyncio.gather(task, return_exceptions=True)
+        raise
 
 
 def _digest(payload: bytes) -> str:
@@ -96,7 +118,16 @@ def _safe_relative(text: str) -> Path:
 
 
 def validate_destination(destination: Path, *, mount: Path, checkout: Path, roots: Mapping[str, Path],
-                         expected_host_destination: str | None = None) -> None:
+                         expected_host_destination: str | None = None, host_checkout: Path | None = None,
+                         host_lake_root: Path | None = None) -> None:
+    if expected_host_destination is not None:
+        host_destination = Path(expected_host_destination).expanduser()
+        if not host_destination.is_absolute() or host_checkout is None or host_lake_root is None or not host_checkout.is_absolute():
+            raise BackupRefusedError("absolute host checkout, lake and backup paths are required to verify mount aliases")
+        host_lake = host_lake_root if host_lake_root.is_absolute() else host_checkout / host_lake_root
+        for forbidden in (host_checkout, host_lake):
+            if host_destination.resolve().is_relative_to(forbidden.resolve()):
+                raise BackupRefusedError("backup host destination must be outside the checkout and the lake, including mount aliases")
     resolved = destination.resolve(strict=True)
     expected = mount.resolve(strict=True)
     if resolved != expected or destination.is_symlink() or not destination.is_dir():
@@ -126,7 +157,7 @@ async def dump_catalog(path: Path) -> CatalogSnapshot:
         schema = await catalog_schema_hash(connection)
         migrations = await connection.fetch('SELECT "MigrationId" FROM "__EFMigrationsHistory" ORDER BY "MigrationId"')
         rows = await connection.fetch('''SELECT "Id", "DataRootId", "PriceAdjustmentMode", "FilePath",
-            "FileSha256", "FileSizeBytes", "ArtifactKind", "Symbol", "TradingDate", "Resolution", "DataType", "Market" FROM "DataLakeArtifacts"
+            "FileSha256", "FileSizeBytes", "ArtifactKind", "Symbol", "TradingDate", "Resolution", "DataType", "Market", "RowCount" FROM "DataLakeArtifacts"
             WHERE "Status"='complete' ORDER BY "Id"''')
         count = await connection.fetchval('SELECT COUNT(*) FROM "DataLakeArtifacts"')
         with path.open("xb") as output:
@@ -153,9 +184,11 @@ def _put_object(destination: Path, payload: bytes, expected: str | None = None) 
     return digest
 
 
-def _copy_snapshot_files(destination: Path, roots: Mapping[str, Path], snapshot: CatalogSnapshot) -> tuple[list[BackupFile], dict[str, str]]:
+def _copy_snapshot_files(destination: Path, roots: Mapping[str, Path], snapshot: CatalogSnapshot,
+                         should_pause: Callable[[], bool] = lambda: False) -> tuple[list[BackupFile], dict[str, str]]:
     indexed: dict[tuple[str, str], BackupFile] = {}
     for row in snapshot.files:
+        _require_work_window(should_pause)
         root_id = row["DataRootId"]
         if root_id not in roots:
             raise BackupRefusedError("catalog snapshot references an unconfigured physical root")
@@ -178,7 +211,7 @@ def _copy_snapshot_files(destination: Path, roots: Mapping[str, Path], snapshot:
             indexed[key] = BackupFile(root_id=root_id, relative_path=relative.as_posix(), sha256=digest,
                 size_bytes=len(payload), artifact_kind=row["ArtifactKind"], artifact_ids=[row["Id"]],
                 symbol=row["Symbol"], session_ms=row["TradingDate"], resolution=row["Resolution"],
-                data_type=row["DataType"], market=row["Market"])
+                data_type=row["DataType"], market=row["Market"], row_count=row.get("RowCount"))
     markers: dict[str, str] = {}
     for root_id, root in roots.items():
         marker = read_marker(root)
@@ -195,6 +228,7 @@ def _copy_snapshot_files(destination: Path, roots: Mapping[str, Path], snapshot:
         # Coverage receipts beside bars/factors are part of the lake too.
         # Never copy scratch/staging or a symlink to data outside this root.
         for path in sorted((root / "lake").rglob("*")):
+            _require_work_window(should_pause)
             if not path.is_file():
                 continue
             if path.is_symlink() or not path.resolve().is_relative_to(root.resolve()):
@@ -233,7 +267,7 @@ async def create_generation(*, destination: Path, roots: Mapping[str, Path], clo
                 for root in roots.values():
                     locks.enter_context(lake_activity(root / "lake" / "raw"))
                 inventory = await snapshot(dump)
-                files, markers = await asyncio.to_thread(_copy_snapshot_files, destination, roots, inventory)
+                files, markers = await bounded_file_work(lambda paused, current=inventory: _copy_snapshot_files(destination, roots, current, paused), should_pause)
             if should_pause():
                 raise BackupRefusedError("backup stopped before the canonical regular open")
             require_same_destination()
@@ -245,18 +279,24 @@ async def create_generation(*, destination: Path, roots: Mapping[str, Path], clo
             _write_durable(staging / "manifest.json", raw)
             require_same_destination()
             _write_durable(staging / "COMPLETE", _digest(raw).encode())
-            verify_generation(staging)
+            await bounded_file_work(lambda paused, current=staging: verify_generation(current, should_pause=paused), should_pause)
+            _require_work_window(should_pause)
+            require_same_destination()
             final = staging.with_name(generation_id)
             os.replace(staging, final)
             _fsync_path(final.parent)
             return manifest
+        except BackupPausedError:
+            shutil.rmtree(staging)
+            raise
         except (OSError, ValueError, BackupRefusedError) as exc:
             last_error = exc
             shutil.rmtree(staging, ignore_errors=False)
     raise BackupRefusedError(f"backup failed after {attempts} bounded attempts: {last_error}") from last_error
 
 
-def verify_generation(generation: Path, *, expected_schema_hash: str | None = None) -> BackupManifest:
+def verify_generation(generation: Path, *, expected_schema_hash: str | None = None,
+                      should_pause: Callable[[], bool] = lambda: False) -> BackupManifest:
     try:
         raw = (generation / "manifest.json").read_bytes()
         if (generation / "COMPLETE").read_text() != _digest(raw):
@@ -271,6 +311,7 @@ def verify_generation(generation: Path, *, expected_schema_hash: str | None = No
         objects = generation.parent.parent / "objects"
         seen: set[tuple[str, str]] = set()
         for item in manifest.files:
+            _require_work_window(should_pause)
             _safe_relative(item.relative_path)
             if item.root_id not in manifest.root_ids or (item.root_id, item.relative_path) in seen:
                 raise BackupRefusedError("generation contains duplicate or foreign-root files")
@@ -342,11 +383,11 @@ def prune_generations(destination: Path, *, daily_keep: int = 7, weekly_keep: in
 
 
 async def restore_generation(*, generation: Path, roots: Mapping[str, Path], connection: Any,
-                             schema: str = "public") -> BackupManifest:
+                             schema: str = "public", should_pause: Callable[[], bool] = lambda: False) -> BackupManifest:
     if not schema.replace("_", "").isalnum() or not schema.isascii():
         raise BackupRefusedError("unsafe restore catalog schema")
     expected = await catalog_schema_hash(connection, schema=schema)
-    manifest = await asyncio.to_thread(verify_generation, generation, expected_schema_hash=expected)
+    manifest = await asyncio.to_thread(verify_generation, generation, expected_schema_hash=expected, should_pause=should_pause)
     migrations = await connection.fetch('SELECT "MigrationId" FROM public."__EFMigrationsHistory" ORDER BY "MigrationId"')
     if [row["MigrationId"] for row in migrations] != manifest.migration_ids:
         raise BackupRefusedError("restore migration history differs from the generation")
@@ -361,9 +402,16 @@ async def restore_generation(*, generation: Path, roots: Mapping[str, Path], con
     objects = generation.parent.parent / "objects"
     # All verification happens before the first target mutation. A failure
     # thereafter leaves an explicitly incomplete target, never a live service.
-    for item in manifest.files:
-        target = roots[item.root_id] / _safe_relative(item.relative_path)
-        _write_durable(target, (objects / item.sha256).read_bytes())
+    def restore_files(paused: Callable[[], bool]) -> None:
+        _require_work_window(paused)
+        for target in roots.values():
+            _write_durable(target / ".restore-incomplete.json", _json({"generation_id": manifest.generation_id}))
+        for item in manifest.files:
+            _require_work_window(paused)
+            target = roots[item.root_id] / _safe_relative(item.relative_path)
+            _write_durable(target, (objects / item.sha256).read_bytes())
+    await bounded_file_work(restore_files, should_pause)
+    _require_work_window(should_pause)
     async with connection.transaction():
         await connection.copy_to_table("DataLakeArtifacts", schema_name=schema,
             source=io.BytesIO((generation / "catalog.copy").read_bytes()), format="binary")
@@ -376,83 +424,17 @@ async def restore_generation(*, generation: Path, roots: Mapping[str, Path], con
         if sequence is not None:
             maximum = await connection.fetchval(f'SELECT MAX("Id") FROM "{schema}"."DataLakeArtifacts"')
             await connection.fetchval("SELECT setval($1::regclass, $2, $3)", sequence, maximum or 1, maximum is not None)
+        _require_work_window(should_pause)
+    for target in roots.values():
+        (target / ".restore-incomplete.json").unlink()
     return manifest
 
 
-def decode_restored_artifacts(manifest: BackupManifest, roots: Mapping[str, Path]) -> dict[str, int]:
-    """Admit and decode every catalogued file against the restored receipt inventory."""
-    import csv
-    import zipfile
-
-    from app.data_lake.factor_files import parse_factor_file
-    from app.data_lake.lean_writer import parse_minute_trade_row
-    from app.data_lake.option_bars import parse_option_day_zip
-    from app.data_lake.option_listing import parse_option_listing_zip
-    from app.option_archive.snapshot import ChainObservation
-    from app.utils.session_anchors import et_date_at_ms
-
-    files = {str((roots[item.root_id] / _safe_relative(item.relative_path)).absolute()): item
-             for item in manifest.files}
-
-    def admission(path: Path) -> bytes:
-        item = files.get(str(path.absolute()))
-        if item is None or not item.artifact_ids:
-            raise BackupRefusedError("restored file has no committed catalog receipt")
-        payload = path.read_bytes()
-        if _digest(payload) != item.sha256 or len(payload) != item.size_bytes:
-            raise BackupRefusedError("restored bytes differ from their committed receipt")
-        return payload
-
-    counts: Counter[str] = Counter()
-    for item in manifest.files:
-        if item.artifact_kind is None:
-            continue
-        path = roots[item.root_id] / _safe_relative(item.relative_path)
-        payload = admission(path)
-        if "/observations/" in item.relative_path:
-            ChainObservation.model_validate_json(payload)
-        elif "/session/v1/" in item.relative_path:
-            from app.data_lake.option_session import read_option_session
-            if item.symbol is None or item.session_ms is None:
-                raise BackupRefusedError("session container receipt lacks its expected identity")
-            decoded = read_option_session(item.symbol, et_date_at_ms(item.session_ms),
-                lake_root=roots[item.root_id] / "lake" / "raw", admission=admission)
-            if decoded is None:
-                raise BackupRefusedError("restored session container is missing")
-        elif "/listing/" in item.relative_path:
-            day_text = path.stem[:8]
-            day = date(int(day_text[:4]), int(day_text[4:6]), int(day_text[6:8]))
-            parse_option_listing_zip(payload, item.symbol or "", day)
-        elif item.artifact_kind == "factor_file":
-            parse_factor_file(payload.decode())
-        elif item.artifact_kind == "map_file":
-            rows = list(csv.reader(io.StringIO(payload.decode())))
-            if not rows or any(len(row) < 2 for row in rows):
-                raise BackupRefusedError("restored map file is malformed")
-        elif item.market == "usa_options" and item.artifact_kind == "time_series_bars":
-            if item.session_ms is None or item.symbol is None:
-                raise BackupRefusedError("option artifact receipt lacks its expected identity")
-            parse_option_day_zip(payload, item.symbol, et_date_at_ms(item.session_ms))
-        elif path.suffix == ".zip":
-            with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-                if not archive.namelist():
-                    raise BackupRefusedError("restored artifact is an empty zip")
-                for name in archive.namelist():
-                    decoded = archive.read(name)
-                    if item.artifact_kind == "time_series_bars" and item.resolution == "minute" and item.data_type == "trade":
-                        for line in decoded.decode().splitlines():
-                            if line:
-                                parse_minute_trade_row(line)
-                    elif name.endswith(".json"):
-                        json.loads(decoded)
-                    else:
-                        decoded.decode("utf-8")
-        elif item.artifact_kind == "metadata" and path.suffix == ".json":
-            json.loads(payload)
-        else:
-            payload.decode("utf-8")
-        counts[item.artifact_kind] += 1
-    return dict(counts)
+def decode_restored_artifacts(manifest: BackupManifest, roots: Mapping[str, Path], *,
+                              should_pause: Callable[[], bool] = lambda: False) -> dict[str, int]:
+    """Verify restored admission and run the canonical artifact readers."""
+    from app.option_archive.restored_reads import decode_restored_lake
+    return decode_restored_lake(manifest, roots, should_pause=should_pause)
 
 
 class RestoreReceipt(BaseModel):

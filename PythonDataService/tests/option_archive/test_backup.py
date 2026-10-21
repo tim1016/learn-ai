@@ -127,3 +127,48 @@ def test_destination_must_be_an_identified_external_mount(source: tuple, tmp_pat
 def test_checked_restore_receipt_binds_generation_and_manifest() -> None:
     receipt = RestoreReceipt(generation_id="g", manifest_sha256="a" * 64, checked_at_ms=1000, passed=True, decoded_counts={"metadata": 1})
     assert checked_restore_receipt({"jobs": {"restore": {"receipt": receipt.model_dump()}}}) == receipt
+
+
+async def test_verification_runs_off_the_option_loop_and_rechecks_pause_before_publish(source: tuple, monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+    import threading
+
+    import app.option_archive.backup as backup
+    entered, release = threading.Event(), threading.Event()
+    original = backup.verify_generation
+    def held_verification(*args, **kwargs):
+        entered.set()
+        assert release.wait(2)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(backup, "verify_generation", held_verification)
+    task = asyncio.create_task(generation(source))
+    assert await asyncio.to_thread(entered.wait, 2)
+    assert not task.done(), "the option loop must remain responsive while generation hashes are checked"
+    release.set()
+    await task
+
+
+async def test_copy_pauses_between_files_without_a_complete_generation(source: tuple) -> None:
+    from app.option_archive.backup import BackupPausedError
+    async def snapshot(path: Path) -> CatalogSnapshot:
+        path.write_bytes(b"dump")
+        return source[3]
+    calls = 0
+    def pause() -> bool:
+        nonlocal calls
+        calls += 1
+        return calls >= 3
+    with pytest.raises(BackupPausedError):
+        await create_generation(destination=source[0], roots=source[1], clock=lambda: 1000,
+                                should_pause=pause, snapshot=snapshot)
+    assert not list((source[0] / "generations").glob("*/COMPLETE"))
+
+
+def test_host_mount_alias_cannot_hide_a_backup_inside_the_checkout(source: tuple, tmp_path: Path) -> None:
+    destination, roots, _, _ = source
+    host_checkout = tmp_path / "host-checkout"
+    aliased_inside = host_checkout / "backup"
+    (destination / ".backup-destination.json").write_text(json.dumps({"host_destination": str(aliased_inside)}))
+    with pytest.raises(BackupRefusedError, match="host destination"):
+        validate_destination(destination, mount=destination, checkout=tmp_path / "container-checkout", roots=roots,
+            expected_host_destination=str(aliased_inside), host_checkout=host_checkout, host_lake_root=host_checkout / "lake")

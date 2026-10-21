@@ -9,7 +9,6 @@ from zoneinfo import ZoneInfo
 from app.data_lake.option_lake import OPTION_HISTORY_YEARS, option_capture_opens_ms, option_history_floor
 from app.lean_sidecar.trading_calendar import (
     expected_sessions,
-    next_trading_day,
     session_open_ms_utc,
     session_window_for_date,
 )
@@ -17,9 +16,10 @@ from app.utils.session_anchors import et_date_at_ms
 
 UNDERLYINGS = ("SPY", "QQQ", "IWM")
 _ET = ZoneInfo("America/New_York")
-# The anniversary day itself is unverified: the 2026-10-12 probe straddled
-# a Saturday. Until a weekday probe answers, request sessions strictly after it.
-ARCHIVE_ANNIVERSARY_EXCLUSIVE = True
+# The read-only account probe observed at 1792557343508 served 270 bars
+# for anniversary session 1729517400000, and refused the earlier sessions.
+# The account includes the two-year anniversary itself (#3418).
+ARCHIVE_ANNIVERSARY_INCLUSIVE = True
 
 
 def archive_history_boundary(today: date) -> date:
@@ -27,7 +27,7 @@ def archive_history_boundary(today: date) -> date:
         anniversary = today.replace(year=today.year - OPTION_HISTORY_YEARS)
     except ValueError:
         anniversary = today.replace(year=today.year - OPTION_HISTORY_YEARS, day=28)
-    return min(next_trading_day(anniversary), option_history_floor(today))
+    return min(expected_sessions(anniversary, anniversary + timedelta(days=14))[0], option_history_floor(today))
 
 
 def archive_baseline_ms(today: date) -> int:

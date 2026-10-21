@@ -14,7 +14,8 @@ Moving a backup to an SSD remains a separate owner action.
    Use the same absolute path in this marker and the setting in step 2.
 2. Set `OPTION_ARCHIVE_BACKUP_HOST_DESTINATION` to that absolute host path and
    `OPTION_ARCHIVE_ENABLED=true` in the data service's environment. Compose
-   mounts it at `/lake-backup`. Both `OPTION_ARCHIVE_BACKUP_DESTINATION` and
+   mounts it at `/lake-backup`. Compose also declares the absolute host
+   checkout and lake paths for containment checks across bind-mount aliases. Both `OPTION_ARCHIVE_BACKUP_DESTINATION` and
    `OPTION_ARCHIVE_BACKUP_MOUNT` must name that same container path.
 3. The named defaults are capture at 01:00 ET, backup at 05:00 ET, and an evening
    observation 30 minutes after the calendar close. Half days follow the calendar.
@@ -38,8 +39,14 @@ Moving a backup to an SSD remains a separate owner action.
    `lake/raw/usa_options/<underlying>/observations/` to investigate rollover.
    Open interest is never asserted to be that session's settled figure.
 
-The archive cutoff uses sessions strictly after the two-year New York-date
-anniversary pending a weekday anniversary probe. Run
+The archive cutoff includes the two-year New York-date anniversary when it
+is a trading session. A read-only probe observed at 1792557343508 served
+270 bars for SPY241025C00580000 on session 1729517400000 (2024-10-21) and
+refused earlier sessions. The observation was at 00:35:43.508 ET, close to
+the default 01:00 ET capture window; it does not establish the vendor's
+rollover clock at every wall-clock time. A vendor outside-data-plan response
+remains authoritative evidence of a lost fetch opportunity. Interactive
+composition keeps its existing margin and admitted history remains readable. Run
 `scripts/probe_option_archive_boundary.py` with a known historical OCC ticker
 and `--today-session-ms` to settle that day; it changes no lake or catalog bytes.
 
