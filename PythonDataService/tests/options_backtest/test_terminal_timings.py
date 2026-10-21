@@ -6,6 +6,7 @@ import threading
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -139,6 +140,42 @@ def test_interrupted_shared_pool_retains_elapsed_queue_and_replay(
         assert phases == (["queue"] if stop_at == "queue" else ["queue", "replay"])
         wall_ms = ledger.seal()
         assert sum(row.duration_ms for row in ledger.rows if row.scope == "run") == wall_ms
+    finally:
+        pool.close()
+
+
+@pytest.mark.slow
+def test_queue_to_replay_uses_one_boundary_without_dropping_observations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.options_backtest import dispatch
+    from tests.options_backtest.setup_fixtures import leg, setup
+
+    given = setup(legs=[leg(expiry={"kind": "same_day"})])
+    frozen = freeze_run_inputs(given, (WED,), scene(), tmp_path)
+    # Delay between adjacent callback samples exposes double-counted time.
+    # Only the coordinator module's clocks are replaced; the actual pool runs normally.
+    ticks = iter([0.0, 0.25, 0.5, 1.0])
+    anchors = iter([1000, 1250, 1500, 2000])
+    monkeypatch.setattr(dispatch, "time", SimpleNamespace(perf_counter=lambda: next(ticks)))
+    monkeypatch.setattr(dispatch, "now_ms_utc", lambda: next(anchors))
+    ledger_ticks = iter([0.0, 1.0, 1.0, 1.0])
+    ledger_anchors = iter([1000, 2000, 2000, 2000])
+    ledger = RunTimings(clock=lambda: next(ledger_anchors), monotonic=lambda: next(ledger_ticks))
+    ledger.start()
+    store = ObservationStore()
+    context = WorkerDispatchContext("options_backtest", {}, {}, {}, "boundary", 1)
+    pool = SharedWorkerPool(workers=1, submission_bound=2, payload_bound_bytes=32 * 1024**2,
+        result_bound_bytes=32 * 1024**2)
+    try:
+        replay_frozen_run(given, (WED,), frozen, context=context, pool=pool, timings=ledger)
+        service.record_observations(store, 7, ledger, {})
+        assert len(store.observations) == 1, "callback overhead cannot make valid observations fail sealing"
+        queue, replay = (next(row for row in ledger.rows if row.phase == phase and row.scope == "run")
+                         for phase in ("queue", "replay"))
+        assert queue.finished_at_ms == replay.started_at_ms == 1250
+        assert queue.duration_ms == 250
+        assert sum(row.duration_ms for row in ledger.rows if row.scope == "run") == 1000
     finally:
         pool.close()
 

@@ -100,7 +100,7 @@ def replay_frozen_run(
             first = False
             replay_started, replay_tick = now_ms_utc(), time.perf_counter()
             ledger.rows.append(PhaseTiming(phase="queue", started_at_ms=queued,
-                finished_at_ms=now_ms_utc(), duration_ms=int((time.perf_counter() - queued_tick) * 1000)))
+                finished_at_ms=replay_started, duration_ms=int((replay_tick - queued_tick) * 1000)))
 
     try:
         batch = [ReadyChain(key=f"{context.job_id}:{chain.key}", begin=begin,
