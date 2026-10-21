@@ -24,8 +24,10 @@ def observations() -> list[BenchmarkObservation]:
             for duration in (50_000, 60_000, 90_000, 20_000, 70_000):
                 result.append(BenchmarkObservation(
                     case_digest=case.digest, frozen_input_digest="a" * 64, result_digest="b" * 64,
+                    archive_inventory_digest="d" * 64,
                     code_revision="revision", worker_width=1, cache_mode=mode,
                     runtime_instance=f"cold-{len(result)}" if mode == "cold" else "warm-1",
+                    cache_generation=f"cold-{len(result)}" if mode == "cold" else "warm-1",
                     run_id=len(result) + 1, accepted_at_ms=1_000_000, saved_at_ms=1_000_000 + duration,
                     phase_duration_ms={"check": 100, "fetch": 0, "freeze": 200, "queue": 300,
                                        "admit_decode": 400, "replay": 500, "save": 100},
@@ -74,7 +76,7 @@ def test_report_refuses_unusable_evidence(mutation: str) -> None:
         "changed_results": {"result_digest": "c" * 64},
         "changed_inputs": {"frozen_input_digest": "c" * 64},
         "unqualified_width": {"worker_width": 4},
-        "fake_cold": {"runtime_instance": samples[1].runtime_instance},
+        "fake_cold": {"cache_generation": samples[1].cache_generation},
         "missing_phase": {"phase_duration_ms": {"replay": 5}},
         "wrong_profile": {"profile_cpus": 16},
     }

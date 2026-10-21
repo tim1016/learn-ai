@@ -279,9 +279,11 @@ async def start_options_backtest_job(req: OptionsBacktestJobRequest) -> OptionsB
     return OptionsBacktestJobAcceptedResponse(job_id=req.job_id, run_id=run_id, status="queued")
 
 
+from app.routers.options_backtest_benchmark import router as benchmark_router  # noqa: E402
 from app.routers.options_backtest_prepare import router as preparation_router  # noqa: E402
 
 jobs_router.include_router(preparation_router)
+jobs_router.include_router(benchmark_router)
 
 
 def _worker(

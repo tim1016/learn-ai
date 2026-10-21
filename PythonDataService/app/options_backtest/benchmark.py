@@ -113,11 +113,13 @@ class BenchmarkObservation(BaseModel):
 
     case_digest: _Digest
     frozen_input_digest: _Digest
+    archive_inventory_digest: _Digest
     result_digest: _Digest
     code_revision: str = Field(min_length=1)
     worker_width: Annotated[int, Field(strict=True, ge=1, le=8)]
     cache_mode: Literal["cold", "warm"]
     runtime_instance: str = Field(min_length=1)
+    cache_generation: str = Field(min_length=1)
     run_id: Annotated[int, Field(strict=True, ge=1)]
     accepted_at_ms: _Ms
     saved_at_ms: _Ms
@@ -148,7 +150,7 @@ def summarize_measurements(
     if 1 not in widths or not widths <= {1, 2, 4, 8}:
         raise ValueError("the qualified widths must include the width-1 baseline")
     groups: dict[tuple[str, int, str], list[BenchmarkObservation]] = defaultdict(list)
-    identity: dict[str, tuple[str, str, str]] = {}
+    identity: dict[str, tuple[str, str, str, str]] = {}
     run_ids: set[int] = set()
     for observation in observations:
         if observation.case_digest not in cases or observation.worker_width not in widths:
@@ -161,7 +163,8 @@ def summarize_measurements(
         ):
             raise ValueError("measurement must use the 8-CPU / 16-GiB research profile")
         key = observation.case_digest
-        pinned = (observation.frozen_input_digest, observation.result_digest, observation.code_revision)
+        pinned = (observation.frozen_input_digest, observation.result_digest, observation.code_revision,
+                  observation.archive_inventory_digest)
         if key in identity and identity[key] != pinned:
             raise ValueError("case inputs, code or exact results changed across repetitions/widths")
         identity[key] = pinned
@@ -171,11 +174,13 @@ def summarize_measurements(
         raise ValueError("both cases need at least five cold and five warm repetitions at every qualified width")
     report: list[dict[str, object]] = []
     for (digest, width, mode), group in sorted(groups.items()):
-        instances = [sample.runtime_instance for sample in group]
+        instances = [sample.cache_generation for sample in group]
         if mode == "cold" and len(instances) != len(set(instances)):
             raise ValueError("cold repetitions must prove a fresh runtime/cache generation")
         if mode == "warm" and len(set(instances)) != 1:
             raise ValueError("warm repetitions must reuse one runtime/cache generation")
+        if mode == "warm" and len({sample.runtime_instance for sample in group}) != 1:
+            raise ValueError("the runtime restarted during warm measurements")
         required_phases = {"check", "fetch", "freeze", "queue", "admit_decode", "replay", "save"}
         if any(not required_phases <= sample.phase_duration_ms.keys() for sample in group):
             raise ValueError("a repetition is missing required phase measurements")
@@ -199,7 +204,7 @@ def summarize_measurements(
             "staging_bytes_peak": _peak(group, "staging_bytes_peak"),
             "database_connections_peak": _peak(group, "database_connections_peak"),
             "worst_operational_latency_ms": max(value for s in group for value in s.operational_latency_ms),
-            "target_met": median <= BENCHMARK_TARGET_MS,
+            "target_met": median <= BENCHMARK_TARGET_MS if measured else None,
             "instrumentation_complete": measured,
             "capacity_qualified": False,
         })
