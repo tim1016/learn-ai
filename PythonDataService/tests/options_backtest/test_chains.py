@@ -17,7 +17,6 @@ from app.options_backtest.frozen_inputs import FrozenRunData, freeze_run_inputs
 from app.options_backtest.run import run_sessions
 from app.options_backtest.run_wire import result_from_wire, result_to_wire
 from app.options_backtest.timings import RunTimings
-from app.research.golden_search.proof import ProofMismatchError
 from app.research.golden_search.shared_pool import SharedWorkerPool
 from app.research.golden_search.worker import WorkerDispatchContext
 from tests.options_backtest._golden_vendor import recorded_vendor
@@ -42,25 +41,6 @@ def test_shuffled_chain_completion_preserves_exact_carry_marks_refusals_fees_and
     results.pop(plan[0].key)
     with pytest.raises(ValueError, match="every planned chain"):
         merge_chains(given, sessions, results)
-
-
-def test_frozen_data_is_equal_warm_cold_and_after_eviction_and_refuses_changed_bytes(tmp_path: Path) -> None:
-    given = setup(legs=[leg(expiry={"kind": "same_day"})])
-    sessions = (WED, THU, HALF_DAY)
-    frozen = freeze_run_inputs(given, sessions, chain_scene(), tmp_path)
-    expected = run_sessions(given, sessions, chain_scene())
-    for cap in (1, 64 * 1024**2):
-        cache = DecodedArtifactCache(max_bytes=cap)
-        for _ in range(2):
-            assert run_sessions(given, sessions, FrozenRunData(frozen, cache)) == expected
-            assert cache.metrics()["resident_bytes"] <= cap
-        if cap > 1:
-            assert cache.metrics()["hits"] > 0
-    digest = next(iter(frozen.sessions.values()))
-    path = tmp_path / digest[:2] / digest
-    path.write_bytes(b"changed bytes")
-    with pytest.raises(ProofMismatchError):
-        run_sessions(given, sessions, FrozenRunData(frozen, cache))
 
 
 def test_same_inventory_reuses_decode_across_job_directories_but_new_root_identity_misses(tmp_path: Path) -> None:

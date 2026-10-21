@@ -1110,26 +1110,12 @@ async def record_timings(conn: asyncpg.Connection, run_id: int, timings: list[di
 
 
 async def _lock_runtime_generation(conn: asyncpg.Connection, run_id: int, generation: int) -> None:
-    from app.research.persistence.ownership import (
-        COORDINATOR_LOCK_CLASSID,
-        COORDINATOR_LOCK_OBJID,
-        GenerationFencedError,
-    )
+    from app.research.persistence.ownership import GenerationFencedError, lock_job_generation
 
-    # The successor must update this same singleton row to advance generation.
-    # Holding its share lock through the result transaction makes save and
-    # generation takeover mutually ordered, rather than a check/write race.
-    current = await conn.fetchval(
-        "SELECT runtime.boot_generation FROM research_runtime_owners runtime "
-        "JOIN research_job_owners owner ON owner.boot_generation=runtime.boot_generation "
-        "JOIN research_options_backtest_runs run ON run.job_id=owner.job_id "
-        "WHERE run.id=$1 AND owner.kind='options_backtest' AND owner.record_id=run.id::text "
-        "AND EXISTS (SELECT 1 FROM pg_locks WHERE locktype='advisory' AND classid=$2 AND objid=$3 AND granted "
-        "AND database=(SELECT oid FROM pg_database WHERE datname=current_database())) "
-        "FOR SHARE OF runtime, owner", run_id, COORDINATOR_LOCK_CLASSID, COORDINATOR_LOCK_OBJID,
-    )
-    if current != generation:
+    job_id = await conn.fetchval("SELECT job_id FROM research_options_backtest_runs WHERE id=$1", run_id)
+    if job_id is None:
         raise GenerationFencedError("a stale research generation cannot save this Options Backtest")
+    await lock_job_generation(conn, job_id, kind="options_backtest", record_id=str(run_id), generation=generation)
 
 
 async def completion_matches(conn: asyncpg.Connection, run_id: int, result: RunResult) -> bool:

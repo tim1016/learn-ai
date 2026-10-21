@@ -203,22 +203,46 @@ async def protected_job_ids(conn: asyncpg.Connection) -> set[str]:
     dead generation here read as protected.
     """
     rows = await conn.fetch(
-        """
-        SELECT owners.job_id
-          FROM research_job_owners owners
-          JOIN research_runtime_owners runtime ON runtime.singleton = $1
-         WHERE owners.boot_generation = runtime.boot_generation
-           AND EXISTS (
-                SELECT 1 FROM pg_locks
-                 WHERE locktype = 'advisory' AND classid = $2 AND objid = $3 AND granted
-                   AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
-           )
-        """,
+        _LIVE_JOB_OWNERS,
         SINGLETON_ROW_ID,
         COORDINATOR_LOCK_CLASSID,
         COORDINATOR_LOCK_OBJID,
     )
     return {row["job_id"] for row in rows}
+
+
+_LIVE_JOB_OWNERS = """
+    SELECT owners.job_id
+      FROM research_job_owners owners
+      JOIN research_runtime_owners runtime ON runtime.singleton = $1
+     WHERE owners.boot_generation = runtime.boot_generation
+       AND EXISTS (
+            SELECT 1 FROM pg_locks
+             WHERE locktype = 'advisory' AND classid = $2 AND objid = $3 AND granted
+               AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+       )
+"""
+
+
+async def lock_job_generation(
+    conn: asyncpg.Connection, job_id: str, *, kind: ResearchKind, record_id: str, generation: int,
+) -> None:
+    """Fence a record's write with the same live ownership that protects it from startup recovery.
+
+    Call inside the record's write transaction. Share locks on the owner and
+    singleton rows order the write against ownership changes and a successor's
+    generation advance; they remain held until that outer transaction ends.
+    """
+    if not conn.is_in_transaction():
+        raise ValueError("a generation fence requires the record's write transaction")
+    owned = await conn.fetchval(
+        _LIVE_JOB_OWNERS + " AND owners.job_id=$4 AND owners.kind=$5 AND owners.record_id=$6 "
+        "AND runtime.boot_generation=$7 FOR SHARE OF runtime, owners",
+        SINGLETON_ROW_ID, COORDINATOR_LOCK_CLASSID, COORDINATOR_LOCK_OBJID,
+        job_id, kind, record_id, generation,
+    )
+    if owned is None:
+        raise GenerationFencedError("a stale or mismatched research generation cannot write this record")
 
 
 async def abandoned_job_ids(conn: asyncpg.Connection, *, up_to_generation: int) -> list[str]:
