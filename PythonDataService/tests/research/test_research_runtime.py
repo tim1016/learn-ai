@@ -474,15 +474,10 @@ async def test_a_claiming_runtime_closes_the_jobs_of_dead_generations(conn, monk
 
 
 @pytest.mark.parametrize("cancel_unreachable", [False, True])
-async def test_a_boot_frees_the_staged_inputs_of_unfinished_options_runs_only(
+async def test_a_boot_asks_an_unfinished_runs_preparation_to_cancel_before_releasing_its_inputs(
     scratch_db, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel_unreachable: bool
 ) -> None:
-    """A dead generation's unfinished run left its inputs behind; a finished run's are not the boot's to touch (#3440).
-
-    The unfinished run is told by its durable row still reading ``running``, not by the job record in Redis: the
-    API's startup sweep, or the 24 h TTL, can close that record before this boot sees it. Asking its preparation
-    job to stop is a courtesy: a Redis error on that request neither aborts the boot nor skips the release.
-    """
+    """Asking a dead run's preparation to stop is a courtesy: a Redis error on it neither aborts the boot nor skips the release."""
     import json
     from urllib.parse import urlsplit, urlunsplit
 
@@ -507,25 +502,20 @@ async def test_a_boot_frees_the_staged_inputs_of_unfinished_options_runs_only(
     monkeypatch.setattr(progress_module, "get_redis", lambda: fake)
 
     result = a_busy_run()
-    redis_status = {"job-crashed": "running", "job-swept": "failed", "job-finished": "completed"}
-    for job_id, status in redis_status.items():
-        run_id = await saved_runs.create_run(scratch_db, saved_runs.NewRun(
-            job_id, 1791800000000, result.setup, None,
-            result.sessions[0].session_open_ms, result.sessions[-1].session_open_ms, len(result.sessions)))
-        await scratch_db.execute(
-            "INSERT INTO research_job_owners (job_id, kind, record_id, owner_instance_id, boot_generation, dispatched_at_ms) "
-            "VALUES ($1, 'options_backtest', $2, 'dead-runtime', 1, 0)", job_id, str(run_id))
-        if job_id == "job-finished":
-            await saved_runs.complete_run(scratch_db, run_id, result, finished_at_ms=1791828000000)
-        if job_id == "job-crashed":
-            await scratch_db.execute("UPDATE research_options_backtest_runs "
-                "SET preparation_job_id='prepare-crashed',preparation_identity=$2 WHERE id=$1", run_id, "a" * 64)
-            fake.job("prepare-crashed", "running")
-            fake.lease("prepare-crashed")
-        fake.job(job_id, status)
-        with InputStaging(tmp_path, job_id) as staging:
-            staging.reserve(6)
-            (staging.root / "blob").write_bytes(b"staged")
+    run_id = await saved_runs.create_run(scratch_db, saved_runs.NewRun(
+        "job-crashed", 1791800000000, result.setup, None,
+        result.sessions[0].session_open_ms, result.sessions[-1].session_open_ms, len(result.sessions)))
+    await scratch_db.execute(
+        "INSERT INTO research_job_owners (job_id, kind, record_id, owner_instance_id, boot_generation, dispatched_at_ms) "
+        "VALUES ('job-crashed', 'options_backtest', $1, 'dead-runtime', 1, 0)", str(run_id))
+    await scratch_db.execute("UPDATE research_options_backtest_runs "
+        "SET preparation_job_id='prepare-crashed',preparation_identity=$2 WHERE id=$1", run_id, "a" * 64)
+    fake.job("prepare-crashed", "running")
+    fake.lease("prepare-crashed")
+    fake.job("job-crashed", "running")
+    with InputStaging(tmp_path, "job-crashed") as staging:
+        staging.reserve(6)
+        (staging.root / "blob").write_bytes(b"staged")
 
     release = input_staging.release_job_inputs
 
@@ -536,19 +526,93 @@ async def test_a_boot_frees_the_staged_inputs_of_unfinished_options_runs_only(
         monkeypatch.setattr(facade, "_request_cancel", unreachable)
 
     def after_cancel(base: Path, job_id: str) -> None:
-        if job_id == "job-crashed" and not cancel_unreachable:
+        if not cancel_unreachable:
             assert fake.hget("job:prepare-crashed:state", "cancel_requested") == "1"
         release(base, job_id)
 
     monkeypatch.setattr(input_staging, "release_job_inputs", after_cancel)
-    authority = ownership.RuntimeAuthority("current", "research", 2, scratch_db)
-    await _close_abandoned_generations(authority)
+    await _close_abandoned_generations(ownership.RuntimeAuthority("current", "research", 2, scratch_db))
 
     assert fake.hget("job:job-crashed:state", "status") == "failed", "the crashed run's record closed"
     assert not job_root(tmp_path, "job-crashed").exists()
-    assert not job_root(tmp_path, "job-swept").exists(), "a record the API sweep closed first still frees its inputs"
-    assert (job_root(tmp_path, "job-finished") / "blob").read_bytes() == b"staged"
-    assert json.loads((tmp_path / ".reservations.json").read_text()) == {"job-finished": 6}
+    assert json.loads((tmp_path / ".reservations.json").read_text()) == {}
+
+
+@pytest.mark.parametrize(
+    ("row", "record", "generation", "staged", "released"),
+    [
+        pytest.param("running", "running", 1, True, True, id="crashed"),
+        pytest.param("running", "failed", 1, True, True, id="record_closed_first_by_the_api_sweep"),
+        pytest.param("complete", "completed", 1, True, True, id="row_finished_but_its_release_never_happened"),
+        pytest.param("deleted", None, 1, True, True, id="row_deleted_after_the_job_was_gone"),
+        pytest.param("complete", "completed", 1, False, False, id="finished_and_nothing_staged"),
+        pytest.param("running", "running", 2, True, False, id="current_generation"),
+    ],
+)
+async def test_a_boot_releases_what_a_dead_generation_left_staged_and_nothing_else(
+    scratch_db, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    row: str, record: str | None, generation: int, staged: bool, released: bool,
+) -> None:
+    """The boot frees an older generation's options job exactly when it still has inputs staged (#3455).
+
+    Neither the run row nor the Redis job record says whether a release happened: a run can commit its row and be
+    killed before its release, a release can fail, and a stored-running run is deleted once its job is gone. So
+    what is staged decides. A job with nothing staged costs the boot no lock and no ledger write.
+    """
+    import json
+    from urllib.parse import urlsplit, urlunsplit
+
+    import redis
+
+    import app.jobs.progress as progress_module
+    from app.jobs import facade
+    from app.options_backtest import input_staging, saved_runs
+    from app.options_backtest.input_staging import InputStaging, job_root
+    from app.research.persistence import ownership
+    from app.research.persistence.schema import ensure_schema
+    from app.research_runtime import _close_abandoned_generations
+    from tests.jobs.conftest import _FakeRedis
+    from tests.options_backtest._a_run import a_busy_run
+    from tests.research.conftest import _ephemeral_url
+
+    await ensure_schema(scratch_db)
+    database = await scratch_db.fetchval("SELECT current_database()")
+    monkeypatch.setattr(settings, "POSTGRES_URL", urlunsplit(urlsplit(_ephemeral_url())._replace(path=f"/{database}")))
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    monkeypatch.setattr(settings, "OPTIONS_BACKTEST_INPUT_ROOT", inputs)
+    fake = _FakeRedis()
+    monkeypatch.setattr(progress_module, "get_redis", lambda: fake)
+
+    job_id = "job-under-test"
+    result = a_busy_run()
+    run_id = await saved_runs.create_run(scratch_db, saved_runs.NewRun(
+        job_id, 1791800000000, result.setup, None,
+        result.sessions[0].session_open_ms, result.sessions[-1].session_open_ms, len(result.sessions)))
+    await scratch_db.execute(
+        "INSERT INTO research_job_owners (job_id, kind, record_id, owner_instance_id, boot_generation, dispatched_at_ms) "
+        "VALUES ($1, 'options_backtest', $2, 'dead-runtime', $3, 0)", job_id, str(run_id), generation)
+    if row == "complete":
+        await saved_runs.complete_run(scratch_db, run_id, result, finished_at_ms=1791828000000)
+    if row == "deleted":
+        assert await saved_runs.delete_run(scratch_db, run_id, is_live=lambda _job: False) is saved_runs.DeleteOutcome.DELETED
+    if record is not None:
+        fake.job(job_id, record)
+    if staged:
+        with InputStaging(inputs, job_id) as staging:
+            staging.reserve(6)
+            (staging.root / "blob").write_bytes(b"staged")
+
+    await _close_abandoned_generations(ownership.RuntimeAuthority("current", "research", 2, scratch_db))
+
+    if not staged:
+        assert list(inputs.iterdir()) == [], "nothing staged: no lock file, no ledger"
+    elif released:
+        assert not job_root(inputs, job_id).exists()
+        assert json.loads((inputs / ".reservations.json").read_text()) == {}
+    else:
+        assert (job_root(inputs, job_id) / "blob").read_bytes() == b"staged"
+        assert json.loads((inputs / ".reservations.json").read_text()) == {job_id: 6}
 
 
 # ── The connection envelope (#3047, PRD #3034 slice 12) ────────────────────

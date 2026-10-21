@@ -107,8 +107,9 @@ async def _close_abandoned_generations(authority: ownership.RuntimeAuthority) ->
     jobs and anything stamped under the new generation are not this
     process's to touch. Whether a lost runtime's results committed before
     it died is #3045's uncertain-write question; this closes records,
-    never accounting. The staged inputs of an options run the dead
-    generation never finished are released with its record.
+    never accounting. An older generation's options job that still has
+    inputs staged gets them released too, after the preparation of a run
+    it never finished is asked to cancel.
     """
     import asyncpg
     import redis
@@ -121,13 +122,12 @@ async def _close_abandoned_generations(authority: ownership.RuntimeAuthority) ->
     conn = await asyncpg.connect(dsn)
     try:
         job_ids = await ownership.abandoned_job_ids(conn, up_to_generation=authority.boot_generation)
-        # Only a run the dead generation never finished still holds staged inputs: a finished run released its
-        # own in its ``finally``. Its durable row, not the Redis job record, says so: the API's startup sweep
-        # or the 24 h TTL may have closed the record first (#3440).
-        options_jobs = await conn.fetch(
-            "SELECT owner.job_id, run.preparation_job_id FROM research_job_owners owner "
-            "JOIN research_options_backtest_runs run ON run.job_id = owner.job_id "
-            "WHERE owner.kind='options_backtest' AND owner.boot_generation < $1 AND run.status = 'running'",
+        # The run row (absent once deleted) only names a preparation to cancel; it never says whether the inputs
+        # were released, so the release below follows what is staged (#3455).
+        older_options_jobs = await conn.fetch(
+            "SELECT owner.job_id, run.status, run.preparation_job_id FROM research_job_owners owner "
+            "LEFT JOIN research_options_backtest_runs run ON run.job_id = owner.job_id "
+            "WHERE owner.kind='options_backtest' AND owner.boot_generation < $1",
             authority.boot_generation,
         )
     finally:
@@ -137,10 +137,10 @@ async def _close_abandoned_generations(authority: ownership.RuntimeAuthority) ->
     if job_ids:
         await asyncio.to_thread(close_orphaned_job_records, job_ids)
     from app.jobs import facade
-    from app.options_backtest.input_staging import release_job_inputs
+    from app.options_backtest.input_staging import release_job_inputs, staged_job_ids
 
-    for row in options_jobs:
-        if row["preparation_job_id"]:
+    for row in older_options_jobs:
+        if row["status"] == "running" and row["preparation_job_id"]:
             try:
                 await facade.request_cancel(row["preparation_job_id"])
             except facade.JobRecordNotFoundError:
@@ -150,7 +150,11 @@ async def _close_abandoned_generations(authority: ownership.RuntimeAuthority) ->
                 # courtesy: the child fences itself on the parent binding, and the release below waits out a live collector.
                 logger.warning("abandoned preparation cancel could not be requested", exc_info=True,
                                extra={"job_id": row["preparation_job_id"]})
-        await asyncio.to_thread(release_job_inputs, settings.OPTIONS_BACKTEST_INPUT_ROOT, row["job_id"])
+    # A run can commit its row and die before releasing, a release can fail, and a run row can be deleted once its
+    # job is gone, while a job that left nothing staged needs nothing: boot cost follows what is staged (#3455).
+    staged = await asyncio.to_thread(staged_job_ids, settings.OPTIONS_BACKTEST_INPUT_ROOT)
+    for job_id in sorted({row["job_id"] for row in older_options_jobs} & staged):
+        await asyncio.to_thread(release_job_inputs, settings.OPTIONS_BACKTEST_INPUT_ROOT, job_id)
 
 
 async def enforce_connection_envelope() -> dict[str, Any]:
