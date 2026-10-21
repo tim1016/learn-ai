@@ -152,13 +152,21 @@ async def _seed_catalog(conn: asyncpg.Connection, catalog: Any) -> None:
     await conn.execute('SELECT setval(pg_get_serial_sequence(\'"DataLakeArtifacts"\',\'Id\'),10000)')
 
 
-@pytest.mark.parametrize("fault", ["api_restart", "dispatch_ack", "save_ack", "generation_fence"])
+@pytest.mark.parametrize("fault", ["api_restart", "dispatch_ack", "save_ack", "create_ack", "activation_ack", "activation_rollback", "generation_fence"])
 async def test_real_http_boundary_keeps_one_fenced_exact_run_across_faults(
     scratch_db: asyncpg.Connection, isolated_redis: str, fake_catalog: Any, tmp_lake: Path,
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str,
 ) -> None:
     # These are the real golden vendor bytes, written by the normal lake writers.
     # Subsequent subprocesses have no provider mocks and cannot fetch missing bytes.
+    from app.data_lake.root_identity import init_empty_root
+
+    root_id = uuid.uuid4()
+    tmp_lake = tmp_path / "nonlegacy-source"
+    init_empty_root(tmp_lake, root_id)
+    (tmp_lake / "staging").mkdir()
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_lake))
+    monkeypatch.setattr(settings, "DATA_LAKE_ROOT_ID", str(root_id))
     monkeypatch.setattr(settings, "POSTGRES_URL", "")
     with recorded_vendor(golden.RECORDING, golden.RECORDED_FILES, golden.STOCK_PATH):
         await golden.capture_the_recording()
@@ -176,6 +184,12 @@ async def test_real_http_boundary_keeps_one_fenced_exact_run_across_faults(
         (faults / "lose-dispatch-ack").touch()
     if fault == "save_ack":
         (faults / "lose-save-ack").touch()
+    if fault == "create_ack":
+        (faults / "lose-create-ack").touch()
+    if fault in ("activation_ack", "activation_rollback"):
+        (faults / "activation-commit-fault").touch()
+        if fault == "activation_rollback":
+            (faults / "activation-rollback").touch()
     inputs = tmp_path / "frozen-inputs"
     environment = {**os.environ, "PYTHONPATH": str(_SOURCE), "POSTGRES_URL": dsn,
         "REDIS_URL": isolated_redis, "POLYGON_API_KEY": "test-key", "LEAN_DATA_WRITE_ROOT": str(tmp_lake),
@@ -186,7 +200,7 @@ async def test_real_http_boundary_keeps_one_fenced_exact_run_across_faults(
         "DATA_PLANE_CONTROL_SECRET": _AUTH[CONTROL_SECRET_HEADER], "TRUSTED_HOSTS": "127.0.0.1,localhost",
         "RESEARCH_WORKER_COUNT": "2", "OPTIONS_SEARCH_WORKER_COUNT": "1"}
     api = _Server("api", api_port, environment, tmp_path)
-    runtime = _Server("runtime", runtime_port, environment, tmp_path)
+    runtime = _Server("runtime", runtime_port, {**environment, "DATA_LAKE_ROOT_ID": ""}, tmp_path)
     job_id = f"socket_{uuid.uuid4().hex[:16]}"
     req = OptionsBacktestJobRequest(job_id=job_id, setup=given, start_ms=et_midnight_ms(golden.TRADING_DATE),
                                    end_ms=et_midnight_ms(golden.TRADING_DATE + timedelta(days=1)))
@@ -194,6 +208,35 @@ async def test_real_http_boundary_keeps_one_fenced_exact_run_across_faults(
         await asyncio.gather(api.ready(), runtime.ready())
         async with httpx.AsyncClient(timeout=20, trust_env=False, headers=_AUTH) as client:
             accepted = await client.post(f"{api.base}/api/jobs-internal/options-backtest", json=req.model_dump(mode="json"))
+            if fault in ("activation_ack", "activation_rollback"):
+                assert accepted.status_code >= 500
+                await _wait_file(faults / "checkpoint")
+                assert (faults / "activation-faulted").exists()
+                accepted = await client.post(f"{api.base}/api/jobs-internal/options-backtest", json=req.model_dump(mode="json"))
+                if fault == "activation_rollback":
+                    assert await scratch_db.fetchval("SELECT attempt FROM research_job_owners WHERE job_id=$1", job_id) == 0
+                    client_redis = redis.Redis.from_url(isolated_redis)
+                    client_redis.delete(f"job:{job_id}:lease")
+                    client_redis.hdel(f"job:{job_id}:state", "started_at")
+                    expired = await client.post(f"{api.base}/api/jobs-internal/options-backtest", json=req.model_dump(mode="json"))
+                    assert expired.status_code == 409
+            if fault == "create_ack":
+                assert accepted.status_code >= 500
+                assert (faults / "create-ack-lost").exists()
+                assert not redis.Redis.from_url(isolated_redis).exists(f"job:{job_id}:lease")
+                owner = await scratch_db.fetchrow("SELECT attempt FROM research_job_owners WHERE job_id=$1", job_id)
+                assert owner["attempt"] == 0
+                redis_client = redis.Redis.from_url(isolated_redis)
+                redis_client.set(f"job:{job_id}:lease", "occupied", ex=30)
+                blocked = await client.post(f"{api.base}/api/jobs-internal/options-backtest", json=req.model_dump(mode="json"))
+                assert blocked.status_code == 503
+                assert await scratch_db.fetchval("SELECT attempt FROM research_job_owners WHERE job_id=$1", job_id) == 0
+                redis_client.delete(f"job:{job_id}:lease")
+                replies = await asyncio.gather(*(client.post(f"{api.base}/api/jobs-internal/options-backtest",
+                    json=req.model_dump(mode="json")) for _ in range(2)))
+                assert [reply.status_code for reply in replies] == [202, 202]
+                assert replies[0].json()["run_id"] == replies[1].json()["run_id"]
+                accepted = replies[0]
             assert accepted.status_code == 202, f"{accepted.text}\n{runtime.log.read_text()}\n{api.log.read_text()}"
             run_id = accepted.json()["run_id"]
             await _wait_file(faults / "checkpoint")
@@ -201,7 +244,10 @@ async def test_real_http_boundary_keeps_one_fenced_exact_run_across_faults(
             assert await scratch_db.fetchval("SELECT count(*) FROM research_options_backtest_run_sessions WHERE run_id=$1", run_id) == 0
             first_checkpoint = json.loads((faults / "checkpoint").read_text())
             duplicate = await client.post(f"{api.base}/api/jobs-internal/options-backtest", json=req.model_dump(mode="json"))
-            assert duplicate.status_code == 202 and duplicate.json()["run_id"] == run_id
+            if fault == "activation_rollback":
+                assert duplicate.status_code == 409
+            else:
+                assert duplicate.status_code == 202 and duplicate.json()["run_id"] == run_id
             changed = req.model_dump(mode="json")
             changed["setup"]["starting_cash_usd"] = "99999"
             mismatch = await client.post(f"{api.base}/api/jobs-internal/options-backtest", json=changed)
@@ -253,6 +299,9 @@ async def test_real_http_boundary_keeps_one_fenced_exact_run_across_faults(
                 (tmp_path / "evidence.json").write_text(json.dumps({"fault": fault, "job_id": job_id, "run_id": run_id,
                     "expected_result_digest": expected_digest, "saved_result_digest": stored_digest,
                     "execution_metadata": metadata}, indent=2))
+            assert await scratch_db.fetchval("SELECT attempt FROM research_job_owners WHERE job_id=$1", job_id) == (0 if fault == "activation_rollback" else 1)
+            events = [json.loads(fields["event"]) for _, fields in state.xrange(f"job:{job_id}:events")]
+            assert sum(event["type"] == "job.started" for event in events) == 1
             assert len(first_checkpoint["sessions"]) == 1
             assert not (faults / "unexpected-provider-request").exists()
             await _wait_file(inputs / ".reservations.json")

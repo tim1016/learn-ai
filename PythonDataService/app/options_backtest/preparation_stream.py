@@ -17,7 +17,7 @@ from app.jobs.progress import JobCancelled, ProgressEmitter
 from app.options_backtest import service
 from app.options_backtest.frozen_inputs import FrozenRunInputs
 from app.options_backtest.input_staging import job_root
-from app.options_backtest.preparation import MAX_EXTERNAL_WAIT_MS, preparation_identity
+from app.options_backtest.preparation import MAX_EXTERNAL_WAIT_MS, runtime_preparation_identity
 from app.options_backtest.saved_runs import RunFailure
 from app.options_backtest.timings import PhaseTiming, RunTimings
 from app.schemas.options_backtest_runs import OptionsBacktestJobRequest
@@ -98,7 +98,7 @@ async def prepare_over_api(req: OptionsBacktestJobRequest, *, emit: ProgressEmit
     if not base:
         raise RuntimeError("OPTIONS_BACKTEST_DATA_SERVICE_URL is required; replay never acquires provider data")
     await asyncio.to_thread(enforce_private_http_target, base)
-    observation = _Observation(preparation_identity(req), emit, lease)
+    observation = _Observation(await asyncio.to_thread(runtime_preparation_identity, req), emit, lease)
     reconnect_deadline: float | None = None
     attempts = 0
     # Connect/write/pool stay bounded. The observer below owns read liveness,

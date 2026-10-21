@@ -7,8 +7,10 @@ import time
 from concurrent.futures import Future
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from app.config import active_root_id, settings
+from app.data_lake.root_identity import LakeRootIdentityError, read_marker, resolve_root_context
 from app.data_lake.work_progress import observe_work
 from app.jobs.progress import CancellationCheck
 from app.options_backtest import service
@@ -31,9 +33,25 @@ class PreparationConflict(ValueError):
     """The job id already binds another request or decoder generation."""
 
 
-def preparation_identity(req: OptionsBacktestJobRequest) -> str:
-    return hash_payload({"request": req.model_dump(mode="json"), "root": str(active_root_id()),
+def preparation_identity(req: OptionsBacktestJobRequest, *, source_root_id: UUID | None = None) -> str:
+    return hash_payload({"request": req.model_dump(mode="json"), "root": str(active_root_id() if source_root_id is None else source_root_id),
                          "execution": backtest_execution_identity()})
+
+
+def runtime_preparation_identity(req: OptionsBacktestJobRequest) -> str:
+    """Bind the runtime to the same physical root without importing provider secrets.
+
+    The API keeps its configured UUID and validates that root normally. The
+    isolated runtime reads the shared mount's canonical marker; an explicit
+    runtime UUID still has to agree. Unmarked managed roots remain refused.
+    """
+    base = Path(settings.LEAN_DATA_WRITE_ROOT)
+    marker = read_marker(base)
+    if marker is None:
+        raise LakeRootIdentityError("Options replay requires the shared lake's root identity marker")
+    expected = active_root_id() if settings.DATA_LAKE_ROOT_ID else marker.data_root_id
+    context = resolve_root_context(expected, base_root=base)
+    return preparation_identity(req, source_root_id=context.root_id)
 
 
 def read_preparation(root: Path, identity: str) -> dict[str, Any] | None:

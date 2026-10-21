@@ -19,6 +19,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO
 
+from app.engine.live.identity import confine_path_to_root
 from app.utils.atomic_file import atomic_write_bytes
 
 MAX_STAGED_BYTES = 8 * 1024**3
@@ -38,6 +39,21 @@ def job_root(base: Path, job_id: str) -> Path:
     if path.is_symlink():
         raise ValueError("a frozen input job directory cannot be a symlink")
     return path
+
+
+def _collector_lock(base: Path, job_id: str) -> BinaryIO:
+    # This inode outlives the removable job directory and every cleanup.
+    job_root(base, job_id)
+    locks = base.resolve() / ".collector-locks"
+    if locks.is_symlink():
+        raise ValueError("collector lock directory cannot be a symlink")
+    locks = confine_path_to_root(locks, base, label="collector lock directory")
+    locks.mkdir(parents=True, exist_ok=True)
+    path = locks / f"{job_id}.lock"
+    if path.is_symlink():
+        raise ValueError("collector lock cannot be a symlink")
+    path = confine_path_to_root(path, locks, label="collector lock")
+    return path.open("a+b")
 
 
 @contextmanager
@@ -65,14 +81,15 @@ class InputStaging:
         self._lock: BinaryIO | None = None
 
     def __enter__(self) -> InputStaging:
-        self.root.mkdir(parents=True, exist_ok=True)
-        self._lock = (self.root / ".collector.lock").open("a+b")
+        self._lock = _collector_lock(self.base, self.job_id)
         try:
             fcntl.flock(self._lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             self._lock.close()
             raise CollectorBusy("that job already has a frozen input collector") from None
         try:
+            self.root = job_root(self.base, self.job_id)
+            self.root.mkdir(parents=True, exist_ok=True)
             with _ledger(self.base) as entries:
                 entries.setdefault(self.job_id, 0)
         except BaseException:
@@ -122,29 +139,26 @@ class InputStaging:
 
 
 def cleanup_job_inputs(base: Path, job_id: str, *, wait_seconds: float = 75.0) -> None:
-    root = job_root(base, job_id)
-    if root.exists():
-        with (root / ".collector.lock").open("a+b") as handle:
-            deadline = time.monotonic() + wait_seconds
-            while True:
-                try:
-                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError:
-                    if time.monotonic() >= deadline:
-                        raise TimeoutError("input collector did not drain; its reservation remains held") from None
-                    time.sleep(0.1)
+    with _collector_lock(base, job_id) as handle:
+        deadline = time.monotonic() + wait_seconds
+        while True:
             try:
-                # Delete bytes before releasing capacity. A crash can leak
-                # a reservation, never allow the cap to be overspent.
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("input collector did not drain; its reservation remains held") from None
+                time.sleep(0.1)
+        try:
+            root = job_root(base, job_id)
+            if root.exists():
+                # Delete bytes before releasing capacity. The stable lock
+                # excludes new collectors through the reservation release.
                 shutil.rmtree(root)
-                with _ledger(base.resolve()) as entries:
-                    entries.pop(job_id, None)
-            finally:
-                fcntl.flock(handle, fcntl.LOCK_UN)
-    else:
-        with _ledger(base.resolve()) as entries:
-            entries.pop(job_id, None)
+            with _ledger(base.resolve()) as entries:
+                entries.pop(job_id, None)
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 def release_job_inputs(base: Path, job_id: str) -> None:

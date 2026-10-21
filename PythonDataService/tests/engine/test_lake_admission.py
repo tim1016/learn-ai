@@ -414,3 +414,28 @@ def test_catalog_outage_stops_range_probe_after_one_failure(lake, monkeypatch):
     from app.lean_sidecar.trading_calendar import session_open_ms_utc
     with pytest.raises(DayNotCapturedError):
         _day_candles_sync(symbol="SPY", session_open_ms_utc=session_open_ms_utc(DAY), lake_root=lake)
+
+
+@pytest.mark.parametrize("observing", [False, True])
+def test_admission_hashes_payload_once_for_verification_and_progress(lake, monkeypatch, observing):
+    from contextlib import nullcontext
+
+    from app.data_lake import admission
+    from app.data_lake.work_progress import observe_work
+
+    path = lake / "equity/usa/minute/spy/20240520_trade.zip"
+    payload = path.read_bytes()
+    sha256 = hashlib.sha256
+    payload_hashes = []
+    receipts = []
+
+    def count_payload(value=b"", *args, **kwargs):
+        if value == payload:
+            payload_hashes.append(value)
+        return sha256(value, *args, **kwargs)
+
+    monkeypatch.setattr(admission.hashlib, "sha256", count_payload)
+    with observe_work(receipts.append) if observing else nullcontext():
+        assert read_committed_bytes(path) == payload
+    assert len(payload_hashes) == 1
+    assert len(receipts) == int(observing)

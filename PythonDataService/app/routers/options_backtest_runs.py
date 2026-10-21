@@ -253,30 +253,28 @@ async def start_options_backtest_job(req: OptionsBacktestJobRequest) -> OptionsB
                 last_session_open_ms=session_window_for_date(sessions[-1]).open_ms_utc,
                 sessions_requested=len(sessions)):
                 raise HTTPException(409, "That job id is bound to another Options Backtest request.")
-            await asyncio.to_thread(research_records.require_live_redelivery, req.job_id, noun="Options Backtest")
-            return OptionsBacktestJobAcceptedResponse(job_id=req.job_id, run_id=run_id, status="queued")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"code": "OPTIONS_BACKTEST_JOB_ALREADY_HAS_A_RUN", "message": str(exc)},
-        ) from exc
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "OPTIONS_BACKTEST_JOB_ALREADY_HAS_A_RUN", "message": str(exc)},
+            ) from exc
     try:
-        work = _worker(run_id, req, sessions, store)
         if runtime:
             from app.options_backtest.runtime import runtime_worker
-            from app.routers import research_records
-            await research_records.stamp_research_dispatch(job_id=req.job_id, kind="options_backtest", record_id=str(run_id))
             work = runtime_worker(run_id, req, sessions, store, _job_result)
-        run_in_thread(
-            req.job_id,
-            work,
-            thread_name=f"options-backtest-{req.job_id[:8]}",
-            cancel_check_every_n=1,
-            emit_renews_lease=not runtime,
-        )
+            started = await store.start_runtime_worker(run_id, req.job_id, work)
+            if not started:
+                await asyncio.to_thread(research_records.require_live_redelivery, req.job_id, noun="Options Backtest")
+        else:
+            work = _worker(run_id, req, sessions, store)
+            run_in_thread(req.job_id, work, thread_name=f"options-backtest-{req.job_id[:8]}",
+                          cancel_check_every_n=1)
+    except saved_runs.RuntimeActivationBlocked as exc:
+        raise HTTPException(503, str(exc)) from exc
     except Exception:
-        # No worker holds the run, and nothing else would ever end it.
-        failure = RunFailure("JOB_NOT_STARTED", "The run could not be started. Nothing was fetched or run.")
-        await asyncio.to_thread(store.fail, run_id, failure, finished_at_ms=now_ms_utc())
+        if not runtime:
+            failure = RunFailure("JOB_NOT_STARTED", "The run could not be started. Nothing was fetched or run.")
+            await asyncio.to_thread(store.fail, run_id, failure, finished_at_ms=now_ms_utc())
         raise
     return OptionsBacktestJobAcceptedResponse(job_id=req.job_id, run_id=run_id, status="queued")
 

@@ -44,6 +44,48 @@ def _pause_after_durable_checkpoint() -> None:
 if _RUNTIME:
     from app.research_runtime import app
 
+    if (_FAULTS / "lose-create-ack").exists():
+        actual_create = saved_runs.DbRunStore.create
+        _create_ack_lost = False
+
+        async def lose_create_ack(self: Any, new: Any) -> int:
+            global _create_ack_lost
+            run_id = await actual_create(self, new)
+            if not _create_ack_lost:
+                _create_ack_lost = True
+                (_FAULTS / "create-ack-lost").touch()
+                raise CallerStoppedWaitingError("test lost creation acknowledgement after atomic commit")
+            return run_id
+
+        saved_runs.DbRunStore.create = lose_create_ack
+
+    if (_FAULTS / "activation-commit-fault").exists():
+        from asyncpg.transaction import Transaction
+
+        actual_exit = Transaction.__aexit__
+        _activation_faulted = False
+
+        async def fault_activation_exit(self: Any, exc_type: Any, exc: Any, tb: Any) -> Any:
+            global _activation_faulted
+            from app.research.persistence import ownership
+
+            authority = ownership.process_authority()
+            target = (not _activation_faulted and exc_type is None and authority is not None
+                      and self._connection is authority.connection
+                      and await self._connection.fetchval("SELECT count(*) FROM research_job_owners WHERE attempt=1") > 0)
+            if target:
+                _activation_faulted = True
+                (_FAULTS / "activation-faulted").touch()
+                if (_FAULTS / "activation-rollback").exists():
+                    error = OSError("test rollback after actual worker launch")
+                    await actual_exit(self, type(error), error, None)
+                    raise error
+                await actual_exit(self, exc_type, exc, tb)
+                raise OSError("test lost activation acknowledgement after actual commit")
+            return await actual_exit(self, exc_type, exc, tb)
+
+        Transaction.__aexit__ = fault_activation_exit
+
     if (_FAULTS / "lose-save-ack").exists():
         actual_save = saved_runs.run_on_background_loop
         _lost = False

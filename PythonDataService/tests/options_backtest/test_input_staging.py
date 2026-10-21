@@ -188,3 +188,44 @@ def test_terminal_publication_owns_collector_until_cleanup_and_takeover_are_safe
         assert not root.exists()
         assert json.loads((tmp_path / ".reservations.json").read_text()) == {"unrelated": 100}
         assert (unrelated.root / "kept").read_bytes() == b"other live inputs"
+
+
+def test_cleanup_keeps_one_lock_inode_through_delete_and_reservation_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.options_backtest import input_staging
+    from app.options_backtest.input_staging import CollectorBusy
+
+    with InputStaging(tmp_path, "reconnecting") as original:
+        original.reserve(80)
+        (original.root / "original").write_bytes(b"original inputs")
+    deleted, proceed = threading.Event(), threading.Event()
+    remove = input_staging.shutil.rmtree
+
+    def paused_remove(path) -> None:
+        remove(path)
+        deleted.set()
+        assert proceed.wait(5), "test must release cleanup after removing the job directory"
+
+    monkeypatch.setattr(input_staging.shutil, "rmtree", paused_remove)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        cleanup = executor.submit(cleanup_job_inputs, tmp_path, "reconnecting")
+        try:
+            assert deleted.wait(5)
+            # The root is absent, but its stable ownership lock still excludes
+            # both reconnecting collectors and a second cleanup's ledger pop.
+            with pytest.raises(CollectorBusy), InputStaging(tmp_path, "reconnecting"):
+                pytest.fail("a removed directory must not create a second ownership inode")
+            with pytest.raises(TimeoutError, match="did not drain"):
+                cleanup_job_inputs(tmp_path, "reconnecting", wait_seconds=0)
+            assert not job_root(tmp_path, "reconnecting").exists()
+            assert json.loads((tmp_path / ".reservations.json").read_text()) == {"reconnecting": 80}
+        finally:
+            proceed.set()
+            cleanup.result(timeout=5)
+    assert json.loads((tmp_path / ".reservations.json").read_text()) == {}
+    with InputStaging(tmp_path, "reconnecting") as successor:
+        successor.reserve(100)
+        (successor.root / "successor").write_bytes(b"new accounted inputs")
+    assert json.loads((tmp_path / ".reservations.json").read_text()) == {"reconnecting": 100}
+    assert (successor.root / "successor").read_bytes() == b"new accounted inputs"

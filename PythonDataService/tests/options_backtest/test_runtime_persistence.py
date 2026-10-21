@@ -6,6 +6,7 @@ from typing import Any
 
 import asyncpg
 import pytest
+import redis
 
 from app.options_backtest import saved_runs, service
 from app.options_backtest.saved_runs import DbRunStore, NewRun, RunFailure
@@ -14,6 +15,7 @@ from app.research.persistence.ownership import COORDINATOR_LOCK_CLASSID, COORDIN
 from app.research.persistence.schema import ensure_schema
 from app.utils.background_loop import CallerStoppedWaitingError
 from tests.options_backtest._a_run import a_busy_run
+from tests.options_backtest.test_runtime_http_boundary import isolated_redis as isolated_redis
 from tests.research.conftest import _ephemeral_url
 from tests.research.conftest import scratch_db as scratch_db
 
@@ -93,3 +95,78 @@ async def test_lost_ack_after_real_commit_joins_once_and_telemetry_failure_keeps
     service.record_observations(store, run_id, ledger, {})
     assert "execution observations" in caplog.text
     assert await saved_runs.completion_matches(scratch_db, run_id, result)
+
+
+async def test_runtime_create_and_owner_stamp_roll_back_together_and_retry_is_not_stranded(
+    scratch_db: asyncpg.Connection, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.research.persistence import ownership
+
+    await ensure_schema(scratch_db)
+    await scratch_db.execute("INSERT INTO research_runtime_owners VALUES('coordinator','current','research',2,1)")
+    await scratch_db.execute("SELECT pg_advisory_lock($1,$2)", COORDINATOR_LOCK_CLASSID, COORDINATOR_LOCK_OBJID)
+    authority = ownership.RuntimeAuthority("current", "research", 2, scratch_db)
+    monkeypatch.setattr(ownership, "process_authority", lambda: authority)
+    result = a_busy_run()
+    new = NewRun("atomic-create", 1791800000000, result.setup, None,
+                 result.sessions[0].session_open_ms, result.sessions[-1].session_open_ms, len(result.sessions))
+    stamp = ownership.record_dispatch
+
+    async def interrupted_stamp(*args, **kwargs) -> None:
+        await stamp(*args, **kwargs)
+        raise OSError("stamp transaction interrupted before commit")
+
+    monkeypatch.setattr(ownership, "record_dispatch", interrupted_stamp)
+    with pytest.raises(OSError, match="interrupted"):
+        await saved_runs._create_runtime_run(new, 2)
+    assert await saved_runs.run_for_job(scratch_db, new.job_id) is None
+    assert await scratch_db.fetchval("SELECT count(*) FROM research_job_owners WHERE job_id=$1", new.job_id) == 0
+    assert await scratch_db.fetchval("SELECT count(*) FROM research_options_search_exposures WHERE owner_id=$1", f"backtest:{new.job_id}") == 0
+    monkeypatch.setattr(ownership, "record_dispatch", stamp)
+    run_id = await saved_runs._create_runtime_run(new, 2)
+    assert await saved_runs.run_for_job(scratch_db, new.job_id) == run_id
+    owner = await scratch_db.fetchrow("SELECT * FROM research_job_owners WHERE job_id=$1", new.job_id)
+    assert owner["record_id"] == str(run_id)
+    assert owner["boot_generation"] == 2
+    assert owner["attempt"] == 0
+    assert await scratch_db.fetchval("SELECT status FROM research_options_backtest_runs WHERE id=$1", run_id) == "running"
+    with pytest.raises(GenerationFencedError):
+        await saved_runs._create_runtime_run(new, 1)
+    for previous_attempt in (None, 1):
+        await scratch_db.execute("UPDATE research_job_owners SET attempt=$2 WHERE job_id=$1", new.job_id, previous_attempt)
+        assert not await saved_runs._start_runtime_worker(run_id, new.job_id, 2, lambda *args: None)
+
+
+@pytest.mark.parametrize("replace_lease", [False, True])
+async def test_failed_activation_releases_only_its_own_initial_lease(
+    scratch_db: asyncpg.Connection, isolated_redis: str, monkeypatch: pytest.MonkeyPatch, replace_lease: bool,
+) -> None:
+    from app.jobs import progress, runner
+    from app.research.persistence import ownership
+
+    await ensure_schema(scratch_db)
+    await scratch_db.execute("INSERT INTO research_runtime_owners VALUES('coordinator','current','research',2,1)")
+    await scratch_db.execute("SELECT pg_advisory_lock($1,$2)", COORDINATOR_LOCK_CLASSID, COORDINATOR_LOCK_OBJID)
+    authority = ownership.RuntimeAuthority("current", "research", 2, scratch_db)
+    monkeypatch.setattr(ownership, "process_authority", lambda: authority)
+    client = redis.Redis.from_url(isolated_redis, decode_responses=True)
+    monkeypatch.setattr(progress, "get_redis", lambda: client)
+    result = a_busy_run()
+    new = NewRun("failed-activation", 1791800000000, result.setup, None,
+                 result.sessions[0].session_open_ms, result.sessions[-1].session_open_ms, len(result.sessions))
+    run_id = await saved_runs._create_runtime_run(new, 2)
+
+    def no_thread(*args: Any, **kwargs: Any) -> None:
+        if replace_lease:
+            client.set(progress._lease_key(new.job_id), "replacement", ex=30)
+        raise OSError("thread did not start")
+
+    monkeypatch.setattr(runner, "run_in_thread", no_thread)
+    try:
+        with pytest.raises(OSError, match="thread did not start"):
+            await saved_runs._start_runtime_worker(run_id, new.job_id, 2, lambda *args: None)
+        assert client.get(progress._lease_key(new.job_id)) == ("replacement" if replace_lease else None)
+        assert await scratch_db.fetchval("SELECT status FROM research_options_backtest_runs WHERE id=$1", run_id) == "failed"
+        assert not await saved_runs._start_runtime_worker(run_id, new.job_id, 2, lambda *args: None)
+    finally:
+        client.delete(progress._lease_key(new.job_id), progress._state_key(new.job_id))

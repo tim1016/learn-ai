@@ -70,6 +70,13 @@ async def send(writer: asyncio.StreamWriter, state: dict[str, Any]) -> None:
 
 @pytest.fixture
 def owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from app.config import LEGACY_ROOT_ID
+    from app.data_lake.root_identity import init_empty_root
+
+    source = tmp_path / "source"
+    init_empty_root(source, LEGACY_ROOT_ID)
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(source))
+    monkeypatch.setattr(settings, "DATA_LAKE_ROOT_ID", "")
     fake = _FakeRedis()
     monkeypatch.setattr(progress, "get_redis", lambda: fake)
     monkeypatch.setattr(settings, "OPTIONS_BACKTEST_INPUT_ROOT", tmp_path)
@@ -178,3 +185,45 @@ def test_bounded_io_deadline_is_fixed_and_neither_expired_nor_stale_owner_can_ex
     with pytest.raises(GenerationFencedError):
         lease.bounded_external_wait(3, deadline)
     assert len(fake.expires) == first
+
+
+async def test_runtime_without_api_env_file_uses_shared_nonlegacy_root_identity(
+    owner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from uuid import UUID
+
+    from app.data_lake.root_identity import init_empty_root
+
+    req, _, _, lease, state = owner
+    root_id = UUID("04fc9ead-1b02-4a3b-a0c1-18bb4cc33ea7")
+    source = tmp_path / "nonlegacy-source"
+    init_empty_root(source, root_id)
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(source))
+    monkeypatch.setattr(settings, "DATA_LAKE_ROOT_ID", str(root_id))
+    state["identity"] = preparation_identity(req)
+    frozen = freeze_run_inputs(req.setup, (WED, THU), scene(), tmp_path / req.job_id)
+    # API reads the UUID from its env_file; the runtime receives no provider
+    # env file and resolves the same identity from their shared lake mount.
+    monkeypatch.setattr(settings, "DATA_LAKE_ROOT_ID", "")
+
+    async def peer(writer):
+        await send(writer, {**state, "status": "complete", "inputs": frozen.model_dump(mode="json")})
+
+    async with socket_peer(peer, monkeypatch):
+        actual = await preparation_stream.prepare_over_api(req, emit=ProgressEmitter(req.job_id, renews_lease=False),
+                                                           lease=lease, timings=RunTimings())
+    assert actual.source_root_id == str(root_id)
+
+
+def test_runtime_root_marker_refuses_explicit_mismatch_or_absence(owner, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.data_lake.root_identity import LakeRootIdentityError, marker_path
+    from app.options_backtest.preparation import runtime_preparation_identity
+
+    req, *_ = owner
+    monkeypatch.setattr(settings, "DATA_LAKE_ROOT_ID", "04fc9ead-1b02-4a3b-a0c1-18bb4cc33ea7")
+    with pytest.raises(LakeRootIdentityError, match="mismatch"):
+        runtime_preparation_identity(req)
+    marker_path(Path(settings.LEAN_DATA_WRITE_ROOT)).unlink()
+    monkeypatch.setattr(settings, "DATA_LAKE_ROOT_ID", "")
+    with pytest.raises(LakeRootIdentityError, match="marker"):
+        runtime_preparation_identity(req)
