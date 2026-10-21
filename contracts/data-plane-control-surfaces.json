@@ -5,6 +5,7 @@
   "/api/broker",
   "/api/brokers",
   "/api/data-lake",
+  "/api/jobs-internal/options-backtest/benchmark-preflight",
   "/api/jobs-internal/options-backtest/prepare",
   "/api/jobs-internal/options-golden-search-history",
   "/api/jobs-internal/pool/drain",
@@ -22,6 +23,8 @@
   "/api/accounts",
   "/api/alpaca-clerk-sqlite",
   "/api/broker-clerks",
-  "/api/brokers"
+  "/api/brokers",
+  "/api/jobs-internal/options-backtest/benchmark-resources",
+  "/api/jobs-internal/options-backtest/benchmark-result"
  ]
 }
