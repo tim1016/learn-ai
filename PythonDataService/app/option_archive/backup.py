@@ -345,6 +345,10 @@ async def restore_generation(*, generation: Path, roots: Mapping[str, Path], con
             "Status"=CASE WHEN "Status"='fetching' THEN 'failed' ELSE "Status" END,
             "LastError"=CASE WHEN "Status"='fetching' THEN 'internal_error' ELSE "LastError" END,
             "ErrorMessage"=CASE WHEN "Status"='fetching' THEN 'Interrupted at backup; restore starts no jobs' ELSE "ErrorMessage" END''')
+        sequence = await connection.fetchval("SELECT pg_get_serial_sequence($1, 'Id')", f'"{schema}"."DataLakeArtifacts"')
+        if sequence is not None:
+            maximum = await connection.fetchval(f'SELECT MAX("Id") FROM "{schema}"."DataLakeArtifacts"')
+            await connection.fetchval("SELECT setval($1::regclass, $2, $3)", sequence, maximum or 1, maximum is not None)
     return manifest
 
 
