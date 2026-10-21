@@ -54,6 +54,7 @@ def execute_runtime_run(*, run_id: int, req: OptionsBacktestJobRequest, sessions
         return result
     except (JobCancelled, service.RunCancelled):
         store.cancel(run_id, finished_at_ms=now_ms_utc())
+        service.record_observations(store, run_id, timings, metadata)
         raise
     except ownership.GenerationFencedError:
         # A successor owns lifecycle recovery. A stale coordinator writes nothing.
@@ -66,6 +67,7 @@ def execute_runtime_run(*, run_id: int, req: OptionsBacktestJobRequest, sessions
     except Exception as exc:
         failure = exc.failure if isinstance(exc, service.RunFailedError) else service.failure_of(exc)
         store.fail(run_id, failure, finished_at_ms=now_ms_utc())
+        service.record_observations(store, run_id, timings, metadata)
         raise service.RunFailedError(failure) from exc
     finally:
         release_job_inputs(settings.OPTIONS_BACKTEST_INPUT_ROOT, req.job_id)

@@ -99,6 +99,7 @@ async def prepare_over_api(req: OptionsBacktestJobRequest, *, emit: ProgressEmit
         raise RuntimeError("OPTIONS_BACKTEST_DATA_SERVICE_URL is required; replay never acquires provider data")
     await asyncio.to_thread(enforce_private_http_target, base)
     observation = _Observation(await asyncio.to_thread(runtime_preparation_identity, req), emit, lease)
+    preparation_start = len(timings.rows)
     reconnect_deadline: float | None = None
     attempts = 0
     # Connect/write/pool stay bounded. The observer below owns read liveness,
@@ -117,13 +118,15 @@ async def prepare_over_api(req: OptionsBacktestJobRequest, *, emit: ProgressEmit
                         continue
                     state = observation.accept(pending.result())
                     if state is not None:
+                        # Each journal frame contains the cumulative closed spans.
+                        # Retain them on interruption without duplicating reconnects.
+                        timings.rows[preparation_start:] = [PhaseTiming.model_validate(row) for row in state["timings"]]
                         reconnect_deadline = None
                         attempts = 0
                         if state["status"] == "complete":
                             frozen = FrozenRunInputs.model_validate(state["inputs"])
                             if frozen.root != str(job_root(settings.OPTIONS_BACKTEST_INPUT_ROOT, req.job_id)):
                                 raise ValueError("prepared input root differs from the runtime's configured shared root")
-                            timings.rows.extend(PhaseTiming.model_validate(row) for row in state["timings"])
                             return frozen
                         if state["status"] == "cancelled":
                             raise JobCancelled("input preparation was cancelled")

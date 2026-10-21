@@ -34,12 +34,15 @@ class RunTimings:
         self.clock, self.monotonic = clock, monotonic
         self.rows: list[PhaseTiming] = []
         self._start: tuple[int, float] | None = None
+        self._sealed_duration_ms: int | None = None
 
     def start(self) -> None:
         self._start = (self.clock(), self.monotonic())
 
     def seal(self) -> int:
         """Account for coordination between phases; detailed chain spans overlap."""
+        if self._sealed_duration_ms is not None:
+            return self._sealed_duration_ms
         if self._start is None:
             raise ValueError("run timing must start before it is sealed")
         started, tick = self._start
@@ -50,6 +53,7 @@ class RunTimings:
             raise ValueError("top-level phase intervals overlap the run wall time")
         self.rows.append(PhaseTiming(phase="coordination", started_at_ms=started,
             finished_at_ms=finished, duration_ms=wall_ms - covered))
+        self._sealed_duration_ms = wall_ms
         return wall_ms
 
     @contextmanager

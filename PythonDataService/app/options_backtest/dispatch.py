@@ -109,18 +109,20 @@ def replay_frozen_run(
                 "starting_cash_usd": str(chain.starting_cash_usd)},
                 "frozen": frozen.model_dump(mode="json"), "identity": identity,
                 "cache_epoch": context.job_id if cold_cache else None}) for chain in plan]
-        for delivery in dispatch(batch):
-            chain_key = delivery.key.removeprefix(f"{context.job_id}:")
-            if chain_key in deliveries:
-                raise ValueError("duplicate chain delivery cannot complete a run twice")
-            deliveries[chain_key] = delivery.result
-            ledger.rows.extend(delivery.timings)
-            residency[delivery.worker_pid] = max(residency.get(delivery.worker_pid, 0), delivery.cache_peak_bytes)
-            metrics["cache_bytes_peak"] = max(metrics["cache_bytes_peak"], sum(residency.values()))
-            metrics["cache_hits"] += delivery.cache_hits
-            metrics["cache_misses"] += delivery.cache_misses
-        ledger.rows.append(PhaseTiming(phase="replay", started_at_ms=replay_started,
-            finished_at_ms=now_ms_utc(), duration_ms=int((time.perf_counter() - replay_tick) * 1000)))
+        try:
+            for delivery in dispatch(batch):
+                chain_key = delivery.key.removeprefix(f"{context.job_id}:")
+                if chain_key in deliveries:
+                    raise ValueError("duplicate chain delivery cannot complete a run twice")
+                deliveries[chain_key] = delivery.result
+                ledger.rows.extend(delivery.timings)
+                residency[delivery.worker_pid] = max(residency.get(delivery.worker_pid, 0), delivery.cache_peak_bytes)
+                metrics["cache_bytes_peak"] = max(metrics["cache_bytes_peak"], sum(residency.values()))
+                metrics["cache_hits"] += delivery.cache_hits
+                metrics["cache_misses"] += delivery.cache_misses
+        finally:
+            ledger.rows.append(PhaseTiming(phase="queue" if first else "replay", started_at_ms=replay_started,
+                finished_at_ms=now_ms_utc(), duration_ms=int((time.perf_counter() - replay_tick) * 1000)))
         with ledger.measure("aggregation"):
             return merge_chains(setup, sessions, deliveries)
     finally:
