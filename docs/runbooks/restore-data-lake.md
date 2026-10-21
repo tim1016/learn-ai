@@ -41,7 +41,7 @@ Moving a backup to an SSD remains a separate owner action.
    abandoned listing generations and session-publication temporary bytes. A full
    budget pauses the pass before another request and appears as `capacity_pause`
    with its recovery reason. Inspect available disk space and retained staging
-   before raising this setting and restarting the data service; repeat the capture
+   before raising this setting in Compose's environment and recreating the data service; repeat the capture
    trigger afterward. Keep verified progress intact. This pause does not spend a
    provider retry, stop independent backup, or authorize legacy-file retirement.
 6. Evening observations are reference data. Their JSON retains capture start/end,
