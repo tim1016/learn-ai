@@ -8,7 +8,7 @@ import pytest
 from fastapi import FastAPI
 
 from app.research.options_golden_search.repository import Conflict
-from app.routers.options_golden_search import get_service, router
+from app.routers.options_golden_search import get_evidence_service, get_service, router
 
 STUDY = "os_" + "a" * 40
 CANDIDATE = "b" * 64
@@ -32,6 +32,7 @@ def api() -> tuple[FastAPI, SimpleNamespace]:
     app = FastAPI()
     app.include_router(router,prefix="/options-search")
     app.dependency_overrides[get_service] = lambda: SimpleNamespace(read_session=read_session,command=command)
+    app.dependency_overrides[get_evidence_service] = lambda: SimpleNamespace(session=read_session)
     return app,state
 
 

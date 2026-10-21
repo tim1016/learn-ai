@@ -98,7 +98,7 @@ test('shows unverifiable results without allowing a technical exception', async 
   const world = await installOptionsSearchWorld(page, exceptionOptionsStudy(true));
   await page.goto(`/options-golden-search/${OPTIONS_SEARCH_ID}`);
   const workbench = page.locator('app-options-golden-search-page');
-  await expect(workbench.getByRole('cell', { name: 'Could Not Evaluate' })).toBeVisible();
+  await expect(workbench.locator('app-options-study-overview').getByRole('cell', { name: 'Could Not Evaluate' })).toBeVisible();
   await expect(workbench.getByRole('article').getByText('Could Not Evaluate', { exact: true })).toBeVisible();
   await workbench.getByLabel('Owner review comment').fill('This comment cannot override missing marks.');
   await expect(workbench.getByRole('button', { name: 'Approve owner exception' })).toBeDisabled();

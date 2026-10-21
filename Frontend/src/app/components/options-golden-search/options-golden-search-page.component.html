@@ -5,7 +5,7 @@
     <a [routerLink]="['/options-evidence/study', value.id]">Open this study's evidence workspace</a>
     <nav class="steps">@for (label of steps; track label; let i = $index) { <button type="button" [class.active]="step() === i + 3" (click)="chooseStep(i + 3)">{{ label }}</button> }</nav>
     <div class="actions"><button type="button" [disabled]="busy()" (click)="refresh()">Refresh study</button><a class="action-link" routerLink="/options-golden-search">New study and history</a></div>
-    <app-options-search-study [study]="value" [step]="step()" [busy]="busy()" [sessionLoader]="sessionLoader" (action)="command($event)" />
+    <app-options-search-study [study]="value" [step]="step()" [busy]="busy()" [sessionLoader]="sessionLoader" [candidateLoader]="candidateLoader" [candidatePageLoader]="candidatePageLoader" (action)="command($event)" />
   } @else {
     <div class="search-intro"><h1>Improve a saved setup</h1><p>Find a stronger version of your setup, with clear limits on what qualifies.</p></div>
     <div class="search-layout">

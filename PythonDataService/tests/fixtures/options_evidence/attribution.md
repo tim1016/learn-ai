@@ -15,6 +15,17 @@ immutable identity, historical evidence and current proof status are retained.
 for `os_d7b4752086147e437a3a0a56ecc980f33d3c6055`, including frozen protocol,
 development/forward projections and snapshot inventory. No final test was opened.
 
+`development-evidence.json` holds the baseline development evaluation row and
+its verified retained blob, read through `repository.get_evaluation` and
+`stages.default_blob_store().get`. Its payload is 239,437 bytes; the blob digest
+is retained in `record.result.evidence_blob`. The four observed sessions include
+599 required held marks and two absent valuations at 1730925480000 and
+1730925600000. A completed trade does not repair those missing intermediate
+marks. The remaining 369 scheduled sessions were never computed.
+`candidate-development.json`, `candidate-session.json` and `study-summary.json`
+are the bounded read projections derived offline from those same bytes for the
+browser journey; they are display fixtures, not a second numerical authority.
+
 These fixtures test identity and display projections. Canonical numerical
 calculations remain covered by their existing engine fixtures/tests. No vendor
 capture, replay, approval or configuration command was issued to capture them.

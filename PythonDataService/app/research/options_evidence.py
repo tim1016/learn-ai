@@ -103,7 +103,8 @@ def study_workspace(row: dict[str, Any]) -> OptionsEvidenceWorkspace:
     protocol = OptionsSearchProtocol.model_validate(row["protocol"])
     detail = StudyDetail.from_record(row)
     baseline = next((c for c in detail.candidates if c.is_original), None)
-    sessions = len(baseline.sessions) if baseline and baseline.sessions else None
+    retained_baseline = next((c for c in row.get("candidates", []) if c["is_original"]), None)
+    sessions = len(retained_baseline["sessions"]) if retained_baseline and retained_baseline.get("sessions") else None
     baseline_blocked = bool(baseline and baseline.verdict == "could_not_evaluate")
     research = row.get("research")
     selection = research.get("selection") if research else None

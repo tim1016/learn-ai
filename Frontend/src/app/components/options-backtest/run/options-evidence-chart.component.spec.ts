@@ -24,3 +24,13 @@ it('labels the true dollar extrema even when nearby values share a pixel', async
   const view = await render(OptionsEvidenceChartComponent, { inputs: { title: 'Equity', explanation: 'Recorded equity', points } });
   expect([...view.container.querySelectorAll('.scale span')].map((label) => label.textContent)).toEqual(['1000 USD', '0 USD']);
 });
+
+it('breaks the path at a missing valuation and preserves a measured zero', async () => {
+  const points = ['0', '10', null, '5', '0'].map((value, index) => ({ timestamp_ms: 1791294000000 + index * 60000, value }));
+  const view = await render(OptionsEvidenceChartComponent, { inputs: { title: 'Equity', explanation: 'Retained partial path', points } });
+  expect(view.container.querySelectorAll('polyline')).toHaveLength(2);
+  expect(screen.getByRole('status').textContent).toContain('0 USD');
+  fireEvent.input(screen.getByRole('slider'), { target: { value: '2' } });
+  expect(screen.getByRole('status').textContent).toContain('Missing contemporaneous valuation');
+  expect(view.container.querySelector('circle')).toBeNull();
+});

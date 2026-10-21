@@ -100,3 +100,24 @@ export function equityPlot(values: readonly string[]) {
     })),
   };
 }
+
+/** ADR 0068: nulls break display paths; only measured authored values set the pixel scale. */
+export function segmentedEquityPlot(values: readonly (string | null)[]) {
+  const measured = values.flatMap((value, index) => value === null ? [] : [{ value, index }]);
+  const scale = equityPlot(measured.map(point => point.value));
+  if (scale === null) return null;
+  const geometry = new Map(measured.map((point, index) => [point.index, {
+    x: point.index * 1000 / Math.max(1, values.length - 1), y: scale.coordinates[index].y,
+  }]));
+  const segments: string[] = [];
+  let segment: string[] = [];
+  values.forEach((value, index) => {
+    const pixel = geometry.get(index);
+    if (value === null || !pixel) {
+      if (segment.length) segments.push(segment.join(' '));
+      segment = [];
+    } else segment.push(`${pixel.x},${pixel.y}`);
+  });
+  if (segment.length) segments.push(segment.join(' '));
+  return { segments, geometry, high: scale.high, low: scale.low };
+}

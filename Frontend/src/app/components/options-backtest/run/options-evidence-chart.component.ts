@@ -1,11 +1,11 @@
 import { ChangeDetectionStrategy, Component, computed, input, linkedSignal } from '@angular/core';
 
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
-import { equityPlot } from './run-chart-scale';
+import { segmentedEquityPlot } from './run-chart-scale';
 
 export interface EvidencePoint {
   readonly timestamp_ms: number;
-  readonly value: string;
+  readonly value: string | null;
 }
 
 /** ADR 0068: project authored decimals to pixels; the inspected value stays exact. */
@@ -25,14 +25,14 @@ export class OptionsEvidenceChartComponent {
   protected readonly selected = linkedSignal(this.lastIndex);
   protected readonly plot = computed(() => {
     const points = this.points();
-    const scale = equityPlot(points.map((point) => point.value));
+    const scale = segmentedEquityPlot(points.map((point) => point.value));
     if (scale === null) return null;
-    return { line: scale.coordinates.map((point) => `${point.x},${point.y}`).join(' '), geometry: scale.coordinates, high: scale.high, low: scale.low, first: points[0].timestamp_ms, last: points.at(-1)?.timestamp_ms };
+    return { ...scale, first: points[0].timestamp_ms, last: points.at(-1)?.timestamp_ms };
   });
   protected readonly inspected = computed(() => {
     const point = this.points()[this.selected()];
-    const pixel = this.plot()?.geometry[this.selected()];
-    return point && pixel ? { ...point, ...pixel } : null;
+    const pixel = this.plot()?.geometry.get(this.selected());
+    return point ? { ...point, x: pixel?.x ?? 0, y: pixel?.y ?? 0 } : null;
   });
   protected inspect(event: Event): void {
     if (event.target instanceof HTMLInputElement) this.selected.set(event.target.valueAsNumber);

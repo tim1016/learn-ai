@@ -13,6 +13,7 @@ import pytest
 from app.lean_sidecar.trading_calendar import expected_sessions
 from app.options_backtest.setup import OptionsBacktestSetup
 from app.options_bots.golden_proof import setup_sha256
+from app.research.options_candidate_evidence import RetainedOptionsEvidence, project
 from app.research.options_golden_search.approval import verify_recorded_study
 from app.research.options_golden_search.evaluator import EvaluationResult, evaluate_setup
 from app.research.options_golden_search.planning import freeze_protocol
@@ -21,7 +22,7 @@ from app.research.options_golden_search.protocol import CostScenario, Knob, Opti
 from app.research.options_golden_search.search import Evaluation, run_search
 from app.research.options_golden_search.stages import final, research
 from app.research.runs.hashing import hash_payload
-from app.schemas.options_golden_search import StudyDetail
+from app.schemas.options_golden_search import Candidate, StudyDetail
 from app.utils.session_anchors import et_midnight_ms
 from tests.options_backtest._market import leg, setup
 from tests.options_backtest._run_data import (
@@ -130,6 +131,12 @@ def test_enabled_stress_gate_retains_each_technical_failure_once(experiment) -> 
     keys = [outcome["gate_id"] for outcome in outcomes]
     assert len(keys) == len(set(keys))
     assert result["final_results"][0]["verdict"] == "could_not_evaluate"
+    detail = project(RetainedOptionsEvidence(row["id"], protocol, protocol.setup, window, "final",
+        evaluator.results[base.evidence_id], base.evidence_id, "fixture-artifact",
+        Candidate.model_validate(result["final_results"][0])))
+    assert detail.candidate.verdict == "could_not_evaluate"
+    assert [gate.model_dump() for gate in detail.candidate.gate_outcomes] == outcomes
+    assert any(gate.gate_id.startswith("final:fees:") for gate in detail.candidate.gate_outcomes)
 
 
 def test_research_compare_and_final_use_real_whole_setup_evidence_with_valid_typed_views(
@@ -157,8 +164,10 @@ def test_research_compare_and_final_use_real_whole_setup_evidence_with_valid_typ
     winner = next(candidate for candidate in final_view.final_results if not candidate.is_original)
     assert winner.verdict == "meets_rules"
     assert winner.completed_sessions == len(protocol.final.session_ms)
-    assert sum(Decimal(month.net_profit_usd) for month in winner.monthly) == Decimal(winner.net_profit_usd)
-    assert 2 <= len(winner.equity) <= 1000
+    retained_winner = Candidate.model_validate(next(c for c in final_row["final_results"] if not c["is_original"]))
+    assert sum(Decimal(month.net_profit_usd) for month in retained_winner.monthly) == Decimal(winner.net_profit_usd)
+    assert 2 <= len(retained_winner.equity) <= 1000
+    assert not winner.monthly and not winner.equity and not winner.sessions
     assert any(len(result.sessions) == len(protocol.final.session_ms) and len(result.sessions[0].observations) == 391 for result in evaluator.results.values())
     assert all(not session.attempts for session in winner.sessions)
 
