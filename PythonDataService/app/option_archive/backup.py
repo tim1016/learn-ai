@@ -37,7 +37,7 @@ class BackupFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
     root_id: str
     relative_path: str
-    sha256: str
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     size_bytes: int = Field(ge=0)
     artifact_kind: str | None = None
     artifact_ids: list[int] = []
@@ -55,7 +55,7 @@ class BackupManifest(BaseModel):
     started_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     completed_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     schema_hash: str
-    catalog_sha256: str
+    catalog_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     catalog_rows: int
     root_ids: list[str]
     files: list[BackupFile]
@@ -180,6 +180,13 @@ def _copy_snapshot_files(destination: Path, roots: Mapping[str, Path], snapshot:
         marker = read_marker(root)
         if marker is None or str(marker.data_root_id) != root_id:
             raise BackupRefusedError("source lake root marker does not match the catalog")
+        state_path = root / "option-archive-state.json"
+        if state_path.exists():
+            state_bytes = state_path.read_bytes()
+            json.loads(state_bytes)
+            state_digest = _put_object(destination, state_bytes)
+            indexed[(root_id, state_path.name)] = BackupFile(root_id=root_id, relative_path=state_path.name,
+                sha256=state_digest, size_bytes=len(state_bytes))
         markers[root_id] = _put_object(destination, (root / "lake" / ".data-root.json").read_bytes())
         # Coverage receipts beside bars/factors are part of the lake too.
         # Never copy scratch/staging or a symlink to data outside this root.
@@ -260,8 +267,9 @@ def verify_generation(generation: Path, *, expected_schema_hash: str | None = No
             if len(payload) != item.size_bytes or _digest(payload) != item.sha256:
                 raise BackupRefusedError("backup file checksum or size is invalid")
         for root_id, digest in manifest.root_markers.items():
-            marker = json.loads((objects / digest).read_bytes())
-            if marker.get("schema_version") != 1 or marker.get("data_root_id") != root_id:
+            raw_marker = (objects / digest).read_bytes()
+            marker = json.loads(raw_marker)
+            if _digest(raw_marker) != digest or marker.get("schema_version") != 1 or marker.get("data_root_id") != root_id:
                 raise BackupRefusedError("backup root marker has the wrong identity")
         if set(manifest.root_markers) != set(manifest.root_ids):
             raise BackupRefusedError("backup is missing a root marker")
@@ -323,6 +331,9 @@ async def restore_generation(*, generation: Path, roots: Mapping[str, Path], con
         raise BackupRefusedError("unsafe restore catalog schema")
     expected = await catalog_schema_hash(connection, schema=schema)
     manifest = await asyncio.to_thread(verify_generation, generation, expected_schema_hash=expected)
+    migrations = await connection.fetch('SELECT "MigrationId" FROM public."__EFMigrationsHistory" ORDER BY "MigrationId"')
+    if [row["MigrationId"] for row in migrations] != manifest.migration_ids:
+        raise BackupRefusedError("restore migration history differs from the generation")
     if set(roots) != set(manifest.root_ids):
         raise BackupRefusedError("restore targets do not match the generation's root identities")
     for target in roots.values():

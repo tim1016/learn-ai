@@ -17,6 +17,7 @@ from app.data_lake.catalog_schema import DATA_LAKE_ARTIFACTS
 from app.data_lake.root_identity import init_empty_root
 from app.option_archive.backup import (
     BackupRefusedError,
+    CatalogSnapshot,
     create_generation,
     decode_restored_artifacts,
     dump_catalog,
@@ -116,7 +117,7 @@ async def test_real_catalog_source_replacement_never_completes_wrong_generation(
     destination.mkdir()
     original = await create_generation(destination=destination, roots={root_id: root}, clock=lambda: 1000, should_pause=lambda: False)
 
-    async def snapshot_then_refresh(path: Path):
+    async def snapshot_then_refresh(path: Path) -> CatalogSnapshot:
         result = await dump_catalog(path)
         source.write_text('{"changed":true}')
         return result
@@ -124,3 +125,14 @@ async def test_real_catalog_source_replacement_never_completes_wrong_generation(
         await create_generation(destination=destination, roots={root_id: root}, clock=lambda: 2000,
                                 should_pause=lambda: False, snapshot=snapshot_then_refresh)
     assert verify_generation(destination / "generations" / original.generation_id).catalog_rows == 1
+
+
+async def test_postgres_job_ownership_excludes_second_process_connection(isolated_catalog: asyncpg.Connection) -> None:
+    from app.option_archive.scheduler import PostgresJobOwnership
+    first, second = PostgresJobOwnership(), PostgresJobOwnership()
+    async with first.hold("singleton-test") as owned:
+        assert owned
+        async with second.hold("singleton-test") as overlapping:
+            assert not overlapping
+    async with second.hold("singleton-test") as after_release:
+        assert after_release

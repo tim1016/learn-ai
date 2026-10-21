@@ -5287,6 +5287,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/option-archive/capture-session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Capture Archive Session */
+        post: operations["capture_archive_session_api_option_archive_capture_session_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/option-archive/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Archive Status */
+        get: operations["archive_status_api_option_archive_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/option-archive/trigger/{job}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Trigger Archive Job */
+        post: operations["trigger_archive_job_api_option_archive_trigger__job__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/options/expirations": {
         parameters: {
             query?: never;
@@ -8372,6 +8423,75 @@ export interface components {
             note: string;
             /** Run Id */
             run_id: number;
+        };
+        /** ArchiveGap */
+        ArchiveGap: {
+            /** Days Left */
+            days_left?: number | null;
+            /** Permanent */
+            permanent: boolean;
+            /** Reason */
+            reason: string;
+            /** Recorded Ms */
+            recorded_ms: number;
+            /** Session Ms */
+            session_ms: number;
+        };
+        /** ArchiveJobHealth */
+        ArchiveJobHealth: {
+            /** Age Ms */
+            age_ms?: number | null;
+            /** Free Bytes */
+            free_bytes?: number | null;
+            /** Generation Id */
+            generation_id?: string | null;
+            /** Last Failure */
+            last_failure?: string | null;
+            /** Last Success Ms */
+            last_success_ms?: number | null;
+            /** Manifest Sha256 */
+            manifest_sha256?: string | null;
+            /** Oldest Unbacked Capture Ms */
+            oldest_unbacked_capture_ms?: number | null;
+            /** Reason */
+            reason: string;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "healthy" | "catching_up" | "waiting" | "at_risk" | "failed" | "unavailable";
+            /** Size Bytes */
+            size_bytes?: number | null;
+        };
+        /** ArchiveSessionCaptureRequest */
+        ArchiveSessionCaptureRequest: {
+            /**
+             * Retry Exhausted
+             * @default false
+             */
+            retry_exhausted?: boolean;
+            /** Session Ms */
+            session_ms: number;
+            /**
+             * Underlying
+             * @enum {string}
+             */
+            underlying: "SPY" | "QQQ" | "IWM";
+        };
+        /** ArchiveTriggerReceipt */
+        ArchiveTriggerReceipt: {
+            /** Accepted */
+            accepted: boolean;
+            /**
+             * Job
+             * @enum {string}
+             */
+            job: "capture" | "snapshot" | "backup" | "restore";
+            /**
+             * Status Url
+             * @default /api/option-archive/status
+             */
+            status_url?: string;
         };
         /**
          * ArtifactDetail
@@ -22492,6 +22612,25 @@ export interface components {
             /** Target */
             target?: string | null;
         };
+        /** OptionArchiveHealth */
+        OptionArchiveHealth: {
+            /** Attention */
+            attention: boolean;
+            backup: components["schemas"]["ArchiveJobHealth"];
+            /** Enabled */
+            enabled: boolean;
+            /** Generated Ms */
+            generated_ms: number;
+            /**
+             * Retention Permission
+             * @default awaiting_vendor_reply
+             * @constant
+             */
+            retention_permission?: "awaiting_vendor_reply";
+            test_restore: components["schemas"]["ArchiveJobHealth"];
+            /** Underlyings */
+            underlyings: components["schemas"]["UnderlyingArchiveHealth"][];
+        };
         /**
          * OptionBuyingPowerAmount
          * @description One amount: whole cents, and the dollars a page shows for it.
@@ -31931,6 +32070,61 @@ export interface components {
          * @enum {string}
          */
         TrustedTemplate: "trusted_default" | "reconciliation" | "ema_crossover" | "ema_crossover_signal" | "ema_crossover_2_bps" | "ema_previous_crossover" | "rsi_mean_reversion" | "deployment_validation";
+        /** UnderlyingArchiveHealth */
+        UnderlyingArchiveHealth: {
+            /** Complete Through Session Ms */
+            complete_through_session_ms?: number | null;
+            /** Earliest Required Session Ms */
+            earliest_required_session_ms?: number | null;
+            /** Gaps */
+            gaps: components["schemas"]["ArchiveGap"][];
+            /** Last Archived Session Ms */
+            last_archived_session_ms?: number | null;
+            /** Last Failure */
+            last_failure?: string | null;
+            /** Last Pass Ended Ms */
+            last_pass_ended_ms?: number | null;
+            /** Last Pass Started Ms */
+            last_pass_started_ms?: number | null;
+            /** Last Success Ms */
+            last_success_ms?: number | null;
+            /** Lost Sessions */
+            lost_sessions: number;
+            /** Next Due Ms */
+            next_due_ms?: number | null;
+            /** Partial Sessions */
+            partial_sessions: number;
+            /** Pending Sessions */
+            pending_sessions: number;
+            /** Phase */
+            phase: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "healthy" | "catching_up" | "waiting" | "at_risk" | "failed" | "unavailable";
+            /**
+             * Snapshot Field Gaps
+             * @default 0
+             */
+            snapshot_field_gaps?: number;
+            /**
+             * Snapshot Incomplete
+             * @default 0
+             */
+            snapshot_incomplete?: number;
+            /**
+             * Snapshot Missed Evenings
+             * @default 0
+             */
+            snapshot_missed_evenings?: number;
+            /** Snapshot Session Ms */
+            snapshot_session_ms?: number | null;
+            /** Underlying */
+            underlying: string;
+        };
         /**
          * UnderlyingSnapshot
          * @description Underlying asset info from snapshot
@@ -42506,6 +42700,94 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NewsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    capture_archive_session_api_option_archive_capture_session_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArchiveSessionCaptureRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArchiveTriggerReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    archive_status_api_option_archive_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionArchiveHealth"];
+                };
+            };
+        };
+    };
+    trigger_archive_job_api_option_archive_trigger__job__post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                job: "capture" | "snapshot" | "backup" | "restore";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArchiveTriggerReceipt"];
                 };
             };
             /** @description Validation Error */

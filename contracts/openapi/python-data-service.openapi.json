@@ -2256,6 +2256,226 @@
         "title": "ApproveGoldenOptionSetupRequest",
         "type": "object"
       },
+      "ArchiveGap": {
+        "properties": {
+          "days_left": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Days Left"
+          },
+          "permanent": {
+            "title": "Permanent",
+            "type": "boolean"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "recorded_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Recorded Ms",
+            "type": "integer"
+          },
+          "session_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Session Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session_ms",
+          "permanent",
+          "reason",
+          "recorded_ms"
+        ],
+        "title": "ArchiveGap",
+        "type": "object"
+      },
+      "ArchiveJobHealth": {
+        "properties": {
+          "age_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Age Ms"
+          },
+          "free_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Free Bytes"
+          },
+          "generation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generation Id"
+          },
+          "last_failure": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Failure"
+          },
+          "last_success_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Success Ms"
+          },
+          "manifest_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manifest Sha256"
+          },
+          "oldest_unbacked_capture_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oldest Unbacked Capture Ms"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "healthy",
+              "catching_up",
+              "waiting",
+              "at_risk",
+              "failed",
+              "unavailable"
+            ],
+            "title": "Severity",
+            "type": "string"
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Bytes"
+          }
+        },
+        "required": [
+          "severity",
+          "reason"
+        ],
+        "title": "ArchiveJobHealth",
+        "type": "object"
+      },
+      "ArchiveSessionCaptureRequest": {
+        "properties": {
+          "retry_exhausted": {
+            "default": false,
+            "title": "Retry Exhausted",
+            "type": "boolean"
+          },
+          "session_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Session Ms",
+            "type": "integer"
+          },
+          "underlying": {
+            "enum": [
+              "SPY",
+              "QQQ",
+              "IWM"
+            ],
+            "title": "Underlying",
+            "type": "string"
+          }
+        },
+        "required": [
+          "underlying",
+          "session_ms"
+        ],
+        "title": "ArchiveSessionCaptureRequest",
+        "type": "object"
+      },
+      "ArchiveTriggerReceipt": {
+        "properties": {
+          "accepted": {
+            "title": "Accepted",
+            "type": "boolean"
+          },
+          "job": {
+            "enum": [
+              "capture",
+              "snapshot",
+              "backup",
+              "restore"
+            ],
+            "title": "Job",
+            "type": "string"
+          },
+          "status_url": {
+            "default": "/api/option-archive/status",
+            "title": "Status Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "accepted",
+          "job"
+        ],
+        "title": "ArchiveTriggerReceipt",
+        "type": "object"
+      },
       "ArtifactDetail": {
         "description": "Full receipt for one catalog row: identity, hashes, and byte metadata.",
         "properties": {
@@ -37784,6 +38004,52 @@
         "title": "OperatorMove",
         "type": "object"
       },
+      "OptionArchiveHealth": {
+        "properties": {
+          "attention": {
+            "title": "Attention",
+            "type": "boolean"
+          },
+          "backup": {
+            "$ref": "#/components/schemas/ArchiveJobHealth"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "generated_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Generated Ms",
+            "type": "integer"
+          },
+          "retention_permission": {
+            "const": "awaiting_vendor_reply",
+            "default": "awaiting_vendor_reply",
+            "title": "Retention Permission"
+          },
+          "test_restore": {
+            "$ref": "#/components/schemas/ArchiveJobHealth"
+          },
+          "underlyings": {
+            "items": {
+              "$ref": "#/components/schemas/UnderlyingArchiveHealth"
+            },
+            "title": "Underlyings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "enabled",
+          "generated_ms",
+          "attention",
+          "underlyings",
+          "backup",
+          "test_restore"
+        ],
+        "title": "OptionArchiveHealth",
+        "type": "object"
+      },
       "OptionBuyingPowerAmount": {
         "additionalProperties": false,
         "description": "One amount: whole cents, and the dollars a page shows for it.",
@@ -63126,6 +63392,195 @@
         "title": "TrustedTemplate",
         "type": "string"
       },
+      "UnderlyingArchiveHealth": {
+        "properties": {
+          "complete_through_session_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Complete Through Session Ms"
+          },
+          "earliest_required_session_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Earliest Required Session Ms"
+          },
+          "gaps": {
+            "items": {
+              "$ref": "#/components/schemas/ArchiveGap"
+            },
+            "title": "Gaps",
+            "type": "array"
+          },
+          "last_archived_session_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Archived Session Ms"
+          },
+          "last_failure": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Failure"
+          },
+          "last_pass_ended_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Pass Ended Ms"
+          },
+          "last_pass_started_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Pass Started Ms"
+          },
+          "last_success_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Success Ms"
+          },
+          "lost_sessions": {
+            "title": "Lost Sessions",
+            "type": "integer"
+          },
+          "next_due_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Due Ms"
+          },
+          "partial_sessions": {
+            "title": "Partial Sessions",
+            "type": "integer"
+          },
+          "pending_sessions": {
+            "title": "Pending Sessions",
+            "type": "integer"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "healthy",
+              "catching_up",
+              "waiting",
+              "at_risk",
+              "failed",
+              "unavailable"
+            ],
+            "title": "Severity",
+            "type": "string"
+          },
+          "snapshot_field_gaps": {
+            "default": 0,
+            "title": "Snapshot Field Gaps",
+            "type": "integer"
+          },
+          "snapshot_incomplete": {
+            "default": 0,
+            "title": "Snapshot Incomplete",
+            "type": "integer"
+          },
+          "snapshot_missed_evenings": {
+            "default": 0,
+            "title": "Snapshot Missed Evenings",
+            "type": "integer"
+          },
+          "snapshot_session_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Session Ms"
+          },
+          "underlying": {
+            "title": "Underlying",
+            "type": "string"
+          }
+        },
+        "required": [
+          "underlying",
+          "severity",
+          "reason",
+          "pending_sessions",
+          "partial_sessions",
+          "lost_sessions",
+          "gaps",
+          "phase"
+        ],
+        "title": "UnderlyingArchiveHealth",
+        "type": "object"
+      },
       "UnderlyingSnapshot": {
         "description": "Underlying asset info from snapshot",
         "properties": {
@@ -85282,6 +85737,150 @@
         "summary": "List News",
         "tags": [
           "news"
+        ]
+      }
+    },
+    "/api/option-archive/capture-session": {
+      "post": {
+        "operationId": "capture_archive_session_api_option_archive_capture_session_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArchiveSessionCaptureRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArchiveTriggerReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Capture Archive Session",
+        "tags": [
+          "option-archive"
+        ]
+      }
+    },
+    "/api/option-archive/status": {
+      "get": {
+        "operationId": "archive_status_api_option_archive_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionArchiveHealth"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Archive Status",
+        "tags": [
+          "option-archive"
+        ]
+      }
+    },
+    "/api/option-archive/trigger/{job}": {
+      "post": {
+        "operationId": "trigger_archive_job_api_option_archive_trigger__job__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job",
+            "required": true,
+            "schema": {
+              "enum": [
+                "capture",
+                "snapshot",
+                "backup",
+                "restore"
+              ],
+              "title": "Job",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArchiveTriggerReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Trigger Archive Job",
+        "tags": [
+          "option-archive"
         ]
       }
     },

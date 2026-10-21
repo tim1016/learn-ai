@@ -1,0 +1,41 @@
+<section id="option-archive" class="archive-card">
+  <h2>Option archive</h2>
+  @if (archive.unavailable()) {
+    <p role="status">Archive status is unavailable. Check the data service connection.</p>
+    <button type="button" (click)="archive.retry()">Retry status</button>
+  } @else if (archive.health(); as health) {
+    @if (!health.enabled) { <p>Preservation is awaiting operator activation.</p> }
+    @for (item of health.underlyings; track item.underlying) {
+      <article [id]="'option-archive-' + item.underlying" [class.needs-attention]="item.severity === 'at_risk' || item.severity === 'failed'">
+        <h3><app-asset-identity [symbol]="item.underlying" size="sm" /></h3>
+        <p>{{ item.reason }}</p>
+        <dl>
+          <dt>Complete through</dt><dd><app-timestamp-display [value]="item.complete_through_session_ms" mode="date-et" /></dd>
+          <dt>Last archived session</dt><dd><app-timestamp-display [value]="item.last_archived_session_ms" mode="date-et" /></dd>
+          <dt>Pending / partial / lost</dt><dd>{{ item.pending_sessions }} / {{ item.partial_sessions }} / {{ item.lost_sessions }}</dd>
+          <dt>Evening observation</dt><dd><app-timestamp-display [value]="item.snapshot_session_ms" mode="date-et" /></dd>
+          <dt>Missed / incomplete observations</dt><dd>{{ item.snapshot_missed_evenings }} / {{ item.snapshot_incomplete }}</dd>
+          <dt>Missing reference fields</dt><dd>{{ item.snapshot_field_gaps }}</dd>
+        </dl>
+        @if (item.phase === 'rth_pause') { <p>Capture is paused for regular trading hours.</p> }
+        @for (gap of item.gaps.slice(0, 3); track gap.session_ms) {
+          <p><app-timestamp-display [value]="gap.session_ms" mode="date-et" />: {{ gap.reason }}</p>
+        }
+      </article>
+    }
+    <article id="option-archive-backup">
+      <h3>Lake backup</h3><p>{{ health.backup.reason }}</p>
+      <p>Last checked: <app-timestamp-display [value]="health.backup.last_success_ms" mode="local" /></p>
+      @if (health.backup.generation_id; as generation) { <p>Generation: {{ generation }}</p> }
+      @if (health.backup.free_bytes !== null) { <p>Destination free space: {{ health.backup.free_bytes }} bytes</p> }
+    </article>
+    <article id="option-archive-restore">
+      <h3>Weekly restore check</h3><p>{{ health.test_restore.reason }}</p>
+      <p>Last passed: <app-timestamp-display [value]="health.test_restore.last_success_ms" mode="local" /></p>
+    </article>
+    <p>Vendor retention permission is awaiting a reply. Capture and backup stay on this Mac.</p>
+    <button type="button" (click)="archive.retry()">Refresh status</button>
+  } @else {
+    <p role="status">Reading archive status…</p>
+  }
+</section>

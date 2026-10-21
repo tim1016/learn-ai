@@ -139,8 +139,14 @@ services:
       # Layout inside this mount: lake/ (canonical artifacts) + staging/ (writer scratch),
       # both on the same filesystem so atomic rename works.
       - ${LEAN_DATA_VOLUME_HOST_PATH:-./data-lake-volume}:/lean-data-writer:rw,z
+      # Owner-created host destination; its identity marker detects a missing mount.
+      - ${OPTION_ARCHIVE_BACKUP_HOST_DESTINATION:-${HOME}/learn-ai-lake-backup}:/lake-backup:rw,z
     environment:
       - POLYGON_API_KEY=${POLYGON_API_KEY}
+      - OPTION_ARCHIVE_ENABLED=${OPTION_ARCHIVE_ENABLED:-false}
+      - OPTION_ARCHIVE_BACKUP_DESTINATION=/lake-backup
+      - OPTION_ARCHIVE_BACKUP_MOUNT=/lake-backup
+      - OPTION_ARCHIVE_BACKUP_HOST_DESTINATION=${OPTION_ARCHIVE_BACKUP_HOST_DESTINATION:-${HOME}/learn-ai-lake-backup}
       - POLYGON_RATE_LIMIT_PER_MIN=${POLYGON_RATE_LIMIT_PER_MIN:-0}
       - FRED_API_KEY=${FRED_API_KEY}
       - LEAN_DATA_ROOT=/lean-data

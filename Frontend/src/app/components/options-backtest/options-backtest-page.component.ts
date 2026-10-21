@@ -5,6 +5,7 @@ import { Tab, TabList, TabPanel, TabPanels, Tabs } from 'primeng/tabs';
 
 import type { DateRange } from '../../shared/date-picker';
 import { FileDownloadService } from '../../shared/file/file-download.service';
+import { OptionArchiveBannerComponent } from '../../shared/option-archive/option-archive-banner.component';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 import { extractServerMessage } from '../broker/operation-error';
 import { BottomBarComponent, type SaveStatus } from './cards/bottom-bar.component';
@@ -58,6 +59,7 @@ interface ImportNotice {
 @Component({
   selector: 'app-options-backtest-page',
   imports: [
+    OptionArchiveBannerComponent,
     ButtonModule,
     Tabs,
     TabList,

@@ -80,6 +80,7 @@ from app.data_lake import catalog_client
 from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
 from app.data_lake.atomic import ArtifactLeaseLostError, AtomicRenameUnsafeError, publish_artifact
 from app.data_lake.ensure_data import _LEASE_TTL_MS, _MAX_CLAIM_RETRIES, _WORKER_ID, _minute_trade_dch
+from app.data_lake.option_request_priority import OptionRequestGate
 from app.data_lake.path_policy import lake_root_for, resolve_lake_root, resolve_staging_root
 from app.data_lake.polygon_fetcher import (
     PolygonAuthError,
@@ -659,10 +660,10 @@ def stock_day_is_asked_again(state: catalog_client.ArtifactClaimState, trading_d
 #: themselves: a single ask is never delayed by other people's batches.
 MAX_VENDOR_REQUESTS_IN_FLIGHT = 4
 
-_request_gates: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = weakref.WeakKeyDictionary()
+_request_gates: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, OptionRequestGate] = weakref.WeakKeyDictionary()
 
 
-def vendor_request_gate() -> asyncio.Semaphore:
+def vendor_request_gate() -> OptionRequestGate:
     """The one gate on option vendor requests: ``async with`` it around a capture.
 
     Every caller of the process shares the background loop (:mod:`app.utils.background_loop`), so they share one
@@ -678,6 +679,6 @@ def vendor_request_gate() -> asyncio.Semaphore:
         )
     gate = _request_gates.get(loop)
     if gate is None:
-        gate = asyncio.Semaphore(MAX_VENDOR_REQUESTS_IN_FLIGHT)
+        gate = OptionRequestGate(MAX_VENDOR_REQUESTS_IN_FLIGHT)
         _request_gates[loop] = gate
     return gate

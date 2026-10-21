@@ -1,0 +1,94 @@
+# Preserve and restore the data lake
+
+The archive is opt-in. It never enables a new data subscription or changes a
+broker. Keep capture and backup on this Mac while the vendor reply is pending.
+Moving a backup to an SSD remains a separate owner action.
+
+## Activate preservation
+
+1. Choose a host folder outside both the checkout and the lake. The default is
+   `~/learn-ai-lake-backup`. Create it yourself; do not rely on Compose to create
+   a missing removable mount. Inside it write `.backup-destination.json` with
+   `{"host_destination":"~/learn-ai-lake-backup"}`. This marker must live on
+   the actual destination, not an empty mountpoint underneath a removable disk.
+2. Set `OPTION_ARCHIVE_BACKUP_HOST_DESTINATION` to that absolute host path and
+   `OPTION_ARCHIVE_ENABLED=true` in the data service's environment. Compose
+   mounts it at `/lake-backup`. Both `OPTION_ARCHIVE_BACKUP_DESTINATION` and
+   `OPTION_ARCHIVE_BACKUP_MOUNT` must name that same container path.
+3. The named defaults are capture at 01:00 ET, backup at 05:00 ET, and an evening
+   observation 30 minutes after the calendar close. Half days follow the calendar.
+   The first capture is the full still-accessible two-year backfill. Provider
+   requests pause before the next regular open and yield to foreground option
+   requests and the evening observation. The interactive history floor is unchanged.
+4. Read `GET /api/option-archive/status` or the Option archive card on Data Lab.
+   `POST /api/option-archive/trigger/capture`, `/snapshot`, `/backup`, and `/restore`
+   require the normal data-plane control-secret header. They return acceptance;
+   read the resulting receipt on the status route. Repeating a running trigger
+   joins that job. The first-night throughput is the difference in answered
+   contract counts divided by the pass's elapsed milliseconds, using durable
+   session receipts in `option-archive-state.json` beside the lake.
+5. An exhausted transient capture can be retried explicitly with authenticated
+   `POST /api/option-archive/capture-session` carrying `underlying`, the canonical
+   `session_ms`, and `retry_exhausted:true`. This scopes recovery to one session.
+   Authentication or entitlement failures need operator correction first.
+6. Evening observations are reference data. Their JSON retains capture start/end,
+   page receipts, field gaps, and only vendor timestamps on the corresponding
+   nested metric. Compare a week's observations under
+   `lake/raw/usa_options/<underlying>/observations/` to investigate rollover.
+   Open interest is never asserted to be that session's settled figure.
+
+The archive cutoff uses sessions strictly after the two-year New York-date
+anniversary pending a weekday anniversary probe. Run
+`scripts/probe_option_archive_boundary.py` with a known historical OCC ticker
+and `--today-session-ms` to settle that day; it changes no lake or catalog bytes.
+
+## Recover a lost lake
+
+1. Stop the data service, research runtime and every reader or writer of this
+   lake. Do not start them again until all checks below pass. Preserve any
+   surviving root/catalog pair unchanged for diagnosis.
+2. Select a generation containing a `COMPLETE` marker under the destination's
+   `generations/`. Keep its sibling `objects/` folder: generations share objects.
+   Do not copy a generation by itself or use a dot-prefixed staging directory.
+3. Use the release/migrations recorded in `manifest.json`. Provision an empty
+   target catalog table with that exact schema and fresh empty target roots.
+   Supply the target database credential through `POSTGRES_URL`; never paste it
+   into a command or a recovery report.
+4. Run `PythonDataService/scripts/restore_lake_generation.py GENERATION --root
+   ROOT_UUID=/empty/target/base-root`. Add `--root` for each root in the manifest.
+   A copy of this self-contained script and this runbook is included in each
+   generation's `restore_files`, addressed by SHA-256 in `objects/`, so the
+   procedure survives losing the checkout. Python and asyncpg are in the data
+   service image. Extract the two named objects before using them.
+5. The entry point verifies the complete marker, dump, schema, files and root
+   markers before writing anything. It imports the binary catalog dump and
+   exact file bytes together, clears all leases, fences old generations and
+   converts unfinished fetches to failed. It starts no jobs, never scans to
+   reindex, rebases no hashes and makes no vendor call.
+6. With provider access blocked, run the weekly restore check against this pair
+   and inspect artifact counts and normal Options Backtest saved timelines and
+   retained Golden Search/Golden Options proofs. Only then point the stopped
+   stack at the recovered root/catalog and restart it. A failed restore leaves
+   an incomplete target: discard that target and repeat into another empty pair.
+
+## Automatic verification and retention
+
+Every backup takes one repeatable-read snapshot of the whole catalog table,
+including receipts and failed rows, and copies the whole stock/option lake,
+root markers and sidecar coverage evidence. It compares committed file hashes,
+fsyncs the dump and inventory, and publishes `COMPLETE` last. A changed source
+causes a bounded retry; a failed attempt never advances backup freshness.
+
+Backup runs independently of backfill. Defaults keep seven daily and four
+weekly verified generations and never remove the last good one. Objects are
+removed only when no retained generation uses them. Retirement pins in
+`retention-pins/<generation_id>.json` bind the manifest hash and a rollback
+`retain_until_ms`; a pinned generation and its objects survive normal pruning.
+
+Once a week, a separate scheduler job restores the latest checked generation
+into an empty temporary root and isolated PostgreSQL schema, admits and decodes
+every committed artifact using the restored receipt inventory, records a
+manifest-bound result, and removes only those temporary targets. This check
+has its own freshness; a new backup does not make an old restore check green.
+No source file is retired until its separate approval and compatibility gate
+passes (#3432).

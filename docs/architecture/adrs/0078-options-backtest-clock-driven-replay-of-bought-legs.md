@@ -230,6 +230,14 @@ The window moves forward each day, and a session not fetched in time is lost to 
 
 *Rejected:* thirty minutes after the close, the first design.
 
+**Evening-observation exception (2026-10-20, #3419).** A fully paged current
+chain observation is captured after the canonical close plus a named interval,
+inside a bounded same-date window. Its OI, IV and Greeks are labelled vendor
+reference observations with capture times and only their own supported nested
+field timestamps. It is never a historical bar finality claim or settled
+same-session open interest. A missed window remains a permanent observation gap.
+Historical bar/listing capture keeps the date-passed rule above.
+
 ### 15. A "never traded" day is stored only for a contract the stored listing holds
 
 *Whose:* made for the owner.

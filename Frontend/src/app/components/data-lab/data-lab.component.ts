@@ -13,6 +13,7 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 import { AssetIdentityComponent } from '../../shared/asset-identity';
 import { DateRangePickerComponent, ProviderBoundsService, type QuickRangeKey, type QuickRangeOffer } from '../../shared/date-picker';
+import { OptionArchiveCardComponent } from '../../shared/option-archive/option-archive-card.component';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 import { SymbolPickerComponent } from '../../shared/symbol-picker/symbol-picker.component';
 import { DEFAULT_ADJUSTMENT_MODE } from '../../shared/ticker-catalog';
@@ -149,6 +150,7 @@ export function parseYmdMsUtc(s: string): number | null {
 @Component({
   selector: 'app-data-lab',
   imports: [
+    OptionArchiveCardComponent,
     RouterLink,
     RouterLinkActive,
     RouterOutlet,
