@@ -6,11 +6,10 @@ const dataPlaneControlSurfaces = require('../contracts/data-plane-control-surfac
 const {
   resolveDataPlaneControlSecret,
 } = require('./scripts/data-plane-control-secret.cjs');
-// Host development reaches the compose services through their loopback ports.
-// Containers override these targets with their compose-network service names.
+// Host development reaches the data plane through its loopback port.
+// Containers override this target with their compose-network service name.
 // Keeping the control-header hook in this one configuration prevents a local
 // target override from accidentally bypassing data-plane authorization.
-const backendProxyTarget = process.env.BACKEND_PROXY_TARGET ?? 'http://127.0.0.1:5000';
 const DEFAULT_DATA_PLANE_PROXY_TARGET = 'http://127.0.0.1:8000';
 const TRUSTED_DATA_PLANE_PROXY_HOSTS = new Set([
   '127.0.0.1',
@@ -154,16 +153,6 @@ function configureDataPlaneProxy(proxy) {
 }
 
 const proxyConfig = {
-  '/graphql': {
-    target: backendProxyTarget,
-    secure: false,
-    changeOrigin: true,
-  },
-  '/api/jobs': {
-    target: backendProxyTarget,
-    secure: false,
-    changeOrigin: true,
-  },
   '/api': {
     target: dataPlaneProxyTarget,
     secure: false,
@@ -179,7 +168,6 @@ Object.defineProperty(proxyConfig, '__test', {
     DATA_PLANE_CONTROL_INTENT_HEADER,
     DATA_PLANE_CONTROL_INTENT_QUERY,
     DATA_PLANE_CONTROL_INTENT_VALUE,
-    backendProxyTarget,
     dataPlaneProxyTarget,
     dataPlaneControlSecret,
     CONTROL_PREFIXES,

@@ -14,7 +14,7 @@ import type { RunLedger } from './strategy-runs.types';
 /**
  * HTTP client for `/api/research/strategy-runs/baselines`. Same
  * pattern as `WalkForwardService` / `MonteCarloService` — direct
- * FastAPI calls, no GraphQL passthrough yet.
+ * FastAPI calls.
  *
  * `runFromRun(run, method)` is the ergonomic entry point used by
  * the run-detail page's two buttons. The default sample counts

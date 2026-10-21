@@ -1,6 +1,7 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { firstValueFrom } from 'rxjs';
+import { Observable, catchError, firstValueFrom, map, of, throwError } from 'rxjs';
+import type { components } from '../api/broker.types';
 import { environment } from '../../environments/environment';
 import type {
   BarSources,
@@ -8,6 +9,9 @@ import type {
   QualityReport,
 } from '../components/data-lab/data-lab-chart/data-lab-chart.component';
 import type { ChartIndicatorResult } from '../shared/trading-chart';
+import { failureAsError, isPythonRefusal } from './python-http-failure';
+
+type Schema = components['schemas'];
 
 // ─────────────────────────────────────────────────────────────
 // Public interfaces (consumed by components)
@@ -44,8 +48,10 @@ export interface DataLabSessionChartSnapshot {
 export interface DataLabSession {
   id: string;
   name: string;
-  createdAt: string;
-  updatedAt: string;
+  /** int64 ms UTC, stamped by the server. */
+  createdAtMs: number;
+  /** int64 ms UTC, stamped by the server. */
+  updatedAtMs: number;
   config: DataLabSessionConfig;
   chartSnapshot: DataLabSessionChartSnapshot | null;
 }
@@ -53,8 +59,10 @@ export interface DataLabSession {
 export interface DataLabSessionSummary {
   id: string;
   name: string;
-  createdAt: string;
-  updatedAt: string;
+  /** int64 ms UTC, stamped by the server. */
+  createdAtMs: number;
+  /** int64 ms UTC, stamped by the server. */
+  updatedAtMs: number;
   ticker: string;
   fromDate: string;
   toDate: string;
@@ -63,273 +71,159 @@ export interface DataLabSessionSummary {
 }
 
 // ─────────────────────────────────────────────────────────────
-// GraphQL queries & mutations
+// Wire shapes
 // ─────────────────────────────────────────────────────────────
 
-const LIST_SESSIONS = `
-  query ListDataLabSessions {
-    dataLabSessions {
-      id
-      name
-      createdAt
-      updatedAt
-      ticker
-      fromDate
-      toDate
-      session
-      forwardFill
-      adjusted
-      entriesJson
-      chartSnapshotJson
-    }
-  }
-`;
-
-const GET_SESSION = `
-  query GetDataLabSession($id: UUID!) {
-    dataLabSession(id: $id) {
-      id
-      name
-      createdAt
-      updatedAt
-      ticker
-      fromDate
-      toDate
-      session
-      forwardFill
-      adjusted
-      entriesJson
-      chartSnapshotJson
-    }
-  }
-`;
-
-const SAVE_SESSION = `
-  mutation SaveDataLabSession($input: DataLabSessionInput!) {
-    saveDataLabSession(input: $input) {
-      success
-      id
-      message
-    }
-  }
-`;
-
-const UPDATE_SESSION = `
-  mutation UpdateDataLabSession($id: UUID!, $input: DataLabSessionInput!) {
-    updateDataLabSession(id: $id, input: $input) {
-      success
-      id
-      message
-    }
-  }
-`;
-
-const RENAME_SESSION = `
-  mutation RenameDataLabSession($id: UUID!, $name: String!) {
-    renameDataLabSession(id: $id, name: $name) {
-      success
-      id
-      message
-    }
-  }
-`;
-
-const DELETE_SESSION = `
-  mutation DeleteDataLabSession($id: UUID!) {
-    deleteDataLabSession(id: $id) {
-      success
-      id
-      message
-    }
-  }
-`;
-
-// ─────────────────────────────────────────────────────────────
-// Internal response shapes
-// ─────────────────────────────────────────────────────────────
-
-interface RawSession {
-  id: string;
-  name: string;
-  createdAt: string;
-  updatedAt: string;
-  ticker: string;
-  fromDate: string;
-  toDate: string;
-  session: string;
-  forwardFill: boolean;
-  adjusted: boolean;
-  entriesJson: string;
-  chartSnapshotJson: string | null;
+/**
+ * Python stores `entries` and `chart_snapshot` as opaque JSON documents the
+ * screen owns, so the generated schema types them as bare objects. This
+ * service is the one place that states what the screen put in them.
+ */
+interface SessionDocuments {
+  entries: DataLabSessionConfig['entries'];
+  chart_snapshot: DataLabSessionChartSnapshot | null;
 }
+type SessionBody = Omit<Schema['DataLabSessionRequest'], keyof SessionDocuments> & SessionDocuments;
+type SessionRow = Omit<Schema['DataLabSessionResponse'], keyof SessionDocuments> & SessionDocuments;
 
-interface MutationResult {
-  success: boolean;
-  id: string | null;
-  message: string;
-}
-
-interface GqlResponse<T> {
-  data: T;
-  errors?: { message: string }[];
-}
+/** The `code` Python gives a 404 that names a missing session (and not a missing route). */
+const SESSION_NOT_FOUND = 'DATA_LAB_SESSION_NOT_FOUND';
 
 // ─────────────────────────────────────────────────────────────
 // Service
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * Saved Data Lab setups over Python's `/api/data-lab/sessions`.
+ *
+ * Every failure rejects with an `Error` whose message is Python's sentence
+ * (a missing session, an unreachable store, a refused body). The one outcome
+ * that resolves instead is `getSession` for an id nobody holds.
+ */
 @Injectable({ providedIn: 'root' })
 export class DataLabSessionService {
-  private http = inject(HttpClient);
-  private url = environment.backendUrl;
+  private readonly http = inject(HttpClient);
+  private readonly base = `${environment.pythonServiceUrl}/api/data-lab/sessions`;
 
-  // ── Queries ───────────────────────────────────────────────
-
-  /** List all sessions (most recent first), returning lightweight summaries. */
-  async listSessions(): Promise<DataLabSessionSummary[]> {
-    const resp = await this.gql<{ dataLabSessions: RawSession[] }>(
-      LIST_SESSIONS
+  /** List all sessions (most recently updated first), returning lightweight summaries. */
+  listSessions(): Promise<DataLabSessionSummary[]> {
+    return firstValueFrom(
+      this.http.get<SessionRow[]>(this.base).pipe(
+        failureAsError('Could not load the saved setups'),
+        map(rows => rows.map(toSummary)),
+      ),
     );
-
-    return (resp.dataLabSessions ?? []).map(s => {
-      const entries = this.parseJson<DataLabSessionConfig['entries']>(s.entriesJson, []);
-      return {
-        id: s.id,
-        name: s.name,
-        createdAt: s.createdAt,
-        updatedAt: s.updatedAt,
-        ticker: s.ticker,
-        fromDate: s.fromDate,
-        toDate: s.toDate,
-        indicatorCount: entries.length,
-        hasChart: s.chartSnapshotJson !== null,
-      };
-    });
   }
 
-  /** Get a full session by ID (includes parsed chart snapshot). */
-  async getSession(id: string): Promise<DataLabSession | undefined> {
-    const resp = await this.gql<{ dataLabSession: RawSession | null }>(
-      GET_SESSION,
-      { id }
+  /** Get a full session by ID; `undefined` when no such session is held. */
+  getSession(id: string): Promise<DataLabSession | undefined> {
+    return firstValueFrom(
+      this.http.get<SessionRow>(`${this.base}/${id}`).pipe(
+        map((row): DataLabSession | undefined => toSession(row)),
+        catchError(err => (isPythonRefusal(err, 404, SESSION_NOT_FOUND) ? of(undefined) : throwError(() => err))),
+        failureAsError('Could not load the setup'),
+      ),
     );
-
-    const raw = resp.dataLabSession;
-    if (!raw) return undefined;
-    return this.toSession(raw);
   }
-
-  // ── Mutations ─────────────────────────────────────────────
 
   /** Save a new session. Returns the generated ID. */
-  async saveSession(
+  saveSession(
     config: DataLabSessionConfig,
     chartSnapshot: DataLabSessionChartSnapshot | null,
-    name?: string
-  ): Promise<string | null> {
+    name?: string,
+  ): Promise<string> {
     const autoName = name || `${config.ticker} ${config.fromDate} → ${config.toDate}`;
-    const input = this.toInput(autoName, config, chartSnapshot);
-
-    const resp = await this.gql<{ saveDataLabSession: MutationResult }>(
-      SAVE_SESSION,
-      { input }
+    return firstValueFrom(
+      this.http.post<Schema['DataLabSessionReceipt']>(this.base, toBody(autoName, config, chartSnapshot)).pipe(
+        failureAsError('Could not save the setup'),
+        map(receipt => receipt.id),
+      ),
     );
-    return resp.saveDataLabSession.success ? resp.saveDataLabSession.id : null;
   }
 
   /** Update an existing session (full replace). */
-  async updateSession(
+  updateSession(
     id: string,
     config: DataLabSessionConfig,
     chartSnapshot: DataLabSessionChartSnapshot | null,
-    name: string
-  ): Promise<boolean> {
-    const input = this.toInput(name, config, chartSnapshot);
-
-    const resp = await this.gql<{ updateDataLabSession: MutationResult }>(
-      UPDATE_SESSION,
-      { id, input }
+    name: string,
+  ): Promise<void> {
+    return settled(
+      this.http.put<Schema['DataLabSessionReceipt']>(`${this.base}/${id}`, toBody(name, config, chartSnapshot)),
+      'Could not update the setup',
     );
-    return resp.updateDataLabSession.success;
   }
 
   /** Rename a session. */
-  async renameSession(id: string, newName: string): Promise<boolean> {
-    const resp = await this.gql<{ renameDataLabSession: MutationResult }>(
-      RENAME_SESSION,
-      { id, name: newName }
+  renameSession(id: string, newName: string): Promise<void> {
+    const body: Schema['DataLabSessionRenameRequest'] = { name: newName };
+    return settled(
+      this.http.patch<Schema['DataLabSessionReceipt']>(`${this.base}/${id}/name`, body),
+      'Could not rename the setup',
     );
-    return resp.renameDataLabSession.success;
   }
 
   /** Delete a session by ID. */
-  async deleteSession(id: string): Promise<boolean> {
-    const resp = await this.gql<{ deleteDataLabSession: MutationResult }>(
-      DELETE_SESSION,
-      { id }
-    );
-    return resp.deleteDataLabSession.success;
+  deleteSession(id: string): Promise<void> {
+    return settled(this.http.delete(`${this.base}/${id}`), 'Could not delete the setup');
   }
+}
 
-  // ── Helpers ───────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// Mapping
+// ─────────────────────────────────────────────────────────────
 
-  private toInput(
-    name: string,
-    config: DataLabSessionConfig,
-    chartSnapshot: DataLabSessionChartSnapshot | null
-  ) {
-    return {
-      name,
-      ticker: config.ticker,
-      fromDate: config.fromDate,
-      toDate: config.toDate,
-      session: config.session,
-      forwardFill: config.forwardFill,
-      adjusted: config.adjusted,
-      entriesJson: JSON.stringify(config.entries),
-      chartSnapshotJson: chartSnapshot ? JSON.stringify(chartSnapshot) : null,
-    };
-  }
+function settled(call: Observable<unknown>, context: string): Promise<void> {
+  return firstValueFrom(call.pipe(failureAsError(context), map(() => undefined)));
+}
 
-  private toSession(raw: RawSession): DataLabSession {
-    const entries = this.parseJson<{ name: string; params: Record<string, number> }[]>(
-      raw.entriesJson, []
-    );
-    const chartSnapshot = raw.chartSnapshotJson
-      ? this.parseJson<DataLabSessionChartSnapshot | null>(raw.chartSnapshotJson, null)
-      : null;
+function toBody(
+  name: string,
+  config: DataLabSessionConfig,
+  chartSnapshot: DataLabSessionChartSnapshot | null,
+): SessionBody {
+  return {
+    name,
+    ticker: config.ticker,
+    from_date: config.fromDate,
+    to_date: config.toDate,
+    session: config.session,
+    forward_fill: config.forwardFill,
+    adjusted: config.adjusted,
+    entries: config.entries,
+    chart_snapshot: chartSnapshot,
+  };
+}
 
-    return {
-      id: raw.id,
-      name: raw.name,
-      createdAt: raw.createdAt,
-      updatedAt: raw.updatedAt,
-      config: {
-        ticker: raw.ticker,
-        fromDate: raw.fromDate,
-        toDate: raw.toDate,
-        session: raw.session as 'rth' | 'extended',
-        forwardFill: raw.forwardFill,
-        adjusted: raw.adjusted ?? true,
-        entries,
-      },
-      chartSnapshot,
-    };
-  }
+function toSummary(row: SessionRow): DataLabSessionSummary {
+  return {
+    id: row.id,
+    name: row.name,
+    createdAtMs: row.created_at_ms,
+    updatedAtMs: row.updated_at_ms,
+    ticker: row.ticker,
+    fromDate: row.from_date,
+    toDate: row.to_date,
+    indicatorCount: row.entries.length,
+    hasChart: row.chart_snapshot !== null,
+  };
+}
 
-  private parseJson<T>(raw: string | null, fallback: T): T {
-    if (!raw) return fallback;
-    try { return JSON.parse(raw); }
-    catch { return fallback; }
-  }
-
-  private async gql<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
-    const resp = await firstValueFrom(
-      this.http.post<GqlResponse<T>>(this.url, { query, variables })
-    );
-    if (resp.errors?.length) {
-      throw new Error(resp.errors[0].message);
-    }
-    return resp.data;
-  }
+function toSession(row: SessionRow): DataLabSession {
+  return {
+    id: row.id,
+    name: row.name,
+    createdAtMs: row.created_at_ms,
+    updatedAtMs: row.updated_at_ms,
+    config: {
+      ticker: row.ticker,
+      fromDate: row.from_date,
+      toDate: row.to_date,
+      session: row.session === 'extended' ? 'extended' : 'rth',
+      forwardFill: row.forward_fill,
+      adjusted: row.adjusted,
+      entries: row.entries,
+    },
+    chartSnapshot: row.chart_snapshot,
+  };
 }

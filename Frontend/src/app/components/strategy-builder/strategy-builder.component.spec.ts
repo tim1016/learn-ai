@@ -2,17 +2,19 @@ import { TestBed, type ComponentFixture } from '@angular/core/testing';
 import { screen, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { provideHttpClient } from '@angular/common/http';
-import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { HttpTestingController, provideHttpClientTesting, type TestRequest } from '@angular/common/http/testing';
 import { vi } from 'vitest';
 import { StrategyBuilderComponent } from './strategy-builder.component';
 import { etIsoDate } from '../../shared/date/et-midnight';
 import { optionExpiryAnchorMs } from '../../shared/option-contract/option-expiry-date';
 
 import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
+import type { components } from '../../api/broker.types';
+import { environment } from '../../../environments/environment';
 import {
   SnapshotContractResult,
   StrategyAnalyzeResult,
-} from '../../graphql/types';
+} from '../../services/market-data.types';
 
 vi.mock('lightweight-charts', () => {
   const mockTimeScale = { fitContent: vi.fn() };
@@ -38,30 +40,63 @@ vi.mock('lightweight-charts', () => {
   };
 });
 
-const GRAPHQL_URL = 'http://localhost:5000/graphql';
+type Schema = components['schemas'];
 
-/**
- * Match a GraphQL request whose body's `query` string contains `needle`.
- * The component sends raw GraphQL POST bodies with shape
- *   { query: '...', variables: {...} }
- * so we filter by query-text for unambiguous matching when multiple
- * requests are in flight.
- */
-function expectGraphQL(httpMock: HttpTestingController, needle: string) {
-  const matches = httpMock.match(r =>
-    r.url === GRAPHQL_URL && typeof (r.body as { query?: string } | null)?.query === 'string'
-    && (r.body as { query: string }).query.includes(needle));
+const API = `${environment.pythonServiceUrl}/api`;
+
+/** The one request posted to a Python route (`options/expirations`, ...); throws unless exactly one is pending. */
+function expectPost(httpMock: HttpTestingController, route: string): TestRequest {
+  const matches = httpMock.match(`${API}/${route}`);
   if (matches.length !== 1) {
-    throw new Error(`Expected exactly one GraphQL request matching "${needle}"; found ${matches.length}`);
+    throw new Error(`Expected exactly one POST to /api/${route}; found ${matches.length}`);
   }
   return matches[0];
 }
 
-function expectGraphQLOptional(httpMock: HttpTestingController, needle: string) {
-  const matches = httpMock.match(r =>
-    r.url === GRAPHQL_URL && typeof (r.body as { query?: string } | null)?.query === 'string'
-    && (r.body as { query: string }).query.includes(needle));
-  return matches[0] ?? null;
+function expectPostOptional(httpMock: HttpTestingController, route: string): TestRequest | null {
+  return httpMock.match(`${API}/${route}`)[0] ?? null;
+}
+
+function expirationsReply(expirations: number[]): Schema['OptionsExpirationsResponse'] {
+  return { success: true, expirations, count: expirations.length, error: null };
+}
+
+const NO_STOCK_SNAPSHOT: Schema['StockSnapshotResponse'] = { success: true, snapshot: null, error: null };
+
+function chainReply(overrides: Partial<Schema['OptionsChainSnapshotResponse']> = {}): Schema['OptionsChainSnapshotResponse'] {
+  return {
+    success: true,
+    underlying: { ticker: 'SPY', price: 100, change: 0, change_percent: 0 },
+    contracts: [],
+    count: 0,
+    risk_free_rate: 0.04,
+    dividend_yield: null,
+    rate_source: 'FRED',
+    dividend_source: null,
+    error: null,
+    ...overrides,
+  };
+}
+
+function analyzeReply(overrides: Partial<Schema['StrategyAnalyzeResponse']> = {}): Schema['StrategyAnalyzeResponse'] {
+  return {
+    success: true,
+    symbol: 'SPY',
+    spot_price: 100,
+    strategy_cost: 0,
+    pop: 0,
+    expected_value: 0,
+    max_profit: 0,
+    max_loss: 0,
+    breakevens: [],
+    curve: [],
+    greeks: { delta: 0, gamma: 0, theta: 0, vega: 0 },
+    current_curve: null,
+    greek_curves: null,
+    leg_diagnostics: null,
+    error: null,
+    ...overrides,
+  };
 }
 
 function buildAnalysisResult(): StrategyAnalyzeResult {
@@ -109,7 +144,7 @@ describe('StrategyBuilderComponent', () => {
     // Drain any incidental requests fired by change detection so each
     // test only asserts the requests it explicitly cares about.
     httpMock.match(() => true).forEach(req => {
-      if (!req.cancelled) req.flush({ data: {} });
+      if (!req.cancelled) req.flush({});
     });
     httpMock.verify();
   });
@@ -163,46 +198,27 @@ describe('StrategyBuilderComponent', () => {
 
       const promise = component.fetchExpirations();
 
-      // fetchExpirations issues two parallel requests: getOptionsExpirations + getStockSnapshot
-      const expReq = expectGraphQL(httpMock, 'getOptionsExpirations');
-      const snapReq = expectGraphQLOptional(httpMock, 'getStockSnapshot');
+      // fetchExpirations issues two parallel requests: the expirations + the stock snapshot
+      const expReq = expectPost(httpMock, 'options/expirations');
+      const snapReq = expectPostOptional(httpMock, 'snapshot/ticker');
 
       const futureDate = optionExpiryAnchorMs(etIsoDate(Date.now() + 30 * 86400000));
-      expReq.flush({
-        data: {
-          getOptionsExpirations: {
-            success: true,
-            expirations: [futureDate],
-            count: 1,
-            error: null,
-          },
-        },
-      });
-      snapReq?.flush({
-        data: { getStockSnapshot: { success: true, snapshot: null, error: null } },
-      });
+      expReq.flush(expirationsReply([futureDate]));
+      snapReq?.flush(NO_STOCK_SNAPSHOT);
 
       // Yield a full event-loop turn so Promise.all resolves and the
       // awaited fetchChainSnapshot() can issue its request.
       await new Promise(resolve => setTimeout(resolve, 0));
 
       // The selection of the nearest expiration triggers a chain-snapshot fetch.
-      const chainReq = expectGraphQL(httpMock, 'getOptionsChainSnapshot');
-      chainReq.flush({
-        data: {
-          getOptionsChainSnapshot: {
-            success: true,
-            underlying: { ticker: 'SPY', price: 590, change: 1, changePercent: 0.17 },
-            contracts: [],
-            count: 0,
-            riskFreeRate: 0.05,
-            dividendYield: 0.012,
-            rateSource: 'fred',
-            dividendSource: 'polygon',
-            error: null,
-          },
-        },
-      });
+      const chainReq = expectPost(httpMock, 'snapshot/options-chain');
+      chainReq.flush(chainReply({
+        underlying: { ticker: 'SPY', price: 590, change: 1, change_percent: 0.17 },
+        risk_free_rate: 0.05,
+        dividend_yield: 0.012,
+        rate_source: 'fred',
+        dividend_source: 'polygon',
+      }));
 
       await promise;
 
@@ -232,12 +248,7 @@ describe('StrategyBuilderComponent', () => {
 
       // Drain to keep afterEach clean
       httpMock.match(() => true).forEach(r => {
-        const body = r.request.body as { query?: string } | null;
-        if (body?.query?.includes('getOptionsExpirations')) {
-          r.flush({ data: { getOptionsExpirations: { success: true, expirations: [], count: 0, error: null } } });
-        } else {
-          r.flush({ data: {} });
-        }
+        r.flush(r.request.url === `${API}/options/expirations` ? expirationsReply([]) : {});
       });
 
       await promise;
@@ -246,21 +257,16 @@ describe('StrategyBuilderComponent', () => {
 
   // ── Failures and stale data are shown, not hidden (#3221) ──────
   describe('failed and superseded fetches', () => {
-    function expirationsReply(expirations: number[]) {
-      return { data: { getOptionsExpirations: { success: true, expirations, count: expirations.length, error: null } } };
-    }
-
-    function snapshotReply(price: number, contracts: SnapshotContractResult[]) {
-      return {
-        data: {
-          getOptionsChainSnapshot: {
-            success: true,
-            underlying: { ticker: 'SPY', price, change: 0, changePercent: 0 },
-            contracts, count: contracts.length,
-            riskFreeRate: 0.04, dividendYield: null, rateSource: 'FRED', dividendSource: null, error: null,
-          },
-        },
-      };
+    function snapshotReply(price: number, strikes: number[]): Schema['OptionsChainSnapshotResponse'] {
+      return chainReply({
+        underlying: { ticker: 'SPY', price, change: 0, change_percent: 0 },
+        contracts: strikes.map(strike => ({
+          ticker: `O:SPY${strike}C`, contract_type: 'call', strike_price: strike, expiration_ms: 4_070_984_400_000,
+          break_even_price: null, implied_volatility: 0.2, open_interest: 10, greeks: null, day: null,
+          last_trade: null, last_quote: { bid: 4.9, ask: 5.1, bid_size: 1, ask_size: 1, midpoint: 5, timeframe: null },
+        })),
+        count: strikes.length,
+      });
     }
 
     function contract(strike: number): SnapshotContractResult {
@@ -271,11 +277,10 @@ describe('StrategyBuilderComponent', () => {
       };
     }
 
-    function flushByTicker(needle: string, ticker: string, body: object): void {
+    function flushByTicker(route: string, ticker: string, body: object): void {
       const req = httpMock.match(r => {
-        const b = r.body as { query?: string; variables?: { underlyingTicker?: string; ticker?: string } } | null;
-        return b?.query?.includes(needle) === true
-          && (b.variables?.underlyingTicker ?? b.variables?.ticker) === ticker;
+        const b = r.body as { underlying_ticker?: string; ticker?: string } | null;
+        return r.url === `${API}/${route}` && (b?.underlying_ticker ?? b?.ticker) === ticker;
       });
       expect(req.length).toBe(1);
       req[0].flush(body);
@@ -285,10 +290,14 @@ describe('StrategyBuilderComponent', () => {
       component.ticker.set('SPY');
       const promise = component.fetchExpirations();
 
-      expectGraphQL(httpMock, 'getOptionsExpirations').flush({
-        data: { getOptionsExpirations: { success: false, expirations: [], count: 0, error: 'Polygon rate limited' } },
-      });
-      expectGraphQLOptional(httpMock, 'getStockSnapshot')?.flush({ data: { getStockSnapshot: { success: false, snapshot: null, error: 'x' } } });
+      expectPost(httpMock, 'options/expirations').flush(
+        { detail: 'Failed to list options expirations: Polygon rate limited' },
+        { status: 500, statusText: 'Internal Server Error' },
+      );
+      expectPostOptional(httpMock, 'snapshot/ticker')?.flush(
+        { detail: 'Failed to fetch stock snapshot: x' },
+        { status: 500, statusText: 'Internal Server Error' },
+      );
       await promise;
 
       expect(component.error()).toContain('Polygon rate limited');
@@ -304,14 +313,14 @@ describe('StrategyBuilderComponent', () => {
       component.ticker.set('MSFT');
       const second = component.fetchExpirations();
 
-      flushByTicker('getOptionsExpirations', 'MSFT', expirationsReply([msftExpiry]));
-      flushByTicker('getStockSnapshot', 'MSFT', { data: { getStockSnapshot: { success: false, snapshot: null, error: null } } });
+      flushByTicker('options/expirations', 'MSFT', expirationsReply([msftExpiry]));
+      flushByTicker('snapshot/ticker', 'MSFT', { success: false, snapshot: null, error: null });
       await new Promise(resolve => setTimeout(resolve, 0));
-      flushByTicker('getOptionsChainSnapshot', 'MSFT', snapshotReply(400, [contract(400)]));
+      flushByTicker('snapshot/options-chain', 'MSFT', snapshotReply(400, [400]));
       await second;
 
-      flushByTicker('getOptionsExpirations', 'AAPL', expirationsReply([aaplExpiry]));
-      flushByTicker('getStockSnapshot', 'AAPL', { data: { getStockSnapshot: { success: false, snapshot: null, error: null } } });
+      flushByTicker('options/expirations', 'AAPL', expirationsReply([aaplExpiry]));
+      flushByTicker('snapshot/ticker', 'AAPL', { success: false, snapshot: null, error: null });
       await first;
 
       expect(component.availableExpirations()).toEqual([msftExpiry]);
@@ -329,14 +338,10 @@ describe('StrategyBuilderComponent', () => {
 
       expect(component.allContracts()).toEqual([]);
       expect(component.legs()).toEqual([]);
-      expectGraphQL(httpMock, 'getOptionsChainSnapshot').flush({
-        data: {
-          getOptionsChainSnapshot: {
-            success: false, underlying: null, contracts: [], count: 0,
-            riskFreeRate: null, dividendYield: null, rateSource: null, dividendSource: null, error: 'Snapshot unavailable',
-          },
-        },
-      });
+      expectPost(httpMock, 'snapshot/options-chain').flush(
+        { detail: 'Snapshot unavailable' },
+        { status: 500, statusText: 'Internal Server Error' },
+      );
       await selecting;
 
       expect(component.error()).toBe('Snapshot unavailable');
@@ -373,7 +378,7 @@ describe('StrategyBuilderComponent', () => {
   });
 
   // ── SB-C: Analyze workflow ─────────────────────────────────────
-  describe('SB-C: analyzeStrategy → resolver call → result rendering', () => {
+  describe('SB-C: analyzeStrategy → strategy analysis call → result rendering', () => {
     function seedReadyState(): void {
       component.ticker.set('SPY');
       component.selectedExpiration.set(4_070_984_400_000);
@@ -390,32 +395,21 @@ describe('StrategyBuilderComponent', () => {
       const promise = component.analyzeStrategy();
       expect(component.analyzing()).toBe(true);
 
-      const req = expectGraphQL(httpMock, 'analyzeOptionsStrategy');
-      req.flush({
-        data: {
-          analyzeOptionsStrategy: {
-            success: true,
-            symbol: 'SPY',
-            spotPrice: 100,
-            strategyCost: 2,
-            pop: 0.45,
-            expectedValue: 0.5,
-            maxProfit: 3,
-            maxLoss: -2,
-            breakevens: [102],
-            curve: [
-              { price: 95, pnl: -2 },
-              { price: 100, pnl: -2 },
-              { price: 105, pnl: 3 },
-            ],
-            greeks: { delta: 0.05, gamma: 0.01, theta: -0.02, vega: 0.05 },
-            currentCurve: null,
-            greekCurves: null,
-            legDiagnostics: null,
-            error: null,
-          },
-        },
-      });
+      const req = expectPost(httpMock, 'strategy/analyze');
+      req.flush(analyzeReply({
+        strategy_cost: 2,
+        pop: 0.45,
+        expected_value: 0.5,
+        max_profit: 3,
+        max_loss: -2,
+        breakevens: [102],
+        curve: [
+          { price: 95, pnl: -2 },
+          { price: 100, pnl: -2 },
+          { price: 105, pnl: 3 },
+        ],
+        greeks: { delta: 0.05, gamma: 0.01, theta: -0.02, vega: 0.05 },
+      }));
 
       await promise;
 
@@ -432,7 +426,7 @@ describe('StrategyBuilderComponent', () => {
       expect(component.error()).toBeNull();
     });
 
-    it('forwards the enabled legs payload to the resolver', async () => {
+    it('sends only the enabled legs, in the wire shape Python takes', async () => {
       seedReadyState();
       // Disable one leg; only enabled ones should be sent.
       component.legs.update(legs => [
@@ -442,43 +436,30 @@ describe('StrategyBuilderComponent', () => {
 
       const promise = component.analyzeStrategy();
 
-      const req = expectGraphQL(httpMock, 'analyzeOptionsStrategy');
-      const requestBody = req.request.body as {
-        variables: { legs: { optionType: string }[] };
-      };
-      const sentLegs = requestBody.variables.legs;
-      expect(sentLegs.length).toBe(2);
-      expect(sentLegs.every((leg) => leg.optionType === 'call')).toBe(true);
+      const req = expectPost(httpMock, 'strategy/analyze');
+      const requestBody = req.request.body as Schema['StrategyAnalyzeRequest'];
+      expect(requestBody.legs.length).toBe(2);
+      expect(requestBody.legs.every((leg) => leg.option_type === 'call')).toBe(true);
 
-      req.flush({ data: { analyzeOptionsStrategy: { success: true, symbol: 'SPY', spotPrice: 100, strategyCost: 0, pop: 0, expectedValue: 0, maxProfit: 0, maxLoss: 0, breakevens: [], curve: [], greeks: { delta: 0, gamma: 0, theta: 0, vega: 0 }, currentCurve: null, greekCurves: null, legDiagnostics: null, error: null } } });
+      req.flush(analyzeReply());
 
       await promise;
     });
 
-    it('propagates resolver-level errors to the error signal', async () => {
+    it('shows the reason Python gave for a failed analysis', async () => {
       seedReadyState();
 
       const promise = component.analyzeStrategy();
-      const req = expectGraphQL(httpMock, 'analyzeOptionsStrategy');
+      const req = expectPost(httpMock, 'strategy/analyze');
 
-      req.flush({
-        data: {
-          analyzeOptionsStrategy: {
-            success: false,
-            symbol: 'SPY',
-            spotPrice: 0, strategyCost: 0, pop: 0, expectedValue: 0,
-            maxProfit: 0, maxLoss: 0,
-            breakevens: [], curve: [],
-            greeks: { delta: 0, gamma: 0, theta: 0, vega: 0 },
-            currentCurve: null, greekCurves: null, legDiagnostics: null,
-            error: 'Python service unavailable',
-          },
-        },
-      });
+      req.flush(
+        { detail: 'Failed to analyze strategy: Python service unavailable' },
+        { status: 500, statusText: 'Internal Server Error' },
+      );
 
       await promise;
 
-      expect(component.error()).toBe('Python service unavailable');
+      expect(component.error()).toBe('Failed to analyze strategy: Python service unavailable');
       expect(component.analysisResult()).toBeNull();
       expect(component.analyzing()).toBe(false);
     });
@@ -487,8 +468,8 @@ describe('StrategyBuilderComponent', () => {
       seedReadyState();
 
       const promise = component.analyzeStrategy();
-      const req = expectGraphQL(httpMock, 'analyzeOptionsStrategy');
-      req.error(new ProgressEvent('error'), { status: 500, statusText: 'Server Error' });
+      const req = expectPost(httpMock, 'strategy/analyze');
+      req.error(new ProgressEvent('error'));
 
       await promise;
 
@@ -510,10 +491,7 @@ describe('StrategyBuilderComponent', () => {
       await component.analyzeStrategy();
 
       // No HTTP request should have fired
-      const matches = httpMock.match(r =>
-        typeof (r.body as { query?: string } | null)?.query === 'string'
-        && (r.body as { query: string }).query.includes('analyzeOptionsStrategy'));
-      expect(matches.length).toBe(0);
+      expect(httpMock.match(`${API}/strategy/analyze`).length).toBe(0);
       expect(component.analyzing()).toBe(false);
     });
 
@@ -526,10 +504,7 @@ describe('StrategyBuilderComponent', () => {
 
       await component.analyzeStrategy();
 
-      const matches = httpMock.match(r =>
-        typeof (r.body as { query?: string } | null)?.query === 'string'
-        && (r.body as { query: string }).query.includes('analyzeOptionsStrategy'));
-      expect(matches.length).toBe(0);
+      expect(httpMock.match(`${API}/strategy/analyze`).length).toBe(0);
     });
 
     it.each<[boolean, string, ReturnType<StrategyBuilderComponent['legs']>]>([
@@ -663,27 +638,35 @@ describe('StrategyBuilderComponent', () => {
       expect(component.selectedHistoryContract()?.ticker).toBe('O:SPY260220C00590000');
       expect(component.selectedHistoryContract()?.contractType).toBe('call');
 
-      const reqs = httpMock.match(r =>
-        r.url === 'http://localhost:5000/graphql'
-        && typeof (r.body as { query?: string } | null)?.query === 'string'
-        && (r.body as { query: string }).query.includes('getOrFetchStockAggregates'));
-      expect(reqs.length).toBe(1);
-      reqs[0].flush({
-        data: {
-          getOrFetchStockAggregates: {
-            ticker: 'O:SPY260220C00590000',
-            aggregates: [
-              { open: 5, high: 6, low: 4, close: 5.5, volume: 1000, timestamp: '2026-02-19T00:00:00Z' },
-            ],
-          },
-        },
-      });
+      const req = expectPost(httpMock, 'aggregates/fetch');
+      expect(req.request.body).toMatchObject({ ticker: 'O:SPY260220C00590000', timespan: 'day', multiplier: 1 });
+      req.flush({
+        success: true,
+        data: [{ open: 5, high: 6, low: 4, close: 5.5, volume: 1000, timestamp: 1_771_465_600_000 }],
+        summary: { original_count: 1, cleaned_count: 1, removed_count: 0, removal_percentage: 0 },
+        ticker: 'O:SPY260220C00590000',
+        data_type: 'aggregates',
+      } satisfies Schema['SanitizedDataResponse']);
 
       await promise;
 
       expect(component.historyLoading()).toBe(false);
       expect(component.historyAggregates().length).toBe(1);
       expect(component.historyError()).toBeNull();
+    });
+
+    it('openContractHistory shows the reason when the aggregates fetch fails', async () => {
+      const promise = component.openContractHistory(buildContract('call'), 'call');
+
+      expectPost(httpMock, 'aggregates/fetch').flush(
+        { detail: 'Failed to fetch aggregates: NOT_AUTHORIZED' },
+        { status: 500, statusText: 'Internal Server Error' },
+      );
+      await promise;
+
+      expect(component.historyError()).toBe('Failed to fetch aggregates: NOT_AUTHORIZED');
+      expect(component.historyLoading()).toBe(false);
+      expect(component.historyAggregates()).toEqual([]);
     });
 
     it('openContractHistory is a no-op for a null contract or one without a ticker', async () => {
@@ -703,9 +686,7 @@ describe('StrategyBuilderComponent', () => {
         snapshot: buildContract('call'),
       });
       component.historyAggregates.set([{
-        id: 1, tickerId: 1, open: 5, high: 6, low: 4, close: 5.5,
-        volume: 1000, volumeWeightedAveragePrice: null, timestamp: 1_771_465_600_000,
-        timespan: 'day', multiplier: 1, transactionCount: null,
+        open: 5, high: 6, low: 4, close: 5.5, volume: 1000, timestamp: 1_771_465_600_000,
       }]);
       component.historyError.set('boom');
 
@@ -750,50 +731,22 @@ describe('StrategyBuilderComponent', () => {
       component.ticker.set('SPY');
       component.selectedExpiration.set(4_070_984_400_000);
       const chain = component.fetchChainSnapshot('SPY', 4_070_984_400_000);
-      expectGraphQL(httpMock, 'getOptionsChainSnapshot').flush({
-        data: {
-          getOptionsChainSnapshot: {
-            success: true,
-            underlying: { ticker: 'SPY', price: 100, change: 0, changePercent: 0 },
-            contracts: [],
-            count: 0,
-            riskFreeRate: 0,
-            dividendYield: null,
-            rateSource: 'FRED',
-            dividendSource: null,
-            error: null,
-          },
-        },
-      });
+      expectPost(httpMock, 'snapshot/options-chain').flush(chainReply({ risk_free_rate: 0 }));
       await chain;
       withPricedLeg();
 
       const analysis = component.analyzeStrategy();
-      const req = expectGraphQL(httpMock, 'analyzeOptionsStrategy');
-      expect(req.request.body.variables.riskFreeRate).toBe(0);
+      const req = expectPost(httpMock, 'strategy/analyze');
+      expect(req.request.body.risk_free_rate).toBe(0);
 
-      req.flush({ data: { analyzeOptionsStrategy: buildAnalysisResult() } });
+      req.flush(analyzeReply());
       await analysis;
     });
 
     // Each expiry prices at its own tenor's rate (#2789).
     it('never prices a new expiry at the previous expiry\'s rate', async () => {
       function flushSnapshot(rate: number): void {
-        expectGraphQL(httpMock, 'getOptionsChainSnapshot').flush({
-          data: {
-            getOptionsChainSnapshot: {
-              success: true,
-              underlying: { ticker: 'SPY', price: 100, change: 0, changePercent: 0 },
-              contracts: [],
-              count: 0,
-              riskFreeRate: rate,
-              dividendYield: null,
-              rateSource: 'FRED',
-              dividendSource: null,
-              error: null,
-            },
-          },
-        });
+        expectPost(httpMock, 'snapshot/options-chain').flush(chainReply({ risk_free_rate: rate }));
       }
       const nearExpiry = optionExpiryAnchorMs(etIsoDate(Date.now() + 30 * 86400000));
       const farExpiry = optionExpiryAnchorMs(etIsoDate(Date.now() + 182 * 86400000));
@@ -817,32 +770,15 @@ describe('StrategyBuilderComponent', () => {
       expect(component.currentPnlCurve().length).toBeGreaterThan(0);
 
       const analysis = component.analyzeStrategy();
-      const req = expectGraphQL(httpMock, 'analyzeOptionsStrategy');
-      expect(req.request.body.variables.expirationMs).toBe(farExpiry);
-      expect(req.request.body.variables.riskFreeRate).toBe(0.05);
+      const req = expectPost(httpMock, 'strategy/analyze');
+      expect(req.request.body.expiration_ms).toBe(farExpiry);
+      expect(req.request.body.risk_free_rate).toBe(0.05);
 
-      req.flush({ data: { analyzeOptionsStrategy: buildAnalysisResult() } });
+      req.flush(analyzeReply());
       await analysis;
     });
 
     it('ignores a late snapshot reply for an expiry the user has left', async () => {
-      function snapshotReply(rate: number) {
-        return {
-          data: {
-            getOptionsChainSnapshot: {
-              success: true,
-              underlying: { ticker: 'SPY', price: 100, change: 0, changePercent: 0 },
-              contracts: [],
-              count: 0,
-              riskFreeRate: rate,
-              dividendYield: null,
-              rateSource: 'FRED',
-              dividendSource: null,
-              error: null,
-            },
-          },
-        };
-      }
       const nearExpiry = optionExpiryAnchorMs(etIsoDate(Date.now() + 30 * 86400000));
       const farExpiry = optionExpiryAnchorMs(etIsoDate(Date.now() + 182 * 86400000));
       component.ticker.set('SPY');
@@ -850,12 +786,11 @@ describe('StrategyBuilderComponent', () => {
       const nearChain = component.fetchChainSnapshot('SPY', nearExpiry);
       const farChain = component.onExpirationSelected(farExpiry);
 
-      const pending = httpMock.match(r =>
-        r.url === GRAPHQL_URL && (r.body as { query: string }).query.includes('getOptionsChainSnapshot'));
-      expect(pending.map(r => r.request.body.variables.expirationMs)).toEqual([nearExpiry, farExpiry]);
-      pending[1].flush(snapshotReply(0.05));
+      const pending = httpMock.match(`${API}/snapshot/options-chain`);
+      expect(pending.map(r => r.request.body.expiration_ms)).toEqual([nearExpiry, farExpiry]);
+      pending[1].flush(chainReply({ risk_free_rate: 0.05 }));
       await farChain;
-      pending[0].flush(snapshotReply(0.0401));
+      pending[0].flush(chainReply({ risk_free_rate: 0.0401 }));
       await nearChain;
 
       expect(component.selectedExpiration()).toBe(farExpiry);
@@ -870,29 +805,14 @@ describe('StrategyBuilderComponent', () => {
       const nearChain = component.fetchChainSnapshot('SPY', nearExpiry);
       const farChain = component.onExpirationSelected(farExpiry);
 
-      const pending = httpMock.match(r =>
-        r.url === GRAPHQL_URL && (r.body as { query: string }).query.includes('getOptionsChainSnapshot'));
-      pending[0].flush({ errors: [{ message: 'near expiry failed' }] });
+      const pending = httpMock.match(`${API}/snapshot/options-chain`);
+      pending[0].flush({ detail: 'near expiry failed' }, { status: 500, statusText: 'Internal Server Error' });
       await nearChain;
 
       expect(component.error()).toBeNull();
       expect(component.chainLoading()).toBe(true);
 
-      pending[1].flush({
-        data: {
-          getOptionsChainSnapshot: {
-            success: true,
-            underlying: { ticker: 'SPY', price: 100, change: 0, changePercent: 0 },
-            contracts: [],
-            count: 0,
-            riskFreeRate: 0.05,
-            dividendYield: null,
-            rateSource: 'FRED',
-            dividendSource: null,
-            error: null,
-          },
-        },
-      });
+      pending[1].flush(chainReply({ risk_free_rate: 0.05 }));
       await farChain;
       expect(component.chainLoading()).toBe(false);
       expect(component.riskFreeRate()).toBe(0.05);
@@ -973,30 +893,16 @@ describe('StrategyBuilderComponent', () => {
       component.ticker.set('SPY');
 
       const promise = component.fetchExpirations();
-      expectGraphQL(httpMock, 'getOptionsExpirations').flush({
-        data: {
-          getOptionsExpirations: { success: true, expirations: [todaysExpiry, nextExpiry], count: 2, error: null },
-        },
-      });
-      expectGraphQLOptional(httpMock, 'getStockSnapshot')?.flush({
-        data: { getStockSnapshot: { success: true, snapshot: null, error: null } },
-      });
+      expectPost(httpMock, 'options/expirations').flush(expirationsReply([todaysExpiry, nextExpiry]));
+      expectPostOptional(httpMock, 'snapshot/ticker')?.flush(NO_STOCK_SNAPSHOT);
       await new Promise(resolve => setTimeout(resolve, 0));
-      expectGraphQL(httpMock, 'getOptionsChainSnapshot').flush({
-        data: {
-          getOptionsChainSnapshot: {
-            success: true,
-            underlying: { ticker: 'SPY', price: 590, change: 0, changePercent: 0 },
-            contracts: [],
-            count: 0,
-            riskFreeRate: 0.05,
-            dividendYield: 0,
-            rateSource: 'fred',
-            dividendSource: 'polygon',
-            error: null,
-          },
-        },
-      });
+      expectPost(httpMock, 'snapshot/options-chain').flush(chainReply({
+        underlying: { ticker: 'SPY', price: 590, change: 0, change_percent: 0 },
+        risk_free_rate: 0.05,
+        dividend_yield: 0,
+        rate_source: 'fred',
+        dividend_source: 'polygon',
+      }));
       await promise;
 
       expect(component.selectedExpiration()).toBe(nextExpiry);
@@ -1036,23 +942,13 @@ describe('StrategyBuilderComponent', () => {
       ]);
     }
 
-    /** Find every captured analyzeOptionsStrategy GraphQL request. */
+    /** Find every captured strategy-analysis request. */
     function findAnalyzeRequests() {
-      return httpMock.match(r =>
-        r.url === GRAPHQL_URL
-        && typeof (r.body as { query?: string } | null)?.query === 'string'
-        && (r.body as { query: string }).query.includes('analyzeOptionsStrategy'));
+      return httpMock.match(`${API}/strategy/analyze`);
     }
 
-    function flushAnalyzeOk(req: ReturnType<typeof findAnalyzeRequests>[number]) {
-      req.flush({
-        data: {
-          analyzeOptionsStrategy: {
-            success: true, pop: 0.5, expectedValue: 10,
-            maxProfit: 100, maxLoss: -50, breakevens: [105], error: null,
-          },
-        },
-      });
+    function flushAnalyzeOk(req: TestRequest) {
+      req.flush(analyzeReply({ pop: 0.5, expected_value: 10, max_profit: 100, max_loss: -50, breakevens: [105] }));
     }
 
     it('P1: re-analyzes after completion when inputs changed mid-flight', async () => {

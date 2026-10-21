@@ -34,7 +34,7 @@ describe("BacktestRunsService", () => {
     expect(await pending).toEqual([]);
   });
 
-  it("passes the engine filter through as the GraphQL-era enum value", async () => {
+  it("passes the engine filter through as the upper-case enum value", async () => {
     const pending = firstValueFrom(service.list("LEAN", 10));
 
     const request = http.expectOne((r) => r.url === BASE);

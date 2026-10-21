@@ -12,8 +12,7 @@ import type {
 
 /**
  * HTTP client for `/api/research/strategy-runs/monte-carlo`. Same
- * pattern as `WalkForwardService` — direct FastAPI calls, no GraphQL
- * passthrough yet.
+ * pattern as `WalkForwardService` — direct FastAPI calls.
  *
  * `runReshuffleFromRun` is the ergonomic entry point for the
  * run-detail page's "Run reshuffle Monte Carlo" button: fixes

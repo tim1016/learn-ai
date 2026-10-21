@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
-import { SnapshotUnderlyingResult } from '../../graphql/types';
+import { SnapshotUnderlyingResult } from '../../services/market-data.types';
 import { TickerQuoteComponent, TickerQuoteView } from './ticker-quote.component';
 
 function requireElement<T extends Element>(node: T | null, selector: string): T {

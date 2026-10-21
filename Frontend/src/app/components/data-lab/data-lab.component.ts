@@ -14,6 +14,7 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { AssetIdentityComponent } from '../../shared/asset-identity';
 import { DateRangePickerComponent, ProviderBoundsService, type QuickRangeKey, type QuickRangeOffer } from '../../shared/date-picker';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
+import { TimestampDisplayPipe } from '../../shared/timestamp';
 import { SymbolPickerComponent } from '../../shared/symbol-picker/symbol-picker.component';
 import { DEFAULT_ADJUSTMENT_MODE } from '../../shared/ticker-catalog';
 import type { PriceAdjustmentMode } from '../../shared/data-lake';
@@ -157,6 +158,7 @@ export function parseYmdMsUtc(s: string): number | null {
     RunDockComponent,
     SymbolPickerComponent,
     DateRangePickerComponent,
+    TimestampDisplayPipe,
   ],
   templateUrl: './data-lab.component.html',
   styleUrls: ['./data-lab.component.scss'],
@@ -458,14 +460,33 @@ export class DataLabComponent {
   readonly sessionName = signal('');
   readonly renamingSessionId = signal<string | null>(null);
   readonly renameValue = signal('');
+  /** Why the last saved-setups call failed; cleared when the next user action starts. */
+  readonly sessionError = signal<string | null>(null);
+
+  /** Runs one saved-setups call. A failure lands in the drawer instead of
+   *  leaving as an unhandled rejection from a click handler. */
+  private async attemptSessionCall<T>(
+    call: () => Promise<T>,
+  ): Promise<{ readonly ok: true; readonly value: T } | { readonly ok: false }> {
+    try {
+      return { ok: true, value: await call() };
+    } catch (err: unknown) {
+      this.sessionError.set(err instanceof Error ? err.message : 'The saved setups request failed.');
+      return { ok: false };
+    }
+  }
 
   async refreshSessionList(): Promise<void> {
-    this.savedSessions.set(await this.sessionService.listSessions());
+    const listed = await this.attemptSessionCall(() => this.sessionService.listSessions());
+    if (listed.ok) this.savedSessions.set(listed.value);
   }
 
   toggleSessionsDrawer(): void {
     this.sessionsDrawerOpen.update((v) => !v);
-    if (this.sessionsDrawerOpen()) this.refreshSessionList();
+    if (this.sessionsDrawerOpen()) {
+      this.sessionError.set(null);
+      void this.refreshSessionList();
+    }
   }
 
   /** Saving requires a committed scope — building the config from the
@@ -501,6 +522,7 @@ export class DataLabComponent {
     const config = this.sessionConfigFromStore();
     if (!config) return;
     this.savingSession.set(true);
+    this.sessionError.set(null);
     try {
       // Persist the latest chart snapshot ONLY when it still matches the
       // committed configuration: `chartStale` is set by any scope/recipe
@@ -509,24 +531,24 @@ export class DataLabComponent {
       // rather than persisting an unrelated render.
       const snapshot = (this.store.chartStale() ? null : this.store.latestChartSnapshot()) as never;
       const activeId = this.activeSessionId();
-      if (activeId) {
-        await this.sessionService.updateSession(
-          activeId,
-          config,
-          snapshot,
-          this.sessionName() || config.ticker,
-        );
-      } else {
-        const newId = await this.sessionService.saveSession(
-          config,
-          snapshot,
-          this.sessionName() || undefined,
-        );
-        if (newId) {
+      await this.attemptSessionCall(async () => {
+        if (activeId) {
+          await this.sessionService.updateSession(
+            activeId,
+            config,
+            snapshot,
+            this.sessionName() || config.ticker,
+          );
+        } else {
+          const newId = await this.sessionService.saveSession(
+            config,
+            snapshot,
+            this.sessionName() || undefined,
+          );
           this.activeSessionId.set(newId);
           this.store.setSavedSession({ id: newId, schemaVersion: DATA_LAB_WORKSPACE_SCHEMA_VERSION });
         }
-      }
+      });
       await this.refreshSessionList();
     } finally {
       this.savingSession.set(false);
@@ -540,8 +562,15 @@ export class DataLabComponent {
   }
 
   async loadSession(id: string): Promise<void> {
-    const session = await this.sessionService.getSession(id);
-    if (!session) return;
+    this.sessionError.set(null);
+    const loaded = await this.attemptSessionCall(() => this.sessionService.getSession(id));
+    if (!loaded.ok) return;
+    const session = loaded.value;
+    if (!session) {
+      this.sessionError.set('Session not found');
+      await this.refreshSessionList();
+      return;
+    }
     const fromMs = parseYmdMsUtc(session.config.fromDate);
     const toMs = parseYmdMsUtc(session.config.toDate);
     this.store.patchDraft({
@@ -575,8 +604,9 @@ export class DataLabComponent {
 
   async deleteSession(id: string, event: Event): Promise<void> {
     event.stopPropagation();
-    await this.sessionService.deleteSession(id);
-    if (this.activeSessionId() === id) {
+    this.sessionError.set(null);
+    const deleted = await this.attemptSessionCall(() => this.sessionService.deleteSession(id));
+    if (deleted.ok && this.activeSessionId() === id) {
       this.activeSessionId.set(null);
       this.sessionName.set('');
       this.store.setSavedSession(null);
@@ -596,7 +626,8 @@ export class DataLabComponent {
 
   async confirmRename(id: string): Promise<void> {
     if (this.renameValue().trim()) {
-      await this.sessionService.renameSession(id, this.renameValue().trim());
+      this.sessionError.set(null);
+      await this.attemptSessionCall(() => this.sessionService.renameSession(id, this.renameValue().trim()));
       await this.refreshSessionList();
     }
     this.renamingSessionId.set(null);
@@ -614,14 +645,5 @@ export class DataLabComponent {
     this.activeSessionId.set(null);
     this.sessionName.set('');
     this.store.setSavedSession(null);
-  }
-
-  formatDate(timestamp: string): string {
-    return new Date(timestamp).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
   }
 }

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import completedRun from '@repo-contracts/fixtures/spec-strategy-backtest-response-v1.json';
 
 import { environment } from '../../environments/environment';
-import { SpecStrategyBacktestResult, StrategySpec } from '../graphql/spec-strategy.models';
+import { SpecStrategyBacktestResult, StrategySpec } from './spec-strategy.types';
 import { SpecStrategyService } from './spec-strategy.service';
 
 const URL = `${environment.pythonServiceUrl}/api/spec-strategy/backtest`;

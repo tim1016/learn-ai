@@ -27,7 +27,7 @@ import {
   StrategySpec,
   SpecStrategyTrade,
   EntryBlock,
-} from '../../graphql/spec-strategy.models';
+} from '../../services/spec-strategy.types';
 import { CANONICAL_FIXTURES, CanonicalFixture } from './canonical-fixtures';
 import {
   CONDITION_CATALOG,

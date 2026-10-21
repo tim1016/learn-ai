@@ -1,32 +1,35 @@
-export interface StockAggregate {
-  id: number;
-  tickerId: number;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-  volumeWeightedAveragePrice: number | null;
-  timestamp: number;
-  timespan: string;
-  multiplier: number;
-  transactionCount: number | null;
-}
+/**
+ * View models of the market-data and pricing screens.
+ *
+ * Python answers in snake_case (`components['schemas']` of the generated
+ * contract); the screens read these camelCase shapes. Where the two are the
+ * same shape a type here is an alias of the generated one. Where only the
+ * case differs, `market-data.mappers.ts` holds the one small mapper that turns
+ * the wire type into the view model. Every timestamp stays `int64 ms UTC`.
+ */
 
-export interface SmartAggregatesResult {
+import type { components } from '../api/broker.types';
+
+type Schema = components['schemas'];
+
+// ------------------------------------------------------------------
+// Aggregate bars
+// ------------------------------------------------------------------
+
+/** One OHLCV bar, the wire shape as-is: `timestamp` is the bar's `int64 ms UTC`. */
+export type StockAggregate = Schema['AggregateBar'];
+
+export interface StockAggregatesResult {
+  /** The ticker as asked, upper-cased. */
   ticker: string;
   aggregates: StockAggregate[];
 }
 
-// Stock Snapshot types (v2 API)
-export interface SnapshotBar {
-  open: number | null;
-  high: number | null;
-  low: number | null;
-  close: number | null;
-  volume: number | null;
-  vwap: number | null;
-}
+// ------------------------------------------------------------------
+// Stock snapshot (single ticker)
+// ------------------------------------------------------------------
+
+export type SnapshotBar = Schema['SnapshotBar'];
 
 export interface MinuteBar extends SnapshotBar {
   accumulatedVolume: number | null;
@@ -49,36 +52,15 @@ export interface StockSnapshotResult {
   error: string | null;
 }
 
-// Options Chain Snapshot types
-export interface GreeksSnapshot {
-  delta: number | null;
-  gamma: number | null;
-  theta: number | null;
-  vega: number | null;
-}
+// ------------------------------------------------------------------
+// Options chain snapshot
+// ------------------------------------------------------------------
 
-export interface DaySnapshot {
-  open: number | null;
-  high: number | null;
-  low: number | null;
-  close: number | null;
-  volume: number | null;
-  vwap: number | null;
-}
+export type GreeksSnapshot = Schema['GreeksSnapshot'];
 
-export interface SnapshotUnderlyingResult {
-  ticker: string;
-  price: number;
-  change: number;
-  changePercent: number;
-}
+export type DaySnapshot = Schema['DaySnapshot'];
 
-export interface LastTradeSnapshot {
-  price: number | null;
-  size: number | null;
-  exchange: number | null;
-  timeframe: string | null;
-}
+export type LastTradeSnapshot = Pick<Schema['LastTradeSnapshot'], 'price' | 'size' | 'exchange' | 'timeframe'>;
 
 export interface LastQuoteSnapshot {
   bid: number | null;
@@ -87,6 +69,13 @@ export interface LastQuoteSnapshot {
   askSize: number | null;
   midpoint: number | null;
   timeframe: string | null;
+}
+
+export interface SnapshotUnderlyingResult {
+  ticker: string;
+  price: number;
+  change: number;
+  changePercent: number;
 }
 
 export interface SnapshotContractResult {
@@ -109,7 +98,7 @@ export interface OptionsChainSnapshotResult {
   underlying: SnapshotUnderlyingResult | null;
   contracts: SnapshotContractResult[];
   count: number;
-  /** Annualized risk-free rate for the chain (FRED-sourced, ~30d tenor). */
+  /** Annualized risk-free rate for the chain (FRED-sourced, interpolated at the expiry's tenor). */
   riskFreeRate: number | null;
   /** Continuous-dividend-yield proxy (Polygon trailing-12-month / spot). */
   dividendYield: number | null;
@@ -118,7 +107,10 @@ export interface OptionsChainSnapshotResult {
   error: string | null;
 }
 
-// Options Strategy Analysis types
+// ------------------------------------------------------------------
+// Options strategy analysis
+// ------------------------------------------------------------------
+
 export interface StrategyLegInput {
   legId?: string;
   strike: number;
@@ -141,17 +133,9 @@ export interface StrategyAnalyzeOptions {
   whatIfIvShift?: number;
 }
 
-export interface PayoffPoint {
-  price: number;
-  pnl: number;
-}
+export type PayoffPoint = Schema['PayoffPoint'];
 
-export interface GreeksResult {
-  delta: number;
-  gamma: number;
-  theta: number;
-  vega: number;
-}
+export type GreeksResult = Required<Schema['GreeksResult']>;
 
 export interface CurrentCurvePoint {
   price: number;
@@ -159,13 +143,7 @@ export interface CurrentCurvePoint {
   theoreticalPnl: number;
 }
 
-export interface GreekCurvePointResult {
-  price: number;
-  delta: number;
-  gamma: number;
-  theta: number;
-  vega: number;
-}
+export type GreekCurvePointResult = Schema['GreekCurvePoint'];
 
 export interface LegDiagnosticResult {
   legId: string | null;
@@ -195,7 +173,7 @@ export interface StrategyAnalyzeResult {
   breakevens: number[];
   curve: PayoffPoint[];
   greeks: GreeksResult;
-  // Phase 1.1: null unless the matching include_* flag was set on the request.
+  // null unless the matching include_* flag was set on the request.
   currentCurve: CurrentCurvePoint[] | null;
   greekCurves: GreekCurvePointResult[] | null;
   legDiagnostics: LegDiagnosticResult[] | null;
@@ -203,26 +181,17 @@ export interface StrategyAnalyzeResult {
 }
 
 // ------------------------------------------------------------------
-// Pricing Engine Toggle
+// Pricing engine toggle
 // ------------------------------------------------------------------
 
 export type QuantLibEngine = 'analytic_bs' | 'binomial_crr' | 'binomial_jr' | 'binomial_lr' | 'finite_diff' | 'monte_carlo';
 
-export interface QuantLibPriceResult {
-  success: boolean;
-  engine: string;
-  price: number;
-  delta: number;
-  gamma: number;
-  theta: number;
-  vega: number;
-  rho: number;
-  d1: number | null;
-  d2: number | null;
-  error: string | null;
-}
+export type QuantLibPriceResult = Schema['QuantLibGreeksResponse'];
 
+// ------------------------------------------------------------------
 // Chart enhancement types
+// ------------------------------------------------------------------
+
 export type GreekType = 'delta' | 'gamma' | 'theta' | 'vega' | 'rho';
 
 export interface WhatIfScenario {
@@ -247,29 +216,31 @@ export interface GreekCurvePoint {
 }
 
 // ------------------------------------------------------------------
-// Pricing Model Comparison
+// Pricing model comparison
 // ------------------------------------------------------------------
 
-export interface PricingPoint {
-  spot: number;
-  price: number;
-  delta: number;
-  gamma: number;
-  /** null when the engine does not provide it (Monte Carlo has no theta, vega or rho). */
-  theta: number | null;
-  vega: number | null;
-  rho: number | null;
-}
+/** `theta`, `vega` and `rho` are null when the engine does not provide them (Monte Carlo has none of the three). */
+export type PricingPoint = Schema['PricingPointResult'];
 
-export interface PricingModelCurve {
-  model: string;
-  points: PricingPoint[];
-}
+export type PricingModelCurve = Schema['PricingModelCurve'];
 
 /** A model the comparison asked for and has no curve for, with the service's reason. */
-export interface PricingModelUnavailable {
-  model: string;
-  reason: string;
+export type PricingModelUnavailable = Schema['PricingModelUnavailable'];
+
+export interface PricingCompareParams {
+  spot: number;
+  strike: number;
+  volatility: number;
+  /** The expiry anchor instant: 16:00 New York time on the expiry date. */
+  expirationMs: number;
+  optionType: string;
+  /** Omit to have Python price at its one default rate. */
+  riskFreeRate?: number;
+  dividendYield?: number;
+  evaluationDate?: string;
+  spotMin?: number;
+  spotMax?: number;
+  numPoints?: number;
 }
 
 export interface PricingCompareResult {
@@ -279,7 +250,7 @@ export interface PricingCompareResult {
   /** The expiry anchor instant: 16:00 New York time on the expiry date. */
   expirationMs: number;
   timeToExpiryYears: number;
-  /** The rate Python priced every curve at; null only when the Backend call failed. */
+  /** The rate Python priced every curve at; null when the call failed before it priced anything. */
   riskFreeRate: number | null;
   models: PricingModelCurve[];
   /** Each requested model with no curve in `models`; empty when every model ran. */

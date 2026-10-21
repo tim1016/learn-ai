@@ -33,8 +33,8 @@ class ShellHostComponent {}
 const savedSession = {
   id: 'session-1',
   name: 'Apple review',
-  createdAt: '2026-05-15T12:00:00Z',
-  updatedAt: '2026-05-15T12:00:00Z',
+  createdAtMs: Date.UTC(2026, 4, 15, 12),
+  updatedAtMs: Date.UTC(2026, 4, 15, 12),
   ticker: 'AAPL',
   fromDate: '2026-04-15',
   toDate: '2026-05-15',
@@ -242,6 +242,36 @@ describe('DataLabComponent (shell)', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Saved setups' }));
     expect(await screen.findByText('Apple review')).toBeTruthy();
+  });
+
+  it('says why a saved setup did not load, and that a vanished one is gone', async () => {
+    const sessions = {
+      listSessions: vi.fn(async () => [savedSession]),
+      getSession: vi.fn(async () => undefined),
+      saveSession: vi.fn(),
+      updateSession: vi.fn(),
+      renameSession: vi.fn(),
+      deleteSession: vi.fn(async () => {
+        throw new Error('Could not delete the setup: Session session-1 not found');
+      }),
+    };
+    const { fixture } = await render(DataLabComponent, {
+      providers: [
+        ...baseProviders(),
+        { provide: DataLabSessionService, useValue: sessions },
+        { provide: DataLabWorkspaceStore, useFactory: createDataLabWorkspaceStore },
+        provideRouter(shellRoutes()),
+      ],
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Saved setups' }));
+    await userEvent.click(await screen.findByText('Apple review'));
+    fixture.detectChanges();
+    expect(await screen.findByText('Session not found')).toBeTruthy();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Delete setup' }));
+    fixture.detectChanges();
+    expect(await screen.findByText('Could not delete the setup: Session session-1 not found')).toBeTruthy();
   });
 
   // ── Calendar-resolved quick ranges ──────────────────────────

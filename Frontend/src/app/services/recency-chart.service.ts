@@ -5,7 +5,7 @@ import { firstValueFrom, map, type Observable } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { JobsService } from './jobs.service';
 
-/** A trade as the chart consumes it — the shape the retired GraphQL query served, kept so the swimlane is untouched. */
+/** A trade as the chart consumes it. */
 export interface RecencyTrade {
   symbol: string;
   strategyKey: string;

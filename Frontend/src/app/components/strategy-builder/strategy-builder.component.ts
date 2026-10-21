@@ -17,7 +17,7 @@ import {
   StrategyAnalyzeResult, StrategyLegInput, PayoffPoint,
   GreekType, WhatIfScenario, ChartCurveData, GreekCurvePoint,
   StockTickerSnapshot, StockAggregate,
-} from '../../graphql/types';
+} from '../../services/market-data.types';
 import {
   strategyPnlAtPrice, strategyGreekAtPrice, LegParams, GreekName,
 } from '../../utils/black-scholes';
@@ -251,7 +251,7 @@ export class StrategyBuilderComponent implements OnDestroy {
       const fromDate = getMinAllowedDate();
       const toDate = new Date().toISOString().slice(0, 10);
       const result = await firstValueFrom(
-        this.marketDataService.getOrFetchStockAggregates(
+        this.marketDataService.getStockAggregates(
           contract.ticker, fromDate, toDate, 'day', 1,
         ),
       );

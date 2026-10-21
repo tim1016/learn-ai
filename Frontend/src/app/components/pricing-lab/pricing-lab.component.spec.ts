@@ -1,14 +1,16 @@
 import { TestBed } from '@angular/core/testing';
 import { render } from '@testing-library/angular';
 import { provideHttpClient } from '@angular/common/http';
-import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { HttpTestingController, provideHttpClientTesting, type TestRequest } from '@angular/common/http/testing';
 import { vi } from 'vitest';
 import { PricingLabComponent } from './pricing-lab.component';
 import { etIsoDate } from '../../shared/date/et-midnight';
 import { optionExpiryAnchorMs } from '../../shared/option-contract/option-expiry-date';
 import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
-import { PricingCompareResult, SnapshotContractResult } from '../../graphql/types';
+import { PricingCompareResult, SnapshotContractResult } from '../../services/market-data.types';
 import { bsPrice } from '../../utils/black-scholes';
+import type { components } from '../../api/broker.types';
+import { environment } from '../../../environments/environment';
 
 vi.mock('lightweight-charts', () => {
   const mockTimeScale = { fitContent: vi.fn() };
@@ -31,16 +33,70 @@ vi.mock('lightweight-charts', () => {
   };
 });
 
-const GRAPHQL_URL = 'http://localhost:5000/graphql';
+type Schema = components['schemas'];
 
-function expectGraphQL(httpMock: HttpTestingController, needle: string) {
-  const matches = httpMock.match(r =>
-    r.url === GRAPHQL_URL && typeof (r.body as { query?: string } | null)?.query === 'string'
-    && (r.body as { query: string }).query.includes(needle));
+const API = `${environment.pythonServiceUrl}/api`;
+
+/** The one request posted to a Python route; throws unless exactly one is pending. */
+function expectPost(httpMock: HttpTestingController, route: string): TestRequest {
+  const matches = httpMock.match(`${API}/${route}`);
   if (matches.length !== 1) {
-    throw new Error(`Expected exactly one GraphQL request matching "${needle}"; found ${matches.length}`);
+    throw new Error(`Expected exactly one POST to /api/${route}; found ${matches.length}`);
   }
   return matches[0];
+}
+
+function expirationsReply(expirations: number[]): Schema['OptionsExpirationsResponse'] {
+  return { success: true, expirations, count: expirations.length, error: null };
+}
+
+/** A call contract in the wire shape, `buildContract`'s twin. */
+function wireContract(strike = 590): NonNullable<Schema['OptionsChainSnapshotResponse']['contracts']>[number] {
+  return {
+    ticker: 'O:SPY260220C00590000',
+    contract_type: 'call',
+    strike_price: strike,
+    expiration_ms: 1_771_621_200_000,
+    break_even_price: 595,
+    implied_volatility: 0.20,
+    open_interest: 1000,
+    greeks: { delta: 0.5, gamma: 0.02, theta: -0.05, vega: 0.15 },
+    day: { open: 5, high: 6, low: 4.5, close: 5.5, volume: 1000, vwap: null },
+    last_trade: null,
+    last_quote: null,
+  };
+}
+
+function chainReply(overrides: Partial<Schema['OptionsChainSnapshotResponse']> = {}): Schema['OptionsChainSnapshotResponse'] {
+  return {
+    success: true,
+    underlying: { ticker: 'SPY', price: 590, change: 0, change_percent: 0 },
+    contracts: [],
+    count: 0,
+    risk_free_rate: null,
+    dividend_yield: null,
+    rate_source: null,
+    dividend_source: null,
+    error: null,
+    ...overrides,
+  };
+}
+
+const PYTHON_BS_POINT = { spot: 590, price: 5.5, delta: 0.5, gamma: 0.02, theta: -0.05, vega: 0.15, rho: 0.05 };
+
+function compareReply(overrides: Partial<Schema['PricingCompareResponse']> = {}): Schema['PricingCompareResponse'] {
+  return {
+    success: true,
+    strike: 590,
+    option_type: 'call',
+    expiration_ms: 4_070_984_400_000,
+    time_to_expiry_years: 0.0822,
+    risk_free_rate: 0.043,
+    models: [{ model: 'python_bs', points: [PYTHON_BS_POINT] }],
+    unavailable_models: [],
+    error: null,
+    ...overrides,
+  };
 }
 
 function buildContract(overrides: Partial<SnapshotContractResult> = {}): SnapshotContractResult {
@@ -82,7 +138,7 @@ describe('PricingLabComponent', () => {
 
   afterEach(() => {
     httpMock.match(() => true).forEach(req => {
-      if (!req.cancelled) req.flush({ data: {} });
+      if (!req.cancelled) req.flush({});
     });
     httpMock.verify();
   });
@@ -93,38 +149,23 @@ describe('PricingLabComponent', () => {
       component.ticker.set('SPY');
       const promise = component.fetchExpirations();
 
-      const expReq = expectGraphQL(httpMock, 'getOptionsExpirations');
+      const expReq = expectPost(httpMock, 'options/expirations');
       const future = optionExpiryAnchorMs(etIsoDate(Date.now() + 30 * 86400000));
-      expReq.flush({
-        data: {
-          getOptionsExpirations: {
-            success: true,
-            expirations: [future],
-            count: 1,
-            error: null,
-          },
-        },
-      });
+      expReq.flush(expirationsReply([future]));
 
       // Yield a full event-loop turn so the awaited fetchChain() can issue its request.
       await new Promise(resolve => setTimeout(resolve, 0));
 
-      const chainReq = expectGraphQL(httpMock, 'getOptionsChainSnapshot');
-      chainReq.flush({
-        data: {
-          getOptionsChainSnapshot: {
-            success: true,
-            underlying: { ticker: 'SPY', price: 590, change: 1, changePercent: 0.17 },
-            contracts: [buildContract()],
-            count: 1,
-            riskFreeRate: 0.045,
-            dividendYield: 0.012,
-            rateSource: 'fred',
-            dividendSource: 'polygon',
-            error: null,
-          },
-        },
-      });
+      const chainReq = expectPost(httpMock, 'snapshot/options-chain');
+      chainReq.flush(chainReply({
+        underlying: { ticker: 'SPY', price: 590, change: 1, change_percent: 0.17 },
+        contracts: [wireContract()],
+        count: 1,
+        risk_free_rate: 0.045,
+        dividend_yield: 0.012,
+        rate_source: 'fred',
+        dividend_source: 'polygon',
+      }));
 
       await promise;
 
@@ -138,21 +179,7 @@ describe('PricingLabComponent', () => {
 
     it('takes a snapshot rate of exactly 0 as the rate', async () => {
       const promise = component.fetchChain('SPY', 4_070_984_400_000);
-      expectGraphQL(httpMock, 'getOptionsChainSnapshot').flush({
-        data: {
-          getOptionsChainSnapshot: {
-            success: true,
-            underlying: { ticker: 'SPY', price: 590, change: 0, changePercent: 0 },
-            contracts: [],
-            count: 0,
-            riskFreeRate: 0,
-            dividendYield: null,
-            rateSource: 'FRED',
-            dividendSource: null,
-            error: null,
-          },
-        },
-      });
+      expectPost(httpMock, 'snapshot/options-chain').flush(chainReply({ risk_free_rate: 0, rate_source: 'FRED' }));
       await promise;
 
       expect(component.riskFreeRate()).toBe(0);
@@ -173,45 +200,26 @@ describe('PricingLabComponent', () => {
       expect(component.serverResult()).toBeNull();
       expect(component.chainLoading()).toBe(true);
 
-      const chainReq = expectGraphQL(httpMock, 'getOptionsChainSnapshot');
-      chainReq.flush({
-        data: {
-          getOptionsChainSnapshot: {
-            success: true,
-            underlying: { ticker: 'AAPL', price: 230, change: 0, changePercent: 0 },
-            contracts: [],
-            count: 0,
-            riskFreeRate: null,
-            dividendYield: null,
-            rateSource: null,
-            dividendSource: null,
-            error: null,
-          },
-        },
-      });
+      const chainReq = expectPost(httpMock, 'snapshot/options-chain');
+      chainReq.flush(chainReply({ underlying: { ticker: 'AAPL', price: 230, change: 0, change_percent: 0 } }));
 
       await promise;
       expect(component.chainLoading()).toBe(false);
     });
 
     // ── Failures and stale data are shown, not hidden (#3221) ──
-    function chainReply(price: number, contracts: SnapshotContractResult[]) {
-      return {
-        data: {
-          getOptionsChainSnapshot: {
-            success: true,
-            underlying: { ticker: 'SPY', price, change: 0, changePercent: 0 },
-            contracts, count: contracts.length,
-            riskFreeRate: null, dividendYield: null, rateSource: null, dividendSource: null, error: null,
-          },
-        },
-      };
+    function strikesReply(price: number, strikes: number[]): Schema['OptionsChainSnapshotResponse'] {
+      return chainReply({
+        underlying: { ticker: 'SPY', price, change: 0, change_percent: 0 },
+        contracts: strikes.map(strike => wireContract(strike)),
+        count: strikes.length,
+      });
     }
 
-    function pendingFor(needle: string, key: 'underlyingTicker' | 'expirationMs', value: string | number) {
+    function pendingFor(route: string, key: 'underlying_ticker' | 'expiration_ms', value: string | number) {
       const found = httpMock.match(r => {
-        const b = r.body as { query?: string; variables?: Record<string, unknown> } | null;
-        return b?.query?.includes(needle) === true && b.variables?.[key] === value;
+        const b = r.body as Record<string, unknown> | null;
+        return r.url === `${API}/${route}` && b?.[key] === value;
       });
       expect(found.length).toBe(1);
       return found[0];
@@ -220,9 +228,10 @@ describe('PricingLabComponent', () => {
     it('says why the expirations could not be loaded', async () => {
       const promise = component.fetchExpirations();
 
-      expectGraphQL(httpMock, 'getOptionsExpirations').flush({
-        data: { getOptionsExpirations: { success: false, expirations: [], count: 0, error: 'Polygon rate limited' } },
-      });
+      expectPost(httpMock, 'options/expirations').flush(
+        { detail: 'Failed to list options expirations: Polygon rate limited' },
+        { status: 500, statusText: 'Internal Server Error' },
+      );
       await promise;
 
       expect(component.statusMessage()?.type).toBe('error');
@@ -232,14 +241,10 @@ describe('PricingLabComponent', () => {
 
     it('says why the chain could not be loaded', async () => {
       const promise = component.fetchChain('SPY', 4_070_984_400_000);
-      expectGraphQL(httpMock, 'getOptionsChainSnapshot').flush({
-        data: {
-          getOptionsChainSnapshot: {
-            success: false, underlying: null, contracts: [], count: 0,
-            riskFreeRate: null, dividendYield: null, rateSource: null, dividendSource: null, error: 'Snapshot unavailable',
-          },
-        },
-      });
+      expectPost(httpMock, 'snapshot/options-chain').flush(
+        { detail: 'Snapshot unavailable' },
+        { status: 500, statusText: 'Internal Server Error' },
+      );
       await promise;
 
       expect(component.statusMessage()?.type).toBe('error');
@@ -251,8 +256,7 @@ describe('PricingLabComponent', () => {
       component.allContracts.set([buildContract()]);
 
       const promise = component.fetchChain('SPY', 4_070_984_400_000);
-      expectGraphQL(httpMock, 'getOptionsChainSnapshot')
-        .error(new ProgressEvent('error'), { status: 500, statusText: 'Server Error' });
+      expectPost(httpMock, 'snapshot/options-chain').error(new ProgressEvent('error'));
       await promise;
 
       expect(component.statusMessage()?.type).toBe('error');
@@ -265,11 +269,9 @@ describe('PricingLabComponent', () => {
       const first = component.fetchChain('SPY', early);
       const second = component.fetchChain('SPY', late);
 
-      pendingFor('getOptionsChainSnapshot', 'expirationMs', late)
-        .flush(chainReply(600, [buildContract({ strikePrice: 600 })]));
+      pendingFor('snapshot/options-chain', 'expiration_ms', late).flush(strikesReply(600, [600]));
       await second;
-      pendingFor('getOptionsChainSnapshot', 'expirationMs', early)
-        .flush(chainReply(500, [buildContract({ strikePrice: 500 })]));
+      pendingFor('snapshot/options-chain', 'expiration_ms', early).flush(strikesReply(500, [500]));
       await first;
 
       expect(component.allContracts().map(c => c.strikePrice)).toEqual([600]);
@@ -285,17 +287,12 @@ describe('PricingLabComponent', () => {
       component.ticker.set('MSFT');
       const second = component.fetchExpirations();
 
-      pendingFor('getOptionsExpirations', 'underlyingTicker', 'MSFT').flush({
-        data: { getOptionsExpirations: { success: true, expirations: [msftExpiry], count: 1, error: null } },
-      });
+      pendingFor('options/expirations', 'underlying_ticker', 'MSFT').flush(expirationsReply([msftExpiry]));
       await new Promise(resolve => setTimeout(resolve, 0));
-      pendingFor('getOptionsChainSnapshot', 'underlyingTicker', 'MSFT')
-        .flush(chainReply(400, [buildContract({ strikePrice: 400 })]));
+      pendingFor('snapshot/options-chain', 'underlying_ticker', 'MSFT').flush(strikesReply(400, [400]));
       await second;
 
-      pendingFor('getOptionsExpirations', 'underlyingTicker', 'AAPL').flush({
-        data: { getOptionsExpirations: { success: true, expirations: [aaplExpiry], count: 1, error: null } },
-      });
+      pendingFor('options/expirations', 'underlying_ticker', 'AAPL').flush(expirationsReply([aaplExpiry]));
       await first;
 
       expect(component.availableExpirations()).toEqual([msftExpiry]);
@@ -306,7 +303,7 @@ describe('PricingLabComponent', () => {
   });
 
   // ── PL-B: Compare workflow ─────────────────────────────────────
-  describe('PL-B: runComparison → pricingModelComparison resolver call', () => {
+  describe('PL-B: runComparison → pricing comparison call', () => {
     function seedReadyState(): void {
       component.ticker.set('SPY');
       component.selectedExpiration.set(4_070_984_400_000);
@@ -315,7 +312,7 @@ describe('PricingLabComponent', () => {
       component.selectedContract.set(buildContract());
     }
 
-    it('forwards (spot, strike, vol, expiration, optionType, riskFreeRate, range, numPoints)', async () => {
+    it('sends (spot, strike, vol, expiration, optionType, riskFreeRate, range, numPoints) in the wire shape', async () => {
       seedReadyState();
       component.riskFreeRate.set(0.045);
       component.spotRangePct.set(20);
@@ -323,33 +320,24 @@ describe('PricingLabComponent', () => {
       const promise = component.runComparison();
       expect(component.compareLoading()).toBe(true);
 
-      const req = expectGraphQL(httpMock, 'pricingModelComparison');
-      const vars = req.request.body.variables;
-      expect(vars.spot).toBe(590);
-      expect(vars.strike).toBe(590);
-      expect(vars.volatility).toBe(0.20);
-      expect(vars.expirationMs).toBe(4_070_984_400_000);
-      expect(vars.optionType).toBe('call');
-      expect(vars.riskFreeRate).toBe(0.045);
-      expect(vars.spotMin).toBeCloseTo(590 * 0.8, 6);
-      expect(vars.spotMax).toBeCloseTo(590 * 1.2, 6);
-      expect(vars.numPoints).toBe(100);
+      const req = expectPost(httpMock, 'quantlib/compare');
+      const body = req.request.body as Schema['PricingCompareRequest'];
+      expect(body.spot).toBe(590);
+      expect(body.strike).toBe(590);
+      expect(body.volatility).toBe(0.20);
+      expect(body.expiration_ms).toBe(4_070_984_400_000);
+      expect(body.option_type).toBe('call');
+      expect(body.risk_free_rate).toBe(0.045);
+      expect(body.spot_min).toBeCloseTo(590 * 0.8, 6);
+      expect(body.spot_max).toBeCloseTo(590 * 1.2, 6);
+      expect(body.num_points).toBe(100);
 
-      req.flush({
-        data: {
-          pricingModelComparison: {
-            success: true,
-            strike: 590, optionType: 'call', expirationMs: 4_070_984_400_000,
-            timeToExpiryYears: 0.0822,
-            models: [
-              { model: 'python_bs', points: [{ spot: 590, price: 5.5, delta: 0.5, gamma: 0.02, theta: -0.05, vega: 0.15, rho: 0.05 }] },
-              { model: 'quantlib_bs', points: [{ spot: 590, price: 5.499, delta: 0.5, gamma: 0.02, theta: -0.05, vega: 0.15, rho: 0.05 }] },
-            ],
-            unavailableModels: [],
-            error: null,
-          },
-        },
-      });
+      req.flush(compareReply({
+        models: [
+          { model: 'python_bs', points: [PYTHON_BS_POINT] },
+          { model: 'quantlib_bs', points: [{ ...PYTHON_BS_POINT, price: 5.499 }] },
+        ],
+      }));
 
       await promise;
 
@@ -366,10 +354,10 @@ describe('PricingLabComponent', () => {
       component.riskFreeRate.set(null);
 
       const promise = component.runComparison();
-      const req = expectGraphQL(httpMock, 'pricingModelComparison');
-      expect(req.request.body.variables.riskFreeRate).toBeNull();
+      const req = expectPost(httpMock, 'quantlib/compare');
+      expect(req.request.body.risk_free_rate).toBeUndefined();
 
-      req.flush({ data: { pricingModelComparison: { success: false, strike: 590, optionType: 'call', expirationMs: 4_070_984_400_000, timeToExpiryYears: 0, riskFreeRate: 0.043, models: [], error: 'stop' } } });
+      req.flush(compareReply({ success: false, time_to_expiry_years: 0, models: [], error: 'stop' }));
       await promise;
     });
 
@@ -399,18 +387,8 @@ describe('PricingLabComponent', () => {
       component.serverResult.set({ success: true, strike: 0, optionType: 'call', expirationMs: 0, timeToExpiryYears: 0, riskFreeRate: null, models: [], unavailableModels: [], error: null });
 
       const promise = component.runComparison();
-      const req = expectGraphQL(httpMock, 'pricingModelComparison');
-      req.flush({
-        data: {
-          pricingModelComparison: {
-            success: false,
-            strike: 590, optionType: 'call', expirationMs: 4_070_984_400_000,
-            timeToExpiryYears: 0,
-            models: [],
-            error: 'QuantLib not available',
-          },
-        },
-      });
+      const req = expectPost(httpMock, 'quantlib/compare');
+      req.flush(compareReply({ success: false, time_to_expiry_years: 0, models: [], error: 'QuantLib not available' }));
       await promise;
 
       expect(component.statusMessage()?.type).toBe('error');
@@ -423,18 +401,8 @@ describe('PricingLabComponent', () => {
       seedReadyState();
 
       const promise = component.runComparison();
-      const req = expectGraphQL(httpMock, 'pricingModelComparison');
-      req.flush({
-        data: {
-          pricingModelComparison: {
-            success: false,
-            strike: 590, optionType: 'call', expirationMs: 4_070_984_400_000,
-            timeToExpiryYears: 0,
-            models: [],
-            error: 'Option has expired',
-          },
-        },
-      });
+      const req = expectPost(httpMock, 'quantlib/compare');
+      req.flush(compareReply({ success: false, time_to_expiry_years: 0, models: [], error: 'Option has expired' }));
       await promise;
 
       expect(component.statusMessage()?.type).toBe('error');
@@ -450,10 +418,7 @@ describe('PricingLabComponent', () => {
 
       expect(component.statusMessage()?.type).toBe('warn');
       expect(component.statusMessage()?.text).toContain('Range %');
-      const matches = httpMock.match(r =>
-        typeof (r.body as { query?: string } | null)?.query === 'string'
-        && (r.body as { query: string }).query.includes('pricingModelComparison'));
-      expect(matches.length).toBe(0);
+      expect(httpMock.match(`${API}/quantlib/compare`).length).toBe(0);
     });
 
     it('draws no Legacy BS overlay while Range % is empty', () => {
@@ -475,25 +440,17 @@ describe('PricingLabComponent', () => {
       seedReadyState();
 
       const promise = component.runComparison();
-      expectGraphQL(httpMock, 'pricingModelComparison').flush({
-        data: {
-          pricingModelComparison: {
-            success: true,
-            strike: 590, optionType: 'call', expirationMs: 4_070_984_400_000,
-            timeToExpiryYears: 0.0822, riskFreeRate: 0.043,
-            models: [
-              { model: 'python_bs', points: [{ spot: 590, price: 5.5, delta: 0.5, gamma: 0.02, theta: -0.05, vega: 0.15, rho: 0.05 }] },
-              { model: 'quantlib_bs', points: [{ spot: 590, price: 5.5, delta: 0.5, gamma: 0.02, theta: -0.05, vega: 0.15, rho: 0.05 }] },
-            ],
-            unavailableModels: [
-              { model: 'quantlib_crr', reason: 'the engine raised RuntimeError while pricing this contract' },
-              { model: 'quantlib_jr', reason: 'the engine raised RuntimeError while pricing this contract' },
-              { model: 'quantlib_mc', reason: 'the engine raised ValueError while pricing this contract' },
-            ],
-            error: null,
-          },
-        },
-      });
+      expectPost(httpMock, 'quantlib/compare').flush(compareReply({
+        models: [
+          { model: 'python_bs', points: [PYTHON_BS_POINT] },
+          { model: 'quantlib_bs', points: [PYTHON_BS_POINT] },
+        ],
+        unavailable_models: [
+          { model: 'quantlib_crr', reason: 'the engine raised RuntimeError while pricing this contract' },
+          { model: 'quantlib_jr', reason: 'the engine raised RuntimeError while pricing this contract' },
+          { model: 'quantlib_mc', reason: 'the engine raised ValueError while pricing this contract' },
+        ],
+      }));
       await promise;
 
       const status = component.statusMessage();
@@ -508,21 +465,10 @@ describe('PricingLabComponent', () => {
       seedReadyState();
 
       const promise = component.runComparison();
-      expectGraphQL(httpMock, 'pricingModelComparison').flush({
-        data: {
-          pricingModelComparison: {
-            success: true,
-            strike: 590, optionType: 'call', expirationMs: 4_070_984_400_000,
-            timeToExpiryYears: 0.0822, riskFreeRate: 0.043,
-            models: [
-              { model: 'python_bs', points: [{ spot: 590, price: 5.5, delta: 0.5, gamma: 0.02, theta: -0.05, vega: 0.15, rho: 0.05 }] },
-            ],
-            unavailableModels: ['quantlib_bs', 'quantlib_crr', 'quantlib_jr', 'quantlib_lr', 'quantlib_fd', 'quantlib_mc']
-              .map(model => ({ model, reason: 'QuantLib is not installed on the data service' })),
-            error: null,
-          },
-        },
-      });
+      expectPost(httpMock, 'quantlib/compare').flush(compareReply({
+        unavailable_models: ['quantlib_bs', 'quantlib_crr', 'quantlib_jr', 'quantlib_lr', 'quantlib_fd', 'quantlib_mc']
+          .map(model => ({ model, reason: 'QuantLib is not installed on the data service' })),
+      }));
       await promise;
 
       const text = component.statusMessage()?.text ?? '';
@@ -535,20 +481,7 @@ describe('PricingLabComponent', () => {
       seedReadyState();
 
       const promise = component.runComparison();
-      expectGraphQL(httpMock, 'pricingModelComparison').flush({
-        data: {
-          pricingModelComparison: {
-            success: true,
-            strike: 590, optionType: 'call', expirationMs: 4_070_984_400_000,
-            timeToExpiryYears: 0.0822, riskFreeRate: 0.043,
-            models: [
-              { model: 'python_bs', points: [{ spot: 590, price: 5.5, delta: 0.5, gamma: 0.02, theta: -0.05, vega: 0.15, rho: 0.05 }] },
-            ],
-            unavailableModels: [],
-            error: null,
-          },
-        },
-      });
+      expectPost(httpMock, 'quantlib/compare').flush(compareReply());
       await promise;
 
       expect(component.statusMessage()?.type).toBe('success');
@@ -593,12 +526,29 @@ describe('PricingLabComponent', () => {
       });
     });
 
+    it('says why the comparison failed when Python answers an HTTP failure', async () => {
+      seedReadyState();
+
+      const promise = component.runComparison();
+      expectPost(httpMock, 'quantlib/compare').flush(
+        { detail: [{ loc: ['body', 'volatility'], msg: 'Input should be greater than 0', type: 'greater_than' }] },
+        { status: 422, statusText: 'Unprocessable Entity' },
+      );
+
+      await promise;
+
+      expect(component.statusMessage()?.type).toBe('error');
+      expect(component.statusMessage()?.text).toContain('Input should be greater than 0');
+      expect(component.serverResult()).toBeNull();
+      expect(component.compareLoading()).toBe(false);
+    });
+
     it('catches network errors and surfaces them in statusMessage', async () => {
       seedReadyState();
 
       const promise = component.runComparison();
-      const req = expectGraphQL(httpMock, 'pricingModelComparison');
-      req.error(new ProgressEvent('error'), { status: 500, statusText: 'Server Error' });
+      const req = expectPost(httpMock, 'quantlib/compare');
+      req.error(new ProgressEvent('error'));
 
       await promise;
 
@@ -619,10 +569,7 @@ describe('PricingLabComponent', () => {
       expect(component.statusMessage()?.type).toBe('warn');
       expect(component.statusMessage()?.text).toContain('contract');
       // No HTTP fired
-      const matches = httpMock.match(r =>
-        typeof (r.body as { query?: string } | null)?.query === 'string'
-        && (r.body as { query: string }).query.includes('pricingModelComparison'));
-      expect(matches.length).toBe(0);
+      expect(httpMock.match(`${API}/quantlib/compare`).length).toBe(0);
     });
 
     it('runComparison sets a warn message when underlying price is missing', async () => {
@@ -632,10 +579,7 @@ describe('PricingLabComponent', () => {
       await component.runComparison();
 
       expect(component.statusMessage()?.type).toBe('warn');
-      const matches = httpMock.match(r =>
-        typeof (r.body as { query?: string } | null)?.query === 'string'
-        && (r.body as { query: string }).query.includes('pricingModelComparison'));
-      expect(matches.length).toBe(0);
+      expect(httpMock.match(`${API}/quantlib/compare`).length).toBe(0);
     });
 
     it('runComparison reports the missing fields when the contract is incomplete', async () => {
@@ -648,10 +592,7 @@ describe('PricingLabComponent', () => {
 
       expect(component.statusMessage()?.type).toBe('warn');
       expect(component.statusMessage()?.text).toContain('implied volatility');
-      const matches = httpMock.match(r =>
-        typeof (r.body as { query?: string } | null)?.query === 'string'
-        && (r.body as { query: string }).query.includes('pricingModelComparison'));
-      expect(matches.length).toBe(0);
+      expect(httpMock.match(`${API}/quantlib/compare`).length).toBe(0);
     });
   });
 });

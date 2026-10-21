@@ -120,6 +120,10 @@
       }
     </div>
 
+    @if (sessionError(); as err) {
+      <p class="dl-shell__scope-error" role="alert">{{ err }}</p>
+    }
+
     <ul class="dl-shell__session-list">
       @for (session of savedSessions(); track session.id) {
         <li class="dl-shell__session-card">
@@ -140,7 +144,7 @@
               <span class="dl-shell__session-name">{{ session.name }}</span>
               <span class="dl-shell__session-meta">
                 {{ session.fromDate }} → {{ session.toDate }} · {{ session.indicatorCount }} indicators ·
-                {{ formatDate(session.updatedAt) }}
+                {{ session.updatedAtMs | timestampDisplay: 'local' : 'datetime' }}
               </span>
             </button>
             <button type="button" aria-label="Rename setup" (click)="startRenaming(session, $event)">Rename</button>

@@ -15,7 +15,7 @@ import {
   SnapshotContractResult,
   SnapshotUnderlyingResult,
   StockTickerSnapshot,
-} from '../../../graphql/types';
+} from '../../../services/market-data.types';
 import { ExpirationRibbonComponent } from '../../options-chain-v2/expiration-ribbon/expiration-ribbon.component';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-picker.component';

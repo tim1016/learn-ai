@@ -6,8 +6,7 @@
  * router when `DATA_LAKE_ENABLED` is on, so the routes are absent from the
  * committed OpenAPI contract these types would otherwise be generated from
  * (`contracts/openapi/python-data-service.openapi.json`). Field names are
- * snake_case because the data plane is reached directly, not through the
- * .NET proxy.
+ * snake_case because that is the data plane's wire shape.
  *
  * Every temporal field is `int64 ms UTC` (ADR 0022 (a) and (e)).
  * `*_trading_date_ms` values are date-anchored at the 09:30 ET session open

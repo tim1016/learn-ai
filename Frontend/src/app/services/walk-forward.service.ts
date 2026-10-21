@@ -12,8 +12,7 @@ import type {
 
 /**
  * HTTP client for `/api/research/strategy-runs/walk-forward`. Same
- * pattern as `StrategyRunsService` — direct FastAPI calls; no GraphQL
- * passthrough yet.
+ * pattern as `StrategyRunsService` — direct FastAPI calls.
  *
  * `runFromRun` is the ergonomic entry point used by the run-detail
  * page's "Run rolling walk-forward" button: takes an existing run's

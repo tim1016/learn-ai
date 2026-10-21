@@ -127,18 +127,12 @@ function fakeService() {
     minuteCandles: vi.fn(() =>
       of([
         {
-          id: 0,
-          tickerId: 0,
           open: 545.1,
           high: 545.2,
           low: 545,
           close: 545.15,
           volume: 1200,
-          volumeWeightedAveragePrice: null,
           timestamp: DAY_MS(2),
-          timespan: 'minute',
-          multiplier: 1,
-          transactionCount: null,
         },
       ]),
     ),

@@ -1,256 +1,67 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { map, tap } from 'rxjs/operators';
 import { Observable } from 'rxjs';
+import { map } from 'rxjs/operators';
+import type { components } from '../api/broker.types';
 import {
-  SmartAggregatesResult,
+  StockAggregatesResult,
   OptionsChainSnapshotResult, StockSnapshotResult,
   StrategyAnalyzeResult, StrategyAnalyzeOptions, StrategyLegInput,
-  PricingCompareResult,
-} from '../graphql/types';
+  PricingCompareParams, PricingCompareResult,
+} from './market-data.types';
+import {
+  failedOptionsChainSnapshot, failedPricingComparison, failedStockSnapshot, failedStrategyAnalysis,
+  toOptionsChainSnapshotResult, toPricingCompareRequest, toPricingCompareResult,
+  toStockSnapshotResult, toStrategyAnalyzeRequest, toStrategyAnalyzeResult,
+} from './market-data.mappers';
+import { failureAsError, failureAsResult } from './python-http-failure';
 import { environment } from '../../environments/environment';
 import { etIsoDate, shiftIsoDateByMonths } from '../shared/date/et-midnight';
 import { optionExpiryAnchorMs } from '../shared/option-contract/option-expiry-date';
 
-const GRAPHQL_URL = environment.backendUrl;
+type Schema = components['schemas'];
 
-const QUERY = `
-  query GetOrFetchStockAggregates(
-    $ticker: String!
-    $fromDate: String!
-    $toDate: String!
-    $timespan: String! = "day"
-    $multiplier: Int! = 1
-    $forceRefresh: Boolean! = false
-    $adjusted: Boolean! = true
-  ) {
-    getOrFetchStockAggregates(
-      ticker: $ticker
-      fromDate: $fromDate
-      toDate: $toDate
-      timespan: $timespan
-      multiplier: $multiplier
-      forceRefresh: $forceRefresh
-      adjusted: $adjusted
-    ) {
-      ticker
-      aggregates {
-        id open high low close volume
-        volumeWeightedAveragePrice timestamp
-        timespan multiplier transactionCount
-      }
-    }
-  }
-`;
-
-interface GraphQLResponse {
-  data: { getOrFetchStockAggregates: SmartAggregatesResult };
-  errors?: { message: string }[];
-}
-
-const GET_OPTIONS_EXPIRATIONS_QUERY = `
-  query GetOptionsExpirations(
-    $underlyingTicker: String!
-    $contractType: String
-    $expirationMsGte: Long
-    $expirationMsLte: Long
-  ) {
-    getOptionsExpirations(
-      underlyingTicker: $underlyingTicker
-      contractType: $contractType
-      expirationMsGte: $expirationMsGte
-      expirationMsLte: $expirationMsLte
-    ) {
-      success
-      expirations
-      count
-      error
-    }
-  }
-`;
-
-interface OptionsExpirationsResponse {
-  data: { getOptionsExpirations: { success: boolean; expirations: number[]; count: number; error?: string } };
-  errors?: { message: string }[];
-}
-
-const GET_OPTIONS_CHAIN_SNAPSHOT_QUERY = `
-  query GetOptionsChainSnapshot($underlyingTicker: String!, $expirationMs: Long) {
-    getOptionsChainSnapshot(underlyingTicker: $underlyingTicker, expirationMs: $expirationMs) {
-      success
-      underlying {
-        ticker price change changePercent
-      }
-      contracts {
-        ticker contractType strikePrice expirationMs
-        breakEvenPrice impliedVolatility openInterest
-        greeks { delta gamma theta vega }
-        day { open high low close volume vwap }
-        lastTrade { price size exchange timeframe }
-        lastQuote { bid ask bidSize askSize midpoint timeframe }
-      }
-      count
-      riskFreeRate
-      dividendYield
-      rateSource
-      dividendSource
-      error
-    }
-  }
-`;
-
-interface OptionsChainSnapshotResponse {
-  data: { getOptionsChainSnapshot: OptionsChainSnapshotResult };
-  errors?: { message: string }[];
-}
-
-const SNAPSHOT_FIELDS = `
-  ticker
-  day { open high low close volume vwap }
-  prevDay { open high low close volume vwap }
-  min { open high low close volume vwap accumulatedVolume timestamp }
-  todaysChange todaysChangePercent updated
-`;
-
-const GET_STOCK_SNAPSHOT_QUERY = `
-  query GetStockSnapshot($ticker: String!) {
-    getStockSnapshot(ticker: $ticker) {
-      success
-      snapshot { ${SNAPSHOT_FIELDS} }
-      error
-    }
-  }
-`;
-
-interface StockSnapshotResponse {
-  data: { getStockSnapshot: StockSnapshotResult };
-  errors?: { message: string }[];
-}
-
-const ANALYZE_OPTIONS_STRATEGY_QUERY = `
-  query AnalyzeOptionsStrategy(
-    $symbol: String!
-    $legs: [StrategyLegInput!]!
-    $expirationMs: Long!
-    $spotPrice: Decimal!
-    $riskFreeRate: Decimal
-    $includeCurrentCurve: Boolean = false
-    $includeGreekCurves: Boolean = false
-    $includeLegDiagnostics: Boolean = false
-    $whatIfTimeShiftDays: Decimal = 0
-    $whatIfIvShift: Decimal = 0
-  ) {
-    analyzeOptionsStrategy(
-      symbol: $symbol
-      legs: $legs
-      expirationMs: $expirationMs
-      spotPrice: $spotPrice
-      riskFreeRate: $riskFreeRate
-      includeCurrentCurve: $includeCurrentCurve
-      includeGreekCurves: $includeGreekCurves
-      includeLegDiagnostics: $includeLegDiagnostics
-      whatIfTimeShiftDays: $whatIfTimeShiftDays
-      whatIfIvShift: $whatIfIvShift
-    ) {
-      success symbol spotPrice strategyCost
-      pop expectedValue maxProfit maxLoss breakevens
-      curve { price pnl }
-      greeks { delta gamma theta vega }
-      currentCurve { price theoreticalValue theoreticalPnl }
-      greekCurves { price delta gamma theta vega }
-      legDiagnostics {
-        legId strike optionType position quantity iv entryPremium
-        currentTheoretical currentDelta currentGamma currentTheta currentVega
-        legPnl
-      }
-      error
-    }
-  }
-`;
-
-interface AnalyzeOptionsStrategyResponse {
-  data: { analyzeOptionsStrategy: StrategyAnalyzeResult };
-  errors?: { message: string }[];
-}
-
-const PRICING_MODEL_COMPARISON_QUERY = `
-  query PricingModelComparison(
-    $spot: Decimal!
-    $strike: Decimal!
-    $volatility: Decimal!
-    $expirationMs: Long!
-    $optionType: String!
-    $riskFreeRate: Decimal
-    $dividendYield: Decimal = 0
-    $evaluationDate: String
-    $spotMin: Decimal
-    $spotMax: Decimal
-    $numPoints: Int = 100
-  ) {
-    pricingModelComparison(
-      spot: $spot
-      strike: $strike
-      volatility: $volatility
-      expirationMs: $expirationMs
-      optionType: $optionType
-      riskFreeRate: $riskFreeRate
-      dividendYield: $dividendYield
-      evaluationDate: $evaluationDate
-      spotMin: $spotMin
-      spotMax: $spotMax
-      numPoints: $numPoints
-    ) {
-      success
-      strike
-      optionType
-      expirationMs
-      timeToExpiryYears
-      riskFreeRate
-      models {
-        model
-        points { spot price delta gamma theta vega rho }
-      }
-      unavailableModels { model reason }
-      error
-    }
-  }
-`;
-
-interface PricingModelComparisonResponse {
-  data: { pricingModelComparison: PricingCompareResult };
-  errors?: { message: string }[];
-}
-
+/**
+ * Python's market-data and pricing routes, called directly.
+ *
+ * Python answers a failed call with an HTTP error and a `detail`. Two operations
+ * reject with an `Error` carrying that sentence (aggregates, expirations); the four
+ * whose screens read `success` and `error` resolve with `success: false` instead,
+ * so one `!result.success` branch covers every kind of failure.
+ */
 @Injectable({
   providedIn: 'root'
 })
 export class MarketDataService {
-  private http = inject(HttpClient);
+  private readonly http = inject(HttpClient);
+  private readonly base = `${environment.pythonServiceUrl}/api`;
 
-  getOrFetchStockAggregates(
+  /** `POST /api/aggregates/fetch` — always a live Polygon read; nothing is cached. */
+  getStockAggregates(
     ticker: string,
     fromDate: string,
     toDate: string,
     timespan = 'day',
     multiplier = 1,
-    forceRefresh = false,
     adjusted = true
-  ): Observable<SmartAggregatesResult> {
+  ): Observable<StockAggregatesResult> {
+    const body: Schema['AggregateRequest'] = {
+      ticker, from_date: fromDate, to_date: toDate, timespan, multiplier, adjusted,
+    };
     return this.http
-      .post<GraphQLResponse>(GRAPHQL_URL, {
-        query: QUERY,
-        variables: { ticker, fromDate, toDate, timespan, multiplier, forceRefresh, adjusted }
-      })
+      .post<Schema['SanitizedDataResponse']>(`${this.base}/aggregates/fetch`, body)
       .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
+        failureAsError(),
+        map(response => {
+          if (!response.success) {
+            throw new Error(`Aggregates unavailable: ${response.error ?? 'no reason given'}`);
           }
+          return { ticker: response.ticker.toUpperCase(), aggregates: response.data };
         }),
-        map(response => response.data.getOrFetchStockAggregates)
       );
   }
 
+  /** `POST /api/options/expirations` — expiry anchor instants, rejecting when the lookup fails. */
   getOptionsExpirations(
     underlyingTicker: string,
     options: {
@@ -260,71 +71,52 @@ export class MarketDataService {
       expirationMsLte?: number;
     } = {}
   ): Observable<number[]> {
+    const body: Schema['OptionsExpirationsRequest'] = {
+      underlying_ticker: underlyingTicker,
+      contract_type: options.contractType,
+      expiration_ms_gte: options.expirationMsGte ?? optionExpiryAnchorMs(etIsoDate(Date.now())),
+      // Both bounds are anchors of ET dates — one zone, six calendar
+      // months out (clamped month arithmetic, not 183 24-hour periods).
+      expiration_ms_lte: options.expirationMsLte ?? optionExpiryAnchorMs(shiftIsoDateByMonths(etIsoDate(Date.now()), 6)),
+    };
     return this.http
-      .post<OptionsExpirationsResponse>(GRAPHQL_URL, {
-        query: GET_OPTIONS_EXPIRATIONS_QUERY,
-        variables: {
-          underlyingTicker,
-          contractType: options.contractType,
-          expirationMsGte: options.expirationMsGte ?? optionExpiryAnchorMs(etIsoDate(Date.now())),
-          // Both bounds are anchors of ET dates — one zone, six calendar
-          // months out (clamped month arithmetic, not 183 24-hour periods).
-          expirationMsLte: options.expirationMsLte ?? optionExpiryAnchorMs(shiftIsoDateByMonths(etIsoDate(Date.now()), 6)),
-        }
-      })
+      .post<Schema['OptionsExpirationsResponse']>(`${this.base}/options/expirations`, body)
       .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => {
-          const result = response.data.getOptionsExpirations;
+        failureAsError('Option expirations unavailable'),
+        map(result => {
           // A vendor failure is not a ticker with no listed options: throw, so
           // every caller shows the reason instead of an empty ribbon.
           if (!result.success) {
             throw new Error(`Option expirations unavailable: ${result.error ?? 'no reason given'}`);
           }
-          return result.expirations;
-        })
+          return result.expirations ?? [];
+        }),
       );
   }
 
+  /** `POST /api/snapshot/options-chain` */
   getOptionsChainSnapshot(
     underlyingTicker: string,
     expirationMs?: number
   ): Observable<OptionsChainSnapshotResult> {
+    const body: Schema['OptionsChainSnapshotRequest'] = {
+      underlying_ticker: underlyingTicker,
+      expiration_ms: expirationMs,
+    };
     return this.http
-      .post<OptionsChainSnapshotResponse>(GRAPHQL_URL, {
-        query: GET_OPTIONS_CHAIN_SNAPSHOT_QUERY,
-        variables: { underlyingTicker, expirationMs }
-      })
-      .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => response.data.getOptionsChainSnapshot)
-      );
+      .post<Schema['OptionsChainSnapshotResponse']>(`${this.base}/snapshot/options-chain`, body)
+      .pipe(map(toOptionsChainSnapshotResult), failureAsResult(failedOptionsChainSnapshot));
   }
 
+  /** `POST /api/snapshot/ticker` */
   getStockSnapshot(ticker: string): Observable<StockSnapshotResult> {
+    const body: Schema['StockSnapshotRequest'] = { ticker };
     return this.http
-      .post<StockSnapshotResponse>(GRAPHQL_URL, {
-        query: GET_STOCK_SNAPSHOT_QUERY,
-        variables: { ticker }
-      })
-      .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => response.data.getStockSnapshot)
-      );
+      .post<Schema['StockSnapshotResponse']>(`${this.base}/snapshot/ticker`, body)
+      .pipe(map(toStockSnapshotResult), failureAsResult(failedStockSnapshot));
   }
 
+  /** `POST /api/strategy/analyze` */
   analyzeOptionsStrategy(
     symbol: string,
     legs: StrategyLegInput[],
@@ -335,66 +127,16 @@ export class MarketDataService {
     riskFreeRate: number | null = null,
     options: StrategyAnalyzeOptions = {},
   ): Observable<StrategyAnalyzeResult> {
+    const body = toStrategyAnalyzeRequest(symbol, legs, expirationMs, spotPrice, riskFreeRate, options);
     return this.http
-      .post<AnalyzeOptionsStrategyResponse>(GRAPHQL_URL, {
-        query: ANALYZE_OPTIONS_STRATEGY_QUERY,
-        variables: {
-          symbol, legs, expirationMs, spotPrice, riskFreeRate,
-          includeCurrentCurve: options.includeCurrentCurve ?? false,
-          includeGreekCurves: options.includeGreekCurves ?? false,
-          includeLegDiagnostics: options.includeLegDiagnostics ?? false,
-          whatIfTimeShiftDays: options.whatIfTimeShiftDays ?? 0,
-          whatIfIvShift: options.whatIfIvShift ?? 0,
-        }
-      })
-      .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => response.data.analyzeOptionsStrategy)
-      );
+      .post<Schema['StrategyAnalyzeResponse']>(`${this.base}/strategy/analyze`, body)
+      .pipe(map(toStrategyAnalyzeResult), failureAsResult(failedStrategyAnalysis));
   }
 
-  comparePricingModels(params: {
-    spot: number;
-    strike: number;
-    volatility: number;
-    /** The expiry anchor instant: 16:00 New York time on the expiry date. */
-    expirationMs: number;
-    optionType: string;
-    riskFreeRate?: number;
-    dividendYield?: number;
-    evaluationDate?: string;
-    spotMin?: number;
-    spotMax?: number;
-    numPoints?: number;
-  }): Observable<PricingCompareResult> {
+  /** `POST /api/quantlib/compare` */
+  comparePricingModels(params: PricingCompareParams): Observable<PricingCompareResult> {
     return this.http
-      .post<PricingModelComparisonResponse>(GRAPHQL_URL, {
-        query: PRICING_MODEL_COMPARISON_QUERY,
-        variables: {
-          spot: params.spot,
-          strike: params.strike,
-          volatility: params.volatility,
-          expirationMs: params.expirationMs,
-          optionType: params.optionType,
-          riskFreeRate: params.riskFreeRate ?? null,
-          dividendYield: params.dividendYield ?? 0,
-          evaluationDate: params.evaluationDate ?? null,
-          spotMin: params.spotMin ?? null,
-          spotMax: params.spotMax ?? null,
-          numPoints: params.numPoints ?? 100,
-        },
-      })
-      .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => response.data.pricingModelComparison),
-      );
+      .post<Schema['PricingCompareResponse']>(`${this.base}/quantlib/compare`, toPricingCompareRequest(params))
+      .pipe(map(toPricingCompareResult), failureAsResult(failedPricingComparison(params)));
   }
 }

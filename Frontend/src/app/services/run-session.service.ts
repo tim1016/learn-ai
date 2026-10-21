@@ -37,7 +37,7 @@ export interface BundleComponentStatus {
 }
 
 export interface RunResult {
-  /** Job id minted by the .NET layer (formerly "session_id"). */
+  /** Job id minted by the jobs facade (formerly "session_id"). */
   sessionId: string;
   filename: string;
   sizeBytes: number;

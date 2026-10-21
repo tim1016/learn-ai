@@ -180,7 +180,7 @@ describe('ReturnsDistributionService', () => {
     const bar = bars[0];
     expect(bar?.timestamp).toBe(1719907200000);
     expect(bar?.open).toBeCloseTo(545.1, 10);
-    expect(bar?.timespan).toBe('minute');
-    expect(bar?.volumeWeightedAveragePrice).toBeNull();
+    expect(bar?.close).toBeCloseTo(545.15, 10);
+    expect(bar?.volume).toBe(1200);
   });
 });

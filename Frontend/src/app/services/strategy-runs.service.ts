@@ -15,10 +15,8 @@ import type {
  * client-side caching. Cache lives in the calling component's
  * `signal()` so each route refresh hits the server.
  *
- * Following the same pattern as `lean-engine` (no GraphQL passthrough
- * yet; Phase B consumes FastAPI directly). When/if the spec layer adds
- * GraphQL, the consumer signature here doesn't change — only the
- * underlying URL.
+ * Following the same pattern as `lean-engine`: Phase B consumes FastAPI
+ * directly.
  */
 @Injectable({ providedIn: 'root' })
 export class StrategyRunsService {

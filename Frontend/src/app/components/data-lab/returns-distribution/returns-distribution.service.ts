@@ -3,7 +3,7 @@ import { inject, Injectable } from '@angular/core';
 import { map, type Observable } from 'rxjs';
 
 import { components } from '../../../api/broker.types';
-import { StockAggregate } from '../../../graphql/types';
+import { StockAggregate } from '../../../services/market-data.types';
 import { environment } from '../../../../environments/environment';
 
 type ReturnDistributionResponseDto = components['schemas']['ReturnDistributionResponse'];
@@ -204,18 +204,12 @@ export class ReturnsDistributionService {
     return this.http.post<DayCandlesResponseDto>(this.dayCandlesBase, body).pipe(
       map((response) =>
         response.bars.map((bar) => ({
-          id: 0,
-          tickerId: 0,
           open: bar.o,
           high: bar.h,
           low: bar.l,
           close: bar.c,
           volume: bar.v ?? 0,
-          volumeWeightedAveragePrice: null,
           timestamp: bar.t,
-          timespan: 'minute',
-          multiplier: 1,
-          transactionCount: null,
         })),
       ),
     );

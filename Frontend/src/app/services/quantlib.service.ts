@@ -1,68 +1,27 @@
 import { Injectable, inject, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
-import { map } from 'rxjs/operators';
+import type { components } from '../api/broker.types';
 import {
   QuantLibPriceResult,
   QuantLibEngine,
-} from '../graphql/types';
+} from './market-data.types';
+import { failedQuantLibPrice } from './market-data.mappers';
+import { failureAsResult } from './python-http-failure';
 import { environment } from '../../environments/environment';
-
-const GRAPHQL_URL = environment.backendUrl;
-
-// ---------------------------------------------------------------------------
-// GraphQL query strings
-// ---------------------------------------------------------------------------
-
-const QUANTLIB_PRICE_QUERY = `
-  query QuantLibPrice(
-    $spot: Decimal!
-    $strike: Decimal!
-    $volatility: Decimal!
-    $expirationMs: Long!
-    $optionType: String!
-    $riskFreeRate: Decimal
-    $evaluationDate: String
-    $dividendYield: Decimal = 0
-    $engine: String = "analytic_bs"
-  ) {
-    quantlibPrice(
-      spot: $spot
-      strike: $strike
-      volatility: $volatility
-      expirationMs: $expirationMs
-      optionType: $optionType
-      riskFreeRate: $riskFreeRate
-      evaluationDate: $evaluationDate
-      dividendYield: $dividendYield
-      engine: $engine
-    ) {
-      success
-      engine
-      price
-      delta
-      gamma
-      theta
-      vega
-      rho
-      d1
-      d2
-      error
-    }
-  }
-`;
-
-// ---------------------------------------------------------------------------
-// Service
-// ---------------------------------------------------------------------------
 
 @Injectable({ providedIn: 'root' })
 export class QuantLibService {
   private readonly http = inject(HttpClient);
+  private readonly url = `${environment.pythonServiceUrl}/api/quantlib/price`;
 
   /** Selected QuantLib sub-engine for comparison. */
   readonly selectedEngine = signal<QuantLibEngine>('analytic_bs');
 
+  /**
+   * `POST /api/quantlib/price`. Python reports an engine failure in-band
+   * (`success: false`); an HTTP failure resolves the same way.
+   */
   async priceOption(params: {
     spot: number;
     strike: number;
@@ -70,28 +29,27 @@ export class QuantLibService {
     /** The expiry anchor instant: 16:00 New York time on the expiry date. */
     expirationMs: number;
     optionType: 'call' | 'put';
+    /** Omit to have Python price at its one default rate (#2764). */
     riskFreeRate?: number;
     evaluationDate?: string;
     dividendYield?: number;
     engine?: QuantLibEngine;
   }): Promise<QuantLibPriceResult> {
+    const engine = params.engine ?? this.selectedEngine();
+    // `undefined` is dropped by JSON; Python rejects a `null` for the rate and the date.
+    const body: components['schemas']['QuantLibPriceRequest'] = {
+      spot: params.spot,
+      strike: params.strike,
+      volatility: params.volatility,
+      expiration_ms: params.expirationMs,
+      option_type: params.optionType,
+      risk_free_rate: params.riskFreeRate,
+      evaluation_date: params.evaluationDate,
+      dividend_yield: params.dividendYield ?? 0,
+      engine,
+    };
     return firstValueFrom(
-      this.http
-        .post<{ data: { quantlibPrice: QuantLibPriceResult } }>(GRAPHQL_URL, {
-          query: QUANTLIB_PRICE_QUERY,
-          variables: {
-            spot: params.spot,
-            strike: params.strike,
-            volatility: params.volatility,
-            expirationMs: params.expirationMs,
-            optionType: params.optionType,
-            riskFreeRate: params.riskFreeRate ?? null,
-            evaluationDate: params.evaluationDate ?? null,
-            dividendYield: params.dividendYield ?? 0,
-            engine: params.engine ?? this.selectedEngine(),
-          },
-        })
-        .pipe(map((r) => r.data.quantlibPrice)),
+      this.http.post<QuantLibPriceResult>(this.url, body).pipe(failureAsResult(failedQuantLibPrice(engine))),
     );
   }
 }

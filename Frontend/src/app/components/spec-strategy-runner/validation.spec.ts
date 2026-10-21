@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { StrategySpec } from '../../graphql/spec-strategy.models';
+import { StrategySpec } from '../../services/spec-strategy.types';
 import { collectIndicatorReferences, validateStrategy } from './validation';
 
 const VALID_SPEC: StrategySpec = {

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, Mock, vi } from 'vitest';
 
 import completedRun from '@repo-contracts/fixtures/spec-strategy-backtest-response-v1.json';
 
-import type { SpecStrategyBacktestResult } from '../../graphql/spec-strategy.models';
+import type { SpecStrategyBacktestResult } from '../../services/spec-strategy.types';
 import { FILL_MODE_OPTIONS } from '../../models/fill-mode';
 import { SpecStrategyService } from '../../services/spec-strategy.service';
 import { SpecStrategyRunnerComponent } from './spec-strategy-runner.component';

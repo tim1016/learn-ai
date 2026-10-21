@@ -16,7 +16,7 @@ import {
   LogicNode,
   Operand,
   StrategySpec,
-} from '../../graphql/spec-strategy.models';
+} from '../../services/spec-strategy.types';
 
 type ConditionOrLogic = Condition | LogicNode;
 

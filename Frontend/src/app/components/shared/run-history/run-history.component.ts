@@ -38,7 +38,7 @@ export class RunHistoryComponent {
    */
   readonly goldenCatalogReadable = input(false);
   /** PR B.3 (2026-05-19) — emitted when the user saves a notes edit on a row.
-   *  The host component owns the persistence side (GraphQL mutation). */
+   *  The host component owns the persistence side. */
   readonly notesEdited = output<{ id: string; notes: string }>();
 
   private readonly _editingId = signal<string | null>(null);
@@ -98,7 +98,7 @@ export class RunHistoryComponent {
   // ------------------------------------------------------------------
   // PR B.3 — inline notes editing. The shared component owns the UI
   // affordance (button → input → save/cancel) while persistence stays
-  // with the host via the ``notesEdited`` output. Keeps the GraphQL
+  // with the host via the ``notesEdited`` output. Keeps the persistence
   // dependency out of this shared widget.
   // ------------------------------------------------------------------
   startEditNotes(row: RunHistoryRow, event: MouseEvent): void {

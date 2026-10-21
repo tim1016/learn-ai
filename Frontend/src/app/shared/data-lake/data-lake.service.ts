@@ -47,8 +47,7 @@ export interface DataLakeProblem {
 
 /**
  * Reads the flag-gated data-lake surface directly from the Python data
- * plane (`/api/data-lake/*` proxies straight through; only `/api/jobs` is
- * served by .NET).
+ * plane (`/api/data-lake/*` proxies straight through, as does `/api/jobs`).
  *
  * Every call resolves to a `DataLakeRead` rather than throwing, so the
  * "lake is dark" case (`DATA_LAKE_ENABLED` off → 404 on every route) is a

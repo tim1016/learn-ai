@@ -432,7 +432,6 @@
     "src/app/shared/date/et-midnight.spec.ts": 0.012,
     "src/app/shared/date/local-wall-clock.spec.ts": 0.006,
     "src/app/shared/date/weekday.spec.ts": 0.008,
-    "src/app/shared/errors/error-catalog.spec.ts": 0.007,
     "src/app/shared/errors/refusal-body.spec.ts": 0.008,
     "src/app/shared/errors/section-error.component.spec.ts": 0.054,
     "src/app/shared/file/file-download.service.spec.ts": 0.012,
