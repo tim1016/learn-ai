@@ -103,7 +103,7 @@ def archived_inventory(case: BenchmarkCase) -> BenchmarkPreflightResponse:
     for session_ms in case.session_open_ms:
         day = et_date_at_ms(session_ms)
         session = read_option_session(case.setup.underlying, day)
-        if session is None or not session.complete:
+        if session is None or not session.contracts_complete:
             incomplete.append(session_ms)
             continue
         underlying = data.underlying_day(day)
