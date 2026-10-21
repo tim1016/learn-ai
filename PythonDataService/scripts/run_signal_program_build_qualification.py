@@ -178,11 +178,13 @@ _DIVIDEND_READER_CHAIN_EXCLUSIONS: dict[str, str] = {
         "app/data_lake/__init__.py",
         "app/data_lake/admission.py",
         "app/data_lake/factor_files.py",
+        "app/data_lake/maintenance.py",
         "app/data_lake/path_policy.py",
         "app/data_lake/polygon_corp_actions.py",
         "app/data_lake/root_identity.py",
         "app/data_lake/types.py",
         "app/lean_sidecar/workspace.py",
+        "app/utils/advisory_lock.py",
         "app/utils/background_loop.py",
         "app/utils/session_anchors.py",
     )
