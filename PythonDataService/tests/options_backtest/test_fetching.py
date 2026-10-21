@@ -197,7 +197,8 @@ async def test_once_one_request_of_a_batch_has_failed_no_other_starts_and_the_se
         strikes=tuple(range(496, 505)),
     )
     # The contracts go in OCC-symbol order: the 496 call is the first of the batch.
-    vendor = Vendor({WED: day}, option_latency_s=0.05, option_errors={"SPY261007C00496000": 429})
+    vendor = Vendor({WED: day}, option_latency_s=0.05, option_errors={"SPY261007C00496000": 429}, answer_errors_first=True)
+    vendor.hold_the_first(4)
     vendor.mount()
 
     with pytest.raises(DownloadFailed) as caught:
