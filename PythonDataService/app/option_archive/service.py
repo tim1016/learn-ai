@@ -44,7 +44,7 @@ from app.option_archive.planner import (
 )
 from app.option_archive.restored_reads import decode_restored_lake
 from app.option_archive.scheduler import ArchiveJob, ArchiveScheduler, JobOwnership, PostgresJobOwnership
-from app.option_archive.settings import ArchiveSettings, archive_settings
+from app.option_archive.settings import STATE_FILE_NAME, ArchiveSettings, archive_settings
 from app.option_archive.snapshot import ChainObservation, SnapshotOutsideWindowError, observe_chain, save_observation
 from app.option_archive.state import (
     ArchiveState,
@@ -73,7 +73,7 @@ class OptionArchiveService:
         self.root = Path(settings.LEAN_DATA_WRITE_ROOT)
         self.service_root = Path(__file__).resolve().parents[2]
         self.checkout = self.service_root.parent if (self.service_root.parent / "compose.yaml").is_file() else self.service_root
-        self.state = state or ArchiveState(self.root / "option-archive-state.json")
+        self.state = state or ArchiveState(self.root / STATE_FILE_NAME)
         self.capture = capture
         self.scheduler = ArchiveScheduler(jobs=(
             ArchiveJob("capture", self.capture_due, self.capture_pass),

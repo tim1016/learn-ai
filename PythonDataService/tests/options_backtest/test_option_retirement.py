@@ -37,6 +37,7 @@ from app.option_archive.backup import (
     manifest_digest,
     read_pin,
 )
+from app.option_archive.settings import STATE_FILE_NAME
 from app.option_archive.state import ArchiveState, ArchiveStateDoc, JobReceipt
 from app.options.contract import OptionContract
 from tests._helpers.fake_lake_catalog import FakeCatalog
@@ -53,7 +54,7 @@ def record_restore_test(lake: Path, receipt: RestoreReceipt | None) -> None:
     """What the archive's restore check records for the lake it preserves."""
     def save(state: ArchiveStateDoc) -> None:
         state.jobs["restore"] = JobReceipt(receipt=receipt)
-    ArchiveState(lake / "option-archive-state.json").update(save)
+    ArchiveState(lake / STATE_FILE_NAME).update(save)
 
 
 def complete_records(fake: FakeCatalog) -> list[ArtifactRecord]:

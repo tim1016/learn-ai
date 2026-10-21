@@ -29,6 +29,7 @@ from app.data_lake.root_identity import LakeRootIdentityError, resolve_root_cont
 from app.engine.live.identity import confine_path_to_root
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.option_archive import lake_restore
+from app.option_archive.settings import STATE_FILE_NAME
 from app.research.runs.hashing import canonical_json
 from app.utils.advisory_lock import try_advisory_file_lock
 from app.utils.atomic_file import atomic_write_bytes, fsync_parent_dir
@@ -222,7 +223,7 @@ def _copy_snapshot_files(destination: Path, roots: Mapping[str, Path], snapshot:
             resolve_root_context(UUID(root_id), base_root=root)
         except LakeRootIdentityError as exc:
             raise BackupRefusedError(f"source lake root marker does not match the catalog: {exc}") from exc
-        state_path = root / "option-archive-state.json"
+        state_path = root / STATE_FILE_NAME
         if state_path.exists():
             state_bytes = state_path.read_bytes()
             json.loads(state_bytes)
@@ -429,8 +430,3 @@ class RestoreReceipt(BaseModel):
     checked_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     passed: bool
     decoded_counts: dict[str, int]
-
-
-def checked_restore_receipt(state: dict[str, Any]) -> RestoreReceipt | None:
-    receipt = state.get("jobs", {}).get("restore", {}).get("receipt")
-    return RestoreReceipt.model_validate(receipt) if receipt is not None else None

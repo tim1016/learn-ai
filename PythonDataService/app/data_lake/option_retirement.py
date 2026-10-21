@@ -40,6 +40,7 @@ from app.option_archive.backup import (
     manifest_digest,
     verify_generation,
 )
+from app.option_archive.settings import STATE_FILE_NAME
 from app.options.contract import OptionContract
 from app.research.runs.hashing import canonical_json, hash_payload
 from app.utils.atomic_file import atomic_write_bytes, fsync_parent_dir
@@ -53,7 +54,6 @@ ROLLBACK_INTERVAL_MS = 7 * _DAY_MS
 #: The oldest restore test a plan may rest on, when it is made and when it is applied.
 RESTORE_TEST_MAX_AGE_MS = 7 * _DAY_MS
 #: The archive service's receipts, at the base of the lake it preserves (``OptionArchiveService.state``).
-_ARCHIVE_STATE_FILE = "option-archive-state.json"
 _Digest = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 _Ms = Annotated[int, Field(strict=True, ge=0, le=MAX_TIMESTAMP_MS)]
 _Model = ConfigDict(frozen=True, extra="forbid")
@@ -207,7 +207,7 @@ def plan_retirement(
     from app.option_archive.state import ArchiveState
 
     root_id = _root_id(mode_root)
-    restore = ArchiveState(mode_root.parent.parent / _ARCHIVE_STATE_FILE).read().job("restore").receipt
+    restore = ArchiveState(mode_root.parent.parent / STATE_FILE_NAME).read().job("restore").receipt
     if restore is None:
         raise RetirementRefusedError("the archive has recorded no restore test of a backup generation")
     manifest = _restore_point(destination, restore, now_ms=now_ms)

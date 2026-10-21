@@ -13,7 +13,7 @@ from app.options_backtest.benchmark import BenchmarkCase
 from app.options_backtest.lake_data import LakeRunData
 from app.options_backtest.timings import RunObservations
 from app.options_bots.golden_proof import result_sha256
-from app.research.golden_search.shared_pool import SharedWorkerPool
+from app.research.golden_search.shared_pool import cgroup_bytes, cgroup_file
 from app.research.persistence import ownership
 from app.research.persistence.db import with_connection, writer_loop_call
 from app.research.runs.hashing import hash_payload
@@ -51,7 +51,7 @@ async def resources() -> BenchmarkResourcesResponse:
     if authority is None or not authority.connected:
         raise RuntimeError("benchmark sampling needs the active research runtime")
     used, maximum = await writer_loop_call(with_connection(_database_capacity))
-    cpu = SharedWorkerPool._cgroup_file("cpu.max")
+    cpu = cgroup_file("cpu.max")
     quota = period = None
     if cpu is not None:
         pieces = cpu.split()
@@ -60,8 +60,8 @@ async def resources() -> BenchmarkResourcesResponse:
     return BenchmarkResourcesResponse(
         observed_at_ms=now_ms_utc(), runtime_instance=f"{authority.instance_id}:{authority.boot_generation}",
         worker_width=settings.OPTIONS_SEARCH_WORKER_COUNT,
-        cgroup_memory_bytes=SharedWorkerPool._cgroup_bytes("memory.current"),
-        cgroup_memory_limit_bytes=SharedWorkerPool._cgroup_bytes("memory.max"),
+        cgroup_memory_bytes=cgroup_bytes("memory.current"),
+        cgroup_memory_limit_bytes=cgroup_bytes("memory.max"),
         cpu_quota_us=quota, cpu_period_us=period,
         frozen_input_bytes=await asyncio.to_thread(_input_bytes, settings.OPTIONS_BACKTEST_INPUT_ROOT),
         database_connections=used, database_connection_limit=maximum,

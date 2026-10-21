@@ -235,6 +235,26 @@ class OwnerHandle:
         self._pool._deregister(self._state)
 
 
+def cgroup_file(name: str) -> str | None:
+    """The text of a cgroup v2 control file of this process's cgroup, or ``None`` where there is none."""
+    try:
+        with open(f"/sys/fs/cgroup/{name}", encoding="ascii") as handle:
+            return handle.read()
+    except OSError:
+        return None
+
+
+def cgroup_bytes(name: str) -> int | None:
+    """A cgroup control file holding one integer (``memory.current``, ``memory.max``), or ``None``."""
+    raw = cgroup_file(name)
+    if raw is None:
+        return None
+    try:
+        return int(raw.strip())
+    except ValueError:
+        return None
+
+
 class SharedWorkerPool:
     """The process-lifetime lanes every dispatch shares under one fair scheduler (#3048)."""
 
@@ -782,7 +802,7 @@ class SharedWorkerPool:
 
     def _refuse_pid_overrun(self) -> None:
         """Refuse a lane count whose task estimate cannot fit 80 % of the cgroup's PID cap (#3048 AC 7)."""
-        raw = self._cgroup_file("pids.max")
+        raw = cgroup_file("pids.max")
         try:
             limit = int((raw or "").strip())
         except ValueError:
@@ -807,8 +827,8 @@ class SharedWorkerPool:
         if now - self._pressure_at < _PRESSURE_PROBE_S:
             return self._pressured
         self._pressure_at = now
-        current = self._cgroup_bytes("memory.current")
-        maximum = self._cgroup_bytes("memory.max")
+        current = cgroup_bytes("memory.current")
+        maximum = cgroup_bytes("memory.max")
         if current is None or maximum is None or maximum <= 0:
             self._pressured = False
             return False
@@ -821,23 +841,6 @@ class SharedWorkerPool:
         self._pressured = pressured
         return pressured
 
-    @staticmethod
-    def _cgroup_file(name: str) -> str | None:
-        try:
-            with open(f"/sys/fs/cgroup/{name}", encoding="ascii") as handle:
-                return handle.read()
-        except OSError:
-            return None
-
-    @classmethod
-    def _cgroup_bytes(cls, name: str) -> int | None:
-        raw = cls._cgroup_file(name)
-        if raw is None:
-            return None
-        try:
-            return int(raw.strip())
-        except ValueError:
-            return None
 
 
 # ── The owner-side base every pooled dispatch shares (#3048, #3049) ───────

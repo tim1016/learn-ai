@@ -6,6 +6,9 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+#: The archive's receipt document, at the base of each lake root.
+STATE_FILE_NAME = "option-archive-state.json"
+
 
 class ArchiveSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="OPTION_ARCHIVE_", extra="ignore")

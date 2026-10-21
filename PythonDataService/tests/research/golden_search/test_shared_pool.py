@@ -299,8 +299,8 @@ def test_memory_pressure_pauses_assignments_without_dropping_work(monkeypatch: p
     def fake_bytes(name: str) -> int | None:
         return {"memory.current": state["current"], "memory.max": state["max"]}.get(name)
 
-    monkeypatch.setattr(SharedWorkerPool, "_cgroup_bytes", staticmethod(fake_bytes))
-    monkeypatch.setattr(SharedWorkerPool, "_cgroup_file", staticmethod(lambda name: "max" if name == "pids.max" else None))
+    monkeypatch.setattr(shared_pool_module, "cgroup_bytes", fake_bytes)
+    monkeypatch.setattr(shared_pool_module, "cgroup_file", lambda name: "max" if name == "pids.max" else None)
     pool, _ = _pool(monkeypatch, workers=1)
     owner = _register(pool)
     try:
@@ -334,9 +334,7 @@ def test_memory_pressure_pauses_assignments_without_dropping_work(monkeypatch: p
 
 def test_startup_refuses_a_pool_that_cannot_fit_the_pid_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
     """The lane-count task estimate must fit 80 % of the cgroup's PID cap (#3048 AC 7)."""
-    monkeypatch.setattr(
-        SharedWorkerPool, "_cgroup_file", staticmethod(lambda name: "100" if name == "pids.max" else None)
-    )
+    monkeypatch.setattr(shared_pool_module, "cgroup_file", lambda name: "100" if name == "pids.max" else None)
     with pytest.raises(RuntimeError, match="PID cap"):
         _pool(monkeypatch, workers=8)
 

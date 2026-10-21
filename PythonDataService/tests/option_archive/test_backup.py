@@ -19,9 +19,7 @@ from app.option_archive.backup import (
     BackupPausedError,
     BackupRefusedError,
     CatalogSnapshot,
-    RestoreReceipt,
     backup_destination_activity,
-    checked_restore_receipt,
     create_generation,
     extend_pin,
     manifest_digest,
@@ -307,11 +305,6 @@ def test_host_destination_is_never_expanded_inside_the_container(source: tuple, 
     with pytest.raises(BackupRefusedError, match="absolute"):
         validate_destination(destination, checkout=tmp_path / "checkout", roots=roots,
                              **{**host_paths(tmp_path), "expected_host_destination": host_destination})
-
-
-def test_checked_restore_receipt_binds_generation_and_manifest() -> None:
-    receipt = RestoreReceipt(generation_id="g", manifest_sha256="a" * 64, checked_at_ms=1000, passed=True, decoded_counts={"metadata": 1})
-    assert checked_restore_receipt({"jobs": {"restore": {"receipt": receipt.model_dump()}}}) == receipt
 
 
 async def test_verification_runs_off_the_option_loop_and_rechecks_pause_before_publish(source: tuple, monkeypatch: pytest.MonkeyPatch) -> None:
