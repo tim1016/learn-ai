@@ -162,3 +162,42 @@ def test_budget_metadata_symlink_escape_refuses_before_outside_write(tmp_path: P
     with pytest.raises(ValueError, match="escapes root"):
         OptionSessionStaging(base).reconcile()
     assert list(outside.iterdir()) == [sentinel] and sentinel.read_bytes() == b"retained"
+
+
+def test_internal_metadata_alias_cannot_delete_retained_outcome(tmp_path: Path) -> None:
+    budget = OptionSessionStaging(tmp_path)
+    budget.root.mkdir(parents=True)
+    original = budget.root / ("." + "a" * 32 + ".lock")
+    original.write_bytes(b"retained original outcome")
+    (tmp_path / "option_session_budget_leases").symlink_to(budget.root, target_is_directory=True)
+    with pytest.raises(ValueError, match="symlink"):
+        OptionSessionStaging(tmp_path).reconcile()
+    assert original.read_bytes() == b"retained original outcome"
+
+
+def test_crashed_ledger_atomic_candidates_are_reclaimed_only_as_bookkeeping(tmp_path: Path) -> None:
+    allowance = overhead(tmp_path)
+    orphan = tmp_path / ".option_session_budget.json.0123456789abcdef.tmp"
+    orphan.write_bytes(b"x" * 32_768)
+    budget = OptionSessionStaging(tmp_path, max_bytes=allowance + 100)
+    budget.reconcile()
+    assert not orphan.exists()
+    reservation = budget.reserve(100)
+    reservation.close()
+
+
+def test_unknown_reservation_metadata_is_preserved_and_refuses_more_work(tmp_path: Path) -> None:
+    budget = OptionSessionStaging(tmp_path)
+    budget.locks.mkdir(parents=True)
+    unknown = budget.locks / "keep-original.zip"
+    unknown.write_bytes(b"unrecognized preserved bytes")
+    with pytest.raises(ValueError, match="metadata"):
+        budget.reserve(100)
+    assert unknown.read_bytes() == b"unrecognized preserved bytes"
+
+
+def test_tiny_budget_refuses_before_creating_bookkeeping(tmp_path: Path) -> None:
+    target = tmp_path / "no-writes"
+    with pytest.raises(ValueError, match="at least"):
+        OptionSessionStaging(target, max_bytes=1).reconcile()
+    assert not target.exists()

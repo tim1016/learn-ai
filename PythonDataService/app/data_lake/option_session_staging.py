@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import stat
 from collections.abc import Iterator, Mapping
@@ -30,6 +31,8 @@ TICKER_RESERVATION_BYTES = 9 * 1024**2
 _MAX_LEDGER_BYTES = 32 * 1024
 _METADATA_BYTES = 2 * _MAX_LEDGER_BYTES + 1024
 _MAX_RESERVATIONS = 128
+_LEASE_NAME = re.compile(r"\.([a-f0-9]{32})\.lock")
+_LEDGER_TEMP_NAME = re.compile(r"\.option_session_budget\.json\.[a-f0-9]{16}\.tmp")
 CAPACITY_PREFIX = "Archive staging capacity"
 
 
@@ -39,8 +42,8 @@ class StagingCapacityError(ValueError):
 
 class OptionSessionStaging:
     def __init__(self, staging_root: Path, *, max_bytes: int = DEFAULT_STAGING_MAX_BYTES) -> None:
-        if type(max_bytes) is not int or max_bytes <= 0:
-            raise ValueError("option staging byte budget must be positive")
+        if type(max_bytes) is not int or max_bytes < _METADATA_BYTES + 1:
+            raise ValueError(f"option staging byte budget must be at least {_METADATA_BYTES + 1} bytes")
         self.base, self.max_bytes = staging_root, max_bytes
         self.root = self._path(staging_root / "option_sessions")
         self.publication_root = self._path(staging_root / "option_session_publications")
@@ -50,12 +53,20 @@ class OptionSessionStaging:
         self._ready = False
 
     def _path(self, path: Path) -> Path:
-        return confine_path_to_root(path, self.base, label="option staging budget")
+        confined = confine_path_to_root(path, self.base, label="option staging budget")
+        current = self.base
+        for part in path.relative_to(self.base).parts:
+            current /= part
+            if current.is_symlink():
+                raise ValueError("option staging budget paths cannot contain a symlink")
+        return confined
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
         target = self._path(self.base / "option_session_budget")
-        self._path(target.with_name(f".{target.name}.lock"))
+        lock = self._path(target.with_name(f".{target.name}.lock"))
+        if lock.exists() and lock.stat().st_size > 1:
+            raise ValueError("option staging budget lock metadata is oversized")
         with advisory_file_lock(target):
             yield
 
@@ -118,16 +129,25 @@ class OptionSessionStaging:
         return used
 
     def _reconcile(self, state: dict) -> None:
+        for path in self.base.glob(".option_session_budget.json.*.tmp"):
+            checked = self._path(path)
+            if not _LEDGER_TEMP_NAME.fullmatch(path.name) or not checked.is_file() or checked.stat().st_size > _MAX_LEDGER_BYTES:
+                raise ValueError("option staging budget has unrecognized atomic ledger metadata")
+            checked.unlink()
         for token in tuple(state["leases"]):
             with try_advisory_file_lock(self._lease_target(token)) as dead:
                 if dead:
                     del state["leases"][token]
         # Only budget-lock metadata is removed. Retained outcomes and abandoned
         # listing/publication generations are never discarded to obtain space.
-        for path in self.locks.glob(".*.lock"):
-            token = path.name[1:-5]
+        for path in self.locks.iterdir() if self.locks.exists() else ():
+            checked = self._path(path)
+            matched = _LEASE_NAME.fullmatch(path.name)
+            if matched is None or not checked.is_file() or checked.stat().st_size != 1:
+                raise ValueError("option staging budget contains unrecognized reservation metadata")
+            token = matched[1]
             if token not in state["leases"]:
-                self._path(path).unlink()
+                checked.unlink()
         state["used_bytes"] = self._measure()
         # A live publication's temp and its outstanding reservation may both
         # be counted until promotion/drain. That conservative headroom is freed
