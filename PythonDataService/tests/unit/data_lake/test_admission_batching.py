@@ -68,7 +68,8 @@ def test_a_lone_request_never_waits_for_a_batch() -> None:
     assert elapsed < 5.0, "nothing waited for a second worker to join"
 
 
-def test_requests_pending_together_share_one_lookup() -> None:
+@pytest.mark.parametrize("queued_order", [(2, 3), (3, 2)])
+def test_requests_pending_together_share_one_lookup(queued_order: tuple[int, int]) -> None:
     """While one lookup is in flight, later arrivals queue behind it — and drain together (#3047 AC 1)."""
     first_in_flight = threading.Event()
     release_first = threading.Event()
@@ -78,7 +79,7 @@ def test_requests_pending_together_share_one_lookup() -> None:
             first_in_flight.set()
             assert release_first.wait(timeout=5.0), "the second submit landed while the first lookup ran"
             return _admit_all(requests)
-        return _admit_all(requests[:1])  # only the first tuple of the shared batch admits
+        return frozenset(index for index, request in enumerate(requests) if request == _check(2).as_tuple())
 
     batcher = AdmissionBatcher(pool_max_size=1, lookup=lookup)
     verdicts: dict[int, object] = {}
@@ -87,8 +88,8 @@ def test_requests_pending_together_share_one_lookup() -> None:
         first.start()
         assert first_in_flight.wait(timeout=5.0), "the first lookup is in flight"
 
-        second = threading.Thread(target=lambda: verdicts.__setitem__(2, batcher.submit(_check(2))), daemon=True)
-        third = threading.Thread(target=lambda: verdicts.__setitem__(3, batcher.submit(_check(3))), daemon=True)
+        second = threading.Thread(target=lambda: verdicts.__setitem__(queued_order[0], batcher.submit(_check(queued_order[0]))), daemon=True)
+        third = threading.Thread(target=lambda: verdicts.__setitem__(queued_order[1], batcher.submit(_check(queued_order[1]))), daemon=True)
         second.start()
         third.start()
         time.sleep(0.1)  # both deposits land while the loop is busy inside the first lookup
