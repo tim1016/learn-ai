@@ -7,7 +7,7 @@ import { extractServerMessage } from '../broker/operation-error';
 import { readDetail } from '../options-backtest/options-backtest.service';
 import { JobsService, type JobState, type JobStreamEvent } from '../../services/jobs.service';
 import type { components } from '../../api/broker.types';
-import type { EvidenceWindow, OptionsStudy, PlanRequest, Preflight, SearchDeclarations, SessionResult, StudyCommand, StudySummary } from './options-golden-search.types';
+import type { EvidenceWindow, HistoryGuidance, HistoryGuidanceRequest, OptionsStudy, PlanRequest, Preflight, SearchDeclarations, SessionResult, StudyCommand, StudySummary } from './options-golden-search.types';
 
 /** The durable command committed; its exact dispatch remains available for retry. */
 export class OptionsSearchDispatchError extends Error {
@@ -24,6 +24,10 @@ export class OptionsGoldenSearchService {
 
   declarations(setupName: string): Promise<SearchDeclarations> {
     return firstValueFrom(this.http.get<SearchDeclarations>(`${this.base}/declarations`, { params: new HttpParams().set('setup_name', setupName) }));
+  }
+
+  historyGuidance(request: HistoryGuidanceRequest): Promise<HistoryGuidance> {
+    return firstValueFrom(this.http.post<HistoryGuidance>(`${this.base}/history-guidance`, request));
   }
 
   preflight(request: PlanRequest): Promise<Preflight> {

@@ -8,6 +8,7 @@
   <button slot="actions" pButton type="button" size="small" severity="secondary" [outlined]="true" [disabled]="!canExport()" [attr.aria-describedby]="exportWhy() === null ? null : 'ob-export-why'" [attr.title]="exportWhy()" (click)="exportSetup()"><i class="pi pi-download" aria-hidden="true"></i><span>Export setup</span></button>
   @if (exportWhy(); as why) { <span slot="actions" id="ob-export-why" class="export-why">{{ why }}</span> }
 </app-page-header>
+<app-option-archive-banner />
 <input #chooser hidden type="file" accept=".json,application/json" aria-label="Setup file to import" (change)="importFile($event)" />
 
 <section class="options-backtest" aria-label="Options Backtest">

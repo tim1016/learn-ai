@@ -28,12 +28,16 @@ class SearchPolicyRequest(Model):
     stress_gate: bool = False
 
 
+TrainMonths = Annotated[int, Field(ge=1, le=120)]
+WindowMonths = Annotated[int, Field(ge=1, le=60)]
+
+
 class History(Model):
     start_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS, strict=True)
     end_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS, strict=True)
-    train_months: int = Field(default=6, ge=1, le=120)
-    test_months: int = Field(default=2, ge=1, le=60)
-    final_months: int = Field(default=6, ge=1, le=60)
+    train_months: TrainMonths = 6
+    test_months: WindowMonths = 2
+    final_months: WindowMonths = 6
 
 
 class PlanRequest(Model):
@@ -103,8 +107,23 @@ class KnobDeclaration(Model):
 
 
 class HistoryBounds(Model):
-    start_ms: int | None
-    end_ms: int | None
+    start_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS, strict=True)
+    end_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS, strict=True)
+
+
+class HistoryGuidanceRequest(Model):
+    bounds: HistoryBounds
+    train_months: TrainMonths
+    test_months: WindowMonths
+    final_months: WindowMonths
+
+
+class HistoryGuidance(Model):
+    start_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS, strict=True)
+    end_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS, strict=True)
+    final_start_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS, strict=True)
+    fold_count: int
+    explanation: str
 
 
 class PlanDefaults(Model):

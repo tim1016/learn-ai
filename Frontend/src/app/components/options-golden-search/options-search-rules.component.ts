@@ -1,9 +1,9 @@
 import { ChangeDetectionStrategy, Component, computed, effect, input, output, signal } from '@angular/core';
-import { form, FormField, max, min } from '@angular/forms/signals';
+import { form, FormField, max, min, validate } from '@angular/forms/signals';
 
-import { etIsoDate } from '../../shared/date/et-midnight';
-import { DateRangePickerComponent, UNBOUNDED, type DateBounds, type DateRange } from '../../shared/date-picker';
+import type { DateRange } from '../../shared/date-picker';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
+import { OptionsSearchHistoryComponent } from './options-search-history.component';
 import type { SearchDeclarations, PlanRequest, Preflight } from './options-golden-search.types';
 
 export interface RuleSelection {
@@ -21,7 +21,7 @@ export interface RuleSelection {
 
 @Component({
   selector: 'app-options-search-rules',
-  imports: [DateRangePickerComponent, FormField, TimestampDisplayComponent],
+  imports: [OptionsSearchHistoryComponent, FormField, TimestampDisplayComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './options-search-rules.component.html',
   styleUrl: './options-golden-search.component.scss',
@@ -38,11 +38,11 @@ export class OptionsSearchRulesComponent {
     for (const field of [path.activity, path.forward, path.final, path.recovery, path.trainMonths, path.testMonths, path.finalMonths, path.budget, path.finalists, path.zoomPasses]) min(field, 1);
     min(path.observations, 2); min(path.zoomPoints, 3); min(path.zoomRefinements, 0);
     max(path.budget, 5000); max(path.finalists, 10); max(path.zoomPoints, 9); max(path.zoomRefinements, 4); max(path.zoomPasses, 5);
+    max(path.trainMonths, 120); max(path.testMonths, 60); max(path.finalMonths, 60);
+    for (const field of [path.trainMonths, path.testMonths, path.finalMonths]) validate(field, ({ value }) => Number.isInteger(value()) ? undefined : { kind: 'whole-months' });
   });
-  protected readonly bounds = computed<DateBounds>(() => {
-    const bounds = this.declarations().history_bounds;
-    return { ...UNBOUNDED, min: bounds.start_ms === null ? null : etIsoDate(bounds.start_ms), max: bounds.end_ms === null ? null : etIsoDate(bounds.end_ms - 1), minReason: 'Pinned Options history begins here.', maxReason: 'Pinned Options history ends here.', unknown: bounds.start_ms === null || bounds.end_ms === null ? 'The server has not established retained history bounds. Preflight must verify coverage.' : null };
-  });
+  /** The walk-forward window lengths date guidance reads; null until all three are valid. */
+  protected readonly windowLengths = computed(() => [this.fields.trainMonths, this.fields.testMonths, this.fields.finalMonths].every((field) => field().valid()) ? { train_months: this.model().trainMonths, test_months: this.model().testMonths, final_months: this.model().finalMonths } : null, { equal: (a, b) => a === b || (a !== null && b !== null && a.train_months === b.train_months && a.test_months === b.test_months && a.final_months === b.final_months) });
   protected readonly pairValid = computed(() => this.model().pairFirst === '' || (this.model().pairFirst !== this.model().pairSecond && [this.model().pairFirst, this.model().pairSecond].every((path) => this.dimensions().some((dimension) => dimension.path === path))));
   protected readonly changedPreset = computed(() => {
     const defaults = this.declarations().defaults;

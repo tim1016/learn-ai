@@ -414,3 +414,16 @@ def test_catalog_outage_stops_range_probe_after_one_failure(lake, monkeypatch):
     from app.lean_sidecar.trading_calendar import session_open_ms_utc
     with pytest.raises(DayNotCapturedError):
         _day_candles_sync(symbol="SPY", session_open_ms_utc=session_open_ms_utc(DAY), lake_root=lake)
+
+
+@pytest.mark.parametrize("observing", [False, True])
+def test_admission_emits_a_work_receipt_only_while_observed(lake, observing):
+    from contextlib import nullcontext
+
+    from app.data_lake.work_progress import observe_work
+
+    path = lake / "equity/usa/minute/spy/20240520_trade.zip"
+    receipts = []
+    with observe_work(receipts.append) if observing else nullcontext():
+        assert read_committed_bytes(path) == path.read_bytes()
+    assert [receipt["work_kind"] for receipt in receipts] == (["admitted_artifact"] if observing else [])

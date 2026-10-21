@@ -104,6 +104,9 @@ class MemoryRunStore:
     def cancel(self, run_id: int, *, finished_at_ms: int) -> None:
         self.cancelled.append((run_id, finished_at_ms))
 
+    def record_timings(self, run_id: int, timings: list[dict[str, Any]], metadata: dict[str, Any]) -> None:
+        return None
+
 
 class FakeEmitter:
     """The job's emitter, remembered."""
@@ -1027,6 +1030,8 @@ def _a_stored_row(status: str) -> dict[str, Any]:
         "summary_json": None,
         "slippage_json": None,
         "tolerance_json": None,
+        "phase_timings_json": None,
+        "execution_metadata_json": None,
     }
 
 

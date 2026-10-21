@@ -367,15 +367,17 @@ async def test_a_contract_outside_the_data_plan_fails_as_outside_the_plan_withou
     day: date, now_ms: int | None, fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble
 ) -> None:
     contract = _call(600, day)
-    vendor_lists(contract)
+    listing_route = vendor_lists(contract)
     bars_route = vendor_bars(lambda symbol: no_trades(symbol))
 
     items = await ensure_chain_data("SPY", day, expiry=None, contracts=[contract], now_ms=now_ms)
 
     assert (items[0].kind, items[0].outcome) == (
         ItemKind.LISTING,
-        Outcome.FETCHED,
-    ), "a listing has no plan floor"
+        Outcome.FAILED,
+    ), "an old missing listing is unfetchable for a backtest"
+    assert items[0].reason == "outside_data_plan"
+    assert listing_route.call_count == 0 and materializer.calls == []
     assert (items[2].kind, items[2].outcome, items[2].reason) == (
         ItemKind.CONTRACT,
         Outcome.FAILED,
@@ -980,7 +982,7 @@ async def test_the_underlyings_fetch_does_not_wait_for_a_place_among_the_option_
     await _on_the_background_loop(_take_every_place_at_the_gate())
     try:
         item = await asyncio.wait_for(
-            _on_the_background_loop(chain_download._capture_underlying("SPY", FRIDAY, None)), 5
+            _on_the_background_loop(chain_download.capture_underlying("SPY", FRIDAY, None)), 5
         )
     finally:
         await _on_the_background_loop(_give_back_places_at_the_gate(MAX_VENDOR_REQUESTS_IN_FLIGHT))

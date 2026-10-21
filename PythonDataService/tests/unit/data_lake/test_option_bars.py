@@ -214,7 +214,7 @@ def _staged_files(tmp_lake: Path) -> list[Path]:
 
 async def _read(contract: OptionContract = CONTRACT, day: date = TRADING_DAY) -> OptionDayBars | None:
     # Admission asks the catalog from a worker thread, as the research workers do.
-    return await asyncio.to_thread(read_option_day_bars, contract, day)
+    return await asyncio.to_thread(read_option_day_bars, contract, day, listed_under="SPY")
 
 
 def _zip_rows(payload: bytes) -> tuple[list[str], list[str]]:
@@ -1606,9 +1606,9 @@ async def test_a_reader_called_on_the_event_loop_thread_answers_none_for_a_day_w
     _mock_vendor()
     await _ensure()
 
-    assert read_option_day_bars(CONTRACT, date(2025, 6, 12)) is None  # called here, on the loop's own thread
+    assert read_option_day_bars(CONTRACT, date(2025, 6, 12), listed_under="SPY") is None  # called here, on the loop's own thread
     with pytest.raises(RuntimeError, match="worker thread"):
-        read_option_day_bars(CONTRACT, TRADING_DAY)
+        read_option_day_bars(CONTRACT, TRADING_DAY, listed_under="SPY")
 
 
 @respx.mock
@@ -1632,7 +1632,7 @@ async def test_the_reader_takes_the_admission_it_is_given(fake_catalog: FakeCata
         asked.append(path)
         return path.read_bytes()
 
-    day = read_option_day_bars(CONTRACT, TRADING_DAY, admission=admit)
+    day = read_option_day_bars(CONTRACT, TRADING_DAY, listed_under="SPY", admission=admit)
 
     assert day is not None and len(day.bars) == 1
     assert asked == [_raw_root(tmp_lake) / RELATIVE_PATH]
@@ -1650,7 +1650,7 @@ async def test_a_day_is_read_from_the_lake_root_it_is_handed_and_the_configured_
     shutil.rmtree(_raw_root(tmp_lake) / "option")  # the configured root no longer holds the day
 
     configured = await _read()
-    from_the_mount = await asyncio.to_thread(read_option_day_bars, CONTRACT, TRADING_DAY, lake_root=mount / "lake" / "raw")
+    from_the_mount = await asyncio.to_thread(read_option_day_bars, CONTRACT, TRADING_DAY, listed_under="SPY", lake_root=mount / "lake" / "raw")
 
     assert result.record is not None
     assert configured is None
@@ -1669,7 +1669,7 @@ async def test_a_lake_root_that_is_not_a_raw_lake_root_is_refused_rather_than_re
     day_file.write_bytes(_zip(MEMBER, "34200000,12700,13100,12500,12700,12\n"))
 
     with pytest.raises(ValueError, match="lake_root"):
-        await asyncio.to_thread(read_option_day_bars, CONTRACT, TRADING_DAY, lake_root=loose)
+        await asyncio.to_thread(read_option_day_bars, CONTRACT, TRADING_DAY, listed_under="SPY", lake_root=loose)
 
 
 # ── Which contract-days are captured ─────────────────────────────────────

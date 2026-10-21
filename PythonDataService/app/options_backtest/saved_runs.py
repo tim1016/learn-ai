@@ -40,6 +40,7 @@ from decimal import Decimal
 from enum import StrEnum
 from itertools import pairwise
 from typing import Any, Literal
+from uuid import uuid4
 
 import asyncpg
 
@@ -54,9 +55,10 @@ from app.options_backtest.saved_setups import read_stored_setup
 from app.options_backtest.session_result import SessionResult
 from app.options_backtest.setup import OptionsBacktestSetup
 from app.options_backtest.statistics import RunSummary
+from app.options_backtest.timings import PhaseTiming
 from app.research.persistence import lifecycle
 from app.research.persistence.db import with_connection, writer_loop_call
-from app.utils.background_loop import run_on_background_loop
+from app.utils.background_loop import CallerStoppedWaitingError, run_on_background_loop
 
 StoredStatus = Literal["running", "complete", "failed", "cancelled"]
 PresentedStatus = Literal["running", "complete", "failed", "cancelled", "interrupted"]
@@ -189,10 +191,16 @@ class StoredRun:
     setup: OptionsBacktestSetup | None
     figures: RunFigures | None
     setup_cannot_open_reason: str | None = None
+    phase_timings: tuple[PhaseTiming, ...] = ()
+    execution_metadata: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if (self.setup is None) == (self.setup_cannot_open_reason is None):
             raise ValueError("a stored run has its setup, or the reason it cannot be opened, and not both")
+
+
+class RuntimeActivationBlocked(RuntimeError):
+    """A never-started run cannot safely acquire its initial worker lease yet."""
 
 
 class DeleteOutcome(StrEnum):
@@ -259,13 +267,20 @@ async def create_run(conn: asyncpg.Connection, new: NewRun) -> int:
         raise DuplicateJob(f"job {new.job_id} already has a run") from exc
 
 
-async def complete_run(conn: asyncpg.Connection, run_id: int, result: RunResult, *, finished_at_ms: int) -> None:
+async def run_for_job(conn: asyncpg.Connection, job_id: str) -> int | None:
+    return await conn.fetchval("SELECT id FROM research_options_backtest_runs WHERE job_id=$1", job_id)
+
+
+async def complete_run(conn: asyncpg.Connection, run_id: int, result: RunResult, *, finished_at_ms: int,
+                       generation: int | None = None) -> None:
     """Save a finished run's figures, sessions and leg trades in one transaction, and mark it ``complete``.
 
     ``RunNotRunning`` when the run is gone or is not running; ``RunDoesNotMatch`` when the result is not one of this
     run (another setup, or sessions other than the ones it was accepted for); nothing is written in either case.
     """
     async with conn.transaction():
+        if generation is not None:
+            await _lock_runtime_generation(conn, run_id, generation)
         row = await conn.fetchrow(
             "SELECT status, setup_json::text AS setup_json, sessions_requested, first_session_open_ms, "
             "last_session_open_ms FROM research_options_backtest_runs WHERE id = $1 FOR UPDATE",
@@ -418,36 +433,44 @@ def _require_fills_of_this_trade(trade: LegTrade) -> None:
             )
 
 
-async def fail_run(conn: asyncpg.Connection, run_id: int, failure: RunFailure, *, finished_at_ms: int) -> bool:
+async def fail_run(conn: asyncpg.Connection, run_id: int, failure: RunFailure, *, finished_at_ms: int,
+                   generation: int | None = None) -> bool:
     """Mark a ``running`` run failed. ``False`` when it was not running."""
     detail = [
         {"session_open_ms": item.session_open_ms, "code": item.code, "message": item.message} for item in failure.items
     ]
-    status = await conn.execute(
-        """
-        UPDATE research_options_backtest_runs
-           SET status = 'failed', finished_at_ms = $2, failure_code = $3, failure_reason = $4,
-               failure_detail_json = $5::jsonb
-         WHERE id = $1 AND status = 'running'
-        """,
-        run_id,
-        finished_at_ms,
-        failure.code,
-        failure.reason,
-        json.dumps(detail),
-    )
-    return status == "UPDATE 1"
+    async with conn.transaction():
+        if generation is not None:
+            await _lock_runtime_generation(conn, run_id, generation)
+        status = await conn.execute(
+            """
+            UPDATE research_options_backtest_runs
+               SET status = 'failed', finished_at_ms = $2, failure_code = $3, failure_reason = $4,
+                   failure_detail_json = $5::jsonb
+             WHERE id = $1 AND status = 'running'
+            """,
+            run_id,
+            finished_at_ms,
+            failure.code,
+            failure.reason,
+            json.dumps(detail),
+        )
+        return status == "UPDATE 1"
 
 
-async def cancel_run(conn: asyncpg.Connection, run_id: int, *, finished_at_ms: int) -> bool:
+async def cancel_run(conn: asyncpg.Connection, run_id: int, *, finished_at_ms: int,
+                     generation: int | None = None) -> bool:
     """Mark a ``running`` run cancelled. ``False`` when it was not running."""
-    status = await conn.execute(
-        "UPDATE research_options_backtest_runs SET status = 'cancelled', finished_at_ms = $2 "
-        "WHERE id = $1 AND status = 'running'",
-        run_id,
-        finished_at_ms,
-    )
-    return status == "UPDATE 1"
+    async with conn.transaction():
+        if generation is not None:
+            await _lock_runtime_generation(conn, run_id, generation)
+        status = await conn.execute(
+            "UPDATE research_options_backtest_runs SET status = 'cancelled', finished_at_ms = $2 "
+            "WHERE id = $1 AND status = 'running'",
+            run_id,
+            finished_at_ms,
+        )
+        return status == "UPDATE 1"
 
 
 # ── Reads ────────────────────────────────────────────────────────────────
@@ -502,7 +525,8 @@ async def get_run(conn: asyncpg.Connection, run_id: int, *, is_live: IsLive) -> 
     """
     row = await conn.fetchrow(
         f"SELECT {_RUN_COLUMNS}, setup_json::text AS setup_json, summary_json::text AS summary_json, "
-        "slippage_json::text AS slippage_json, tolerance_json::text AS tolerance_json "
+        "slippage_json::text AS slippage_json, tolerance_json::text AS tolerance_json, "
+        "phase_timings_json::text AS phase_timings_json, execution_metadata_json::text AS execution_metadata_json "
         "FROM research_options_backtest_runs WHERE id = $1",
         run_id,
     )
@@ -527,6 +551,8 @@ async def get_run(conn: asyncpg.Connection, run_id: int, *, is_live: IsLive) -> 
         setup=saved.setup,
         figures=figures,
         setup_cannot_open_reason=saved.cannot_open_reason,
+        phase_timings=tuple(PhaseTiming.model_validate(item) for item in json.loads(row["phase_timings_json"] or "[]")),
+        execution_metadata=json.loads(row["execution_metadata_json"]) if row["execution_metadata_json"] else None,
     )
 
 
@@ -781,6 +807,15 @@ class SessionLine:
     trades: int
 
 
+def request_matches_header(header: RunHeader | None, setup: OptionsBacktestSetup, *,
+    first_session_open_ms: int, last_session_open_ms: int, sessions_requested: int,
+) -> bool:
+    return header is not None and header.setup == setup and (
+        header.record.first_session_open_ms == first_session_open_ms
+        and header.record.last_session_open_ms == last_session_open_ms
+        and header.record.sessions_requested == sessions_requested)
+
+
 async def get_run_header(conn: asyncpg.Connection, run_id: int) -> RunHeader | None:
     """A run's record and setup; ``None`` when there is none. Cheaper than ``get_run`` where no figure is wanted.
 
@@ -928,20 +963,177 @@ def _session_line(row: asyncpg.Record) -> SessionLine:
 class DbRunStore:
     """Saves a run to the research tables. ``create`` is awaited by the route; the others block, for a worker thread."""
 
+    def __init__(self, *, generation: int | None = None) -> None:
+        self.generation = generation
+
     async def create(self, new: NewRun) -> int:
-        return await writer_loop_call(with_connection(create_run, new))
+        if self.generation is None:
+            return await writer_loop_call(with_connection(create_run, new))
+        return await writer_loop_call(_create_runtime_run(new, self.generation))
+
+    async def start_runtime_worker(self, run_id: int, job_id: str, work: Callable[..., Any]) -> bool:
+        if self.generation is None:
+            raise ValueError("runtime activation requires a generation")
+        return await writer_loop_call(_start_runtime_worker(run_id, job_id, self.generation, work))
 
     def complete(self, run_id: int, result: RunResult, *, finished_at_ms: int) -> None:
-        run_on_background_loop(
-            with_connection(complete_run, run_id, result, finished_at_ms=finished_at_ms), timeout=SAVE_TIMEOUT_SECONDS
-        )
+        try:
+            run_on_background_loop(
+                with_connection(complete_run, run_id, result, finished_at_ms=finished_at_ms, generation=self.generation),
+                timeout=SAVE_TIMEOUT_SECONDS,
+            )
+        except CallerStoppedWaitingError:
+            # The original coroutine continues. Row locking waits behind its
+            # transaction, then exact comparison joins a committed success.
+            if run_on_background_loop(with_connection(completion_matches, run_id, result), timeout=SAVE_TIMEOUT_SECONDS):
+                return
+            raise
+
+    def record_timings(self, run_id: int, timings: list[dict[str, Any]], metadata: dict[str, Any]) -> None:
+        run_on_background_loop(with_connection(record_timings, run_id, timings, metadata, generation=self.generation), timeout=SAVE_TIMEOUT_SECONDS)
 
     def fail(self, run_id: int, failure: RunFailure, *, finished_at_ms: int) -> None:
         run_on_background_loop(
-            with_connection(fail_run, run_id, failure, finished_at_ms=finished_at_ms), timeout=SAVE_TIMEOUT_SECONDS
+            with_connection(fail_run, run_id, failure, finished_at_ms=finished_at_ms, generation=self.generation), timeout=SAVE_TIMEOUT_SECONDS
         )
 
     def cancel(self, run_id: int, *, finished_at_ms: int) -> None:
         run_on_background_loop(
-            with_connection(cancel_run, run_id, finished_at_ms=finished_at_ms), timeout=SAVE_TIMEOUT_SECONDS
+            with_connection(cancel_run, run_id, finished_at_ms=finished_at_ms, generation=self.generation), timeout=SAVE_TIMEOUT_SECONDS
         )
+
+
+async def _create_runtime_run(new: NewRun, generation: int) -> int:
+    """Commit the run, exposure and owner stamp together on the authority session."""
+    from app.research.persistence import ownership
+
+    authority = ownership.process_authority()
+    if authority is None or not authority.connected or authority.boot_generation != generation:
+        raise ownership.GenerationFencedError("Options Backtest creation requires the current runtime authority")
+    async with authority.stamp_lock:
+        if not authority.connected:
+            raise ownership.GenerationFencedError("Options Backtest authority was lost before creation")
+        async with authority.connection.transaction():
+            run_id = await create_run(authority.connection, new)
+            await ownership.record_dispatch(authority.connection, authority, job_id=new.job_id,
+                                            kind="options_backtest", record_id=str(run_id))
+            await _lock_runtime_generation(authority.connection, run_id, generation)
+            await authority.connection.execute(
+                "UPDATE research_job_owners SET attempt=0 WHERE job_id=$1", new.job_id)
+            return run_id
+
+
+# A failed activation commit can roll its marker back after launching a
+# worker. Keep a no-second-start fence for that live authority until the
+# durable row closes; a successor generation never resumes its job ids.
+_UNCONFIRMED_ACTIVATIONS: set[tuple[str, int, str]] = set()
+
+
+async def _start_runtime_worker(run_id: int, job_id: str, generation: int, work: Callable[..., Any]) -> bool:
+    """Only a dispatch without prior worker-start evidence may be activated.
+
+    The marker and fresh lease are claimed once under the live authority.
+    Starting the thread belongs to this writer task too: a caller timeout
+    leaves it running, while loss of this session fences the generation.
+    """
+    from app.jobs import progress
+    from app.jobs.runner import run_in_thread
+    from app.research.persistence import ownership
+    from app.utils.timestamps import now_ms_utc
+
+    authority = ownership.process_authority()
+    if authority is None or not authority.connected or authority.boot_generation != generation:
+        raise ownership.GenerationFencedError("Options activation requires the current runtime authority")
+    activation = (authority.instance_id, generation, job_id)
+    lease_token = uuid4().hex
+    async with authority.stamp_lock:
+        started, claimed = False, False
+        try:
+            async with authority.connection.transaction():
+                await _lock_runtime_generation(authority.connection, run_id, generation)
+                row = await authority.connection.fetchrow(
+                    "SELECT owner.attempt, run.status FROM research_job_owners owner "
+                    "JOIN research_options_backtest_runs run ON run.job_id=owner.job_id "
+                    "WHERE run.id=$1 AND owner.job_id=$2 FOR UPDATE OF owner, run", run_id, job_id)
+                if row is None or row["attempt"] != 0 or row["status"] != "running":
+                    _UNCONFIRMED_ACTIVATIONS.discard(activation)
+                    return False
+                if activation in _UNCONFIRMED_ACTIVATIONS:
+                    return False
+                # Atomic with respect to terminal job state and other lease holders.
+                script = """
+                local status = redis.call('HGET', KEYS[2], 'status')
+                if status == 'completed' or status == 'failed' or status == 'cancelled' then return -1 end
+                if redis.call('HGET', KEYS[2], 'started_at') then return -1 end
+                if redis.call('SET', KEYS[1], ARGV[2], 'NX', 'EX', ARGV[1]) then
+                    if not status then redis.call('HSET', KEYS[2], 'status', 'queued') end
+                    return 1
+                end
+                return 0
+                """
+                claimed = await asyncio.to_thread(progress.get_redis().eval, script, 2,
+                    progress._lease_key(job_id), progress._state_key(job_id), progress.JOB_LEASE_TTL_SECONDS, lease_token)
+                if claimed == -1:
+                    return False
+                if not claimed:
+                    raise RuntimeActivationBlocked("The initial worker lease is occupied; retry this job shortly.")
+                await authority.connection.execute("UPDATE research_job_owners SET attempt=1 WHERE job_id=$1", job_id)
+                run_in_thread(job_id, work, thread_name=f"options-backtest-{job_id[:8]}",
+                              cancel_check_every_n=1, emit_renews_lease=False)
+                started = True
+        except Exception:
+            if started:
+                _UNCONFIRMED_ACTIVATIONS.add(activation)
+            elif claimed == 1:
+                await fail_run(authority.connection, run_id,
+                    RunFailure("JOB_NOT_STARTED", "The run could not be started. Nothing was fetched or run."),
+                    finished_at_ms=now_ms_utc(), generation=generation)
+                await asyncio.to_thread(progress.get_redis().eval,
+                    "if redis.call('GET',KEYS[1]) == ARGV[1] then return redis.call('DEL',KEYS[1]) end return 0",
+                    1, progress._lease_key(job_id), lease_token)
+            # A lost commit acknowledgement cannot reverse a worker that is
+            # already running. Its lease and durable result reconcile it.
+            raise
+        return True
+
+
+async def record_timings(conn: asyncpg.Connection, run_id: int, timings: list[dict[str, Any]], metadata: dict[str, Any],
+                         *, generation: int | None = None) -> None:
+    """Execution observations remain separate from immutable financial results."""
+    async with conn.transaction():
+        if generation is not None:
+            await _lock_runtime_generation(conn, run_id, generation)
+        await conn.execute(
+            "UPDATE research_options_backtest_runs SET phase_timings_json=$2::jsonb, execution_metadata_json=$3::jsonb WHERE id=$1",
+            run_id, json.dumps(timings), json.dumps(metadata),
+        )
+
+
+async def _lock_runtime_generation(conn: asyncpg.Connection, run_id: int, generation: int) -> None:
+    from app.research.persistence.ownership import (
+        COORDINATOR_LOCK_CLASSID,
+        COORDINATOR_LOCK_OBJID,
+        GenerationFencedError,
+    )
+
+    # The successor must update this same singleton row to advance generation.
+    # Holding its share lock through the result transaction makes save and
+    # generation takeover mutually ordered, rather than a check/write race.
+    current = await conn.fetchval(
+        "SELECT runtime.boot_generation FROM research_runtime_owners runtime "
+        "JOIN research_job_owners owner ON owner.boot_generation=runtime.boot_generation "
+        "JOIN research_options_backtest_runs run ON run.job_id=owner.job_id "
+        "WHERE run.id=$1 AND owner.kind='options_backtest' AND owner.record_id=run.id::text "
+        "AND EXISTS (SELECT 1 FROM pg_locks WHERE locktype='advisory' AND classid=$2 AND objid=$3 AND granted "
+        "AND database=(SELECT oid FROM pg_database WHERE datname=current_database())) "
+        "FOR SHARE OF runtime, owner", run_id, COORDINATOR_LOCK_CLASSID, COORDINATOR_LOCK_OBJID,
+    )
+    if current != generation:
+        raise GenerationFencedError("a stale research generation cannot save this Options Backtest")
+
+
+async def completion_matches(conn: asyncpg.Connection, run_id: int, result: RunResult) -> bool:
+    """Read-only uncertain-write reconciliation; no second result publication."""
+    async with conn.transaction():
+        status = await conn.fetchval("SELECT status FROM research_options_backtest_runs WHERE id=$1 FOR UPDATE", run_id)
+        return status == "complete" and await read_result(conn, run_id) == result

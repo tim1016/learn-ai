@@ -263,6 +263,23 @@ class OptionMinuteBarPath:
         )
 
 
+_OPTION_SESSION_ROOT = _OPTION_ROOT / "session" / "v1"
+
+
+@dataclass(frozen=True)
+class OptionSessionPath:
+    """Versioned option-session container; distinct from every legacy artifact."""
+
+    underlying: str
+    trading_date: date
+
+    def __post_init__(self) -> None:
+        _require_option_segment(self.underlying)
+
+    def relative_path(self) -> PurePosixPath:
+        return _OPTION_SESSION_ROOT / self.underlying.lower() / f"{self.trading_date:%Y%m%d}.zip"
+
+
 @dataclass(frozen=True)
 class OptionListingPath:
     """The contracts listed for one underlying as of one trading date (#3030)."""

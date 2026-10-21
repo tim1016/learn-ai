@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, localcontext
 
+from app.data_lake.option_bars import SessionMemberRef
 from app.options.contract import OptionContract
 from app.options_backtest import fills
 from app.options_backtest.results import SessionOutcome, SessionStatus
@@ -28,10 +29,11 @@ from app.utils.session_anchors import et_date_at_ms
 
 @dataclass(frozen=True)
 class PinnedDay:
-    """One contract's day of bars, and the sha256 of the stored file it was read from."""
+    """One contract's day of bars, the sha256 of the stored file it was read from, and its container member, if any."""
 
     contract: OptionContract
     sha256: str
+    reference: SessionMemberRef | None = None
 
 
 @dataclass(frozen=True)

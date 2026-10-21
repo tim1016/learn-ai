@@ -10,7 +10,7 @@ exactly the uncached run's projection.
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -241,6 +241,34 @@ def test_duplicate_residency_is_reported_honestly() -> None:
     cache.get_or_decode(_key(root_id="/lake/root-b", content_digest=digest), lambda: _bars(3))
 
     assert cache.metrics()["duplicate_residency_bytes"] == 2 * (64 + 3 * 800)
+
+
+def test_another_immutable_decode_shares_the_bound_peak_and_warm_hint() -> None:
+    """A non-bar decode (an Options frozen session, #3428) rides the same budget and residency report."""
+
+    @dataclass(frozen=True)
+    class Blob:
+        content_digest: str
+        relative_path: str
+
+    entry = 3000
+    cache = DecodedArtifactCache(max_bytes=entry + 64 + 800)
+    first, second = Blob("1" * 64, "11/" + "1" * 64), Blob("2" * 64, "22/" + "2" * 64)
+    decoded = cache.get_or_decode_value(first, lambda: ("session one",), estimate=lambda value: entry)
+    assert cache.get_or_decode_value(first, lambda: pytest.fail("a hit decodes nothing"), estimate=len) is decoded
+
+    cache.take_peak_bytes()
+    cache.get_or_decode(_key(), lambda: _bars(1))
+    cache.get_or_decode_value(second, lambda: ("session two",), estimate=lambda value: entry)
+
+    assert cache.take_peak_bytes() == entry + 64 + 800, "one bound across bars and other decodes"
+    assert cache.metrics()["evictions"] == 1 and cache.metrics()["resident_entries"] == 2
+    added, _ = cache.take_residency_delta()
+    assert second in [key for key, _ in added]
+    cache.clear()
+    assert cache.metrics()["resident_entries"] == 0 and cache.take_peak_bytes() == entry + 64 + 800
+    _, evicted = cache.take_residency_delta()
+    assert second in evicted and _key() in evicted, "a cold start tells the warm hint what went"
 
 
 def test_the_key_names_the_root_mode_and_relative_path(tmp_path: Path) -> None:

@@ -27,16 +27,21 @@ every unpinned one — or that alone exceeds the whole bound — is decoded
 through the uncached path and not retained, and the metrics say so. Bars
 handed out are the shared immutable ``TradeBar`` objects (frozen dataclass)
 in a fresh list, so one evaluation cannot mutate what another sees.
+
+Other immutable decodes share the same bound through ``get_or_decode_value``
+(an Options frozen session, #3428): one budget per process, one residency
+report for the pool's warm hint, and the same deterministic accounting, since
+each caller charges a fixed per-element estimate of its own decoded shape.
 """
 
 from __future__ import annotations
 
 import os
 from collections import OrderedDict
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Hashable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from app.data_lake.adjustment_versions import adjusted_root_for
 from app.data_lake.path_policy import lake_root_for
@@ -140,13 +145,23 @@ def artifact_key(
     )
 
 
+class CacheKey(Hashable, Protocol):
+    """What any entry's key names: the admitted bytes it decodes, and the path the pool's warm hint reads (#3048)."""
+
+    @property
+    def content_digest(self) -> str: ...
+
+    @property
+    def relative_path(self) -> str: ...
+
+
 def _estimated_bytes(bars: Sequence[TradeBar]) -> int:
     return _LIST_OVERHEAD_BYTES + len(bars) * _TRADE_BAR_ESTIMATED_BYTES
 
 
 @dataclass
 class _Entry:
-    bars: tuple[TradeBar, ...]
+    value: Any
     estimated_bytes: int
     pins: int = 0
 
@@ -200,18 +215,20 @@ class DecodedArtifactCache:
             raise ValueError(f"decoded-artifact cache bound must be positive, got {max_bytes}")
         self._max_bytes = max_bytes
         # Oldest-used first (LRU): hits and stores move entries to the end.
-        self._entries: OrderedDict[ArtifactKey, _Entry] = OrderedDict()
+        self._entries: OrderedDict[CacheKey, _Entry] = OrderedDict()
         self._metrics = _CacheMetrics(max_bytes=max_bytes)
+        # The most bytes resident at once since the last ``take_peak_bytes``.
+        self._peak_bytes = 0
         # Content digests currently resident, for duplicate-residency honesty:
         # the same bytes admitted under two roots hold twice in this process.
         self._digest_residency: dict[str, int] = {}
         # Keys already handed out by ``take_residency_delta``: a key reports
         # once when it becomes resident, and again if it is evicted and
         # re-decoded — the delta must stay a delta, not a census (#3048).
-        self._reported: set[ArtifactKey] = set()
+        self._reported: set[CacheKey] = set()
         # Victims evicted since the last delta take, so the parent's warm
         # hints can forget what no child holds (#3048 review).
-        self._evicted_since: list[ArtifactKey] = []
+        self._evicted_since: list[CacheKey] = []
 
     def get_or_decode(self, key: ArtifactKey, decode: Callable[[], list[TradeBar]]) -> list[TradeBar]:
         """Return ``key``'s bars, decoding through ``decode`` only on a miss.
@@ -220,34 +237,54 @@ class DecodedArtifactCache:
         current bytes; this method never reads a file and never re-decides
         admission. Hits hand back the shared immutable bars in a fresh list.
         """
+        return list(self.get_or_decode_value(key, lambda: tuple(decode()), estimate=_estimated_bytes))
+
+    def get_or_decode_value[V](self, key: CacheKey, decode: Callable[[], V], *, estimate: Callable[[V], int]) -> V:
+        """Return ``key``'s decoded value, decoding through ``decode`` only on a miss.
+
+        The same admission contract as ``get_or_decode``. Every hit hands back
+        the one resident object, so the value must be immutable in use.
+        ``estimate`` charges its retained bytes from fixed per-element
+        figures, so accounting and eviction stay deterministic.
+        """
         self._metrics.keys_seen += 1
         entry = self._entries.get(key)
         if entry is not None:
             self._metrics.hits += 1
             self._entries.move_to_end(key)
-            return list(entry.bars)
+            return entry.value
         self._metrics.misses += 1
-        bars = decode()
-        estimated = _estimated_bytes(bars)
+        value = decode()
+        estimated = estimate(value)
         if estimated > self._max_bytes:
             # One artifact cannot fit in the whole allowance by construction:
             # the bounded-uncached path, not a bound violation.
             self._metrics.uncached_decodes += 1
-            return bars
+            return value
         self._evict_until(estimated)
         if self._resident_bytes() + estimated > self._max_bytes:
             # Pinned entries leave no room; decode without retaining rather
             # than exceed the bound or evict an in-use iterator's entry.
             self._metrics.uncached_decodes += 1
-            return bars
-        self._store(key, bars, estimated)
-        return list(bars)
+            return value
+        self._store(key, value, estimated)
+        return value
 
-    def pin(self, key: ArtifactKey) -> None:
+    def clear(self) -> None:
+        """Evict every unpinned entry, so the next reads decode cold; the warm hint hears of each."""
+        for key in [key for key, entry in self._entries.items() if entry.pins == 0]:
+            self._evict(key)
+
+    def take_peak_bytes(self) -> int:
+        """The most estimated bytes resident at once since the last take; the next window starts from now."""
+        peak, self._peak_bytes = self._peak_bytes, self._resident_bytes()
+        return peak
+
+    def pin(self, key: CacheKey) -> None:
         """Mark ``key``'s entry in use; eviction skips it until unpinned."""
         self._entries[key].pins += 1
 
-    def unpin(self, key: ArtifactKey) -> None:
+    def unpin(self, key: CacheKey) -> None:
         entry = self._entries[key]
         if entry.pins <= 0:
             raise ValueError(f"unpin of an unpinned entry: {key.relative_path}")
@@ -258,7 +295,7 @@ class DecodedArtifactCache:
         self._refresh_residency()
         return self._metrics.as_dict()
 
-    def take_residency_delta(self) -> tuple[list[tuple[ArtifactKey, int]], list[ArtifactKey]]:
+    def take_residency_delta(self) -> tuple[list[tuple[CacheKey, int]], list[CacheKey]]:
         """Additions and removals since the last take — the warm-affinity hint (#3048).
 
         The shared pool's scheduler uses the additions to prefer a lane
@@ -276,9 +313,10 @@ class DecodedArtifactCache:
         self._evicted_since = []
         return added, evicted
 
-    def _store(self, key: ArtifactKey, bars: list[TradeBar], estimated: int) -> None:
-        self._entries[key] = _Entry(bars=tuple(bars), estimated_bytes=estimated)
+    def _store(self, key: CacheKey, value: Any, estimated: int) -> None:
+        self._entries[key] = _Entry(value=value, estimated_bytes=estimated)
         self._digest_residency[key.content_digest] = self._digest_residency.get(key.content_digest, 0) + 1
+        self._peak_bytes = max(self._peak_bytes, self._resident_bytes())
 
     def _resident_bytes(self) -> int:
         return sum(entry.estimated_bytes for entry in self._entries.values())
@@ -288,14 +326,17 @@ class DecodedArtifactCache:
             victim = next((key for key, entry in self._entries.items() if entry.pins == 0), None)
             if victim is None:
                 return
-            self._entries.pop(victim)
-            self._evicted_since.append(victim)
-            self._metrics.evictions += 1
-            remaining = self._digest_residency.get(victim.content_digest, 0) - 1
-            if remaining > 0:
-                self._digest_residency[victim.content_digest] = remaining
-            else:
-                self._digest_residency.pop(victim.content_digest, None)
+            self._evict(victim)
+
+    def _evict(self, victim: CacheKey) -> None:
+        self._entries.pop(victim)
+        self._evicted_since.append(victim)
+        self._metrics.evictions += 1
+        remaining = self._digest_residency.get(victim.content_digest, 0) - 1
+        if remaining > 0:
+            self._digest_residency[victim.content_digest] = remaining
+        else:
+            self._digest_residency.pop(victim.content_digest, None)
 
     def _refresh_residency(self) -> None:
         self._metrics.resident_entries = len(self._entries)

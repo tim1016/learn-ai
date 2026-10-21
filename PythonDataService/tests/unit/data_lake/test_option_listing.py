@@ -45,6 +45,7 @@ from app.data_lake.option_lake import (
     LISTING_FETCH_BUDGET_MS,
     WORKER_ID,
     HeldLease,
+    option_session_publication_lock,
     publish_option_artifact,
 )
 from app.data_lake.option_listing import (
@@ -1270,6 +1271,33 @@ async def test_reusing_a_listing_with_nothing_to_clean_up_changes_no_row(
     assert again.reused is True and again.record == first.record
     assert staled == [0]  # the cleanup ran, and had nothing to do
     assert {row_id: row["status"] for row_id, row in fake_catalog.rows.items()} == before
+
+
+@respx.mock
+async def test_reusing_a_listing_while_a_session_publication_holds_the_date_still_succeeds(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cleanup a reuse runs is idempotent: a busy publication lock defers it, never fails the reuse."""
+    route = _mock_one_page(STANDARD_ROWS)
+    first = await ensure_option_listing("SPY", AS_OF)
+    cleanup = fake_catalog.mark_metadata_artifacts_stale_for_path
+    staled: list[int] = []
+
+    async def counting(*args: Any, **kwargs: Any) -> int:
+        staled.append(await cleanup(*args, **kwargs))
+        return staled[-1]
+
+    monkeypatch.setattr(catalog_client, "mark_metadata_artifacts_stale_for_path", counting)
+
+    with option_session_publication_lock("SPY", AS_OF) as owns:
+        assert owns
+        during = await ensure_option_listing("SPY", AS_OF)
+    after = await ensure_option_listing("SPY", AS_OF)
+
+    assert during.failure is None and during.reused is True and during.record == first.record
+    assert after.failure is None and after.reused is True
+    assert staled == [0]  # deferred while the lock was held, done by the next reuse
+    assert route.call_count == 1
 
 
 # ── Reading is only through admission ───────────────────────────────────

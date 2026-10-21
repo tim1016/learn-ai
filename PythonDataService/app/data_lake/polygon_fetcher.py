@@ -17,6 +17,9 @@ from decimal import Decimal
 
 import httpx
 
+from app.data_lake.work_progress import completed_provider_response
+from app.utils.session_anchors import shift_calendar_years
+
 logger = logging.getLogger(__name__)
 
 _POLYGON_BASE = "https://api.polygon.io"
@@ -65,12 +68,7 @@ def polygon_history_floor(today: date) -> date:
     ceiling padded to ``5 * 366`` for leap years and says nothing about what
     the provider will actually serve.
     """
-    try:
-        anniversary = today.replace(year=today.year - POLYGON_HISTORY_YEARS)
-    except ValueError:
-        # 29 February with a non-leap anniversary year.
-        anniversary = today.replace(year=today.year - POLYGON_HISTORY_YEARS, day=28)
-    return anniversary + timedelta(days=_HISTORY_FLOOR_MARGIN_DAYS)
+    return shift_calendar_years(today, -POLYGON_HISTORY_YEARS) + timedelta(days=_HISTORY_FLOOR_MARGIN_DAYS)
 
 
 class PolygonFetchError(RuntimeError):
@@ -187,6 +185,7 @@ async def fetch_aggregate_bars(
             # exact digits; prices and vwap are converted back to float below.
             payload = resp.json(parse_float=Decimal)
             _raise_for_payload_status(payload, symbol, resp.status_code)
+            completed_provider_response(symbol, resp.content)
             for r in payload.get("results") or []:
                 out.append(
                     PolygonBar(

@@ -24,7 +24,8 @@ from app.data_lake.admission import read_committed_bytes
 from app.data_lake.option_bars import parse_option_day_zip
 from app.data_lake.option_lake import option_read_root
 from app.data_lake.option_listing import OptionListing, parse_option_listing_zip
-from app.data_lake.path_policy import LeanMinuteBarPath, OptionListingPath, OptionMinuteBarPath
+from app.data_lake.option_session import parse_retained_option_session, read_option_session
+from app.data_lake.path_policy import LeanMinuteBarPath, OptionListingPath, OptionMinuteBarPath, OptionSessionPath
 from app.engine.data.lean_format import LeanMinuteDataReader
 from app.lean_sidecar.trading_calendar import CALENDAR_IDENTITY, CALENDAR_PACKAGE_VERSION
 from app.options.contract import OptionContract
@@ -39,6 +40,7 @@ from app.options_backtest.lake_data import (
 from app.options_backtest.market import MinuteBar
 from app.options_backtest.picking import Listing
 from app.options_backtest.run import RunResult, RunStopped, run_sessions
+from app.options_backtest.session_result import PinnedDay
 from app.options_backtest.setup import OptionsBacktestSetup
 from app.research.golden_search.proof import BlobStore, default_blob_store
 from app.schemas.signal_program_seal import semantic_payload_hash
@@ -69,6 +71,7 @@ def _canonical(value: Any) -> Any:
             # Money steps are not stored with historical runs. Their derived
             # capital evidence is compared through the summary instead.
             if field.name not in {"money_steps", "stamps"}
+            and not (isinstance(value, PinnedDay) and field.name == "reference")
         }
     if isinstance(value, Mapping):
         return {str(key): _canonical(item) for key, item in value.items()}
@@ -109,6 +112,7 @@ def _source_digest() -> str:
         _APP_ROOT / "utils/session_anchors.py",
         _APP_ROOT / "data_lake/option_bars.py",
         _APP_ROOT / "data_lake/option_listing.py",
+        _APP_ROOT / "data_lake/option_session.py",
         _APP_ROOT / "engine/data/lean_format.py",
     }
     return semantic_payload_hash(
@@ -150,8 +154,12 @@ def input_manifest(result: RunResult) -> dict[str, str]:
         if pins.listing_sha256 is not None:
             manifest[str(OptionListingPath(result.setup.underlying, day).relative_path())] = pins.listing_sha256
         for pinned in pins.option_days:
-            path = OptionMinuteBarPath(pinned.contract.root, pinned.contract.occ_symbol, day).relative_path()
-            manifest[str(path)] = pinned.sha256
+            if pinned.reference is not None:
+                path = OptionSessionPath(result.setup.underlying, day).relative_path()
+                manifest[str(path)] = pinned.reference.container_sha256
+            else:
+                path = OptionMinuteBarPath(pinned.contract.root, pinned.contract.occ_symbol, day).relative_path()
+                manifest[str(path)] = pinned.sha256
     return manifest
 
 
@@ -191,7 +199,20 @@ class ArchivedRunData:
             )
         )
 
-    def option_day(self, contract: OptionContract, trading_date: date) -> Captured[Sequence[MinuteBar]]:
+    def option_day(self, contract: OptionContract, trading_date: date) -> Captured[Sequence[MinuteBar]] | None:
+        session_path = str(OptionSessionPath(self.underlying, trading_date).relative_path())
+        if session_path in self.manifest:
+            payload, _ = self._read(session_path)
+            listing_raw, listing_digest = self._read(str(OptionListingPath(self.underlying, trading_date).relative_path()))
+            listing = OptionListing(self.underlying, trading_date,
+                parse_option_listing_zip(listing_raw, self.underlying, trading_date), listing_digest)
+            session = parse_retained_option_session(payload, listing)
+            day = session.option_day(contract.occ_symbol)
+            if day is not None:
+                return Captured(_named_by_close(day.bars, trading_date, subject="archived contract",
+                    unreadable=UnderlyingDayUnreadable), day.sha256, session.reference(contract.occ_symbol))
+            if contract.occ_symbol not in session.unresolved:
+                return None
         relative = str(OptionMinuteBarPath(contract.root, contract.occ_symbol, trading_date).relative_path())
         payload, digest = self._read(relative)
         bars = parse_option_day_zip(payload, contract.occ_symbol, trading_date)
@@ -233,8 +254,10 @@ def build_proof(
 
     The manual path archives and verifies the selected lake bytes as before.
     The retained-study path requires those exact blobs already to exist and
-    never consults the lake. Both independently decode a second replay from
-    the source run's pins, and compare complete outcomes and input identities.
+    never consults the lake. Both replay a second time from the source run's
+    pins, reading and digest-checking the archived bytes on every ask, and
+    compare complete outcomes and input identities. A session container whose
+    admitted bytes equal the lake's shares the first replay's decode (#3435).
     """
     _require_not_stopped(should_stop)
     rules_digest = current_rules_digest()
@@ -250,7 +273,21 @@ def build_proof(
         root = option_read_root(lake_root)
         for relative, expected in manifest.items():
             _require_not_stopped(should_stop)
-            payload = read_committed_bytes(root / relative)
+            path = root / relative
+            if path.is_file():
+                payload = read_committed_bytes(path)
+            else:
+                # Older proofs name original zip bytes. Compaction retains those
+                # exact bytes as a member; decoded equality is never substituted.
+                pinned = next(((session, pin) for session in source.sessions for pin in session.pins.option_days
+                               if str(OptionMinuteBarPath(pin.contract.root, pin.contract.occ_symbol,
+                                   session.trading_date).relative_path()) == relative), None)
+                if pinned is None:
+                    raise GoldenProofError("An original pinned input is missing.")
+                session = read_option_session(source.setup.underlying, pinned[0].trading_date, lake_root=lake_root)
+                if session is None or pinned[1].contract.occ_symbol not in session.days:
+                    raise GoldenProofError("The exact original pinned bytes were not retained.")
+                payload = session.legacy_bytes(pinned[1].contract.occ_symbol)
             if hashlib.sha256(payload).hexdigest() != expected:
                 raise GoldenProofError("An input changed since the selected run. Nothing was approved.")
             if store.put(payload) != expected:

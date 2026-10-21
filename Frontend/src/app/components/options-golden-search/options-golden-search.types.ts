@@ -1,3 +1,4 @@
+import type { components } from '../../api/broker.types';
 import type { ServedSetup } from '../options-backtest/options-backtest.types';
 
 export type SearchValue = string | number | boolean | null | { readonly [key: string]: SearchValue };
@@ -43,6 +44,8 @@ export interface SearchDeclarations {
   readonly history_bounds: { readonly start_ms: number | null; readonly end_ms: number | null };
   readonly defaults: PlanDefaults;
 }
+export type HistoryGuidanceRequest = components['schemas']['HistoryGuidanceRequest'];
+export type HistoryGuidance = components['schemas']['HistoryGuidance'];
 export interface PlanRequest {
   readonly expected_setup_hash: string;
   readonly parent_study_id?: string;

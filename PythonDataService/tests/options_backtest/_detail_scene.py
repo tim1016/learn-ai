@@ -39,6 +39,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from datetime import date
+from typing import Any
 
 from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.options_backtest.run import RunResult
@@ -155,6 +156,9 @@ class CollectingStore:
 
     def cancel(self, run_id: int, *, finished_at_ms: int) -> None:
         raise AssertionError("the scene is never cancelled")
+
+    def record_timings(self, run_id: int, timings: list[dict[str, Any]], metadata: dict[str, Any]) -> None:
+        return None
 
 
 async def run_the_scene() -> RunResult:

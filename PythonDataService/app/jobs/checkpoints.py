@@ -137,7 +137,7 @@ class CheckpointGate:
         self._sequences: dict[str, int] = {}
         self._cursors: dict[tuple[str, str], int] = {}
 
-    def accept(self, checkpoint: ExecutionCheckpoint) -> bool:
+    def accept(self, checkpoint: ExecutionCheckpoint, *, lease_ttl_s: int | None = None) -> bool:
         """Admit ``checkpoint`` if it is current, ordered and advancing; renew once when it is.
 
         Rejected without renewal: a stale generation, a sequence that does not
@@ -165,7 +165,7 @@ class CheckpointGate:
         # fails no work path — the same tolerance the cancellation check
         # applies (log, carry on).
         try:
-            progress.get_redis().expire(_lease_key(self.job_id), self._lease_ttl_s)
+            progress.get_redis().expire(_lease_key(self.job_id), self._lease_ttl_s if lease_ttl_s is None else lease_ttl_s)
         except redis.RedisError as exc:
             logger.warning("checkpoint lease renewal failed for job %s: %s", self.job_id, exc)
             return False
@@ -266,6 +266,8 @@ class GatedLease:
         self._gate = CheckpointGate(job_id, self.generation, on_accepted=self._seen.append)
         self._lock = threading.Lock()
         self._cancel = CancellationCheck(job_id, renews_lease=False)
+        self._external_deadline_ms: int | None = None
+        self._external_wait_ids: set[int] = set()
 
     def fenced_cancel(self) -> None:
         """Cancellation and the coordinator fence in one poll (#3065).
@@ -303,9 +305,41 @@ class GatedLease:
                 phase=str(message.get("phase", "search")),
             )
 
+    def bounded_external_wait(self, wait_id: int, deadline_ms: int) -> None:
+        """Accept one actual bounded I/O start, without resurrecting an expired owner.
+
+        The acquisition code declares its own hard timeout before waiting.
+        Re-observing that wait after reconnect cannot extend it. Receipt
+        checkpoints keep this fixed deadline; polling never calls this seam.
+        """
+        from app.utils.timestamps import now_ms_utc
+
+        with self._lock:
+            self.fenced_cancel()
+            if wait_id in self._external_wait_ids:
+                return
+            remaining_ms = deadline_ms - now_ms_utc()
+            if not 0 < remaining_ms <= 1_860_000:
+                raise ValueError("external acquisition wait exceeds its declared bound")
+            ttl = max(JOB_LEASE_TTL_SECONDS, (remaining_ms + 999) // 1000 + 5)
+            if not progress.get_redis().expire(_lease_key(self._gate.job_id), ttl):
+                raise progress.JobCancelled("the acquisition owner lease expired before bounded I/O started")
+            self._external_wait_ids.add(wait_id)
+            self._external_deadline_ms = deadline_ms
+
+    def external_wait_finished(self) -> None:
+        with self._lock:
+            self.fenced_cancel()
+            self._external_deadline_ms = None
+            self._accept(cursor=0, cursor_kind="processed_blocks", phase="preparation")
+
     def _accept(self, *, cursor: int, cursor_kind: str, phase: str) -> None:
         from app.utils.timestamps import now_ms_utc
 
+        ttl = JOB_LEASE_TTL_SECONDS
+        if self._external_deadline_ms is not None:
+            remaining_s = max(0, (self._external_deadline_ms - now_ms_utc() + 999) // 1000)
+            ttl = max(JOB_LEASE_TTL_SECONDS, remaining_s + 5)
         self._gate.accept(
             ExecutionCheckpoint(
                 generation=self.generation,
@@ -316,5 +350,6 @@ class GatedLease:
                 phase=phase,
                 occurred_at_ms=now_ms_utc(),
                 transition=True,
-            )
+            ),
+            lease_ttl_s=ttl,
         )

@@ -2256,6 +2256,215 @@
         "title": "ApproveGoldenOptionSetupRequest",
         "type": "object"
       },
+      "ArchiveGap": {
+        "properties": {
+          "days_left": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Days Left"
+          },
+          "permanent": {
+            "title": "Permanent",
+            "type": "boolean"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "recorded_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Recorded Ms",
+            "type": "integer"
+          },
+          "session_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Session Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session_ms",
+          "permanent",
+          "reason",
+          "recorded_ms"
+        ],
+        "title": "ArchiveGap",
+        "type": "object"
+      },
+      "ArchiveJobHealth": {
+        "properties": {
+          "free_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Free Bytes"
+          },
+          "generation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generation Id"
+          },
+          "last_failure": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Failure"
+          },
+          "last_success_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Success Ms"
+          },
+          "manifest_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manifest Sha256"
+          },
+          "oldest_unbacked_capture_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oldest Unbacked Capture Ms"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "healthy",
+              "catching_up",
+              "waiting",
+              "at_risk",
+              "failed",
+              "unavailable"
+            ],
+            "title": "Severity",
+            "type": "string"
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Bytes"
+          }
+        },
+        "required": [
+          "severity",
+          "reason"
+        ],
+        "title": "ArchiveJobHealth",
+        "type": "object"
+      },
+      "ArchiveSessionCaptureRequest": {
+        "properties": {
+          "retry_exhausted": {
+            "default": false,
+            "title": "Retry Exhausted",
+            "type": "boolean"
+          },
+          "session_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Session Ms",
+            "type": "integer"
+          },
+          "underlying": {
+            "enum": [
+              "SPY",
+              "QQQ",
+              "IWM"
+            ],
+            "title": "Underlying",
+            "type": "string"
+          }
+        },
+        "required": [
+          "underlying",
+          "session_ms"
+        ],
+        "title": "ArchiveSessionCaptureRequest",
+        "type": "object"
+      },
+      "ArchiveTriggerReceipt": {
+        "properties": {
+          "accepted": {
+            "title": "Accepted",
+            "type": "boolean"
+          },
+          "job": {
+            "enum": [
+              "capture",
+              "snapshot",
+              "backup",
+              "restore"
+            ],
+            "title": "Job",
+            "type": "string"
+          },
+          "status_url": {
+            "default": "/api/option-archive/status",
+            "title": "Status Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "accepted",
+          "job"
+        ],
+        "title": "ArchiveTriggerReceipt",
+        "type": "object"
+      },
       "ArtifactDetail": {
         "description": "Full receipt for one catalog row: identity, hashes, and byte metadata.",
         "properties": {
@@ -4231,6 +4440,197 @@
           "test_trade_count"
         ],
         "title": "BaselineRunRecord",
+        "type": "object"
+      },
+      "BenchmarkPreflightRequest": {
+        "properties": {
+          "case": {
+            "enum": [
+              "spy_typical_v1",
+              "spy_eight_leg_cover_v1"
+            ],
+            "title": "Case",
+            "type": "string"
+          }
+        },
+        "required": [
+          "case"
+        ],
+        "title": "BenchmarkPreflightRequest",
+        "type": "object"
+      },
+      "BenchmarkPreflightResponse": {
+        "properties": {
+          "case_digest": {
+            "title": "Case Digest",
+            "type": "string"
+          },
+          "incomplete_session_ms": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Incomplete Session Ms",
+            "type": "array"
+          },
+          "inventory_digest": {
+            "title": "Inventory Digest",
+            "type": "string"
+          },
+          "sessions": {
+            "minimum": 0.0,
+            "title": "Sessions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "case_digest",
+          "inventory_digest",
+          "sessions",
+          "incomplete_session_ms"
+        ],
+        "title": "BenchmarkPreflightResponse",
+        "type": "object"
+      },
+      "BenchmarkResourcesResponse": {
+        "properties": {
+          "cgroup_memory_bytes": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cgroup Memory Bytes"
+          },
+          "cgroup_memory_limit_bytes": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cgroup Memory Limit Bytes"
+          },
+          "cpu_period_us": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpu Period Us"
+          },
+          "cpu_quota_us": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpu Quota Us"
+          },
+          "database_connection_limit": {
+            "minimum": 0.0,
+            "title": "Database Connection Limit",
+            "type": "integer"
+          },
+          "database_connections": {
+            "minimum": 0.0,
+            "title": "Database Connections",
+            "type": "integer"
+          },
+          "frozen_input_bytes": {
+            "minimum": 0.0,
+            "title": "Frozen Input Bytes",
+            "type": "integer"
+          },
+          "observed_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "runtime_instance": {
+            "title": "Runtime Instance",
+            "type": "string"
+          },
+          "worker_width": {
+            "minimum": 1.0,
+            "title": "Worker Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "observed_at_ms",
+          "runtime_instance",
+          "worker_width",
+          "cgroup_memory_bytes",
+          "cgroup_memory_limit_bytes",
+          "cpu_quota_us",
+          "cpu_period_us",
+          "frozen_input_bytes",
+          "database_connections",
+          "database_connection_limit"
+        ],
+        "title": "BenchmarkResourcesResponse",
+        "type": "object"
+      },
+      "BenchmarkResultResponse": {
+        "description": "A complete saved run of a pooled replay: when it was accepted and saved, and what its replay measured.",
+        "properties": {
+          "accepted_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Accepted At Ms",
+            "type": "integer"
+          },
+          "phase_timings": {
+            "items": {
+              "$ref": "#/components/schemas/PhaseTiming"
+            },
+            "title": "Phase Timings",
+            "type": "array"
+          },
+          "replay": {
+            "$ref": "#/components/schemas/ReplayObservations"
+          },
+          "result_digest": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Result Digest",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "integer"
+          },
+          "saved_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Saved At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "run_id",
+          "accepted_at_ms",
+          "saved_at_ms",
+          "result_digest",
+          "phase_timings",
+          "replay"
+        ],
+        "title": "BenchmarkResultResponse",
         "type": "object"
       },
       "Body_generate_validation_report_api_dataset_validation_report_post": {
@@ -31073,6 +31473,8 @@
           "end_ms": {
             "anyOf": [
               {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
                 "type": "integer"
               },
               {
@@ -31084,6 +31486,8 @@
           "start_ms": {
             "anyOf": [
               {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
                 "type": "integer"
               },
               {
@@ -31138,6 +31542,101 @@
           "job_id"
         ],
         "title": "HistoryCaptureJobRequest",
+        "type": "object"
+      },
+      "HistoryGuidance": {
+        "additionalProperties": false,
+        "properties": {
+          "end_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Ms"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "final_start_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Start Ms"
+          },
+          "fold_count": {
+            "title": "Fold Count",
+            "type": "integer"
+          },
+          "start_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Ms"
+          }
+        },
+        "required": [
+          "start_ms",
+          "end_ms",
+          "final_start_ms",
+          "fold_count",
+          "explanation"
+        ],
+        "title": "HistoryGuidance",
+        "type": "object"
+      },
+      "HistoryGuidanceRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "bounds": {
+            "$ref": "#/components/schemas/HistoryBounds"
+          },
+          "final_months": {
+            "maximum": 60.0,
+            "minimum": 1.0,
+            "title": "Final Months",
+            "type": "integer"
+          },
+          "test_months": {
+            "maximum": 60.0,
+            "minimum": 1.0,
+            "title": "Test Months",
+            "type": "integer"
+          },
+          "train_months": {
+            "maximum": 120.0,
+            "minimum": 1.0,
+            "title": "Train Months",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "bounds",
+          "train_months",
+          "test_months",
+          "final_months"
+        ],
+        "title": "HistoryGuidanceRequest",
         "type": "object"
       },
       "HoldState": {
@@ -37784,6 +38283,52 @@
         "title": "OperatorMove",
         "type": "object"
       },
+      "OptionArchiveHealth": {
+        "properties": {
+          "attention": {
+            "title": "Attention",
+            "type": "boolean"
+          },
+          "backup": {
+            "$ref": "#/components/schemas/ArchiveJobHealth"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "generated_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Generated Ms",
+            "type": "integer"
+          },
+          "retention_permission": {
+            "const": "awaiting_vendor_reply",
+            "default": "awaiting_vendor_reply",
+            "title": "Retention Permission"
+          },
+          "test_restore": {
+            "$ref": "#/components/schemas/ArchiveJobHealth"
+          },
+          "underlyings": {
+            "items": {
+              "$ref": "#/components/schemas/UnderlyingArchiveHealth"
+            },
+            "title": "Underlyings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "enabled",
+          "generated_ms",
+          "attention",
+          "underlyings",
+          "backup",
+          "test_restore"
+        ],
+        "title": "OptionArchiveHealth",
+        "type": "object"
+      },
       "OptionBuyingPowerAmount": {
         "additionalProperties": false,
         "description": "One amount: whole cents, and the dollars a page shows for it.",
@@ -42725,6 +43270,22 @@
         "additionalProperties": false,
         "description": "Body of ``POST /api/jobs-internal/options-backtest``: the setup, the half-open range, and the minted job id.\n\nThe range is ``[start_ms, end_ms)`` as Grid Search's window is: New York midnight of the first date to New York\nmidnight after the last. ``setup_name`` is the name the setup was saved under, when it was started from one.",
         "properties": {
+          "benchmark_cache_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "cold",
+                  "warm"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Internal benchmark control; cold clears each worker once for this job, never financial identity.",
+            "title": "Benchmark Cache Mode"
+          },
           "end_ms": {
             "description": "New York midnight of the day after the range's last day. Any other instant is refused with a 400 and the code OPTIONS_BACKTEST_RANGE_NOT_ON_MIDNIGHT.",
             "maximum": 253402300799999.0,
@@ -43273,6 +43834,16 @@
             "minimum": 0.0,
             "title": "Last Session Open Ms",
             "type": "integer"
+          },
+          "observations": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunObservations"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "sessions_requested": {
             "title": "Sessions Requested",
@@ -48951,7 +49522,9 @@
                   "not_a_session",
                   "symbol_too_long",
                   "listing_not_captured",
-                  "not_listed"
+                  "not_listed",
+                  "staging_capacity",
+                  "paused"
                 ],
                 "type": "string"
               },
@@ -49530,6 +50103,60 @@
           "has_full_coverage"
         ],
         "title": "PerformanceHorizonResponse",
+        "type": "object"
+      },
+      "PhaseTiming": {
+        "additionalProperties": false,
+        "properties": {
+          "chain_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chain Key"
+          },
+          "duration_ms": {
+            "minimum": 0.0,
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "finished_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Finished At Ms",
+            "type": "integer"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "scope": {
+            "default": "run",
+            "enum": [
+              "run",
+              "chain"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "started_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Started At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "phase",
+          "started_at_ms",
+          "finished_at_ms",
+          "duration_ms"
+        ],
+        "title": "PhaseTiming",
         "type": "object"
       },
       "PlanDefaults": {
@@ -53934,6 +54561,67 @@
         "title": "RemoveAction",
         "type": "object"
       },
+      "ReplayObservations": {
+        "additionalProperties": false,
+        "description": "What a pooled replay of frozen inputs measured: its identities and its workers' decoded-cache use.",
+        "properties": {
+          "cache_bytes_peak": {
+            "minimum": 0.0,
+            "title": "Cache Bytes Peak",
+            "type": "integer"
+          },
+          "cache_epoch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Epoch"
+          },
+          "cache_hits": {
+            "minimum": 0.0,
+            "title": "Cache Hits",
+            "type": "integer"
+          },
+          "cache_misses": {
+            "minimum": 0.0,
+            "title": "Cache Misses",
+            "type": "integer"
+          },
+          "execution_identity_digest": {
+            "title": "Execution Identity Digest",
+            "type": "string"
+          },
+          "frozen_input_digest": {
+            "title": "Frozen Input Digest",
+            "type": "string"
+          },
+          "runtime_boot_generation": {
+            "title": "Runtime Boot Generation",
+            "type": "integer"
+          },
+          "worker_width": {
+            "minimum": 1.0,
+            "title": "Worker Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "frozen_input_digest",
+          "execution_identity_digest",
+          "runtime_boot_generation",
+          "worker_width",
+          "cache_epoch",
+          "cache_hits",
+          "cache_misses",
+          "cache_bytes_peak"
+        ],
+        "title": "ReplayObservations",
+        "type": "object"
+      },
       "ReproveGoldenOptionSetupRequest": {
         "additionalProperties": false,
         "properties": {
@@ -55229,6 +55917,40 @@
           "total_return_pct"
         ],
         "title": "RunMetrics",
+        "type": "object"
+      },
+      "RunObservations": {
+        "additionalProperties": false,
+        "description": "One run's sealed operational record: its phases, its wall time and, for a pooled replay, what that measured.\n\nThe run-scope phases sum to ``wall_duration_ms``; chain-scope phases overlap them. Stored as the phase rows and\none flat metadata object, which a run replayed in the data service fills with its wall time alone.",
+        "properties": {
+          "phase_timings": {
+            "items": {
+              "$ref": "#/components/schemas/PhaseTiming"
+            },
+            "title": "Phase Timings",
+            "type": "array"
+          },
+          "replay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReplayObservations"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "wall_duration_ms": {
+            "minimum": 0.0,
+            "title": "Wall Duration Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "phase_timings",
+          "wall_duration_ms"
+        ],
+        "title": "RunObservations",
         "type": "object"
       },
       "RunReadinessResponse": {
@@ -63125,6 +63847,205 @@
         ],
         "title": "TrustedTemplate",
         "type": "string"
+      },
+      "UnderlyingArchiveHealth": {
+        "properties": {
+          "complete_through_session_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Complete Through Session Ms"
+          },
+          "earliest_required_session_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Earliest Required Session Ms"
+          },
+          "gaps": {
+            "items": {
+              "$ref": "#/components/schemas/ArchiveGap"
+            },
+            "title": "Gaps",
+            "type": "array"
+          },
+          "last_archived_session_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Archived Session Ms"
+          },
+          "last_failure": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Failure"
+          },
+          "last_pass_ended_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Pass Ended Ms"
+          },
+          "last_pass_started_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Pass Started Ms"
+          },
+          "last_success_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Success Ms"
+          },
+          "lost_sessions": {
+            "title": "Lost Sessions",
+            "type": "integer"
+          },
+          "next_due_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Due Ms"
+          },
+          "partial_sessions": {
+            "title": "Partial Sessions",
+            "type": "integer"
+          },
+          "pending_sessions": {
+            "title": "Pending Sessions",
+            "type": "integer"
+          },
+          "phase": {
+            "enum": [
+              "capture",
+              "waiting",
+              "complete",
+              "rth_pause",
+              "snapshot_pause",
+              "capacity_pause",
+              "interrupted",
+              "failed"
+            ],
+            "title": "Phase",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "healthy",
+              "catching_up",
+              "waiting",
+              "at_risk",
+              "failed",
+              "unavailable"
+            ],
+            "title": "Severity",
+            "type": "string"
+          },
+          "snapshot_field_gaps": {
+            "default": 0,
+            "title": "Snapshot Field Gaps",
+            "type": "integer"
+          },
+          "snapshot_incomplete": {
+            "default": 0,
+            "title": "Snapshot Incomplete",
+            "type": "integer"
+          },
+          "snapshot_missed_evenings": {
+            "default": 0,
+            "title": "Snapshot Missed Evenings",
+            "type": "integer"
+          },
+          "snapshot_session_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Session Ms"
+          },
+          "underlying": {
+            "title": "Underlying",
+            "type": "string"
+          }
+        },
+        "required": [
+          "underlying",
+          "severity",
+          "reason",
+          "pending_sessions",
+          "partial_sessions",
+          "lost_sessions",
+          "gaps",
+          "phase"
+        ],
+        "title": "UnderlyingArchiveHealth",
+        "type": "object"
       },
       "UnderlyingSnapshot": {
         "description": "Underlying asset info from snapshot",
@@ -84596,6 +85517,230 @@
         ]
       }
     },
+    "/api/jobs-internal/options-backtest/benchmark-preflight": {
+      "post": {
+        "operationId": "benchmark_preflight_api_jobs_internal_options_backtest_benchmark_preflight_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BenchmarkPreflightRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BenchmarkPreflightResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Benchmark Preflight",
+        "tags": [
+          "jobs-internal"
+        ]
+      }
+    },
+    "/api/jobs-internal/options-backtest/benchmark-resources": {
+      "get": {
+        "operationId": "benchmark_resources_api_jobs_internal_options_backtest_benchmark_resources_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BenchmarkResourcesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Benchmark Resources",
+        "tags": [
+          "jobs-internal"
+        ]
+      }
+    },
+    "/api/jobs-internal/options-backtest/benchmark-result/{run_id}": {
+      "get": {
+        "operationId": "benchmark_result_api_jobs_internal_options_backtest_benchmark_result__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Run Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BenchmarkResultResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Benchmark Result",
+        "tags": [
+          "jobs-internal"
+        ]
+      }
+    },
+    "/api/jobs-internal/options-backtest/prepare": {
+      "post": {
+        "operationId": "prepare_api_jobs_internal_options_backtest_prepare_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OptionsBacktestJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Prepare",
+        "tags": [
+          "jobs-internal"
+        ]
+      }
+    },
     "/api/jobs-internal/options-golden-search": {
       "post": {
         "operationId": "dispatch_api_jobs_internal_options_golden_search_post",
@@ -85282,6 +86427,150 @@
         "summary": "List News",
         "tags": [
           "news"
+        ]
+      }
+    },
+    "/api/option-archive/capture-session": {
+      "post": {
+        "operationId": "capture_archive_session_api_option_archive_capture_session_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArchiveSessionCaptureRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArchiveTriggerReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Capture Archive Session",
+        "tags": [
+          "option-archive"
+        ]
+      }
+    },
+    "/api/option-archive/status": {
+      "get": {
+        "operationId": "archive_status_api_option_archive_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionArchiveHealth"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Archive Status",
+        "tags": [
+          "option-archive"
+        ]
+      }
+    },
+    "/api/option-archive/trigger/{job}": {
+      "post": {
+        "operationId": "trigger_archive_job_api_option_archive_trigger__job__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job",
+            "required": true,
+            "schema": {
+              "enum": [
+                "capture",
+                "snapshot",
+                "backup",
+                "restore"
+              ],
+              "title": "Job",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArchiveTriggerReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Trigger Archive Job",
+        "tags": [
+          "option-archive"
         ]
       }
     },
@@ -90304,6 +91593,65 @@
           }
         },
         "summary": "Declarations",
+        "tags": [
+          "research-options-golden-search"
+        ]
+      }
+    },
+    "/api/research/options-golden-search/history-guidance": {
+      "post": {
+        "operationId": "history_guidance_api_research_options_golden_search_history_guidance_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HistoryGuidanceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryGuidance"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "History Guidance",
         "tags": [
           "research-options-golden-search"
         ]

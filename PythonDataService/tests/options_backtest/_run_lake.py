@@ -75,6 +75,9 @@ class Vendor:
     stock_release: threading.Event | None = None
     # Contracts whose bars request is answered with a status (a symbol -> HTTP status), for a failure mid-download.
     option_errors: dict[str, int] = field(default_factory=dict)
+    # Failure-boundary tests order HTTP answers explicitly rather than by latency.
+    answer_errors_first: bool = False
+    _error_answered: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
     # Contracts whose request is answered "outside the plan".
     outside_plan: set[str] = field(default_factory=set)
     listing_errors: dict[date, int] = field(default_factory=dict)
@@ -192,9 +195,12 @@ class Vendor:
             await self._held_until(self.option_release)
             if self.option_latency_s:
                 await asyncio.sleep(self.option_latency_s)
+            if self.answer_errors_first and symbol not in self.option_errors:
+                await self._error_answered.wait()
             if symbol in self.outside_plan:
                 return outside_the_plan()
             if symbol in self.option_errors:
+                self._error_answered.set()
                 return httpx.Response(self.option_errors[symbol], json={"status": "ERROR", "error": "fake"})
             contract = OptionContract.from_occ_symbol(symbol)
             day = contract.expiry_date

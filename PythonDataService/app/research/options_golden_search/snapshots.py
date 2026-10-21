@@ -8,7 +8,7 @@ from pathlib import Path
 
 from app.data_lake.admission import read_committed_bytes
 from app.data_lake.option_lake import option_read_root
-from app.data_lake.path_policy import LeanMinuteBarPath, OptionListingPath, OptionMinuteBarPath
+from app.data_lake.path_policy import LeanMinuteBarPath, OptionListingPath, OptionMinuteBarPath, OptionSessionPath
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.options.contract import OptionContract
 from app.options_backtest.data import Captured
@@ -59,8 +59,10 @@ class SnapshotRunData(ArchivedRunData):
 
     def option_day(self, contract: OptionContract, trading_date: date) -> Captured[Sequence[MinuteBar]] | None:
         relative = str(OptionMinuteBarPath(contract.root, contract.occ_symbol, trading_date).relative_path())
-        self.actual_reads.add(relative)
-        return None if relative in self.absent else super().option_day(contract, trading_date)
+        if relative in self.absent:
+            self.actual_reads.add(relative)
+            return None
+        return super().option_day(contract, trading_date)
 
 
 def capture_snapshot(protocol: OptionsSearchProtocol, blobs: BlobStore, *, lake_root: Path | None = None) -> Snapshot:
@@ -75,6 +77,7 @@ def capture_snapshot(protocol: OptionsSearchProtocol, blobs: BlobStore, *, lake_
     manifest: dict[str, str] = {}
     absent: set[str] = set()
     retained = 0
+    container_recorded = False
 
     def record(relative: str, expected: str | None) -> None:
         nonlocal retained
@@ -121,5 +124,11 @@ def capture_snapshot(protocol: OptionsSearchProtocol, blobs: BlobStore, *, lake_
                     contracts.add(picked.contract)
         for contract in sorted(contracts, key=lambda c: c.occ_symbol):
             captured = source.option_day(contract, day)
-            record(str(OptionMinuteBarPath(contract.root, contract.occ_symbol, day).relative_path()), None if captured is None else captured.sha256)
-    return Snapshot(manifest=manifest, absent=tuple(sorted(absent)), retained_bytes=retained)
+            if captured is not None and captured.reference is not None:
+                record(str(OptionSessionPath(protocol.setup.underlying, day).relative_path()), captured.reference.container_sha256)
+                container_recorded = True
+            else:
+                record(str(OptionMinuteBarPath(contract.root, contract.occ_symbol, day).relative_path()), None if captured is None else captured.sha256)
+    # Version 2 marks a manifest that names a session container; older snapshots keep version 1 and their id.
+    return Snapshot(version=2 if container_recorded else 1,
+                    manifest=manifest, absent=tuple(sorted(absent)), retained_bytes=retained)

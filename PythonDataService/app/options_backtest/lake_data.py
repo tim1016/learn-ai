@@ -45,7 +45,8 @@ reader names no error of its own for a damaged file, so the failures it lets out
 
 Blocking. The readers ask the catalog through the lake's admission and need a thread with no running event loop, so
 call them from a worker thread, and from an ``async def`` only through ``asyncio.to_thread``. Each method says so at
-once and not only on a day that has a file. Nothing is cached: a day is read from its file on every ask.
+once and not only on a day that has a file. A day's bytes are read and admitted on every ask; only a session
+container's decode is shared, by its admitted sha256 (``option_session``).
 """
 
 from __future__ import annotations
@@ -294,7 +295,7 @@ class LakeRunData:
         worker thread.
         """
         _require_a_worker_thread()
-        stored = read_option_day_bars(contract, trading_date, lake_root=self._lake_root)
+        stored = read_option_day_bars(contract, trading_date, lake_root=self._lake_root, listed_under=self._underlying)
         if stored is None:
             return None
         named = _named_by_close(
@@ -303,4 +304,4 @@ class LakeRunData:
             subject=f"the stored bars of {contract.occ_symbol} for {trading_date.isoformat()}",
             unreadable=OptionBarsCannotBePlaced,
         )
-        return Captured(value=named, sha256=stored.sha256)
+        return Captured(value=named, sha256=stored.sha256, reference=stored.reference)

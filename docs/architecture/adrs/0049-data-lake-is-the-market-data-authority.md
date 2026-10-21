@@ -166,11 +166,25 @@ Until either fires, `data_lake_artifacts` already serves catalog and coverage qu
 
 **Provenance:** Amended 2026-08-30 alongside PRD [#1885](https://github.com/tim1016/learn-ai/issues/1885) ("Bring the data lake to completion — trustworthy contents, a fixed write path, one store"), tracked at issue [#1886](https://github.com/tim1016/learn-ai/issues/1886). Three positions this ADR originally recorded are reversed here by explicit decision, not because they were found wrong: rebuildability (Decision 2), the provenance-migration obligation (Decision 2), and the durable run-receipt follow-up (Decision 3b). PRD #1885 states this plainly: "Three of its recorded positions are being reversed by decision rather than discovered wrong: rebuildability, provenance migration, and run receipts. The amendments should read as decisions superseding decisions, with this PRD cited, not as corrections of error." This amendment does exactly that; the original Decision 2, Decision 3b, and Consequences text above is left in place as the historical record of what was originally decided and why, and this section states what supersedes it.
 
-### A1. Recovery from a lost catalog is wipe-and-re-backfill, not rebuild-from-files — Decision 2 superseded
+### A1. Recovery restores a checked lake/catalog pair — amended 2026-10-20
 
-Decision 2 above states that "identity, hash, and coverage are rebuildable by walking the lake and re-hashing," and that claim underlies its "losing Postgres loses the index, not the data" framing. PRD #1885 withdraws that framing by decision: this deployment can re-download every symbol from Polygon at no meaningful cost, which removes the motivation for ever building a walk-and-rehash tool. **The sole supported recovery path for a lost catalog is to discard the orphaned files and re-backfill from the provider. No scan-and-reindex or catalog-rebuild-from-files tool exists, and none will be built** (PRD #1885, "Recovery model" and "Out of Scope": *"Any scan-and-reindex or catalog-rebuild tool. Explicitly rejected in favour of wipe-and-re-backfill"*; user story 24). A rarely-run recovery tool rots; the cost of retiring the claim is this ADR amendment, made explicitly, rather than a maintenance burden on tooling nobody exercises.
+The rolling options entitlement makes captured history irreplaceable after it
+ages out. The 2026-08-30 assumption that every symbol could be downloaded again
+no longer holds (#3412, #3420, #3424). The supported recovery for retained data is
+a verified generation containing the exact whole catalog snapshot, original lake
+bytes, root markers, receipts, and the matching schema/migration identity.
 
-This does not disturb the rest of Decision 2's breakdown. Lease state is still correctly not rebuilt — a claim on work in flight has no meaning after a catalog loss, and that reasoning is unaffected by this amendment.
+Nightly generations use a repeatable-read binary COPY, content-addressed files,
+checked inventories and a complete marker written last. Weekly isolated restores
+prove decoding without provider access. Recovery clears and fences in-flight
+leases and starts no services. Wipe-and-download remains available only for data
+the provider still serves. No scan-and-reindex or hash-rebasing tool is introduced.
+See [the recovery runbook](../../runbooks/restore-data-lake.md).
+
+Backup generations stay on this Mac outside the checkout and Podman VM while
+written vendor clarification is pending. An external SSD remains gated on that
+reply. Retention pins preserve an approved rollback point through legacy-file
+retirement; neither a failed backup nor pruning removes the last checked pair.
 
 ### A2. Provenance migration obligation withdrawn — legacy documents are deleted outright
 

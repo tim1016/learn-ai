@@ -162,7 +162,7 @@ async def capture_the_recording() -> Stored:
 
     The listing goes first because a contract's empty day is accepted only for a contract the stored listing holds.
     The underlying goes through ``materialize_engine_run``, the stock engine's function, as the past chain's download
-    does (``chain_download._capture_underlying``), on a worker thread.
+    does (``chain_download.capture_underlying``), on a worker thread.
     """
     listing = await ensure_option_listing("SPY", TRADING_DATE)
     days = {
@@ -180,9 +180,9 @@ async def capture_the_recording() -> Stored:
     return Stored(listing, days, underlying)
 
 
-async def off_the_loop(function, *args):
+async def off_the_loop(function, *args, **kwargs):
     """The lake's readers block and need a thread with no event loop, as a run's worker thread is."""
-    return await asyncio.to_thread(function, *args)
+    return await asyncio.to_thread(function, *args, **kwargs)
 
 
 # ── a. Through the lake's real fetchers ─────────────────────────────────────────────────────────────────────────
@@ -221,8 +221,8 @@ async def test_each_contract_day_is_stored_with_exactly_the_bars_the_vendor_sent
     # Five answers were recorded and five requests were made, one for each: the listing, the three contracts and the
     # underlying's day. Nothing else was asked of the vendor.
     assert sorted(path for path, _ in asked) == sorted(RECORDED_FILES)
-    call = await off_the_loop(read_option_day_bars, CALL_600, TRADING_DATE)
-    put = await off_the_loop(read_option_day_bars, PUT_600, TRADING_DATE)
+    call = await off_the_loop(read_option_day_bars, CALL_600, TRADING_DATE, listed_under="SPY")
+    put = await off_the_loop(read_option_day_bars, PUT_600, TRADING_DATE, listed_under="SPY")
     assert call is not None and put is not None
     # 389 and 400: the number of ``"t":`` stamps in each recorded file, which is also the ``resultsCount`` it states.
     assert (len(call.bars), len(put.bars)) == (389, 400)
@@ -259,7 +259,7 @@ async def test_a_contract_that_never_traded_is_stored_as_a_captured_empty_day_be
     # lake pins "listed, did not trade": a complete row with no bars.
     assert never_traded.failure is None and never_traded.record is not None
     assert never_traded.record.row_count == 0
-    day = await off_the_loop(read_option_day_bars, CALL_680, TRADING_DATE)
+    day = await off_the_loop(read_option_day_bars, CALL_680, TRADING_DATE, listed_under="SPY")
     assert day is not None, "a day that never traded was captured; it is not a day that is missing"
     assert day.bars == ()
 
@@ -307,7 +307,7 @@ async def test_a_contract_the_stored_listing_does_not_hold_is_refused_before_the
     assert refused.record is None and refused.failure is not None
     assert refused.failure.reason == "not_listed"
     assert not route.called, "the vendor was never asked: the listing refuses first"
-    assert await off_the_loop(read_option_day_bars, CALL_999, TRADING_DATE) is None
+    assert await off_the_loop(read_option_day_bars, CALL_999, TRADING_DATE, listed_under="SPY") is None
     assert {key: dict(row) for key, row in fake_catalog.rows.items()} == rows_before
     assert sorted(path.name for path in raw_root(tmp_lake).rglob("*") if path.is_file()) == files_before
 
