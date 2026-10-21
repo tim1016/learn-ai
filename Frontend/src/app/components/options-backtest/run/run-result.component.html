@@ -2,7 +2,7 @@
 @if (run().figures; as figures) {
   <app-options-backtest-run-limitations [run]="run()" (inspect)="openEvidence($event)" />
   <app-options-backtest-run-headline [figures]="figures" />
-  <app-options-backtest-run-daily-chart [rows]="figures.by_day" [equityCurve]="figures.equity_curve" [drawdown]="figures.drawdown_by_dollars ?? null" [dailyMetrics]="figures.dashboard?.daily" (openDay)="day.set($event)" />
+  <app-options-backtest-run-daily-chart [rows]="figures.by_day" [equityCurve]="figures.equity_curve" [drawdown]="figures.drawdown_by_dollars ?? null" [percentageDrawdown]="figures.drawdown_by_fraction ?? null" [dailyMetrics]="figures.dashboard?.daily" (openDay)="day.set($event)" />
   <app-options-backtest-run-month-table [rows]="figures.by_month" />
   <section class="evidence-desk" aria-label="Detailed evidence">
     <h2>Explore the evidence</h2>

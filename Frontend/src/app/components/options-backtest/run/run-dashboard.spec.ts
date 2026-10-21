@@ -6,8 +6,16 @@ import { fakeRunDetail, inertRunDetail } from '../run-detail/testing/fake-run-de
 import { dashboard } from '../testing/dashboard-fixture';
 import { figures, runDetail } from '../testing/run-fixtures';
 import { RunResultComponent } from './run-result.component';
+import run76 from '../../../../../../PythonDataService/tests/fixtures/options_evidence/run76.json';
 
 describe('the completed-run Performance desk', () => {
+  it('names the independent maxima without pairing the percentage maximum with the dollar episode', async () => {
+    await render(RunResultComponent, { inputs: { run: runDetail({ figures: figures({ drawdown_by_dollars: run76.figures.drawdown_by_dollars, drawdown_by_fraction: run76.figures.drawdown_by_fraction }) }) }, providers: [{ provide: RunDetailService, useValue: inertRunDetail() }] });
+    expect(screen.getByRole('button', { name: 'Max dollar drawdown' }).closest('.tile')?.textContent).toContain('$1,754.10');
+    expect(screen.getByRole('button', { name: 'Max percentage drawdown' }).closest('.tile')?.textContent).toContain('12.4%');
+    fireEvent.click(screen.getByRole('button', { name: 'Max percentage drawdown' }));
+    expect(screen.getByRole('complementary', { name: 'Selected statistic' }).textContent).toContain('different dates');
+  });
   it('puts authored annualized Sharpe and session means in front, with calculations revealed on click', async () => {
     await render(RunResultComponent, { inputs: { run: runDetail({ figures: figures({ dashboard: dashboard() }) }) }, providers: [{ provide: RunDetailService, useValue: inertRunDetail() }] });
     const headline = screen.getByRole('region', { name: 'Headline figures' });

@@ -2,6 +2,8 @@
   <div class="heading"><h3>The profit path</h3><div class="key"><span class="key-gain"></span>Gain <span class="key-loss"></span>Loss <span class="key-idle"></span>No trade</div></div>
   <div class="readout" aria-live="polite">@if (highlighted(); as point) { <strong>{{ point.date }}</strong><span>Daily P&L {{ point.net_profit_usd | authoredUsd }}</span>@if (point.equity) { <span>Equity {{ point.equity | authoredUsd }}</span> }@if (point.underwater) { <span>Below peak {{ point.underwater | authoredUsd }}</span> } } @else { <span>{{ rows().length }} observed sessions · session-close equity · USD</span> }</div>
   @if (timeline().alignmentIssue; as issue) { <p class="unavailable">{{ issue }}</p> }
+  <div class="episode-controls"><button type="button" [class.active]="drawdownBasis() === 'dollars'" (click)="drawdownBasis.set('dollars')">Show largest dollar drawdown</button><button type="button" [class.active]="drawdownBasis() === 'percentage'" (click)="drawdownBasis.set('percentage')">Show largest percentage drawdown</button></div>
+  @if (activeDrawdown(); as fall) { <p class="episode">Selected {{ drawdownBasis() }} maximum: {{ fall.fall_usd | authoredUsd }} · {{ fall.display_percent_1_place }}% of its running peak. Peak {{ peakLabel() }} → trough {{ date(fall.trough_session_open_ms) }}. @if (curve()?.shade) { The shaded equity span follows this episode. } @else { Chart annotation unavailable for this recorded episode. }</p> } @else { <p class="episode">This drawdown maximum was not recorded.</p> }
   @if (rows().length > 0) {
     <div class="chart-frame">
       <div class="scales">
@@ -31,5 +33,5 @@
     </div>
   } @else { <p>No session results were recorded.</p> }
   <div class="chart-foot"><span>All plots share session positions and horizontal scroll. Choose a bar to inspect the session.</span><button type="button" (click)="help.set(!help())">How to read this</button></div>
-  @if (help()) { <p>The shaded equity span marks the largest dollar drawdown. Axes fit this run. No-trade sessions remain in the timeline. A missing equity path is not reconstructed in the browser. Session closes can hide deeper intraday losses.</p> }
+  @if (help()) { <p>The shaded equity span marks the selected maximum. Dollar and percentage maxima can occur in different episodes. Axes fit this run. No-trade sessions remain in the timeline. A missing equity path is not reconstructed in the browser. Session closes can hide deeper intraday losses.</p> }
 </section>

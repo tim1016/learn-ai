@@ -21,10 +21,17 @@ export class RunDailyChartComponent {
   readonly rows = input.required<readonly DayRow[]>();
   readonly equityCurve = input<RunFigures['equity_curve'] | undefined>(undefined);
   readonly drawdown = input<Drawdown | null>(null);
+  readonly percentageDrawdown = input<Drawdown | null>(null);
   readonly dailyMetrics = input<DailyMetrics | undefined>(undefined);
   readonly openDay = output<DayRequest>();
   protected readonly selected = signal<number | null>(null);
   protected readonly help = signal(false);
+  protected readonly drawdownBasis = signal<'dollars' | 'percentage'>('dollars');
+  protected readonly activeDrawdown = computed(() => this.drawdownBasis() === 'dollars' ? this.drawdown() : this.percentageDrawdown());
+  protected readonly peakLabel = computed(() => {
+    const peak = this.activeDrawdown()?.peak_session_open_ms;
+    return peak === null ? 'before the first session' : peak === undefined ? 'not recorded' : this.date(peak);
+  });
   protected readonly timeline = computed(() => {
     const rows = this.rows(), equity = this.equityCurve(), daily = this.dailyMetrics();
     const matchesRows = (points: readonly { session_open_ms: number | null }[]) =>
@@ -52,9 +59,9 @@ export class RunDailyChartComponent {
       y: scale.coordinates[index].y,
       label: point.session_open_ms === null ? `Starting cash: ${formatAuthoredUsd(point.equity_usd)}` : `${this.date(point.session_open_ms)}: equity ${formatAuthoredUsd(point.equity_usd)}`,
     }));
-    const peakMs = this.drawdown()?.peak_session_open_ms ?? null;
+    const peakMs = this.activeDrawdown()?.peak_session_open_ms;
     const peak = points.find((point) => point.session_open_ms === peakMs);
-    const trough = points.find((point) => point.session_open_ms === this.drawdown()?.trough_session_open_ms);
+    const trough = points.find((point) => point.session_open_ms === this.activeDrawdown()?.trough_session_open_ms);
     return { high: scale.high, low: scale.low, points, line: points.map((p) => `${p.x},${p.y}`).join(' '), shade: peak && trough ? `${peak.x},0 ${trough.x},0 ${trough.x},160 ${peak.x},160` : null };
   });
   protected readonly bars = computed(() => {

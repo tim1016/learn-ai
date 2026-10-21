@@ -4,8 +4,22 @@ import { describe, expect, it } from 'vitest';
 import { dashboard } from '../testing/dashboard-fixture';
 import { DAY_ROWS, figures } from '../testing/run-fixtures';
 import { RunDailyChartComponent } from './run-daily-chart.component';
+import type { DayRow } from '../options-backtest.types';
+import run76 from '../../../../../../PythonDataService/tests/fixtures/options_evidence/run76.json';
 
 describe('the shared run timeline', () => {
+  it('selects the recorded independent dollar and percentage maximum episodes for source76', async () => {
+    const f = run76.figures;
+    const { container } = await render(RunDailyChartComponent, { inputs: { rows: f.by_day as DayRow[], equityCurve: f.equity_curve,
+      drawdown: f.drawdown_by_dollars, percentageDrawdown: f.drawdown_by_fraction } });
+    const dollarShade = container.querySelector('.drawdown-span')?.getAttribute('points');
+    expect(screen.getByText(/Selected dollars maximum/).textContent).toContain('$1,754.10 · 9.1%');
+    expect(screen.getByText(/Selected dollars maximum/).textContent).toContain('2025-04-24 → trough 2025-07-01');
+    fireEvent.click(screen.getByRole('button', { name: 'Show largest percentage drawdown' }));
+    expect(screen.getByText(/Selected percentage maximum/).textContent).toContain('$1,633.50 · 12.4%');
+    expect(screen.getByText(/Selected percentage maximum/).textContent).toContain('2025-02-21 → trough 2025-03-25');
+    expect(container.querySelector('.drawdown-span')?.getAttribute('points')).not.toBe(dollarShade);
+  });
   it('aligns each bar with its own equity point and highlights the same session in all three plots', async () => {
     const run = figures(), asked: number[] = [];
     const { container } = await render(RunDailyChartComponent, {
@@ -49,5 +63,15 @@ describe('the shared run timeline', () => {
   it('keeps month ticks when the dashboard projection is absent', async () => {
     await render(RunDailyChartComponent, { inputs: { rows: DAY_ROWS } });
     expect(screen.getByText('2026-09')).toBeTruthy();
+  });
+  it('leaves a legacy missing peak date unshaded instead of assigning it to starting cash', async () => {
+    const recorded = figures().drawdown_by_dollars;
+    if (!recorded) throw new Error('Expected a retained drawdown fixture.');
+    const fall = { ...recorded };
+    delete fall.peak_session_open_ms;
+    const { container } = await render(RunDailyChartComponent, { inputs: { rows: DAY_ROWS, equityCurve: figures().equity_curve, drawdown: fall } });
+    expect(container.querySelector('.drawdown-span')).toBeNull();
+    expect(screen.getByText(/Peak not recorded/)).toBeTruthy();
+    expect(screen.getByText(/Chart annotation unavailable/)).toBeTruthy();
   });
 });
