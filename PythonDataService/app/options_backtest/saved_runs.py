@@ -54,6 +54,7 @@ from app.options_backtest.saved_setups import read_stored_setup
 from app.options_backtest.session_result import SessionResult
 from app.options_backtest.setup import OptionsBacktestSetup
 from app.options_backtest.statistics import RunSummary
+from app.options_backtest.timings import PhaseTiming
 from app.research.persistence import lifecycle
 from app.research.persistence.db import with_connection, writer_loop_call
 from app.utils.background_loop import run_on_background_loop
@@ -189,6 +190,8 @@ class StoredRun:
     setup: OptionsBacktestSetup | None
     figures: RunFigures | None
     setup_cannot_open_reason: str | None = None
+    phase_timings: tuple[PhaseTiming, ...] = ()
+    execution_metadata: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if (self.setup is None) == (self.setup_cannot_open_reason is None):
@@ -259,13 +262,20 @@ async def create_run(conn: asyncpg.Connection, new: NewRun) -> int:
         raise DuplicateJob(f"job {new.job_id} already has a run") from exc
 
 
-async def complete_run(conn: asyncpg.Connection, run_id: int, result: RunResult, *, finished_at_ms: int) -> None:
+async def run_for_job(conn: asyncpg.Connection, job_id: str) -> int | None:
+    return await conn.fetchval("SELECT id FROM research_options_backtest_runs WHERE job_id=$1", job_id)
+
+
+async def complete_run(conn: asyncpg.Connection, run_id: int, result: RunResult, *, finished_at_ms: int,
+                       generation: int | None = None) -> None:
     """Save a finished run's figures, sessions and leg trades in one transaction, and mark it ``complete``.
 
     ``RunNotRunning`` when the run is gone or is not running; ``RunDoesNotMatch`` when the result is not one of this
     run (another setup, or sessions other than the ones it was accepted for); nothing is written in either case.
     """
     async with conn.transaction():
+        if generation is not None:
+            await _lock_runtime_generation(conn, run_id, generation)
         row = await conn.fetchrow(
             "SELECT status, setup_json::text AS setup_json, sessions_requested, first_session_open_ms, "
             "last_session_open_ms FROM research_options_backtest_runs WHERE id = $1 FOR UPDATE",
@@ -502,7 +512,8 @@ async def get_run(conn: asyncpg.Connection, run_id: int, *, is_live: IsLive) -> 
     """
     row = await conn.fetchrow(
         f"SELECT {_RUN_COLUMNS}, setup_json::text AS setup_json, summary_json::text AS summary_json, "
-        "slippage_json::text AS slippage_json, tolerance_json::text AS tolerance_json "
+        "slippage_json::text AS slippage_json, tolerance_json::text AS tolerance_json, "
+        "phase_timings_json::text AS phase_timings_json, execution_metadata_json::text AS execution_metadata_json "
         "FROM research_options_backtest_runs WHERE id = $1",
         run_id,
     )
@@ -527,6 +538,8 @@ async def get_run(conn: asyncpg.Connection, run_id: int, *, is_live: IsLive) -> 
         setup=saved.setup,
         figures=figures,
         setup_cannot_open_reason=saved.cannot_open_reason,
+        phase_timings=tuple(PhaseTiming.model_validate(item) for item in json.loads(row["phase_timings_json"] or "[]")),
+        execution_metadata=json.loads(row["execution_metadata_json"]) if row["execution_metadata_json"] else None,
     )
 
 
@@ -928,13 +941,19 @@ def _session_line(row: asyncpg.Record) -> SessionLine:
 class DbRunStore:
     """Saves a run to the research tables. ``create`` is awaited by the route; the others block, for a worker thread."""
 
+    def __init__(self, *, generation: int | None = None) -> None:
+        self.generation = generation
+
     async def create(self, new: NewRun) -> int:
         return await writer_loop_call(with_connection(create_run, new))
 
     def complete(self, run_id: int, result: RunResult, *, finished_at_ms: int) -> None:
         run_on_background_loop(
-            with_connection(complete_run, run_id, result, finished_at_ms=finished_at_ms), timeout=SAVE_TIMEOUT_SECONDS
+            with_connection(complete_run, run_id, result, finished_at_ms=finished_at_ms, generation=self.generation), timeout=SAVE_TIMEOUT_SECONDS
         )
+
+    def record_timings(self, run_id: int, timings: list[dict[str, Any]], metadata: dict[str, Any]) -> None:
+        run_on_background_loop(with_connection(record_timings, run_id, timings, metadata), timeout=SAVE_TIMEOUT_SECONDS)
 
     def fail(self, run_id: int, failure: RunFailure, *, finished_at_ms: int) -> None:
         run_on_background_loop(
@@ -945,3 +964,27 @@ class DbRunStore:
         run_on_background_loop(
             with_connection(cancel_run, run_id, finished_at_ms=finished_at_ms), timeout=SAVE_TIMEOUT_SECONDS
         )
+
+
+async def record_timings(conn: asyncpg.Connection, run_id: int, timings: list[dict[str, Any]], metadata: dict[str, Any]) -> None:
+    """Execution observations remain separate from immutable financial results."""
+    await conn.execute(
+        "UPDATE research_options_backtest_runs SET phase_timings_json=$2::jsonb, execution_metadata_json=$3::jsonb WHERE id=$1",
+        run_id, json.dumps(timings), json.dumps(metadata),
+    )
+
+
+async def _lock_runtime_generation(conn: asyncpg.Connection, run_id: int, generation: int) -> None:
+    from app.research.persistence.ownership import GenerationFencedError
+
+    # The successor must update this same singleton row to advance generation.
+    # Holding its share lock through the result transaction makes save and
+    # generation takeover mutually ordered, rather than a check/write race.
+    current = await conn.fetchval(
+        "SELECT runtime.boot_generation FROM research_runtime_owners runtime "
+        "JOIN research_job_owners owner ON owner.boot_generation=runtime.boot_generation "
+        "JOIN research_options_backtest_runs run ON run.job_id=owner.job_id "
+        "WHERE run.id=$1 AND owner.kind='options_backtest' FOR SHARE OF runtime, owner", run_id,
+    )
+    if current != generation:
+        raise GenerationFencedError("a stale research generation cannot save this Options Backtest")

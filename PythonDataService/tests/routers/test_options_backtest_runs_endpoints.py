@@ -1027,6 +1027,8 @@ def _a_stored_row(status: str) -> dict[str, Any]:
         "summary_json": None,
         "slippage_json": None,
         "tolerance_json": None,
+        "phase_timings_json": None,
+        "execution_metadata_json": None,
     }
 
 

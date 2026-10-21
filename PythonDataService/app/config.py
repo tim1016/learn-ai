@@ -1,5 +1,6 @@
 """Application configuration loaded from environment variables"""
 
+import os
 import re
 from pathlib import Path
 from typing import Literal
@@ -357,6 +358,9 @@ class Settings(BaseSettings):
     # Where the isolated research runtime answers (``http://research:8000``),
     # read only when RESEARCH_EXECUTION_MODE=research.
     RESEARCH_RUNTIME_URL: str = ""
+    # The isolated runtime asks the data service to acquire and freeze inputs.
+    OPTIONS_BACKTEST_DATA_SERVICE_URL: str = ""
+    OPTIONS_BACKTEST_INPUT_ROOT: Path = _SERVICE_ARTIFACTS_ROOT / "options_backtest" / "inputs"
     # Bounded research worker pool (#3046, PRD #3034 slice 11). One ready
     # batch may spread across this many spawned workers with at most
     # RESEARCH_DISPATCH_WINDOW evaluations begun-but-undelivered. One worker
@@ -432,8 +436,8 @@ class Settings(BaseSettings):
     # volume wherever the recorder is enabled.
     IV_RECORDER_STORE_PATH: str = "/var/lib/iv-recorder"
 
-settings = Settings()
-fleet_settings = FleetSettings()
+settings = Settings(_env_file=None) if os.environ.get("RESEARCH_WORKER") == "1" else Settings()
+fleet_settings = FleetSettings(_env_file=None) if os.environ.get("RESEARCH_WORKER") == "1" else FleetSettings()
 
 # The deterministic root UUID every pre-#1876 catalog row was backfilled with
 # (Backend migration AddDataRootIdToDataLakeArtifactsAndRuns) and the value

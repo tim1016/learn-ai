@@ -303,3 +303,20 @@ async def forward_options_search_job(payload: dict[str, Any]) -> dict[str, Any]:
             return {"study_id": row["id"], "job_id": payload["job_id"], "status": "queued"}
         raise HTTPException(502, "The runtime did not confirm a live Options study dispatch; retry its command receipt.") from exc
     return _answer_of(response)
+
+
+async def forward_options_backtest_job(payload: dict[str, Any]) -> dict[str, Any]:
+    """A timeout joins the same durable live run; it never starts API replay."""
+    try:
+        response = await _post_runtime_dispatch("/api/jobs-internal/options-backtest", payload)
+    except httpx.HTTPError as exc:
+        from app.options_backtest.saved_runs import run_for_job
+        from app.research.persistence import lifecycle
+        from app.research.persistence.db import with_connection
+
+        run_id = await with_connection(run_for_job, str(payload["job_id"]))
+        live = await asyncio.to_thread(lifecycle.job_is_live, str(payload["job_id"]))
+        if run_id is not None and live is True:
+            return {"job_id": payload["job_id"], "run_id": run_id, "status": "queued"}
+        raise HTTPException(502, "The research runtime did not confirm this backtest; retry the same job id.") from exc
+    return _answer_of(response)

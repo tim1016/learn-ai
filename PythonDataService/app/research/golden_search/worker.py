@@ -201,7 +201,7 @@ def _child_main() -> int:
     # The parent sizes it — the pool divides the shared budget across its
     # lanes (#3066 review); a lone child keeps the serial parity ceiling.
     decoded_cache = DecodedArtifactCache(
-        max_bytes=int(os.environ.get("RESEARCH_WORKER_DECODED_CACHE_BYTES") or WORKER_DECODED_CACHE_BYTES)
+        max_bytes=int(os.environ.get("RESEARCH_WORKER_DECODED_CACHE_BYTES") or WORKER_DECODED_CACHE_BYTES) // 2
     )
     state = {"identity": identity, "admission_sequence": 0, "decoded_cache": decoded_cache}
 
@@ -352,6 +352,11 @@ def _run_one_task(
 
             run_options_task(task, out=out, ask_admission=ask_admission, cancel_flag=cancel_flag, state=state)
             return
+        if kind == "options_backtest_chain":
+            from app.options_backtest.dispatch import run_backtest_chain_task
+
+            run_backtest_chain_task(task, out=out, ask_admission=ask_admission, cancel_flag=cancel_flag, state=state)
+            return
         if kind == "benchmark_eval":
             from app.research.benchmark import run_benchmark_eval_task
 
@@ -486,6 +491,9 @@ class WorkerDispatchContext:
     # This child's decoded-cache ceiling in bytes: the serial parity ceiling
     # by default, the shared budget's share under a pool (#3066 review).
     decoded_cache_bytes: int = WORKER_DECODED_CACHE_BYTES
+    # A qualified width also bounds simultaneous Options owners (#3428).
+    concurrency_group: str | None = None
+    group_limit: int = 1
 
 
 class ResearchWorker:
@@ -547,8 +555,13 @@ class ResearchWorker:
 
     def _spawn(self) -> None:
         env = {
-            **os.environ,
+            **{key: value for key, value in os.environ.items()
+               if not any(word in key.upper() for word in ("API_KEY", "SECRET", "TOKEN", "PASSWORD"))
+               and key not in {"POSTGRES_URL", "REDIS_URL"}},
             **CHILD_ENV_FIXED,
+            "RESEARCH_WORKER": "1",
+            "POLYGON_API_KEY": "worker-has-no-provider-access",
+            "POSTGRES_URL": "",
             # Startup imports can extend the runtime's library search path.
             # Preserve it so the child sees the same installed environment
             # when it verifies the sealed identity (ADR 0077).

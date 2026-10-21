@@ -61,6 +61,7 @@ from app.options_backtest.run import RunResult, RunStopped, SessionDataMissing, 
 from app.options_backtest.saved_runs import FailureItem, RunFailure
 from app.options_backtest.session_market import MalformedBars
 from app.options_backtest.setup import OptionsBacktestSetup
+from app.options_backtest.timings import RunTimings
 from app.research.grid_search.service import window_dates
 from app.utils.background_loop import CallerStoppedWaitingError
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms, require_schedulable_end
@@ -218,11 +219,15 @@ def execute_run(
     its row stays ``running``, which reads as ``interrupted`` once the job is gone. Either way the job ends as the run
     did, with the run's own words and not the store's.
     """
+    timings = RunTimings(clock=clock)
     try:
-        result = _work(setup, sessions, hooks, clock)
+        result = _work(setup, sessions, hooks, clock, timings=timings)
         _stop_if_asked(hooks)
         hooks.on_phase(PHASE_SAVING)
-        _save(store, run_id, result, clock)
+        with timings.measure("save"):
+            _save(store, run_id, result, clock)
+        if hasattr(store, "record_timings"):
+            store.record_timings(run_id, timings.wire(), {})
         return result
     except (RunCancelled, RunStopped, DownloadStopped, CheckStopped):
         finished_at_ms = clock()
@@ -268,43 +273,48 @@ def _record_the_end(record: Callable[[], None], *, run_id: int, ended: str) -> N
 
 
 def _work(
-    setup: OptionsBacktestSetup, sessions: Sequence[date], hooks: RunHooks, clock: Callable[[], int]
+    setup: OptionsBacktestSetup, sessions: Sequence[date], hooks: RunHooks, clock: Callable[[], int],
+    *, timings: RunTimings | None = None,
 ) -> RunResult:
+    ledger = timings or RunTimings(clock=clock)
+    prepare_run_data(setup, sessions, hooks, clock, timings=ledger)
+    with ledger.measure("replay"):
+        return _replay(setup, sessions, hooks)
+
+
+def prepare_run_data(
+    setup: OptionsBacktestSetup, sessions: Sequence[date], hooks: RunHooks, clock: Callable[[], int],
+    *, timings: RunTimings,
+) -> None:
+    """Only the data service runs provider acquisition; runtime replay is separate."""
     now_ms = clock()
     _stop_if_asked(hooks)
     hooks.on_phase(PHASE_CHECKING_DATA)
-    check = check_data(
-        setup,
-        sessions,
-        now_ms=now_ms,
-        data=LakeCheckData(setup.underlying),
-        on_session=hooks.on_progress,
-        should_stop=hooks.should_stop,
-    )
+    with timings.measure("check"):
+        check = check_data(
+            setup, sessions, now_ms=now_ms, data=LakeCheckData(setup.underlying),
+            on_session=hooks.on_progress, should_stop=hooks.should_stop,
+        )
     if check.count(SessionVerdict.CANNOT_BE_TESTED):
         raise SessionsCannotBeTested(check)
 
     _stop_if_asked(hooks)
     hooks.on_phase(PHASE_DOWNLOADING_DATA)
-    report = _naming_the_session(
-        sessions,
-        hooks,
-        lambda progress: ensure_run_data(
-            setup,
-            sessions,
-            now_ms=now_ms,
-            on_progress=progress,
-            should_stop=hooks.should_stop,
-            on_log=hooks.on_log,
-        ),
-    )
+    with timings.measure("download"):
+        report = _naming_the_session(
+            sessions, hooks,
+            lambda progress: ensure_run_data(
+                setup, sessions, now_ms=now_ms, on_progress=progress,
+                should_stop=hooks.should_stop, on_log=hooks.on_log,
+            ),
+        )
     hooks.on_log(
         f"Brought in {report.listings_fetched} listings and {report.option_days_fetched} contract days "
         f"({report.listings_reused} and {report.option_days_reused} were already stored)."
     )
 
     _stop_if_asked(hooks)
-    return _replay(setup, sessions, hooks)
+    return None
 
 
 def _replay(setup: OptionsBacktestSetup, sessions: Sequence[date], hooks: RunHooks) -> RunResult:

@@ -228,9 +228,12 @@ services:
       # every dispatch it accepts with its boot generation (#3042).
       RESEARCH_EXECUTION_MODE: research
       RESEARCH_RUNTIME: "1"
+      OPTIONS_BACKTEST_DATA_SERVICE_URL: http://python-service:8000
+      OPTIONS_BACKTEST_INPUT_ROOT: /app/artifacts/options_backtest/inputs
       # The pooled dispatch's bounds (#3046): width comes from the fleet's
       # .env — the default is the serial one-worker runtime.
       RESEARCH_WORKER_COUNT: ${RESEARCH_WORKER_COUNT:-1}
+      OPTIONS_SEARCH_WORKER_COUNT: ${OPTIONS_SEARCH_WORKER_COUNT:-1}
       RESEARCH_DISPATCH_WINDOW: ${RESEARCH_DISPATCH_WINDOW:-8}
       DATA_PLANE_CONTROL_SECRET: ${DATA_PLANE_CONTROL_SECRET:?Set DATA_PLANE_CONTROL_SECRET in .env before starting the stack}
       REDIS_URL: redis://:${REDIS_PASSWORD:-local-dev-redis-password}@redis:6379/0

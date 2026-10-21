@@ -20,6 +20,17 @@ The existing immutable Golden Options registry remains the approval authority. A
 
 ## Alternatives
 
+### Amendment 2026-10-20 — Ordinary Options runs share execution capacity
+
+Options Backtest joins Options Golden Search and Signal studies on the same
+research pool. Every Options owner counts against the same qualified width;
+one is the default until combined workload qualification authorizes more.
+Shared execution changes neither selection evidence nor approval authority.
+The ordinary run freezes admitted storage answers and original byte pins
+before dispatch, retains chronological cash within each chain, and saves only
+after every mandatory chain has succeeded. Timings and cache observations
+remain outside financial and qualification identities.
+
 Reusing stock metric and seal types would mix trade units and drawdown conventions. A second session engine would let search approve different rules from execution. Hash-only snapshots lose reproducibility when the lake changes. Publishing the ordinary run alone would prove replay without proving the search qualification claim. Each alternative leaves a materially weaker authority boundary.
 
 ## Selectable objective — owner decision, 2026-10-17

@@ -43,7 +43,7 @@ from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse
 
 from app.config import settings
-from app.routers import golden_search
+from app.routers import golden_search, options_backtest_runs
 from app.security.data_plane_control import require_data_plane_control_secret
 from app.utils.error_handlers import install_fleet_control_error_handler
 
@@ -276,6 +276,12 @@ app = FastAPI(
 # mounts rely on network placement alone.
 app.include_router(
     golden_search.jobs_router,
+    prefix="/api/jobs-internal",
+    tags=["jobs-internal"],
+    dependencies=[Depends(require_data_plane_control_secret)],
+)
+app.include_router(
+    options_backtest_runs.jobs_router,
     prefix="/api/jobs-internal",
     tags=["jobs-internal"],
     dependencies=[Depends(require_data_plane_control_secret)],

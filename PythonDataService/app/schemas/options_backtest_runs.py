@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from decimal import Decimal
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -27,6 +27,7 @@ from app.options_backtest.saved_runs import FailureItem, Headline, RunFailure, R
 from app.options_backtest.saved_setups import SETUP_NAME_PATTERN
 from app.options_backtest.setup import OptionsBacktestSetup
 from app.options_backtest.statistics import DayRow, Drawdown, MonthRow, Ratio, RunSummary, equity_path
+from app.options_backtest.timings import PhaseTiming
 from app.schemas.options_backtest import served_setup
 from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_day_end_ms, et_midnight_ms
 
@@ -826,6 +827,8 @@ class OptionsBacktestRunDetailResponse(OptionsBacktestRunListItemResponse):
     # The whole run replayed at each slippage on the ladder, lowest first; empty unless the run is complete.
     slippage: list[OptionsBacktestSlippagePointResponse]
     slippage_tolerance: OptionsBacktestSlippageToleranceResponse | None = None
+    phase_timings: list[PhaseTiming] = Field(default_factory=list)
+    execution_metadata: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def _either_the_setup_or_why_not(self) -> Self:
@@ -842,6 +845,8 @@ class OptionsBacktestRunDetailResponse(OptionsBacktestRunListItemResponse):
         tolerance = None if figures is None else figures.slippage_tolerance
         return cls(
             **listed.model_dump(),
+            phase_timings=list(stored.phase_timings),
+            execution_metadata=stored.execution_metadata,
             calendar_identity=stored.record.calendar_identity,
             calendar_package_version=stored.record.calendar_package_version,
             setup=None if setup is None else served_setup(setup),
@@ -900,6 +905,8 @@ class OptionsBacktestJobRequest(BaseModel):
 
     job_id: str = Field(min_length=1, max_length=JOB_ID_MAX_LENGTH, pattern=JOB_ID_PATTERN)
     setup: OptionsBacktestSetup
+    benchmark_cache_mode: Literal["cold", "warm"] | None = Field(default=None,
+        description="Internal benchmark control; cold clears each worker once for this job, never financial identity.")
     start_ms: Ms = Field(description=START_MS_RULE)
     end_ms: Ms = Field(description=END_MS_RULE)
     setup_name: Annotated[str, Field(pattern=SETUP_NAME_PATTERN)] | None = Field(

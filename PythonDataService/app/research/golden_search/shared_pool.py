@@ -390,7 +390,8 @@ class SharedWorkerPool:
         while True:
             if not any(not lane.busy for lane in self._lanes):
                 return
-            runnable = [owner for owner in self._owners if not owner.closed and owner.pending]
+            runnable = [owner for owner in self._owners if not owner.closed and owner.pending
+                        and self._group_has_capacity_locked(owner)]
             if not runnable:
                 return
             owner = runnable[self._ring % len(runnable)]
@@ -408,6 +409,14 @@ class SharedWorkerPool:
                 # running — the renewal evidence the PRD names for queued
                 # jobs, fired by the lane once the begin marker is durable.
                 entry.handoff_pending = True
+
+    def _group_has_capacity_locked(self, owner: _OwnerState) -> bool:
+        group = owner.context.concurrency_group
+        if group is None:
+            return True
+        peers = [peer for peer in self._owners if peer.context.concurrency_group == group]
+        limit = min(peer.context.group_limit for peer in peers)
+        return sum(peer.in_flight for peer in peers) < limit
 
     def _pick_lane_locked(self, entry: _Entry) -> _Lane:
         """The warmest idle lane for this entry, lowest index breaking ties (#3048).
