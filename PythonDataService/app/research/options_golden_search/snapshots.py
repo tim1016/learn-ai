@@ -8,7 +8,7 @@ from pathlib import Path
 
 from app.data_lake.admission import read_committed_bytes
 from app.data_lake.option_lake import option_read_root
-from app.data_lake.path_policy import LeanMinuteBarPath, OptionListingPath, OptionMinuteBarPath
+from app.data_lake.path_policy import LeanMinuteBarPath, OptionListingPath, OptionMinuteBarPath, OptionSessionPath
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.options.contract import OptionContract
 from app.options_backtest.data import Captured
@@ -121,5 +121,9 @@ def capture_snapshot(protocol: OptionsSearchProtocol, blobs: BlobStore, *, lake_
                     contracts.add(picked.contract)
         for contract in sorted(contracts, key=lambda c: c.occ_symbol):
             captured = source.option_day(contract, day)
-            record(str(OptionMinuteBarPath(contract.root, contract.occ_symbol, day).relative_path()), None if captured is None else captured.sha256)
-    return Snapshot(manifest=manifest, absent=tuple(sorted(absent)), retained_bytes=retained)
+            if captured is not None and captured.reference is not None:
+                record(str(OptionSessionPath(protocol.setup.underlying, day).relative_path()), captured.reference["container_sha256"])
+            else:
+                record(str(OptionMinuteBarPath(contract.root, contract.occ_symbol, day).relative_path()), None if captured is None else captured.sha256)
+    return Snapshot(version=2 if any("/session/" in path for path in manifest) else 1,
+                    manifest=manifest, absent=tuple(sorted(absent)), retained_bytes=retained)

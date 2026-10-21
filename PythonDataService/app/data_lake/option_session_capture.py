@@ -1,0 +1,147 @@
+"""Resumable full-listing session capture with brief publication leases (#3427).
+
+A same-host advisory lock fences the collector for its whole lifetime; process
+death releases it. Validated ticker outcomes are fsynced independently under
+the listing/recipe identity. There is no catalog lease during provider work,
+no staging cleanup by a losing collector, and no staged coverage is readable.
+"""
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+from collections.abc import Callable
+from datetime import date
+
+from app.config import settings
+from app.data_lake.bar_validation import CorruptVendorBarsError, assert_publishable_minute_bars
+from app.data_lake.lean_writer import build_minute_trade_zip_bytes
+from app.data_lake.option_bars import (
+    _minute_trade_bar,
+    _publication_gate_view,
+    _require_exact_price_relations,
+    _require_prices_above_zero_on_the_grid,
+    _require_whole_minute_starts,
+    parse_option_day_zip,
+)
+from app.data_lake.option_lake import (
+    MAX_CLAIM_RETRIES,
+    OptionCaptureResult,
+    OptionDataFailure,
+    OptionFailureReason,
+    current_ms,
+    option_history_floor,
+    refusal_before_claim,
+    vendor_reason,
+    vendor_request_gate,
+)
+from app.data_lake.option_listing import ensure_option_listing, read_option_listing
+from app.data_lake.option_session import option_session_dch, read_option_session
+from app.data_lake.option_session_repack import publish_option_session
+from app.data_lake.path_policy import resolve_staging_root
+from app.data_lake.polygon_fetcher import PolygonFetchError
+from app.data_lake.polygon_option_bars import fetch_option_minute_bars
+from app.lean_sidecar.trading_calendar import session_open_ms_utc
+from app.options_backtest.chain_download import Outcome, _capture_underlying
+from app.utils.advisory_lock import try_advisory_file_lock
+from app.utils.atomic_file import atomic_write_bytes
+from app.utils.background_loop import background_loop
+from app.utils.session_anchors import et_date_at_ms
+
+
+async def capture_option_session(
+    underlying: str, trading_date: date, *, now_ms: int | None = None,
+    should_pause: Callable[[], bool] | None = None, history_floor: date | None = None,
+    retry_exhausted: bool = False,
+) -> OptionCaptureResult:
+    """Resolve every listed ticker. Repeated triggers join durable collection.
+
+    A ``lease_timeout`` result means another collector owns this session, or a
+    deliberate pause retained its progress. Explicit ``retry_exhausted`` grants
+    one new bounded transient-attempt budget; normal scheduling never resets it.
+    """
+    if asyncio.get_running_loop() is not background_loop():
+        future = asyncio.run_coroutine_threadsafe(capture_option_session(
+            underlying, trading_date, now_ms=now_ms, should_pause=should_pause,
+            history_floor=history_floor, retry_exhausted=retry_exhausted), background_loop())
+        return await asyncio.wrap_future(future)
+    now = current_ms() if now_ms is None else now_ms
+    def failed(reason: OptionFailureReason, detail: str) -> OptionCaptureResult:
+        return OptionCaptureResult.failed(OptionDataFailure(reason, detail, underlying, trading_date))
+    refusal = refusal_before_claim(underlying, trading_date, now_ms=now)
+    if refusal is not None:
+        return OptionCaptureResult.failed(refusal)
+    if trading_date < (history_floor or option_history_floor(et_date_at_ms(now))):
+        return failed("outside_data_plan", "session is older than the archive fetch boundary")
+    paused = should_pause or (lambda: False)
+    staging = resolve_staging_root("raw") / "option_sessions" / underlying / str(session_open_ms_utc(trading_date))
+    with try_advisory_file_lock(staging / "collector") as owns:
+        if not owns:
+            return failed("lease_timeout", "this session already has a running collector")
+        if paused():
+            return failed("lease_timeout", "capture paused before a provider request; progress retained")
+        async with vendor_request_gate():
+            listing_result = await ensure_option_listing(underlying, trading_date, now_ms=now)
+        if listing_result.failure is not None:
+            return listing_result
+        listing = await asyncio.to_thread(read_option_listing, underlying, trading_date)
+        if listing is None:
+            return failed("listing_not_captured", "listing was not admitted after capture")
+        existing = await asyncio.to_thread(read_option_session, underlying, trading_date, listing=listing)
+        if existing is not None and existing.complete:
+            return await publish_option_session(listing, dict(existing.original_bytes))
+        generation = staging / option_session_dch() / listing.sha256
+        generation.mkdir(parents=True, exist_ok=True)
+        captured = {} if existing is None else dict(existing.original_bytes)
+        for row in listing.rows:
+            symbol = row.ticker.removeprefix("O:")
+            # The parser rejects unsafe or mismatched symbols before URL or path use.
+            from app.options.contract import OptionContract
+            OptionContract.from_occ_symbol(symbol)
+            path = generation / f"{symbol}.zip"
+            if path.is_file():
+                payload = path.read_bytes()
+                receipt = json.loads(path.with_suffix(".json").read_bytes())
+                if receipt != {"sha256": hashlib.sha256(payload).hexdigest(), "listing_sha256": listing.sha256,
+                               "recipe": option_session_dch()}:
+                    return failed("validation_failed", "staged ticker receipt does not match its exact bytes")
+                parse_option_day_zip(payload, symbol, trading_date)
+                captured[symbol] = payload
+            if symbol in captured:
+                continue
+            if paused():
+                return failed("lease_timeout", "capture paused; validated ticker outcomes retained")
+            attempts_path = generation / f"{symbol}.attempts"
+            attempts = int(attempts_path.read_text()) if attempts_path.is_file() else 0
+            if attempts >= MAX_CLAIM_RETRIES and not retry_exhausted:
+                return failed("fetch_timeout", "ticker exhausted its transient retries; explicit recovery is required")
+            if retry_exhausted and attempts >= MAX_CLAIM_RETRIES:
+                attempts = 0
+            try:
+                async with vendor_request_gate():
+                    if paused():
+                        return failed("lease_timeout", "capture paused before a provider request; progress retained")
+                    bars = await fetch_option_minute_bars(symbol, trading_date, settings.POLYGON_API_KEY)
+                _require_exact_price_relations(bars, symbol=symbol, trading_date=trading_date)
+                assert_publishable_minute_bars(_publication_gate_view(bars), symbol=symbol, trading_date=trading_date)
+                _require_whole_minute_starts([bar.t_ms for bar in bars], symbol=symbol, trading_date=trading_date)
+                _require_prices_above_zero_on_the_grid(bars)
+                payload = build_minute_trade_zip_bytes(symbol=symbol, trading_date_yyyymmdd=f"{trading_date:%Y%m%d}",
+                                                       bars=[_minute_trade_bar(bar) for bar in bars])
+                parse_option_day_zip(payload, symbol, trading_date)
+            except PolygonFetchError as exc:
+                atomic_write_bytes(attempts_path, str(attempts + 1).encode())
+                return failed(vendor_reason(exc), str(exc))
+            except (CorruptVendorBarsError, ArithmeticError, ValueError) as exc:
+                atomic_write_bytes(attempts_path, str(attempts + 1).encode())
+                return failed("validation_failed", str(exc))
+            atomic_write_bytes(path.with_suffix(".json"), json.dumps({"sha256": hashlib.sha256(payload).hexdigest(),
+                "listing_sha256": listing.sha256, "recipe": option_session_dch()}, sort_keys=True).encode())
+            atomic_write_bytes(path, payload)
+            captured[symbol] = payload
+        if paused():
+            return failed("lease_timeout", "capture paused before underlying collection; outcomes retained")
+        underlying_result = await _capture_underlying(underlying, trading_date, now, allow_before_floor=history_floor is not None)
+        if underlying_result.outcome is Outcome.FAILED:
+            return failed("provider_api_error", underlying_result.detail or "underlying bars could not be captured")
+        return await publish_option_session(listing, captured)

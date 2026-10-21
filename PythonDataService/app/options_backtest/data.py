@@ -37,6 +37,7 @@ class Captured[T]:
 
     value: T
     sha256: str
+    reference: dict[str, str] | None = None
 
     def __post_init__(self) -> None:
         if not _SHA256.fullmatch(self.sha256):

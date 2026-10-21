@@ -32,6 +32,7 @@ class PinnedDay:
 
     contract: OptionContract
     sha256: str
+    reference: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)

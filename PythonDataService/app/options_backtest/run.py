@@ -356,7 +356,7 @@ def load_session_market(
     pins = SessionPins(
         underlying.sha256,
         listing.sha256,
-        tuple(PinnedDay(contract, found.sha256) for contract, found in days.items()),
+        tuple(PinnedDay(contract, found.sha256, found.reference) for contract, found in days.items()),
     )
     return market, pins
 

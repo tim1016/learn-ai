@@ -150,6 +150,7 @@ class OptionDayBars:
     trading_date: date
     bars: tuple[OptionBar, ...]
     sha256: str
+    reference: dict[str, str] | None = None
 
 
 class OptionBarsFileError(ValueError):
@@ -221,6 +222,8 @@ def read_option_day_bars(
     *,
     admission: Callable[[Path], bytes] = read_committed_bytes,
     lake_root: Path | None = None,
+    listed_under: str | None = None,
+    legacy_only: bool = False,
 ) -> OptionDayBars | None:
     """One contract's captured session, or ``None`` when that day has no file.
 
@@ -252,6 +255,16 @@ def read_option_day_bars(
     Synchronous, like ``LeanMinuteDataReader.read_day``.
     """
     symbol = contract.occ_symbol
+    if not legacy_only:
+        from app.data_lake.option_session import read_option_session
+
+        session = read_option_session(listed_under or contract.root, trading_date, admission=admission, lake_root=lake_root)
+        if session is not None:
+            stored = session.option_day(symbol)
+            if stored is not None:
+                return OptionDayBars(symbol, trading_date, stored.bars, stored.sha256, session.reference(symbol))
+            if symbol not in session.unresolved:
+                return None
     path = option_read_root(lake_root) / Path(*_bars_path(contract, trading_date).parts)
     if not path.is_file():
         return None
@@ -461,9 +474,37 @@ async def ensure_option_day_bars(
         )
     symbol = contract.occ_symbol
     now = now_ms if now_ms is not None else current_ms()
-    refusal = refusal_before_claim(symbol, trading_date, now_ms=now) or plan_window_refusal(
-        symbol, trading_date, now_ms=now
-    )
+    refusal = refusal_before_claim(symbol, trading_date, now_ms=now)
+    if refusal is None:
+        from app.data_lake.option_session import OptionSessionFileError, read_option_session
+
+        try:
+            session = await asyncio.to_thread(read_option_session, listed_under, trading_date, listing=listing)
+        except (LakeAdmissionError, OptionSessionFileError) as exc:
+            return OptionCaptureResult.failed(OptionDataFailure("validation_failed", str(exc), symbol, trading_date))
+        if session is not None and session.option_day(symbol) is not None:
+            records = await catalog_client.select_coverage_minute_bars(
+                market=OPTION_MARKET, symbol=listed_under, data_type="trade", start_trading_date=trading_date,
+                end_trading_date=trading_date, price_adjustment_mode=OPTION_PRICE_ADJUSTMENT_MODE,
+            )
+            record = next((r for r in records if r.file_sha256 == session.sha256 and r.provider == OPTION_PROVIDER), None)
+            if record is None:
+                raise LakeAdmissionError("session receipt changed after admission")
+            return OptionCaptureResult(record=record, failure=None, reused=True)
+        if plan_window_refusal(symbol, trading_date, now_ms=now) is not None:
+            try:
+                stored = await asyncio.to_thread(read_option_day_bars, contract, trading_date, listed_under=listed_under)
+            except (LakeAdmissionError, OptionBarsFileError) as exc:
+                return OptionCaptureResult.failed(OptionDataFailure("validation_failed", str(exc), symbol, trading_date))
+            if stored is not None:
+                records = await catalog_client.select_coverage_minute_bars(
+                    market=OPTION_MARKET, symbol=symbol, data_type="trade", start_trading_date=trading_date,
+                    end_trading_date=trading_date, price_adjustment_mode=OPTION_PRICE_ADJUSTMENT_MODE,
+                )
+                record = next((r for r in records if r.file_sha256 == stored.sha256 and r.provider == OPTION_PROVIDER), None)
+                if record is not None:
+                    return OptionCaptureResult(record=record, failure=None, reused=True)
+            refusal = plan_window_refusal(symbol, trading_date, now_ms=now)
     if refusal is None:
         refusal = await _listing_refusal(listed_under, symbol, trading_date, listing)
     if refusal is not None:

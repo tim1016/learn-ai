@@ -378,17 +378,27 @@ def _check_session(setup: OptionsBacktestSetup, day: date, *, now_ms: int, data:
         return outline.result(SessionVerdict.READY, skip=SkipReason.WINDOW_DOES_NOT_FIT, contracts=ContractNeeds(0, 0))
 
     problems.extend(_lake_refusals(setup.underlying, day, now_ms=now_ms))
-    if problems:
+    if any(problem.code is ProblemCode.SESSION_DATA_NOT_FINAL for problem in problems):
         return outline.result(SessionVerdict.CANNOT_BE_TESTED, problems=tuple(problems))
-    return _inspect_what_is_stored(setup, day, outline, data)
+    fetchable = plan_window_refusal(setup.underlying, day, now_ms=now_ms) is None
+    result = _inspect_what_is_stored(setup, day, outline, data, fetchable=fetchable)
+    if not fetchable and result.verdict is SessionVerdict.NEEDS_DOWNLOAD:
+        result = outline.result(
+            SessionVerdict.CANNOT_BE_TESTED, contracts=result.contracts,
+            problems=(Problem(ProblemCode.OLDER_THAN_THE_DATA_PLAN,
+                              "Required stored data is missing. " + _OLDER_THAN_THE_PLAN),),
+            notes=result.notes,
+        )
+    if problems:
+        return outline.result(SessionVerdict.CANNOT_BE_TESTED, contracts=result.contracts,
+                              problems=tuple(problems) + result.problems, notes=result.notes)
+    return result
 
 
 def _lake_refusals(underlying: str, day: date, *, now_ms: int) -> list[Problem]:
     refusals: list[Problem] = []
     if session_refusal(underlying, day, now_ms=now_ms) is not None:
         refusals.append(Problem(ProblemCode.SESSION_DATA_NOT_FINAL, SESSION_DATA_NOT_FINAL_WORDS))
-    if plan_window_refusal(underlying, day, now_ms=now_ms) is not None:
-        refusals.append(Problem(ProblemCode.OLDER_THAN_THE_DATA_PLAN, _OLDER_THAN_THE_PLAN))
     return refusals
 
 
@@ -447,7 +457,7 @@ def _a_contract_day_as_the_run_reads_it(
 
 
 def _inspect_what_is_stored(
-    setup: OptionsBacktestSetup, day: date, outline: _Outline, data: CheckableData
+    setup: OptionsBacktestSetup, day: date, outline: _Outline, data: CheckableData, *, fetchable: bool = True,
 ) -> SessionCheck:
     notes: list[str] = []
     try:
@@ -455,11 +465,14 @@ def _inspect_what_is_stored(
             lambda: _the_underlying_as_the_run_reads_it(data, day),
             "underlying bars",
             notes,
-            replaced=lambda _exc: data.download_replaces_the_underlying(day),
+            replaced=lambda _exc: fetchable and data.download_replaces_the_underlying(day),
         )
     except _KeptUnusable as kept:
         return _malformed(outline, "the underlying", kept.cause)
-    listing = _stored(lambda: data.listing(day), "contract listing", notes, replaced=lambda _exc: True)
+    try:
+        listing = _stored(lambda: data.listing(day), "contract listing", notes, replaced=lambda _exc: fetchable)
+    except _KeptUnusable as kept:
+        return _malformed(outline, "contract listing", kept.cause)
     absent = [
         (DataKind.UNDERLYING_BARS, underlying is None),
         (DataKind.LISTING, listing is None),
@@ -488,7 +501,7 @@ def _inspect_what_is_stored(
                 lambda c=contract: _a_contract_day_as_the_run_reads_it(data, c, day),
                 f"bars of {contract.occ_symbol}",
                 notes,
-                replaced=_a_contract_day_replaced,
+                replaced=lambda exc: fetchable and _a_contract_day_replaced(exc),
             )
         except _KeptUnusable as kept:
             return _malformed(outline, contract.occ_symbol, kept.cause)

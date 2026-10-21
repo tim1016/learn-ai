@@ -130,6 +130,7 @@ def read_session_series(session: SessionResult, *, run_id: int, underlying: str,
     trading_date = et_date_at_ms(session.session_open_ms)
     pins = session.pins
     pinned = {day.contract: day.sha256 for day in pins.option_days}
+    references = {day.contract: day.reference for day in pins.option_days}
     # A session skipped on its window read nothing, so the run pinned nothing: that is not a pin gone missing.
     skipped = session.outcome.skip_reason is SkipReason.WINDOW_DOES_NOT_FIT
     # What is read, in the order it is read: (symbol, contract, pin, the reason for no pin).
@@ -149,6 +150,7 @@ def read_session_series(session: SessionResult, *, run_id: int, underlying: str,
             symbol=symbol,
             contract=contract,
             pin=pin,
+            reference=references.get(contract),
             no_pin=no_pin,
             trading_date=trading_date,
             data=data,
@@ -166,6 +168,7 @@ def _series(
     symbol: str,
     contract: OptionContract | None,
     pin: str | None,
+    reference: dict[str, str] | None,
     no_pin: SeriesReason,
     trading_date: date,
     data: RunData,
@@ -203,7 +206,7 @@ def _series(
         return not_shown(SeriesReason.UNREADABLE)
     if captured is None:
         return not_shown(SeriesReason.GONE)
-    if captured.sha256 != pin:
+    if captured.sha256 != pin or (reference is not None and captured.reference != reference):
         return not_shown(SeriesReason.CHANGED)
     points = tuple(
         SeriesPoint(bar.close_ms, bar.close)

@@ -144,6 +144,18 @@ async def _capture_listing(
     underlying: str, trading_date: date, now_ms: int | None
 ) -> tuple[DownloadItem, OptionListing | None]:
     """The listing, captured or reused, and read once so each contract capture can be handed it."""
+    refusal = option_lake.plan_window_refusal(underlying, trading_date,
+        now_ms=option_lake.current_ms() if now_ms is None else now_ms)
+    if refusal is not None:
+        try:
+            stored = await asyncio.to_thread(read_option_listing, underlying, trading_date)
+        except (LakeAdmissionError, OptionListingFileError) as exc:
+            return DownloadItem(ItemKind.LISTING, underlying, Outcome.FAILED, "validation_failed",
+                                unreadable_problem("stored listing", exc)), None
+        if stored is not None:
+            return DownloadItem(ItemKind.LISTING, underlying, Outcome.ALREADY_STORED, None, None), stored
+        return DownloadItem(ItemKind.LISTING, underlying, Outcome.FAILED, refusal.reason,
+                            "Required listing is missing and can no longer be fetched: " + refusal.detail), None
     async with option_lake.vendor_request_gate():
         result = await ensure_option_listing(underlying, trading_date, now_ms=now_ms)
     item = _item_of(ItemKind.LISTING, underlying, result)
@@ -161,7 +173,7 @@ async def _capture_listing(
     return item, stored
 
 
-async def _capture_underlying(underlying: str, trading_date: date, now_ms: int | None) -> DownloadItem:
+async def _capture_underlying(underlying: str, trading_date: date, now_ms: int | None, *, allow_before_floor: bool = False) -> DownloadItem:
     """The underlying's raw minute bars: left alone when held, refused when the session is not over, else fetched.
 
     A fetch is the stock engine's own function. It has no completed-session gate, so the lake's rule for the options of
@@ -180,6 +192,12 @@ async def _capture_underlying(underlying: str, trading_date: date, now_ms: int |
     )
     if refusal is not None:
         return DownloadItem(ItemKind.UNDERLYING, underlying, Outcome.FAILED, refusal.reason, refusal.detail)
+    if not allow_before_floor:
+        refusal = option_lake.plan_window_refusal(underlying, trading_date,
+            now_ms=option_lake.current_ms() if now_ms is None else now_ms)
+        if refusal is not None:
+            return DownloadItem(ItemKind.UNDERLYING, underlying, Outcome.FAILED, refusal.reason,
+                                "Required underlying bars are missing and can no longer be fetched: " + refusal.detail)
     try:
         await asyncio.to_thread(
             materialize_engine_run,

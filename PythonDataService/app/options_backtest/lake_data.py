@@ -294,7 +294,7 @@ class LakeRunData:
         worker thread.
         """
         _require_a_worker_thread()
-        stored = read_option_day_bars(contract, trading_date, lake_root=self._lake_root)
+        stored = read_option_day_bars(contract, trading_date, lake_root=self._lake_root, listed_under=self._underlying)
         if stored is None:
             return None
         named = _named_by_close(
@@ -303,4 +303,4 @@ class LakeRunData:
             subject=f"the stored bars of {contract.occ_symbol} for {trading_date.isoformat()}",
             unreadable=OptionBarsCannotBePlaced,
         )
-        return Captured(value=named, sha256=stored.sha256)
+        return Captured(value=named, sha256=stored.sha256, reference=stored.reference)
