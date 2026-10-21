@@ -134,9 +134,8 @@ def check_naive_time_helpers() -> list[Violation]:
         ("python-datetime-utcnow", re.compile(r"\bdatetime\.utcnow\s*\(")),
         ("python-datetime-utcfromtimestamp", re.compile(r"\bdatetime\.utcfromtimestamp\s*\(")),
         ("python-datetime-now-without-tz", re.compile(r"\bdatetime\.now\s*\(\s*\)")),
-        ("dotnet-datetime-parse", re.compile(r"\bDateTime\.Parse\s*\(")),
     ]
-    files = iter_files([ROOT / "PythonDataService/app", ROOT / "Backend"], (".py", ".cs"))
+    files = iter_files([ROOT / "PythonDataService/app"], (".py",))
     return [v for path in files for v in scan_lines(path, checks)]
 
 

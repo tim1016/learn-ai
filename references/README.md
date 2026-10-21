@@ -26,6 +26,14 @@ references/
 | QuantConnect/Lean | `7986ed0aade3ae5de06121682409f05984e32ff7` | 2026-04-26 | Apache-2.0 | `lean/7986ed0aade3ae5de06121682409f05984e32ff7/` |
 | Bouchaud/Farmer/Lillo arXiv source | `0809.0822v1` | 2026-05-14 | NOASSERTION | `arxiv-0809.0822v1/` |
 
+## First-party code kept for audit
+
+Not vendored upstream code, so no commit-SHA directory and no authority claim: code this repo wrote and retired, kept where a future port will want to read it.
+
+| Folder | What | Why kept |
+|---|---|---|
+| `csharp-jobs/` | The C# IV recorder cron (Quartz) and its helpers, removed with the C# backend (ADR 0081) | Unused. Its README names where a Python clock could plug in. |
+
 ## Adding a new vendored reference
 
 1. Identify the exact upstream commit (or paper version) you are porting from.

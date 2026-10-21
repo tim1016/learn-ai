@@ -123,34 +123,6 @@
         "alpaca-paper-clerk-data->/app/artifacts/alpaca_clerk:volume"
       ]
     },
-    "backend": {
-      "container_name": "my-backend",
-      "containment": {
-        "mem_limit": "3221225472"
-      },
-      "env_file": [],
-      "environment_keys": [
-        "ASPNETCORE_ENVIRONMENT",
-        "ASPNETCORE_URLS",
-        "ConnectionStrings__DefaultConnection",
-        "DOTNET_ReadyToRun",
-        "DOTNET_TieredCompilation",
-        "DOTNET_USE_POLLING_FILE_WATCHER",
-        "DataPlane__ControlSecret",
-        "PolygonService__BaseUrl",
-        "REDIS_URL"
-      ],
-      "image": "mcr.microsoft.com/dotnet/sdk:10.0",
-      "networks": [
-        "app-network"
-      ],
-      "ports": [
-        "127.0.0.1:5000->8080"
-      ],
-      "volumes": [
-        "Backend->/src:bind"
-      ]
-    },
     "db": {
       "container_name": "my-postgres",
       "containment": {
@@ -178,7 +150,6 @@
       },
       "env_file": [],
       "environment_keys": [
-        "BACKEND_PROXY_TARGET",
         "DATA_PLANE_CONTROL_SECRET",
         "DATA_PLANE_PROXY_TARGET",
         "NODE_OPTIONS"
@@ -209,7 +180,6 @@
       "environment_keys": [
         "ALLOWED_ORIGINS",
         "ALPACA_CLERK_DIR",
-        "BACKEND_URL",
         "DATA_PLANE_CONTROL_SECRET",
         "FLEET_AGENT_SERVICE_TOKENS_JSON",
         "FLEET_CONTROL_DIR",
@@ -284,7 +254,6 @@
   "services": [
     "alpaca-live-clerk",
     "alpaca-paper-clerk",
-    "backend",
     "db",
     "frontend",
     "python-service",

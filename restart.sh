@@ -158,7 +158,7 @@ fi
 EXPECTED_SERVICES=$(podman compose ${COMPOSE_ARGS[@]+"${COMPOSE_ARGS[@]}"} config --services 2>/dev/null | sort || true)
 
 # Wait budget: the longest healthcheck start_period in compose.yaml is the
-# frontend at 120s; backend cold compile pushes 60–90s on top. Poll for
+# frontend at 120s; the data plane's cold start adds up to 45s behind it. Poll for
 # 240s (80 x 3s) so the script's verdict matches reality on cold builds.
 # Poll budget is injectable so a test can drive the verdict without waiting
 # the full production budget; unset, it is the 80 x 3s described above.

@@ -95,7 +95,7 @@ jobs:
           docker compose --project-name learn-ai \
             --env-file deploy/fleet/ci-render.placeholders \
             -f compose.yaml -f compose.fleet.dev.yaml config --services | sort > /tmp/services.txt
-          printf '%s\n' alpaca-live-clerk alpaca-paper-clerk backend db frontend python-service redis \
+          printf '%s\n' alpaca-live-clerk alpaca-paper-clerk db frontend python-service redis \
             | sort | diff -u - /tmp/services.txt
 
   frontend-lint:
@@ -182,68 +182,6 @@ jobs:
           restore-keys: angular-build-cache-${{ runner.os }}-${{ matrix.shard }}-
       - run: npm test -- --runner-config=vitest.ci.config.ts
 
-  backend-lint:
-    name: Backend Lint
-    runs-on: ${{ github.event.pull_request.number == 3300 && fromJSON('["self-hosted", "Linux", "ARM64", "learn-ai-vm"]') || 'ubuntu-latest' }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "10.0.x"
-      - run: dotnet restore podman.sln
-      - run: dotnet format podman.sln --verify-no-changes --no-restore
-
-  backend-graphql-contract:
-    name: Backend GraphQL Contract
-    runs-on: ${{ github.event.pull_request.number == 3300 && fromJSON('["self-hosted", "Linux", "ARM64", "learn-ai-vm"]') || 'ubuntu-latest' }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "10.0.x"
-      - run: dotnet restore Backend/Backend.csproj
-      - name: Export GraphQL schema and require a committed snapshot
-        run: |
-          dotnet run --project Backend --configuration Release -- schema export --output ../contracts/graphql/backend.schema.graphql
-          git diff --exit-code -- contracts/graphql/backend.schema.graphql
-
-  backend-test:
-    name: Backend Tests
-    runs-on: ${{ github.event.pull_request.number == 3300 && fromJSON('["self-hosted", "Linux", "ARM64", "learn-ai-vm"]') || 'ubuntu-latest' }}
-    # A hang backstop, not a time budget: see the Frontend shard job.
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "10.0.x"
-      - run: dotnet restore podman.sln
-      - name: Run Backend Tests
-        env:
-          DOTNET_NOLOGO: true
-        run: |
-          # Past two minutes the run passes or fails on its tests alone and
-          # warns, like the Python and Frontend shards.
-          started=$SECONDS
-          status=0
-          dotnet test Backend.Tests/Backend.Tests.csproj --no-restore --configuration Release --filter "Category!=PostgresIntegration" --logger "trx;LogFileName=backend-tests.trx" --results-directory TestResults || status=$?
-          elapsed=$((SECONDS - started))
-          if [ "$elapsed" -gt 120 ]; then
-            echo "::warning title=Backend tests are over their 120-second target::Took ${elapsed}s. This does not fail the run. To trim it, move its slowest tests to the daily suite."
-          fi
-          exit "$status"
-      - name: Upload backend test results
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-test-results
-          path: TestResults/backend-tests.trx
-          if-no-files-found: ignore
-
   python-lint:
     name: Python Lint
     runs-on: ${{ github.event.pull_request.number == 3300 && fromJSON('["self-hosted", "Linux", "ARM64", "learn-ai-vm"]') || 'ubuntu-latest' }}
@@ -321,9 +259,6 @@ jobs:
       - frontend-lint
       - frontend-typecheck
       - frontend-test-shard
-      - backend-lint
-      - backend-graphql-contract
-      - backend-test
       - python-lint
       - python-test-shard
     runs-on: ${{ github.event.pull_request.number == 3300 && fromJSON('["self-hosted", "Linux", "ARM64", "learn-ai-vm"]') || 'ubuntu-latest' }}

@@ -95,7 +95,7 @@ services:
       # this role applies no lane's staged profile, so it must author no
       # restart command. Each lane below declares its own service instead.
       FLEET_WORKER_SERVICE: ""
-      TRUSTED_HOSTS: localhost,127.0.0.1,test,testserver,python-service,backend,host.containers.internal,host.docker.internal
+      TRUSTED_HOSTS: localhost,127.0.0.1,test,testserver,python-service,host.containers.internal,host.docker.internal
       # Research execution routing (#3043): local by default — this process
       # keeps running research jobs on its own threads. An operator selects
       # the isolated runtime by setting RESEARCH_EXECUTION_MODE=research in
