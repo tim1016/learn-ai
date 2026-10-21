@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.data_lake import catalog_client
 from app.data_lake.maintenance import lake_activity
@@ -65,6 +65,15 @@ class BackupFile(BaseModel):
     sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     size_bytes: int = Field(ge=0)
     artifact_ids: list[int] = []
+
+    @model_validator(mode="before")
+    @classmethod
+    def read_legacy_catalog_mirrors(cls, value: Any) -> Any:
+        """Version 1 copied catalog fields; restored rows now supply that authority (#3440)."""
+        if isinstance(value, dict):
+            legacy = {"artifact_kind", "symbol", "session_ms", "resolution", "data_type", "market", "row_count"}
+            return {key: item for key, item in value.items() if key not in legacy}
+        return value
 
 
 class BackupManifest(BaseModel):

@@ -13,6 +13,7 @@ from __future__ import annotations
 import pytest
 import redis
 
+from app.jobs import runner
 from app.jobs.progress import (
     JOB_LEASE_TTL_SECONDS,
     JOB_TTL_SECONDS,
@@ -121,4 +122,22 @@ def test_run_in_thread_releases_the_lease_when_the_work_raises(fake: _FakeRedis)
     run_in_thread("lease-1", work, thread_name="lease-test").join(timeout=5)
 
     assert fake.hashes["job:lease-1:state"]["status"] == "failed"
+    assert not fake.exists(LEASE)
+
+
+@pytest.mark.parametrize("failure_at", ["construct", "start"])
+def test_a_worker_that_cannot_start_releases_its_lease(
+    fake: _FakeRedis, monkeypatch: pytest.MonkeyPatch, failure_at: str,
+) -> None:
+    def refuse(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("cannot start worker")
+
+    if failure_at == "construct":
+        monkeypatch.setattr(runner.threading, "Thread", refuse)
+    else:
+        monkeypatch.setattr(runner.threading.Thread, "start", refuse)
+
+    with pytest.raises(RuntimeError, match="cannot start worker"):
+        run_in_thread("lease-1", lambda emit, cancel: None)
+
     assert not fake.exists(LEASE)

@@ -1028,10 +1028,6 @@ async def _create_runtime_run(new: NewRun, generation: int) -> int:
 # durable row closes; a successor generation never resumes its job ids.
 _UNCONFIRMED_ACTIVATIONS: set[tuple[str, int, str]] = set()
 
-# ``run_in_thread`` acquires the job's lease before it starts the thread, writing this value over the claim's token;
-# a start that fails after that holds the lease under this value, not its token (#3440).
-_RUN_IN_THREAD_LEASE_VALUE = "1"
-
 
 async def _start_runtime_worker(run_id: int, job_id: str, generation: int, work: Callable[..., Any]) -> bool:
     """Only a dispatch without prior worker-start evidence may be activated.
@@ -1093,9 +1089,8 @@ async def _start_runtime_worker(run_id: int, job_id: str, generation: int, work:
                     RunFailure("JOB_NOT_STARTED", "The run could not be started. Nothing was fetched or run."),
                     finished_at_ms=now_ms_utc(), generation=generation)
                 await asyncio.to_thread(progress.get_redis().eval,
-                    "local held = redis.call('GET',KEYS[1]) "
-                    "if held == ARGV[1] or held == ARGV[2] then return redis.call('DEL',KEYS[1]) end return 0",
-                    1, progress.lease_key(job_id), lease_token, _RUN_IN_THREAD_LEASE_VALUE)
+                    "if redis.call('GET',KEYS[1]) == ARGV[1] then return redis.call('DEL',KEYS[1]) end return 0",
+                    1, progress.lease_key(job_id), lease_token)
             # A lost commit acknowledgement cannot reverse a worker that is
             # already running. Its lease and durable result reconcile it.
             raise

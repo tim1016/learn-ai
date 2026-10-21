@@ -25,6 +25,7 @@ from app.option_archive.backup import (
     manifest_digest,
     prune_generations,
     read_pin,
+    restore_generation,
     validate_destination,
     verify_generation,
 )
@@ -124,6 +125,29 @@ class _EmptyTargetCatalog:
 
     async def close(self) -> None:
         return None
+
+
+async def test_legacy_manifest_still_verifies_and_restores_without_catalog_mirrors(
+    source: tuple, tmp_path: Path,
+) -> None:
+    path = await generation(source)
+    legacy_fields = dict(artifact_kind="metadata", symbol="SPY", session_ms=1749821400000,
+                         resolution=None, data_type=None, market="usa_options", row_count=None)
+    manifest = json.loads((path / "manifest.json").read_bytes())
+    for item in manifest["files"]:
+        item.update(legacy_fields)
+    payload = lake_restore.canonical(manifest)
+    (path / "manifest.json").write_bytes(payload)
+    (path / "COMPLETE").write_text(lake_restore.digest(payload))
+
+    checked = verify_generation(path)
+    assert all(not (legacy_fields.keys() & item.model_dump().keys()) for item in checked.files)
+    root_id, = source[1]
+    target = tmp_path / "legacy-restored"
+    catalog = _EmptyTargetCatalog()
+    await restore_generation(generation=path, roots={root_id: target}, connection=catalog)
+    assert (target / "lake/raw/equity/usa/spy.csv").read_bytes() == source[2].read_bytes()
+    assert catalog.imported == (path / "catalog.copy").read_bytes()
 
 
 @pytest.mark.parametrize("damaged", [False, True])
