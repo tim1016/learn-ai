@@ -17,8 +17,9 @@ the underlying is a sentence with no code, so its code is asked of the catalog, 
 day it could not fetch; when no day of the chunk has one the failure is ``UNDERLYING_NOT_FETCHED``. The listing of a
 session is read from the lake once and handed to every contract capture of that session, so it is not parsed again for
 each contract. The lake is asked once which of a session's contract days are captured, and only the rest are captured;
-a captured day whose file does not read is captured again, as the check promised. The lake fetches such a day again
-whenever its own parser refuses the file (the reuse gate runs that parser). A day that parser accepts and this
+a captured day whose file does not read is captured again, as the check promised, unless the session's container does
+not read: a download refuses that with no request (#3416) and the check says so (#3442). The lake fetches such a day
+again whenever its own parser refuses the file (the reuse gate runs that parser). A day that parser accepts and this
 feature's reader refuses, a bar closing on another New York date, is held as good: the capture reuses it with no
 request, and the replay is where it ends the run; the check refuses such a session first and promises no fetch for it
 (``data_check``'s table of stored days).
