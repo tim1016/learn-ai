@@ -152,7 +152,8 @@ async def _seed_catalog(conn: asyncpg.Connection, catalog: Any) -> None:
     await conn.execute('SELECT setval(pg_get_serial_sequence(\'"DataLakeArtifacts"\',\'Id\'),10000)')
 
 
-@pytest.mark.parametrize("fault", ["api_restart", "dispatch_ack", "save_ack", "create_ack", "activation_ack", "activation_rollback", "generation_fence"])
+@pytest.mark.parametrize("fault", ["api_restart", "dispatch_ack", "save_ack", "create_ack", "activation_ack",
+    "bind_rollback", "occupied_lease", "lost_job_state", "old_generation_redelivery", "generation_fence"])
 async def test_real_http_boundary_keeps_one_fenced_exact_run_across_faults(
     scratch_db: asyncpg.Connection, isolated_redis: str, fake_catalog: Any, tmp_lake: Path,
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str,
@@ -184,12 +185,12 @@ async def test_real_http_boundary_keeps_one_fenced_exact_run_across_faults(
         (faults / "lose-dispatch-ack").touch()
     if fault == "save_ack":
         (faults / "lose-save-ack").touch()
-    if fault == "create_ack":
-        (faults / "lose-create-ack").touch()
-    if fault in ("activation_ack", "activation_rollback"):
-        (faults / "activation-commit-fault").touch()
-        if fault == "activation_rollback":
-            (faults / "activation-rollback").touch()
+    if fault in ("create_ack", "bind_rollback"):
+        (faults / "bind-commit-fault").touch()
+        if fault == "bind_rollback":
+            (faults / "bind-rollback").touch()
+    if fault == "activation_ack":
+        (faults / "lose-launch-ack").touch()
     inputs = tmp_path / "frozen-inputs"
     environment = {**os.environ, "PYTHONPATH": str(_SOURCE), "POSTGRES_URL": dsn,
         "REDIS_URL": isolated_redis, "POLYGON_API_KEY": "test-key", "LEAN_DATA_WRITE_ROOT": str(tmp_lake),
@@ -207,51 +208,70 @@ async def test_real_http_boundary_keeps_one_fenced_exact_run_across_faults(
     try:
         await asyncio.gather(api.ready(), runtime.ready())
         async with httpx.AsyncClient(timeout=20, trust_env=False, headers=_AUTH) as client:
+            state = redis.Redis.from_url(isolated_redis, decode_responses=True)
+            if fault == "occupied_lease":
+                state.set(f"job:{job_id}:lease", "occupied", ex=30)
+                state.hset(f"job:{job_id}:state", mapping={"status": "queued"})
             accepted = await client.post(f"{api.base}/api/jobs-internal/options-backtest", json=req.model_dump(mode="json"))
-            if fault in ("activation_ack", "activation_rollback"):
+            if fault == "activation_ack":
                 assert accepted.status_code >= 500
                 await _wait_file(faults / "checkpoint")
-                assert (faults / "activation-faulted").exists()
+                assert (faults / "launch-ack-lost").exists()
                 accepted = await client.post(f"{api.base}/api/jobs-internal/options-backtest", json=req.model_dump(mode="json"))
-                if fault == "activation_rollback":
-                    assert await scratch_db.fetchval("SELECT attempt FROM research_job_owners WHERE job_id=$1", job_id) == 0
-                    client_redis = redis.Redis.from_url(isolated_redis)
-                    client_redis.delete(f"job:{job_id}:lease")
-                    client_redis.hdel(f"job:{job_id}:state", "started_at")
-                    expired = await client.post(f"{api.base}/api/jobs-internal/options-backtest", json=req.model_dump(mode="json"))
-                    assert expired.status_code == 409
-            if fault == "create_ack":
+            if fault == "bind_rollback":
                 assert accepted.status_code >= 500
-                assert (faults / "create-ack-lost").exists()
-                assert not redis.Redis.from_url(isolated_redis).exists(f"job:{job_id}:lease")
-                owner = await scratch_db.fetchrow("SELECT attempt FROM research_job_owners WHERE job_id=$1", job_id)
-                assert owner["attempt"] == 0
-                redis_client = redis.Redis.from_url(isolated_redis)
-                redis_client.set(f"job:{job_id}:lease", "occupied", ex=30)
-                blocked = await client.post(f"{api.base}/api/jobs-internal/options-backtest", json=req.model_dump(mode="json"))
-                assert blocked.status_code == 503
-                assert await scratch_db.fetchval("SELECT attempt FROM research_job_owners WHERE job_id=$1", job_id) == 0
-                redis_client.delete(f"job:{job_id}:lease")
+                assert (faults / "bind-faulted").exists()
+                assert await saved_runs.run_for_job(scratch_db, job_id) is None
+                assert not (faults / "checkpoint").exists()
+                assert state.get(f"job:{job_id}:lease") is None
+                assert await scratch_db.fetchval("SELECT count(*) FROM research_job_owners WHERE job_id=$1", job_id) == 0
+                assert await scratch_db.fetchval("SELECT count(*) FROM research_options_search_exposures WHERE owner_id=$1", f"backtest:{job_id}") == 0
+                accepted = await client.post(f"{api.base}/api/jobs-internal/options-backtest", json=req.model_dump(mode="json"))
+            if fault == "occupied_lease":
+                assert accepted.status_code == 503
+                assert state.get(f"job:{job_id}:lease") == "occupied"
+                assert await saved_runs.run_for_job(scratch_db, job_id) is None
+                assert await scratch_db.fetchval("SELECT count(*) FROM research_job_owners WHERE job_id=$1", job_id) == 0
+                assert await scratch_db.fetchval("SELECT count(*) FROM research_options_search_exposures WHERE owner_id=$1", f"backtest:{job_id}") == 0
+                state.delete(f"job:{job_id}:lease")
                 replies = await asyncio.gather(*(client.post(f"{api.base}/api/jobs-internal/options-backtest",
                     json=req.model_dump(mode="json")) for _ in range(2)))
                 assert [reply.status_code for reply in replies] == [202, 202]
                 assert replies[0].json()["run_id"] == replies[1].json()["run_id"]
                 accepted = replies[0]
+            if fault == "create_ack":
+                assert (faults / "bind-faulted").exists()
             assert accepted.status_code == 202, f"{accepted.text}\n{runtime.log.read_text()}\n{api.log.read_text()}"
             run_id = accepted.json()["run_id"]
             await _wait_file(faults / "checkpoint")
             assert await scratch_db.fetchval("SELECT status FROM research_options_backtest_runs WHERE id=$1", run_id) == "running"
             assert await scratch_db.fetchval("SELECT count(*) FROM research_options_backtest_run_sessions WHERE run_id=$1", run_id) == 0
             first_checkpoint = json.loads((faults / "checkpoint").read_text())
+            if fault == "lost_job_state":
+                held_state = state.hgetall(f"job:{job_id}:state")
+                held_lease = state.get(f"job:{job_id}:lease")
+                assert held_state["started_at"] and held_lease
+                state.delete(f"job:{job_id}:lease", f"job:{job_id}:state")
+            if fault == "old_generation_redelivery":
+                await scratch_db.execute("UPDATE research_job_owners SET boot_generation=0 WHERE job_id=$1", job_id)
             duplicate = await client.post(f"{api.base}/api/jobs-internal/options-backtest", json=req.model_dump(mode="json"))
-            if fault == "activation_rollback":
+            if fault in ("lost_job_state", "old_generation_redelivery"):
                 assert duplicate.status_code == 409
+                if fault == "lost_job_state":
+                    assert state.get(f"job:{job_id}:lease") is None
+                    assert state.hget(f"job:{job_id}:state", "status") is None
+                    assert state.hget(f"job:{job_id}:state", "started_at") is None
             else:
                 assert duplicate.status_code == 202 and duplicate.json()["run_id"] == run_id
             changed = req.model_dump(mode="json")
             changed["setup"]["starting_cash_usd"] = "99999"
             mismatch = await client.post(f"{api.base}/api/jobs-internal/options-backtest", json=changed)
             assert mismatch.status_code == 409
+            if fault == "lost_job_state":
+                state.hset(f"job:{job_id}:state", mapping=held_state)
+                state.set(f"job:{job_id}:lease", held_lease, ex=30)
+            if fault == "old_generation_redelivery":
+                await scratch_db.execute("UPDATE research_job_owners SET boot_generation=1 WHERE job_id=$1", job_id)
             if fault == "api_restart":
                 runtime_pid = runtime.process.pid
                 api.stop()
@@ -268,7 +288,6 @@ async def test_real_http_boundary_keeps_one_fenced_exact_run_across_faults(
                 assert released.status_code == 200
             (faults / "release").touch()
             deadline = time.monotonic() + 45
-            state = redis.Redis.from_url(isolated_redis, decode_responses=True)
             while state.hget(f"job:{job_id}:state", "status") not in ("completed", "failed", "cancelled"):
                 if time.monotonic() >= deadline:
                     pytest.fail(f"runtime job did not settle:\n{runtime.log.read_text()}\n{api.log.read_text()}")
@@ -285,6 +304,13 @@ async def test_real_http_boundary_keeps_one_fenced_exact_run_across_faults(
                 assert await scratch_db.fetchval("SELECT count(*) FROM research_options_backtest_run_sessions WHERE run_id=$1", run_id) == 1
                 closed = await client.post(f"{api.base}/api/jobs-internal/options-backtest", json=req.model_dump(mode="json"))
                 assert closed.status_code == (502 if fault == "dispatch_ack" else 409)
+                if fault != "dispatch_ack":
+                    state.delete(f"job:{job_id}:lease", f"job:{job_id}:state")
+                    await scratch_db.execute("UPDATE research_job_owners SET boot_generation=0 WHERE job_id=$1", job_id)
+                    expired = await client.post(f"{api.base}/api/jobs-internal/options-backtest", json=req.model_dump(mode="json"))
+                    assert expired.status_code == 409
+                    assert state.get(f"job:{job_id}:lease") is None
+                    assert state.hgetall(f"job:{job_id}:state") == {}
                 if fault == "dispatch_ack":
                     assert (faults / "dispatch-ack-delayed").exists()
                     assert (faults / "dispatch-ack-lost").exists()
@@ -299,7 +325,6 @@ async def test_real_http_boundary_keeps_one_fenced_exact_run_across_faults(
                 (tmp_path / "evidence.json").write_text(json.dumps({"fault": fault, "job_id": job_id, "run_id": run_id,
                     "expected_result_digest": expected_digest, "saved_result_digest": stored_digest,
                     "execution_metadata": metadata}, indent=2))
-            assert await scratch_db.fetchval("SELECT attempt FROM research_job_owners WHERE job_id=$1", job_id) == (0 if fault == "activation_rollback" else 1)
             events = [json.loads(fields["event"]) for _, fields in state.xrange(f"job:{job_id}:events")]
             assert sum(event["type"] == "job.started" for event in events) == 1
             assert len(first_checkpoint["sessions"]) == 1

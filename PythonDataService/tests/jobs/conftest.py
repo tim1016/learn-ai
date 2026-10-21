@@ -77,6 +77,27 @@ class _FakeRedis:
     def set(self, key: str, value: str, ex: int | None = None) -> None:
         self.strings[key] = value
 
+    def eval(self, script: str, number_of_keys: int, *values: Any) -> int:
+        if number_of_keys == 2:
+            lease, state, token, _lease_ttl, state_ttl = values
+            fields = self.hashes.get(state, {})
+            if fields.get("status") in {"completed", "failed", "cancelled"} or fields.get("started_at"):
+                return -1
+            if lease in self.strings:
+                return 0
+            self.strings[lease] = token
+            if "status" not in fields:
+                self.hset(state, mapping={"status": "queued"})
+            self.expire(state, state_ttl)
+            return 1
+        if number_of_keys == 1:
+            lease, token = values
+            if self.strings.get(lease) == token:
+                self.delete(lease)
+                return 1
+            return 0
+        raise NotImplementedError("The job-store fake supports only worker claim and release scripts.")
+
     def exists(self, key: str) -> bool:
         return key in self.strings
 

@@ -19,7 +19,7 @@ from fastapi import APIRouter, HTTPException, Path, Query, Response, status
 
 from app.data_lake.catalog_client import CatalogUnavailableError
 from app.jobs.phases import friendly as friendly_phase
-from app.jobs.progress import CancellationCheck, JobCancelled, ProgressEmitter
+from app.jobs.progress import CancellationCheck, JobAlreadyStarted, JobCancelled, JobLeaseOccupied, ProgressEmitter
 from app.jobs.runner import run_in_thread
 from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.options_backtest import saved_runs, saved_setups, service
@@ -231,21 +231,17 @@ async def start_options_backtest_job(req: OptionsBacktestJobRequest) -> OptionsB
             raise HTTPException(503, "Options Backtest requires a live research runtime authority.")
         store = DbRunStore(generation=authority.boot_generation)
     setup_name = await _name_the_run_may_carry(req)
-    try:
-        run_id = await store.create(
-            NewRun(
-                job_id=req.job_id,
-                created_at_ms=now_ms_utc(),
-                setup=req.setup,
-                setup_name=setup_name,
-                first_session_open_ms=session_window_for_date(sessions[0]).open_ms_utc,
-                last_session_open_ms=session_window_for_date(sessions[-1]).open_ms_utc,
-                sessions_requested=len(sessions),
-            )
-        )
-    except DuplicateJob as exc:
-        if runtime:
-            from app.routers import research_records
+    new = NewRun(
+        job_id=req.job_id, created_at_ms=now_ms_utc(), setup=req.setup, setup_name=setup_name,
+        first_session_open_ms=session_window_for_date(sessions[0]).open_ms_utc,
+        last_session_open_ms=session_window_for_date(sessions[-1]).open_ms_utc,
+        sessions_requested=len(sessions),
+    )
+    if runtime:
+        from app.options_backtest.runtime import runtime_worker
+        try:
+            run_id = await store.accept_runtime_run(new, lambda run_id: runtime_worker(run_id, req, sessions, store, _job_result))
+        except DuplicateJob:
             run_id = await with_connection(saved_runs.run_for_job, req.job_id)
             existing = await with_connection(saved_runs.get_run_header, run_id)
             if not saved_runs.request_matches_header(existing, req.setup,
@@ -253,28 +249,30 @@ async def start_options_backtest_job(req: OptionsBacktestJobRequest) -> OptionsB
                 last_session_open_ms=session_window_for_date(sessions[-1]).open_ms_utc,
                 sessions_requested=len(sessions)):
                 raise HTTPException(409, "That job id is bound to another Options Backtest request.")
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={"code": "OPTIONS_BACKTEST_JOB_ALREADY_HAS_A_RUN", "message": str(exc)},
-            ) from exc
+            if existing.record.status != "running":
+                raise HTTPException(409, "That Options Backtest already ended; start a new job instead.")
+            await asyncio.to_thread(research_records.require_live_redelivery, req.job_id, noun="Options Backtest")
+        except JobLeaseOccupied as exc:
+            raise HTTPException(503, str(exc)) from exc
+        except JobAlreadyStarted as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except (saved_runs.RunDoesNotMatch, saved_runs.RunNotRunning) as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except ownership.GenerationFencedError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        return OptionsBacktestJobAcceptedResponse(job_id=req.job_id, run_id=run_id, status="queued")
+
     try:
-        if runtime:
-            from app.options_backtest.runtime import runtime_worker
-            work = runtime_worker(run_id, req, sessions, store, _job_result)
-            started = await store.start_runtime_worker(run_id, req.job_id, work)
-            if not started:
-                await asyncio.to_thread(research_records.require_live_redelivery, req.job_id, noun="Options Backtest")
-        else:
-            work = _worker(run_id, req, sessions, store)
-            run_in_thread(req.job_id, work, thread_name=f"options-backtest-{req.job_id[:8]}",
-                          cancel_check_every_n=1)
-    except saved_runs.RuntimeActivationBlocked as exc:
-        raise HTTPException(503, str(exc)) from exc
+        run_id = await store.create(new)
+    except DuplicateJob as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "OPTIONS_BACKTEST_JOB_ALREADY_HAS_A_RUN", "message": str(exc)}) from exc
+    try:
+        work = _worker(run_id, req, sessions, store)
+        run_in_thread(req.job_id, work, thread_name=f"options-backtest-{req.job_id[:8]}", cancel_check_every_n=1)
     except Exception:
-        if not runtime:
-            failure = RunFailure("JOB_NOT_STARTED", "The run could not be started. Nothing was fetched or run.")
-            await asyncio.to_thread(store.fail, run_id, failure, finished_at_ms=now_ms_utc())
+        failure = RunFailure("JOB_NOT_STARTED", "The run could not be started. Nothing was fetched or run.")
+        await asyncio.to_thread(store.fail, run_id, failure, finished_at_ms=now_ms_utc())
         raise
     return OptionsBacktestJobAcceptedResponse(job_id=req.job_id, run_id=run_id, status="queued")
 
