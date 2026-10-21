@@ -1,5 +1,5 @@
 import { exampleBody } from '../options-backtest/testing/fixtures';
-import type { OptionsStudy, Preflight, SearchCandidate, SearchDeclarations } from './options-golden-search.types';
+import type { HistoryGuidance, OptionsStudy, Preflight, SearchCandidate, SearchDeclarations } from './options-golden-search.types';
 import type { CandidateEvidence } from './options-candidate-evidence.component';
 
 export function declarations(): SearchDeclarations {
@@ -9,6 +9,9 @@ export function declarations(): SearchDeclarations {
     history_bounds: { start_ms: 1704171600000, end_ms: 1790999999999 },
     defaults: { version: 'v1', rationale: 'Editable policy hurdles.', policy: { max_drawdown_percent: '20', min_sharpe: 1, min_activity_per_year: 50, min_daily_observations: 30, min_forward_sessions: 30, min_final_sessions: 30, max_recovery_sessions: null, risk_free_daily_return: 0, stress_gate: false }, train_months: 6, test_months: 2, final_months: 6, evaluation_cap: 5000, finalist_count: 3 },
   };
+}
+export function historyGuidance(): HistoryGuidance {
+  return { start_ms: 1704171600000, end_ms: 1788321600000, final_start_ms: 1772427600000, fold_count: 10, explanation: 'Longest interval with complete walk-forward windows. Check plan verifies coverage.' };
 }
 export function preflight(): Preflight {
   return { preflight_hash: 'b'.repeat(64), can_lock: true, missing_history: false, blockers: [], warnings: ['Final activity is not guaranteed.'], drawdown_limit_usd: '2000', combination_count: 2, legal_combination_count: 2, invalid_combination_count: 0, required_evaluations: 30, reserved_evaluations: 20, estimated_setup_sessions: 3000, mark_coverage: 'Verified', exposure: 'History unknown', identity: 'pinned-code-and-data', windows: [] };

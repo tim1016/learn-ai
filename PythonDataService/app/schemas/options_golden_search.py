@@ -103,8 +103,23 @@ class KnobDeclaration(Model):
 
 
 class HistoryBounds(Model):
-    start_ms: int | None
-    end_ms: int | None
+    start_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS, strict=True)
+    end_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS, strict=True)
+
+
+class HistoryGuidanceRequest(Model):
+    bounds: HistoryBounds
+    train_months: int = Field(default=6, ge=1, le=120)
+    test_months: int = Field(default=2, ge=1, le=60)
+    final_months: int = Field(default=6, ge=1, le=60)
+
+
+class HistoryGuidance(Model):
+    start_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS, strict=True)
+    end_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS, strict=True)
+    final_start_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS, strict=True)
+    fold_count: int
+    explanation: str
 
 
 class PlanDefaults(Model):

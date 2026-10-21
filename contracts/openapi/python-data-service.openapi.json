@@ -31484,6 +31484,8 @@
           "end_ms": {
             "anyOf": [
               {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
                 "type": "integer"
               },
               {
@@ -31495,6 +31497,8 @@
           "start_ms": {
             "anyOf": [
               {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
                 "type": "integer"
               },
               {
@@ -31549,6 +31553,101 @@
           "job_id"
         ],
         "title": "HistoryCaptureJobRequest",
+        "type": "object"
+      },
+      "HistoryGuidance": {
+        "additionalProperties": false,
+        "properties": {
+          "end_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Ms"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "final_start_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Start Ms"
+          },
+          "fold_count": {
+            "title": "Fold Count",
+            "type": "integer"
+          },
+          "start_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Ms"
+          }
+        },
+        "required": [
+          "start_ms",
+          "end_ms",
+          "final_start_ms",
+          "fold_count",
+          "explanation"
+        ],
+        "title": "HistoryGuidance",
+        "type": "object"
+      },
+      "HistoryGuidanceRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "bounds": {
+            "$ref": "#/components/schemas/HistoryBounds"
+          },
+          "final_months": {
+            "default": 6,
+            "maximum": 60.0,
+            "minimum": 1.0,
+            "title": "Final Months",
+            "type": "integer"
+          },
+          "test_months": {
+            "default": 2,
+            "maximum": 60.0,
+            "minimum": 1.0,
+            "title": "Test Months",
+            "type": "integer"
+          },
+          "train_months": {
+            "default": 6,
+            "maximum": 120.0,
+            "minimum": 1.0,
+            "title": "Train Months",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "bounds"
+        ],
+        "title": "HistoryGuidanceRequest",
         "type": "object"
       },
       "HoldState": {
@@ -91406,6 +91505,65 @@
           }
         },
         "summary": "Declarations",
+        "tags": [
+          "research-options-golden-search"
+        ]
+      }
+    },
+    "/api/research/options-golden-search/history-guidance": {
+      "post": {
+        "operationId": "history_guidance_api_research_options_golden_search_history_guidance_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HistoryGuidanceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryGuidance"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "History Guidance",
         "tags": [
           "research-options-golden-search"
         ]

@@ -126,6 +126,7 @@ export class OptionsGoldenSearchPageComponent {
     this.loading.set(true);
     this.error.set(null);
     this.declarations.set(null);
+    this.range.set({ from: '', to: '' });
     this.checked.set(null);
     this.knobs.set([]);
     this.timing.set([]);

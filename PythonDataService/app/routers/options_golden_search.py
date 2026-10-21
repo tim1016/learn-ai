@@ -23,6 +23,8 @@ from app.schemas.options_golden_search import (
     Declarations,
     HistoryCaptureAccepted,
     HistoryCaptureJobRequest,
+    HistoryGuidance,
+    HistoryGuidanceRequest,
     JobAccepted,
     JobRequest,
     LockRequest,
@@ -113,6 +115,13 @@ async def declarations(setup_name: str = Query(min_length=1,max_length=80), api=
         return await api.declarations(setup_name)
     except (ValueError,LookupError) as exc:
         raise refusal(exc) from exc
+
+
+@router.post("/history-guidance", response_model=HistoryGuidance)
+async def history_guidance(body: HistoryGuidanceRequest) -> HistoryGuidance:
+    from app.research.options_golden_search.history_guidance import history_guidance as suggest
+
+    return await asyncio.to_thread(suggest, body)
 
 
 @router.post("/preflight",response_model=Preflight)

@@ -1,0 +1,21 @@
+@if (guidance.isLoading()) { <p>Finding the longest interval that fits your walk-forward windows…</p> }
+@if (!validLengths()) { <p class="problem">Use whole months: 1–120 for training and 1–60 for each test window.</p> }
+@if (problem(); as message) { <p class="problem">{{ message }}</p><button type="button" (click)="guidance.reload()">Retry date guidance</button> }
+@if (answer(); as value) {
+  <div class="history-guidance">
+    <h3>{{ isMaximum() ? 'Maximum study interval selected' : 'Suggested maximum study interval' }}</h3>
+    @if (value.start_ms !== null && value.end_ms !== null) {
+      <p class="history-dates"><app-timestamp-display [value]="value.start_ms" mode="date-et" granularity="date" /> → <app-timestamp-display [value]="value.end_ms - 1" mode="date-et" granularity="date" /></p>
+    }
+    <p>{{ value.explanation }}</p>
+    @if (value.final_start_ms !== null && value.end_ms !== null) {
+      <p>Reserved final test: <app-timestamp-display [value]="value.final_start_ms" mode="date-et" granularity="date" /> → <app-timestamp-display [value]="value.end_ms - 1" mode="date-et" granularity="date" />. These dates apply when Max is selected.</p>
+    }
+  </div>
+}
+@let retained = request().bounds;
+@if (retained.start_ms !== null && retained.end_ms !== null) {
+  <p>Retained underlying history: <app-timestamp-display [value]="retained.start_ms" mode="date-et" granularity="date" /> → <app-timestamp-display [value]="retained.end_ms - 1" mode="date-et" granularity="date" />. The study interval may be shorter to fit complete windows.</p>
+}
+<p>Start and end dates are included. Keep Max for the longest compatible study, or enter a custom interval and use Check plan to confirm its walk-forward windows.</p>
+<app-date-range-picker [from]="range().from" [to]="range().to" [bounds]="bounds()" [ranges]="['Max']" [hostOffers]="offers()" label="Options study history" (changed)="chooseRange($event)" (picked)="useMaximum()" />
