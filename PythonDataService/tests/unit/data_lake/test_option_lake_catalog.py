@@ -215,7 +215,7 @@ async def test_a_completed_day_reads_back_through_the_real_admission(clean_artif
     _mock_bars(_bars_ok([_bar(0), _bar(1, o=0.29, h=0.29, l=0.29, c=0.29, v=1)]))
     result = await _ensure()
 
-    day = await asyncio.to_thread(read_option_day_bars, CONTRACT, TRADING_DAY)
+    day = await asyncio.to_thread(read_option_day_bars, CONTRACT, TRADING_DAY, listed_under="SPY")
 
     assert day is not None and result.record is not None
     assert day.sha256 == result.record.file_sha256
@@ -266,8 +266,8 @@ async def test_a_contract_that_never_traded_completes_with_zero_rows_and_reads_b
     assert (row["RowCount"], row["FirstBarStartMs"], row["LastBarStartMs"]) == (0, 0, 0)
     assert row["FileSha256"] == result.record.file_sha256 and row["FileSizeBytes"] == result.record.file_size_bytes
     assert again.reused is True and route.call_count == 1
-    captured = await asyncio.to_thread(read_option_day_bars, CONTRACT, TRADING_DAY)
-    never = await asyncio.to_thread(read_option_day_bars, CONTRACT, date(2025, 6, 12))
+    captured = await asyncio.to_thread(read_option_day_bars, CONTRACT, TRADING_DAY, listed_under="SPY")
+    never = await asyncio.to_thread(read_option_day_bars, CONTRACT, date(2025, 6, 12), listed_under="SPY")
     assert captured is not None and captured.bars == ()
     assert never is None
 
@@ -698,12 +698,12 @@ async def test_a_stored_day_with_a_bar_off_the_minute_is_fetched_again_and_not_r
     )
 
     with pytest.raises(OptionBarsFileError):
-        await asyncio.to_thread(read_option_day_bars, CONTRACT, TRADING_DAY)
+        await asyncio.to_thread(read_option_day_bars, CONTRACT, TRADING_DAY, listed_under="SPY")
     again = await _ensure()
 
     assert again.failure is None and again.reused is False and again.record is not None
     assert route.call_count == 2
-    healed = await asyncio.to_thread(read_option_day_bars, CONTRACT, TRADING_DAY)
+    healed = await asyncio.to_thread(read_option_day_bars, CONTRACT, TRADING_DAY, listed_under="SPY")
     assert healed is not None and [bar.start_ms for bar in healed.bars] == [SESSION_OPEN_MS]
     [row] = await _bar_rows()
     assert (row["Status"], row["LeaseGeneration"], row["FileSha256"]) == ("complete", 2, again.record.file_sha256)

@@ -74,16 +74,18 @@ import time
 from collections.abc import Callable, Coroutine, Sequence
 from concurrent.futures import Future
 from concurrent.futures import wait as wait_for_futures
+from contextvars import copy_context
 from dataclasses import dataclass
 from datetime import date
 from functools import partial
 from typing import Any
 
 from app.data_lake import catalog_client
-from app.data_lake.option_bars import captured_option_days, ensure_option_day_bars
+from app.data_lake.option_bars import ensure_option_day_bars
 from app.data_lake.option_lake import LEASE_TTL_MS, OptionCaptureResult, session_refusal, vendor_request_gate
 from app.data_lake.option_listing import OptionListing, ensure_option_listing
 from app.data_lake.run_materialization import LakeMaterializationError, materialize_engine_run
+from app.data_lake.work_progress import bounded_wait
 from app.lean_sidecar.trading_calendar import expected_sessions, session_window_for_date
 from app.options.contract import OptionContract
 from app.options_backtest.data_check import STORED_FILE_ERRORS, DataKind, DataThing
@@ -113,7 +115,6 @@ OTHER_REQUEST_POLL_SECONDS = 2.0
 _LISTING_TIMEOUT_SECONDS = 600.0
 _CONTRACTS_TIMEOUT_SECONDS = 1800.0
 _UNDERLYING_TIMEOUT_SECONDS = 700.0
-_CATALOG_QUESTION_TIMEOUT_SECONDS = 120.0
 
 # The two lines the job's log gets about a wait for another request: no date, no contract, no count that could go stale.
 WAITING_FOR_ANOTHER_REQUEST = "Waiting for data another request is already fetching."
@@ -310,7 +311,23 @@ class _Download:
     def _needs_data(self, day: date) -> bool:
         """A session whose window does not fit reads nothing, so it fetches nothing."""
         window = session_window_for_date(day)
-        return self._setup.window_fits(session_open_ms=window.open_ms_utc, session_close_ms=window.close_ms_utc)
+        if not self._setup.window_fits(session_open_ms=window.open_ms_utc, session_close_ms=window.close_ms_utc):
+            return False
+        from app.data_lake.option_lake import plan_window_refusal
+
+        refusal = plan_window_refusal(self._setup.underlying, day, now_ms=self._now_ms)
+        if refusal is None:
+            return True
+        underlying, listing = self._reader.underlying_day(day), self._reader.listing(day)
+        if underlying is not None and listing is not None:
+            needs = session_needs(
+                self._setup, trading_date=day, session_open_ms=window.open_ms_utc,
+                session_close_ms=window.close_ms_utc, underlying=tuple(underlying.value), listing=listing.value,
+            )
+            if all(self._reader.option_day(contract, day) is not None for contract in needs.contracts):
+                return False
+        raise DownloadFailed(session=day, what="required stored data", reason=refusal.reason,
+                             detail="Required stored data is missing and can no longer be fetched: " + refusal.detail)
 
     # ── the underlying ───────────────────────────────────────────────────
 
@@ -422,16 +439,7 @@ class _Download:
 
     def _not_stored(self, contracts: Sequence[OptionContract], day: date) -> list[OptionContract]:
         """The contracts whose day is not stored: the lake is asked once, and a captured day must also read."""
-        symbols = [contract.occ_symbol for contract in contracts]
-        captured = self._on_the_loop(
-            lambda _batch: _which_are_captured(symbols, day),
-            give_up_after=_CATALOG_QUESTION_TIMEOUT_SECONDS,
-            session=day,
-            what="the list of stored contract days",
-        )
-        return [
-            contract for contract in contracts if contract.occ_symbol not in captured or not self._reads(contract, day)
-        ]
+        return [contract for contract in contracts if not self._reads(contract, day)]
 
     def _reads(self, contract: OptionContract, day: date) -> bool:
         """Whether a day the catalog names as captured still reads; one that does not is captured again."""
@@ -526,43 +534,44 @@ class _Download:
         stopped waiting. If the thread leaves the wait by any other exception (a log hook or a stop poll that fails),
         the batch is told to stop first, so the captures begin no request after it.
         """
-        deadline = self._pace.now() + give_up_after
         grace = STOP_GRACE_SECONDS if batch is not None else 0.0
-        told_at: float | None = None
-        stopped = False
-        said_waiting = False
-        try:
-            while True:
-                self._pace.wait_for(future, STOP_POLL_SECONDS)
-                if batch is not None:
-                    said_waiting = self._say_if_waiting_changed(batch, said_waiting)
-                if future.done():
-                    break
-                now = self._pace.now()
-                if told_at is None:
-                    stopped = self._should_stop()
-                    if not stopped and now < deadline:
-                        continue
-                    told_at = now
+        with bounded_wait(give_up_after + grace):
+            deadline = self._pace.now() + give_up_after
+            told_at: float | None = None
+            stopped = False
+            said_waiting = False
+            try:
+                while True:
+                    self._pace.wait_for(future, STOP_POLL_SECONDS)
                     if batch is not None:
-                        batch.stop.set()
-                if now - told_at >= grace:
-                    break
-            if told_at is None:
-                return future.result()
-            if not future.done():
-                future.cancel()
-            if stopped:
-                raise DownloadStopped(self._done)
-            raise DownloadFailed(
-                session=session, what=what, reason=TOOK_TOO_LONG, detail=f"not finished after {give_up_after} seconds"
-            )
-        except BaseException:
-            # Nothing waits for this batch any more, so nothing of it may start a request: the stop is a flag the
-            # coroutines read, and setting it again after the paths above set it is harmless.
-            if batch is not None:
-                batch.stop.set()
-            raise
+                        said_waiting = self._say_if_waiting_changed(batch, said_waiting)
+                    if future.done():
+                        break
+                    now = self._pace.now()
+                    if told_at is None:
+                        stopped = self._should_stop()
+                        if not stopped and now < deadline:
+                            continue
+                        told_at = now
+                        if batch is not None:
+                            batch.stop.set()
+                    if now - told_at >= grace:
+                        break
+                if told_at is None:
+                    return future.result()
+                if not future.done():
+                    future.cancel()
+                if stopped:
+                    raise DownloadStopped(self._done)
+                raise DownloadFailed(
+                    session=session, what=what, reason=TOOK_TOO_LONG, detail=f"not finished after {give_up_after} seconds"
+                )
+            except BaseException:
+                # Nothing waits for this batch any more, so nothing of it may start a request: the stop is a flag the
+                # coroutines read, and setting it again after the paths above set it is harmless.
+                if batch is not None:
+                    batch.stop.set()
+                raise
 
 
 def _stretches(needed: Sequence[date]) -> list[list[date]]:
@@ -599,7 +608,8 @@ def _in_a_thread[T](work: Callable[[], T], *, name: str) -> Future[T]:
         except BaseException as exc:  # carried to the thread waiting on the future
             future.set_exception(exc)
 
-    threading.Thread(target=run, name=name, daemon=True).start()
+    context = copy_context()
+    threading.Thread(target=lambda: context.run(run), name=name, daemon=True).start()
     return future
 
 
@@ -624,10 +634,6 @@ async def _capture_listing(
         lambda: ensure_option_listing(underlying, day, now_ms=now_ms), batch=batch
     )
 
-
-async def _which_are_captured(symbols: Sequence[str], day: date) -> frozenset[str]:
-    await catalog_client.init_pool()
-    return await captured_option_days(symbols, day)
 
 
 async def _capture_contract_days(

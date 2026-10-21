@@ -40,6 +40,12 @@ def freeze_window(key: str, start_ms: int, end_ms: int, rate: int) -> Window:
                   activity_floor=window_activity(rate, start_ms, end_ms)["minimum_trades"])
 
 
+def final_window_start(end: date, final_months: int) -> date | None:
+    """The final window's first date, or ``None`` when ``final_months`` before ``end`` drifts at a month end."""
+    final_start = add_months(end, -final_months)
+    return final_start if add_months(final_start, final_months) == end else None
+
+
 def freeze_protocol(setup: OptionsBacktestSetup, knobs: tuple[Knob, ...], *, start_ms: int, end_ms: int,
                     train_months: int = 6, test_months: int = 2, final_months: int = 6,
                     policy: Policy | None = None, snapshot_id: str = "pending", identities: dict[str, str] | None = None,
@@ -48,9 +54,8 @@ def freeze_protocol(setup: OptionsBacktestSetup, knobs: tuple[Knob, ...], *, sta
     policy = policy or Policy()
     if min(train_months, test_months, final_months) < 1:
         raise ValueError("all interval lengths must be positive whole months")
-    end = et_date_at_ms(end_ms)
-    final_start = add_months(end, -final_months)
-    if add_months(final_start, final_months) != end:
+    final_start = final_window_start(et_date_at_ms(end_ms), final_months)
+    if final_start is None:
         raise ValueError("final interval must contain whole months without month-end drift")
     final_start_ms = et_midnight_ms(final_start)
     raw_folds = plan_folds(start=et_date_at_ms(start_ms), end_exclusive=final_start,

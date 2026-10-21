@@ -49,6 +49,7 @@ from pathlib import Path, PurePosixPath
 from uuid import UUID
 
 from app.data_lake import catalog_client
+from app.data_lake.maintenance import lake_activity
 from app.engine.live.identity import confine_path_to_root
 
 logger = logging.getLogger(__name__)
@@ -211,7 +212,8 @@ def atomic_write_and_promote(
     final path and there is nothing left here to check.
     """
     staged, sha = stage_content(content, lake_root, staging_root, rel_lake_path, request_id, worker_id, attempt)
-    promote_staged(staged, lake_root, rel_lake_path)
+    with lake_activity(lake_root):
+        promote_staged(staged, lake_root, rel_lake_path)
     return sha
 
 
@@ -289,19 +291,20 @@ async def publish_artifact(
             to_promote.append((companion_staged, companion_path))
         staged, sha = stage_content(content, lake_root, staging_root, rel_lake_path, request_id, worker_id, attempt)
         to_promote.append((staged, rel_lake_path))
-        await catalog_client.publish_under_lease(
-            artifact_id=artifact_id,
-            worker_id=worker_id,
-            lease_generation=lease_generation,
-            promote=_promote,
-            row_count=row_count,
-            first_bar_start_ms=first_bar_start_ms,
-            last_bar_start_ms=last_bar_start_ms,
-            file_size_bytes=len(content),
-            file_sha256=sha,
-            data_contract_hash=data_contract_hash,
-            corporate_action_version=corporate_action_version,
-        )
+        with lake_activity(lake_root):
+            await catalog_client.publish_under_lease(
+                artifact_id=artifact_id,
+                worker_id=worker_id,
+                lease_generation=lease_generation,
+                promote=_promote,
+                row_count=row_count,
+                first_bar_start_ms=first_bar_start_ms,
+                last_bar_start_ms=last_bar_start_ms,
+                file_size_bytes=len(content),
+                file_sha256=sha,
+                data_contract_hash=data_contract_hash,
+                corporate_action_version=corporate_action_version,
+            )
     finally:
         # promote_staged renames a staged path away on success, so there is
         # nothing left to unlink for it then. Every other exit -- refusal, a

@@ -246,3 +246,12 @@ def fake_data(
 def changed(written: OptionsBacktestSetup, **fields: Any) -> OptionsBacktestSetup:
     """The same setup with some of its fields changed, validated afresh."""
     return OptionsBacktestSetup.model_validate({**written.model_dump(mode="python"), **fields})
+
+
+def chain_scene() -> FakeRunData:
+    """Two full sessions and a half day of one call at 500, for frozen-input and chained replays (#3428)."""
+    return fake_data({
+        WED: Day(underlying=steady("500.20"), options={("call", 500): {**flat("4", 5, 99), 100: ("4", "3.50")}}),
+        THU: Day(underlying=steady("500.20"), options={("call", 500): {**flat("2", 5, 344), 345: ("2.40", "2.40")}}),
+        HALF_DAY: Day(underlying=steady("500.20", last=210), options={("call", 500): flat("2", 1, 210)}),
+    })

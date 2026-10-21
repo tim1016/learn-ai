@@ -5119,6 +5119,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs-internal/options-backtest/benchmark-preflight": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Benchmark Preflight */
+        post: operations["benchmark_preflight_api_jobs_internal_options_backtest_benchmark_preflight_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs-internal/options-backtest/benchmark-resources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Benchmark Resources */
+        get: operations["benchmark_resources_api_jobs_internal_options_backtest_benchmark_resources_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs-internal/options-backtest/benchmark-result/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Benchmark Result */
+        get: operations["benchmark_result_api_jobs_internal_options_backtest_benchmark_result__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs-internal/options-backtest/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Prepare */
+        post: operations["prepare_api_jobs_internal_options_backtest_prepare_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs-internal/options-golden-search": {
         parameters: {
             query?: never;
@@ -5464,6 +5532,57 @@ export interface paths {
         get: operations["list_news_api_news_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/option-archive/capture-session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Capture Archive Session */
+        post: operations["capture_archive_session_api_option_archive_capture_session_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/option-archive/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Archive Status */
+        get: operations["archive_status_api_option_archive_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/option-archive/trigger/{job}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Trigger Archive Job */
+        post: operations["trigger_archive_job_api_option_archive_trigger__job__post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6685,6 +6804,23 @@ export interface paths {
         get: operations["declarations_api_research_options_golden_search_declarations_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/options-golden-search/history-guidance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** History Guidance */
+        post: operations["history_guidance_api_research_options_golden_search_history_guidance_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8616,6 +8752,73 @@ export interface components {
             /** Run Id */
             run_id: number;
         };
+        /** ArchiveGap */
+        ArchiveGap: {
+            /** Days Left */
+            days_left?: number | null;
+            /** Permanent */
+            permanent: boolean;
+            /** Reason */
+            reason: string;
+            /** Recorded Ms */
+            recorded_ms: number;
+            /** Session Ms */
+            session_ms: number;
+        };
+        /** ArchiveJobHealth */
+        ArchiveJobHealth: {
+            /** Free Bytes */
+            free_bytes?: number | null;
+            /** Generation Id */
+            generation_id?: string | null;
+            /** Last Failure */
+            last_failure?: string | null;
+            /** Last Success Ms */
+            last_success_ms?: number | null;
+            /** Manifest Sha256 */
+            manifest_sha256?: string | null;
+            /** Oldest Unbacked Capture Ms */
+            oldest_unbacked_capture_ms?: number | null;
+            /** Reason */
+            reason: string;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "healthy" | "catching_up" | "waiting" | "at_risk" | "failed" | "unavailable";
+            /** Size Bytes */
+            size_bytes?: number | null;
+        };
+        /** ArchiveSessionCaptureRequest */
+        ArchiveSessionCaptureRequest: {
+            /**
+             * Retry Exhausted
+             * @default false
+             */
+            retry_exhausted?: boolean;
+            /** Session Ms */
+            session_ms: number;
+            /**
+             * Underlying
+             * @enum {string}
+             */
+            underlying: "SPY" | "QQQ" | "IWM";
+        };
+        /** ArchiveTriggerReceipt */
+        ArchiveTriggerReceipt: {
+            /** Accepted */
+            accepted: boolean;
+            /**
+             * Job
+             * @enum {string}
+             */
+            job: "capture" | "snapshot" | "backup" | "restore";
+            /**
+             * Status Url
+             * @default /api/option-archive/status
+             */
+            status_url?: string;
+        };
         /**
          * ArtifactDetail
          * @description Full receipt for one catalog row: identity, hashes, and byte metadata.
@@ -9368,6 +9571,65 @@ export interface components {
             test_metrics: components["schemas"]["RunMetrics"];
             /** Test Trade Count */
             test_trade_count: number;
+        };
+        /** BenchmarkPreflightRequest */
+        BenchmarkPreflightRequest: {
+            /**
+             * Case
+             * @enum {string}
+             */
+            case: "spy_typical_v1" | "spy_eight_leg_cover_v1";
+        };
+        /** BenchmarkPreflightResponse */
+        BenchmarkPreflightResponse: {
+            /** Case Digest */
+            case_digest: string;
+            /** Incomplete Session Ms */
+            incomplete_session_ms: number[];
+            /** Inventory Digest */
+            inventory_digest: string;
+            /** Sessions */
+            sessions: number;
+        };
+        /** BenchmarkResourcesResponse */
+        BenchmarkResourcesResponse: {
+            /** Cgroup Memory Bytes */
+            cgroup_memory_bytes: number | null;
+            /** Cgroup Memory Limit Bytes */
+            cgroup_memory_limit_bytes: number | null;
+            /** Cpu Period Us */
+            cpu_period_us: number | null;
+            /** Cpu Quota Us */
+            cpu_quota_us: number | null;
+            /** Database Connection Limit */
+            database_connection_limit: number;
+            /** Database Connections */
+            database_connections: number;
+            /** Frozen Input Bytes */
+            frozen_input_bytes: number;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Runtime Instance */
+            runtime_instance: string;
+            /** Worker Width */
+            worker_width: number;
+        };
+        /**
+         * BenchmarkResultResponse
+         * @description A complete saved run of a pooled replay: when it was accepted and saved, and what its replay measured.
+         */
+        BenchmarkResultResponse: {
+            /** Accepted At Ms */
+            accepted_at_ms: number;
+            /** Phase Timings */
+            phase_timings: components["schemas"]["PhaseTiming"][];
+            replay: components["schemas"]["ReplayObservations"];
+            /** Result Digest */
+            result_digest: string;
+            /** Run Id */
+            run_id: number;
+            /** Saved At Ms */
+            saved_at_ms: number;
         };
         /** Body_generate_validation_report_api_dataset_validation_report_post */
         Body_generate_validation_report_api_dataset_validation_report_post: {
@@ -19961,6 +20223,29 @@ export interface components {
             job_id: string;
             request: components["schemas"]["PlanRequest"];
         };
+        /** HistoryGuidance */
+        HistoryGuidance: {
+            /** End Ms */
+            end_ms: number | null;
+            /** Explanation */
+            explanation: string;
+            /** Final Start Ms */
+            final_start_ms: number | null;
+            /** Fold Count */
+            fold_count: number;
+            /** Start Ms */
+            start_ms: number | null;
+        };
+        /** HistoryGuidanceRequest */
+        HistoryGuidanceRequest: {
+            bounds: components["schemas"]["HistoryBounds"];
+            /** Final Months */
+            final_months: number;
+            /** Test Months */
+            test_months: number;
+            /** Train Months */
+            train_months: number;
+        };
         /**
          * HoldState
          * @description The account-level exposure-hold state, journal-derived (S6).
@@ -22907,6 +23192,25 @@ export interface components {
             /** Target */
             target?: string | null;
         };
+        /** OptionArchiveHealth */
+        OptionArchiveHealth: {
+            /** Attention */
+            attention: boolean;
+            backup: components["schemas"]["ArchiveJobHealth"];
+            /** Enabled */
+            enabled: boolean;
+            /** Generated Ms */
+            generated_ms: number;
+            /**
+             * Retention Permission
+             * @default awaiting_vendor_reply
+             * @constant
+             */
+            retention_permission?: "awaiting_vendor_reply";
+            test_restore: components["schemas"]["ArchiveJobHealth"];
+            /** Underlyings */
+            underlyings: components["schemas"]["UnderlyingArchiveHealth"][];
+        };
         /**
          * OptionBuyingPowerAmount
          * @description One amount: whole cents, and the dollars a page shows for it.
@@ -24560,6 +24864,11 @@ export interface components {
          */
         OptionsBacktestJobRequest: {
             /**
+             * Benchmark Cache Mode
+             * @description Internal benchmark control; cold clears each worker once for this job, never financial identity.
+             */
+            benchmark_cache_mode?: ("cold" | "warm") | null;
+            /**
              * End Ms
              * @description New York midnight of the day after the range's last day. Any other instant is refused with a 400 and the code OPTIONS_BACKTEST_RANGE_NOT_ON_MIDNIGHT.
              */
@@ -24788,6 +25097,7 @@ export interface components {
             job_id: string;
             /** Last Session Open Ms */
             last_session_open_ms: number;
+            observations?: components["schemas"]["RunObservations"] | null;
             /** Sessions Requested */
             sessions_requested: number;
             setup?: components["schemas"]["OptionsBacktestSetup-Output"] | null;
@@ -26822,7 +27132,7 @@ export interface components {
              * Reason
              * @description The lake's typed reason, when it failed. `lease_timeout` is not missing data: another request is fetching the same thing at this moment and it will be stored when that one finishes, so show it as 'being fetched by another request; ask again' and read the chain again.
              */
-            reason: ("provider_auth_error" | "provider_entitlement_error" | "provider_rate_limited" | "provider_api_error" | "provider_no_data" | "unknown_symbol" | "validation_failed" | "io_error" | "launcher_unreachable" | "lease_timeout" | "fetch_timeout" | "unsupported_resolution" | "unsupported_artifact_kind" | "corp_action_revision_mismatch" | "data_contract_mismatch" | "internal_error" | "session_not_produced" | "run_aborted") | ("outside_data_plan" | "session_not_over" | "not_a_session" | "symbol_too_long" | "listing_not_captured" | "not_listed") | ("underlying_not_fetched" | "underlying_unreadable") | null;
+            reason: ("provider_auth_error" | "provider_entitlement_error" | "provider_rate_limited" | "provider_api_error" | "provider_no_data" | "unknown_symbol" | "validation_failed" | "io_error" | "launcher_unreachable" | "lease_timeout" | "fetch_timeout" | "unsupported_resolution" | "unsupported_artifact_kind" | "corp_action_revision_mismatch" | "data_contract_mismatch" | "internal_error" | "session_not_produced" | "run_aborted") | ("outside_data_plan" | "session_not_over" | "not_a_session" | "symbol_too_long" | "listing_not_captured" | "not_listed" | "staging_capacity" | "paused") | ("underlying_not_fetched" | "underlying_unreadable") | null;
             /** Subject */
             subject: string;
         };
@@ -27030,6 +27340,25 @@ export interface components {
             trade_count?: number;
             /** Win Rate */
             win_rate?: number | null;
+        };
+        /** PhaseTiming */
+        PhaseTiming: {
+            /** Chain Key */
+            chain_key?: string | null;
+            /** Duration Ms */
+            duration_ms: number;
+            /** Finished At Ms */
+            finished_at_ms: number;
+            /** Phase */
+            phase: string;
+            /**
+             * Scope
+             * @default run
+             * @enum {string}
+             */
+            scope?: "run" | "chain";
+            /** Started At Ms */
+            started_at_ms: number;
         };
         /** PlanDefaults */
         PlanDefaults: {
@@ -28700,6 +29029,28 @@ export interface components {
              */
             kind: "remove";
         };
+        /**
+         * ReplayObservations
+         * @description What a pooled replay of frozen inputs measured: its identities and its workers' decoded-cache use.
+         */
+        ReplayObservations: {
+            /** Cache Bytes Peak */
+            cache_bytes_peak: number;
+            /** Cache Epoch */
+            cache_epoch: string | null;
+            /** Cache Hits */
+            cache_hits: number;
+            /** Cache Misses */
+            cache_misses: number;
+            /** Execution Identity Digest */
+            execution_identity_digest: string;
+            /** Frozen Input Digest */
+            frozen_input_digest: string;
+            /** Runtime Boot Generation */
+            runtime_boot_generation: number;
+            /** Worker Width */
+            worker_width: number;
+        };
         /** ReproveGoldenOptionSetupRequest */
         ReproveGoldenOptionSetupRequest: {
             /** Idempotency Key */
@@ -29255,6 +29606,20 @@ export interface components {
             win_rate?: number | null;
             /** Winning Trades */
             winning_trades: number;
+        };
+        /**
+         * RunObservations
+         * @description One run's sealed operational record: its phases, its wall time and, for a pooled replay, what that measured.
+         *
+         *     The run-scope phases sum to ``wall_duration_ms``; chain-scope phases overlap them. Stored as the phase rows and
+         *     one flat metadata object, which a run replayed in the data service fills with its wall time alone.
+         */
+        RunObservations: {
+            /** Phase Timings */
+            phase_timings: components["schemas"]["PhaseTiming"][];
+            replay?: components["schemas"]["ReplayObservations"] | null;
+            /** Wall Duration Ms */
+            wall_duration_ms: number;
         };
         /** RunReadinessResponse */
         RunReadinessResponse: {
@@ -33303,6 +33668,64 @@ export interface components {
          * @enum {string}
          */
         TrustedTemplate: "trusted_default" | "reconciliation" | "ema_crossover" | "ema_crossover_signal" | "ema_crossover_2_bps" | "ema_previous_crossover" | "rsi_mean_reversion" | "deployment_validation";
+        /** UnderlyingArchiveHealth */
+        UnderlyingArchiveHealth: {
+            /** Complete Through Session Ms */
+            complete_through_session_ms?: number | null;
+            /** Earliest Required Session Ms */
+            earliest_required_session_ms?: number | null;
+            /** Gaps */
+            gaps: components["schemas"]["ArchiveGap"][];
+            /** Last Archived Session Ms */
+            last_archived_session_ms?: number | null;
+            /** Last Failure */
+            last_failure?: string | null;
+            /** Last Pass Ended Ms */
+            last_pass_ended_ms?: number | null;
+            /** Last Pass Started Ms */
+            last_pass_started_ms?: number | null;
+            /** Last Success Ms */
+            last_success_ms?: number | null;
+            /** Lost Sessions */
+            lost_sessions: number;
+            /** Next Due Ms */
+            next_due_ms?: number | null;
+            /** Partial Sessions */
+            partial_sessions: number;
+            /** Pending Sessions */
+            pending_sessions: number;
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "capture" | "waiting" | "complete" | "rth_pause" | "snapshot_pause" | "capacity_pause" | "interrupted" | "failed";
+            /** Reason */
+            reason: string;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "healthy" | "catching_up" | "waiting" | "at_risk" | "failed" | "unavailable";
+            /**
+             * Snapshot Field Gaps
+             * @default 0
+             */
+            snapshot_field_gaps?: number;
+            /**
+             * Snapshot Incomplete
+             * @default 0
+             */
+            snapshot_incomplete?: number;
+            /**
+             * Snapshot Missed Evenings
+             * @default 0
+             */
+            snapshot_missed_evenings?: number;
+            /** Snapshot Session Ms */
+            snapshot_session_ms?: number | null;
+            /** Underlying */
+            underlying: string;
+        };
         /**
          * UnderlyingSnapshot
          * @description Underlying asset info from snapshot
@@ -43787,6 +44210,140 @@ export interface operations {
             };
         };
     };
+    benchmark_preflight_api_jobs_internal_options_backtest_benchmark_preflight_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BenchmarkPreflightRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BenchmarkPreflightResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    benchmark_resources_api_jobs_internal_options_backtest_benchmark_resources_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BenchmarkResourcesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    benchmark_result_api_jobs_internal_options_backtest_benchmark_result__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BenchmarkResultResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    prepare_api_jobs_internal_options_backtest_prepare_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OptionsBacktestJobRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     dispatch_api_jobs_internal_options_golden_search_post: {
         parameters: {
             query?: never;
@@ -44358,6 +44915,94 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NewsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    capture_archive_session_api_option_archive_capture_session_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArchiveSessionCaptureRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArchiveTriggerReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    archive_status_api_option_archive_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionArchiveHealth"];
+                };
+            };
+        };
+    };
+    trigger_archive_job_api_option_archive_trigger__job__post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                job: "capture" | "snapshot" | "backup" | "restore";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArchiveTriggerReceipt"];
                 };
             };
             /** @description Validation Error */
@@ -47383,6 +48028,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Declarations"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    history_guidance_api_research_options_golden_search_history_guidance_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HistoryGuidanceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HistoryGuidance"];
                 };
             };
             /** @description Validation Error */

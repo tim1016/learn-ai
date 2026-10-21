@@ -87,6 +87,8 @@ class OptionsDispatch(PooledOwnerDispatch):
         # A caller cannot grant itself capacity beyond the qualified operator profile.
         if width < 1 or width > min(settings.OPTIONS_SEARCH_WORKER_COUNT, settings.RESEARCH_WORKER_COUNT):
             raise ValueError("Options worker width exceeds the current operator profile")
+        context.concurrency_group = "options_replay"
+        context.group_limit = settings.OPTIONS_SEARCH_WORKER_COUNT
         super().__init__(context, workers=width, window=width,
             pool=pool or shared_worker_pool(workers=settings.RESEARCH_WORKER_COUNT,
                 submission_bound=SUBMISSION_FACTOR * settings.RESEARCH_WORKER_COUNT,

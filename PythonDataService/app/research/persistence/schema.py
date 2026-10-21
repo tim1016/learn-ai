@@ -55,7 +55,7 @@ from __future__ import annotations
 
 import asyncpg
 
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
 # Arbitrary but fixed: serializes concurrent first-use across FastAPI's loop
 # and the worker loop so CREATE IF NOT EXISTS never races itself.
 _ADVISORY_LOCK_KEY = 0x1926_0001
@@ -1118,6 +1118,11 @@ DDL_V23: tuple[str, ...] = (
         ON research_options_search_trials(study_id,id)""",
 )
 
+DDL_V24: tuple[str, ...] = (
+    "ALTER TABLE research_options_backtest_runs ADD COLUMN IF NOT EXISTS phase_timings_json JSONB NULL",
+    "ALTER TABLE research_options_backtest_runs ADD COLUMN IF NOT EXISTS execution_metadata_json JSONB NULL",
+)
+
 VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (1, DDL_V1),
     (2, DDL_V2),
@@ -1142,6 +1147,7 @@ VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (21, DDL_V21),
     (22, DDL_V22),
     (23, DDL_V23),
+    (24, DDL_V24),
 )
 
 

@@ -134,13 +134,21 @@ services:
       # from this path.
       - ./PythonDataService/artifacts/alpaca_clerk:/app/alpaca_clerk_legacy:ro,z
       - ./PythonDataService/scripts:/app/scripts:ro,z
+      - ./docs/runbooks/restore-data-lake.md:/app/restore-data-lake.md:ro,z
       # Data lake writer mount (Slice 1b). Default host path is ./data-lake-volume
       # (gitignored); override LEAN_DATA_VOLUME_HOST_PATH in .env for a different root.
       # Layout inside this mount: lake/ (canonical artifacts) + staging/ (writer scratch),
       # both on the same filesystem so atomic rename works.
       - ${LEAN_DATA_VOLUME_HOST_PATH:-./data-lake-volume}:/lean-data-writer:rw,z
+      # Owner-created host destination; its identity marker detects a missing mount.
+      - ${OPTION_ARCHIVE_BACKUP_HOST_DESTINATION:-${HOME}/learn-ai-lake-backup}:/lake-backup:rw,z
     environment:
       - POLYGON_API_KEY=${POLYGON_API_KEY}
+      - OPTION_ARCHIVE_ENABLED=${OPTION_ARCHIVE_ENABLED:-false}
+      - OPTION_ARCHIVE_HOST_CHECKOUT=${PWD}
+      - OPTION_ARCHIVE_HOST_LAKE_ROOT=${LEAN_DATA_VOLUME_HOST_PATH:-${PWD}/data-lake-volume}
+      - OPTION_ARCHIVE_BACKUP_DESTINATION=/lake-backup
+      - OPTION_ARCHIVE_BACKUP_HOST_DESTINATION=${OPTION_ARCHIVE_BACKUP_HOST_DESTINATION:-${HOME}/learn-ai-lake-backup}
       - POLYGON_RATE_LIMIT_PER_MIN=${POLYGON_RATE_LIMIT_PER_MIN:-0}
       - FRED_API_KEY=${FRED_API_KEY}
       - LEAN_DATA_ROOT=/lean-data

@@ -207,12 +207,29 @@ def _no_such_run(run_id: int) -> HTTPException:
 )
 async def start_options_backtest_job(req: OptionsBacktestJobRequest) -> OptionsBacktestJobAcceptedResponse:
     """Accept a run: 202 once its row is made and a worker holds it. A bad range is a 400 and no job."""
+    from app.services.research_runtime_client import (
+        forward_options_backtest_job,
+        is_research_runtime,
+        research_forwarding_enabled,
+    )
+    runtime = is_research_runtime()
+    if research_forwarding_enabled() and not runtime:
+        return OptionsBacktestJobAcceptedResponse.model_validate(await forward_options_backtest_job(req.model_dump(mode="json")))
+    if runtime:
+        from app.routers import research_records
+        await research_records.refuse_unauthorized_dispatch()
     try:
         # A calendar quarter not yet read is built on first use: off the event loop.
         sessions = await asyncio.to_thread(service.sessions_of_range, req.start_ms, req.end_ms)
     except RunRefused as exc:
         raise _refusal(exc) from exc
     store = run_store()
+    if runtime:
+        from app.research.persistence import ownership
+        authority = ownership.process_authority()
+        if authority is None or not authority.connected:
+            raise HTTPException(503, "Options Backtest requires a live research runtime authority.")
+        store = DbRunStore(generation=authority.boot_generation)
     setup_name = await _name_the_run_may_carry(req)
     try:
         run_id = await store.create(
@@ -227,23 +244,46 @@ async def start_options_backtest_job(req: OptionsBacktestJobRequest) -> OptionsB
             )
         )
     except DuplicateJob as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"code": "OPTIONS_BACKTEST_JOB_ALREADY_HAS_A_RUN", "message": str(exc)},
-        ) from exc
+        if runtime:
+            from app.routers import research_records
+            run_id = await with_connection(saved_runs.run_for_job, req.job_id)
+            existing = await with_connection(saved_runs.get_run_header, run_id)
+            if not saved_runs.request_matches_header(existing, req.setup,
+                first_session_open_ms=session_window_for_date(sessions[0]).open_ms_utc,
+                last_session_open_ms=session_window_for_date(sessions[-1]).open_ms_utc,
+                sessions_requested=len(sessions)):
+                raise HTTPException(409, "That job id is bound to another Options Backtest request.")
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "OPTIONS_BACKTEST_JOB_ALREADY_HAS_A_RUN", "message": str(exc)},
+            ) from exc
     try:
-        run_in_thread(
-            req.job_id,
-            _worker(run_id, req, sessions, store),
-            thread_name=f"options-backtest-{req.job_id[:8]}",
-            cancel_check_every_n=1,
-        )
+        if runtime:
+            from app.options_backtest.runtime import runtime_worker
+            work = runtime_worker(run_id, req, sessions, store, _job_result)
+            started = await store.start_runtime_worker(run_id, req.job_id, work)
+            if not started:
+                await asyncio.to_thread(research_records.require_live_redelivery, req.job_id, noun="Options Backtest")
+        else:
+            work = _worker(run_id, req, sessions, store)
+            run_in_thread(req.job_id, work, thread_name=f"options-backtest-{req.job_id[:8]}",
+                          cancel_check_every_n=1)
+    except saved_runs.RuntimeActivationBlocked as exc:
+        raise HTTPException(503, str(exc)) from exc
     except Exception:
-        # No worker holds the run, and nothing else would ever end it.
-        failure = RunFailure("JOB_NOT_STARTED", "The run could not be started. Nothing was fetched or run.")
-        await asyncio.to_thread(store.fail, run_id, failure, finished_at_ms=now_ms_utc())
+        if not runtime:
+            failure = RunFailure("JOB_NOT_STARTED", "The run could not be started. Nothing was fetched or run.")
+            await asyncio.to_thread(store.fail, run_id, failure, finished_at_ms=now_ms_utc())
         raise
     return OptionsBacktestJobAcceptedResponse(job_id=req.job_id, run_id=run_id, status="queued")
+
+
+from app.routers.options_backtest_benchmark import router as benchmark_router  # noqa: E402
+from app.routers.options_backtest_prepare import router as preparation_router  # noqa: E402
+
+jobs_router.include_router(preparation_router)
+jobs_router.include_router(benchmark_router)
 
 
 def _worker(

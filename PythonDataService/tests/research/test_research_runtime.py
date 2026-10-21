@@ -92,6 +92,9 @@ def test_the_research_service_is_an_opt_in_profile_with_its_own_cgroup() -> None
     # The API keeps its own smaller envelope and its routing env is opt-in too.
     api = compose["services"]["python-service"]["environment"]
     assert api["RESEARCH_EXECUTION_MODE"] == "${RESEARCH_EXECUTION_MODE:-local}"
+    assert "DATA_LAKE_ROOT_ID" not in research["environment"]
+    assert "env_file" not in research, "the shared root marker must not import provider credentials"
+    assert any("/lean-data-writer" in volume for volume in research["volumes"])
     assert research["environment"]["RESEARCH_RUNTIME"] == "1"
     assert research["environment"]["RESEARCH_EXECUTION_MODE"] == "research"
 

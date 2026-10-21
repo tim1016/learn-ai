@@ -243,7 +243,7 @@ def test_a_session_older_than_the_data_plan_cannot_be_tested_and_the_floor_day_i
     assert [problem.code for problem in too_old.problems] == [ProblemCode.OLDER_THAN_THE_DATA_PLAN]
     assert at_the_floor.verdict is SessionVerdict.NEEDS_DOWNLOAD
     assert checked.option_prices_from == date(2024, 10, 14)
-    assert ("underlying", friday_before_the_floor) not in data.asked, "a session that cannot be tested is not read"
+    assert ("underlying", friday_before_the_floor) in data.asked, "retained history is checked before the fetch floor"
 
 
 def test_a_session_that_is_not_over_cannot_be_tested_and_says_its_data_is_not_final() -> None:
@@ -651,3 +651,16 @@ def test_a_check_that_takes_ten_minutes_asks_whether_to_stop_at_least_every_thir
     assert clock[0] >= 600, "the check took its ten minutes of fake time"
     assert len(polled_at) == len(sessions)
     assert longest <= 30
+
+
+def test_retained_complete_history_stays_ready_after_plan_rollover() -> None:
+    old = date(2024, 10, 11)
+    assert _only(_check({old: _stored()})).verdict is SessionVerdict.READY
+    call = contract_on(old, "call", 500)
+    unreadable = _only(_check({old: _stored()}, damaged=((old, call.occ_symbol),)))
+    assert unreadable.verdict is SessionVerdict.CANNOT_BE_TESTED
+    assert [problem.code for problem in unreadable.problems] == [ProblemCode.STORED_DATA_IS_MALFORMED]
+    missing = _only(_check({old: Day(underlying=steady("500.20"), options={})}))
+    assert missing.verdict is SessionVerdict.CANNOT_BE_TESTED
+    assert missing.problems[0].code is ProblemCode.OLDER_THAN_THE_DATA_PLAN
+    assert "missing" in missing.problems[0].message

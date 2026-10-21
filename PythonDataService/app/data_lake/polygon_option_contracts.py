@@ -31,6 +31,8 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import AsyncIterator
+from contextlib import aclosing, asynccontextmanager
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -39,7 +41,7 @@ from typing import Any
 import httpx
 
 from app.data_lake.polygon_fetcher import _POLYGON_BASE, _TIMEOUT_S, PolygonFetchError
-from app.data_lake.polygon_option_http import get_json_object, require_confirmed_status
+from app.data_lake.polygon_option_http import option_pages
 
 logger = logging.getLogger(__name__)
 
@@ -99,54 +101,34 @@ async def fetch_option_contracts(
     lease). Once it has passed, :class:`PolygonListingTimeoutError` is raised before the next
     request. ``None`` means no deadline, for a caller that holds nothing that can run out.
     """
-    url = f"{_POLYGON_BASE}{_CONTRACTS_PATH}"
     params = {
         "underlying_ticker": underlying.upper(),
         "as_of": as_of.strftime("%Y-%m-%d"),
         "limit": _PAGE_LIMIT,
     }
     out: list[PolygonOptionContract] = []
-    read: set[str] = set()
-    next_url: str | None = url
+    pages = 0
     deadline = None if budget_s is None else _now_s() + budget_s
 
-    async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
-        while next_url is not None:
-            if next_url in read:
-                raise PolygonFetchError(f"Polygon contract paging looped back to a page already read for {underlying}")
-            if len(read) >= _MAX_PAGES:
-                raise PolygonFetchError(f"Polygon contract paging passed {_MAX_PAGES} pages for {underlying}")
-            if next_url != url and not next_url.startswith(f"{_POLYGON_BASE}/"):
-                # The key rides in a header on every request, so a cursor that leaves Polygon is never followed.
-                raise PolygonFetchError(f"Polygon's next page for {underlying} is not on api.polygon.io")
-            if deadline is not None and _now_s() >= deadline:
-                raise PolygonListingTimeoutError(
-                    f"Polygon contract paging for {underlying} used up its {budget_s:g} s after {len(read)} page(s)"
-                )
-            read.add(next_url)
-            # A later page's URL holds the vendor's cursor; httpx would replace that query if ``params`` were given.
-            payload = await get_json_object(
-                client, next_url, params=params if next_url == url else None, api_key=api_key, label=underlying
+    @asynccontextmanager
+    async def within_budget(pages_read: int) -> AsyncIterator[None]:
+        if deadline is not None and _now_s() >= deadline:
+            raise PolygonListingTimeoutError(
+                f"Polygon contract paging for {underlying} used up its {budget_s:g} s after {pages_read} page(s)"
             )
-            require_confirmed_status(payload, underlying, 200)
-            # Every page, the last included, says its rows as a list. An underlying with no options answers
-            # ``[]`` (probed 2026-10-12), so a page without one is a degraded answer, and reading it as an
-            # empty last page would store the pages before it as the whole listing.
-            results = payload.get("results")
-            if not isinstance(results, list):
-                raise PolygonFetchError(f"Polygon contract results for {underlying} are not a list", 200)
-            # No more pages is a cursor that is absent or null. Any other value that is not a text with something in it
-            # (false, 0, [], {}, "") is a damaged answer, and reading it as the end would store a cut-short listing as whole.
-            cursor = payload.get("next_url")
-            if cursor is not None and (not isinstance(cursor, str) or not cursor):
-                raise PolygonFetchError(f"Polygon next page for {underlying} is not a URL", 200)
-            if cursor is not None and not results:
-                raise PolygonFetchError(f"Polygon sent an empty page with a next page for {underlying}", 200)
-            out.extend(_contract_from_row(row, underlying) for row in results)
-            next_url = cursor
+        yield
+
+    async with (
+        httpx.AsyncClient(timeout=_TIMEOUT_S) as client,
+        aclosing(option_pages(client, f"{_POLYGON_BASE}{_CONTRACTS_PATH}", params=params, api_key=api_key,
+                              label=underlying, max_pages=_MAX_PAGES, around_request=within_budget)) as listing,
+    ):
+        async for payload in listing:
+            out.extend(_contract_from_row(row, underlying) for row in payload["results"])
+            pages += 1
     logger.info(
         "data_lake.polygon_option_contracts: listing fetched",
-        extra={"action": "option_listing_fetched", "underlying": underlying.upper(), "contracts": len(out), "pages": len(read)},
+        extra={"action": "option_listing_fetched", "underlying": underlying.upper(), "contracts": len(out), "pages": pages},
     )
     return out
 

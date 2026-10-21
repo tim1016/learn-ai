@@ -1141,9 +1141,21 @@ async def _service_lifespan(
             role="data-plane",
         )
 
+    option_archive_service = None
+    if _ROLE_RUNS_DATA_PLANE_CORE:
+        from app.option_archive.service import OptionArchiveService
+        from app.utils.background_loop import background_loop
+
+        option_archive_service = OptionArchiveService()
+        app.state.option_archive_service = option_archive_service
+        if option_archive_service.config.ENABLED:
+            await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(option_archive_service.start(), background_loop()))
+
     try:
         yield
     finally:
+        if option_archive_service is not None:
+            await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(option_archive_service.stop(), background_loop()))
         # The research coordinator authority goes back before anything else:
         # while it is held, no other runtime may claim dispatch authority.
         if research_authority is not None:
@@ -1329,6 +1341,9 @@ PROTECTED_DATA_PLANE_READ_DEPENDENCIES = [Depends(require_data_plane_control_sec
 if _ROLE_RUNS_DATA_PLANE_CORE:
     app.include_router(aggregates.router, prefix="/api/aggregates", tags=["aggregates"])
     app.include_router(options.router, prefix="/api/options", tags=["options"])
+    from app.routers import option_archive
+
+    app.include_router(option_archive.router)
     app.include_router(snapshot.router, prefix="/api/snapshot", tags=["snapshot"])
     app.include_router(tickers.router, prefix="/api/tickers", tags=["tickers"])
     app.include_router(trading_calendar.router, prefix="/api/calendar", tags=["calendar"])

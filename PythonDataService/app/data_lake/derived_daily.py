@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import io
 import zipfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -191,7 +191,8 @@ def build_daily_zip_bytes(
     return buf.getvalue()
 
 
-def read_minute_trade_bars(file_path: str, lake_root: Path) -> list[MinuteTradeBar]:
+def read_minute_trade_bars(file_path: str, lake_root: Path, *,
+                           admission: Callable[[Path], bytes] = read_committed_bytes) -> list[MinuteTradeBar]:
     """Read a complete minute-trade artifact from disk and reconstruct MinuteTradeBar list.
 
     The zip contains one CSV: <yyyymmdd>_<sym>_minute_trade.csv. Each row:
@@ -200,7 +201,7 @@ def read_minute_trade_bars(file_path: str, lake_root: Path) -> list[MinuteTradeB
     The trading date is inferred from the file path (equity/<mkt>/minute/<sym>/<yyyymmdd>_trade.zip).
     """
     full_path = lake_root / Path(*PurePosixPath(file_path).parts)
-    payload = read_committed_bytes(full_path)
+    payload = admission(full_path)
     verify_adjusted_payload(full_path, payload, full_path.parent.name.upper())
     with zipfile.ZipFile(io.BytesIO(payload)) as zf:
         names = zf.namelist()

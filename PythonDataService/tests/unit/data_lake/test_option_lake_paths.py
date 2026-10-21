@@ -10,7 +10,11 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
-from app.data_lake.path_policy import OptionListingPath, OptionMinuteBarPath
+from app.data_lake.path_policy import (
+    OptionListingPath,
+    OptionMinuteBarPath,
+    OptionSessionPath,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -59,3 +63,8 @@ def test_option_paths_are_written_only_by_the_path_policy() -> None:
     ]
 
     assert offenders == []
+
+
+def test_a_session_container_lives_in_its_own_versioned_namespace() -> None:
+    relative = OptionSessionPath("SPY", date(2025, 6, 13)).relative_path()
+    assert relative == PurePosixPath("option/usa/session/v1/spy/20250613.zip")

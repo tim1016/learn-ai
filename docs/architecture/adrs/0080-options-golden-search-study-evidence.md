@@ -8,6 +8,8 @@ Options Golden Search composes the canonical Options session rules and historica
 
 One protocol freezes exact setup, stable leg-ID dimensions, disjoint calendar folds, policy, scenarios, data inventory, executable identity and work bounds. The retained content-addressed inventory includes explicit absence. Workers cannot fall through to mutable lake bytes or fetch repairs. Changes require a new linked study. The existing research writer, runtime authority, attempt fencing and bounded shared pool remain the operational boundaries. The API serves guarded commands and read projections; the jobs API carries authorized dispatch tokens. No broker or Clerk authority enters research workers.
 
+**Versioned session inventory (#3422; 2026-10-20).** A new retained snapshot may name admitted session-container blobs and pinned listing blobs. Its immutable inventory still records unresolved logical contract days as absent; a later lake repair cannot fill them. All container members are validated on retained replay, and a changed blob refuses. Version-1 per-contract snapshots and their retained original bytes remain readable unchanged. The new storage layout changes neither selection rules nor existing evidence identities.
+
 Forward folds test a selection procedure whose winners may differ. Their pooled synthetic path adds each fold's P&L increments to the accumulated prior fold P&L; it does not compound independently reset capital. Every fold still admits positions with the same reset starting cash. Pooled capital sufficiency is therefore not claimed, and procedure counts never become one finalist's track record. Finalists freeze before final results are exposed.
 
 The frozen elapsed-time bound applies separately to each executable stage (research, final, approval). Human review between stages consumes none of the next stage's allowance; retries within a stage share its original deadline and cannot renew an exhausted limit.
@@ -17,6 +19,17 @@ Final opening commits shortlist, prior exposure classification, permanent exposu
 The existing immutable Golden Options registry remains the approval authority. A selected complete ordinary run receives its existing input/replay proof. A separate retained study manifest binds the selection history, traces, policy, final comparison and exceptions. Recomputing metrics verifies that manifest before atomic publication. An execution re-proof never silently recertifies an earlier statistical verdict under changed metrics. Approved evidence is not deletable. Approval starts no bot; all existing Deploy, custody and provider decisions remain in force.
 
 ## Alternatives
+
+### Amendment 2026-10-20 — Ordinary Options runs share execution capacity
+
+Options Backtest joins Options Golden Search and Signal studies on the same
+research pool. Every Options owner counts against the same qualified width;
+one is the default until combined workload qualification authorizes more.
+Shared execution changes neither selection evidence nor approval authority.
+The ordinary run freezes admitted storage answers and original byte pins
+before dispatch, retains chronological cash within each chain, and saves only
+after every mandatory chain has succeeded. Timings and cache observations
+remain outside financial and qualification identities.
 
 Reusing stock metric and seal types would mix trade units and drawdown conventions. A second session engine would let search approve different rules from execution. Hash-only snapshots lose reproducibility when the lake changes. Publishing the ordinary run alone would prove replay without proving the search qualification claim. Each alternative leaves a materially weaker authority boundary.
 

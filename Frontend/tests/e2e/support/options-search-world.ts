@@ -79,6 +79,7 @@ export async function installOptionsSearchWorld(page: Page, initial: OptionsStud
       // Pinned fixture sessions containing the dates typed in this browser test.
       await fulfill({ session_open_ms: [1704205800000, 1789738200000], session_close_ms: [1704229200000, 1789761600000], holidays: [] });
     } else if (path === `${OPTIONS_SEARCH_API}/declarations`) await fulfill(DECLARATIONS);
+    else if (path === `${OPTIONS_SEARCH_API}/history-guidance`) await fulfill({ start_ms: 1704171600000, end_ms: 1788321600000, final_start_ms: 1772427600000, fold_count: 10, explanation: 'Longest interval with complete walk-forward windows. Check plan verifies coverage.' });
     else if (path === `${OPTIONS_SEARCH_API}/preflight`) { preflights.push(request.postDataJSON()); await fulfill(PREFLIGHT); }
     else if (path === `${OPTIONS_SEARCH_API}/studies` && request.method() === 'POST') {
       locks.push(request.postDataJSON()); current = lockedOptionsStudy(); await fulfill(publicStudy());

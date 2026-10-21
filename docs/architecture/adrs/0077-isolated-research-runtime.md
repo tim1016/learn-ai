@@ -101,6 +101,26 @@ assumed.
 
 ## Consequences
 
+### Amendment 2026-10-20 — Options Backtest shares the research pool
+
+In research mode, Options Backtest dispatches and saves in this runtime.
+The API alone checks, downloads and freezes admitted inputs through an
+authenticated preparation stream. Workers receive an immutable, hashed local
+inventory, with original storage pins, and receive no provider or database
+credentials. A missing runtime refuses; it never falls back to API replay.
+Explicit local development mode retains its serial path.
+
+One task carries one chronological slippage/cash chain. The canonical serial
+replay computes each chain; merge preserves the serial ladder plan and refuses
+an incomplete mandatory chain set. The shared base chain is computed once.
+All Options owners share the qualified Options width, initially one, inside
+the existing fair pool. This avoids another executor competing with studies.
+The worker's existing decoded-cache allowance is split between stock and
+Options data, rather than adding another allowance. UTC phase observations,
+cache statistics and frozen inventory identity are execution metadata, apart
+from every financial result and proof hash. A generation-fenced transaction
+is the only successful saved-result publication.
+
 - The engine authority map gains the research-runtime row; the Golden
   Search row's entry point names the runtime when the mode selects it.
 - ADR 0055's one-backtest amendment now describes the API container's

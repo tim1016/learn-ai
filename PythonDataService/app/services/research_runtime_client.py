@@ -303,3 +303,34 @@ async def forward_options_search_job(payload: dict[str, Any]) -> dict[str, Any]:
             return {"study_id": row["id"], "job_id": payload["job_id"], "status": "queued"}
         raise HTTPException(502, "The runtime did not confirm a live Options study dispatch; retry its command receipt.") from exc
     return _answer_of(response)
+
+
+async def forward_options_backtest_job(payload: dict[str, Any]) -> dict[str, Any]:
+    """A timeout joins the same durable live run; it never starts API replay."""
+    try:
+        response = await _post_runtime_dispatch("/api/jobs-internal/options-backtest", payload)
+    except httpx.HTTPError as exc:
+        from app.lean_sidecar.trading_calendar import session_window_for_date
+        from app.options_backtest import saved_runs, service
+        from app.research.persistence import lifecycle
+        from app.research.persistence.db import with_connection
+        from app.schemas.options_backtest_runs import OptionsBacktestJobRequest
+
+        run_id = await with_connection(saved_runs.run_for_job, str(payload["job_id"]))
+        if run_id is not None:
+            request = OptionsBacktestJobRequest.model_validate(payload)
+            try:
+                sessions = await asyncio.to_thread(service.sessions_of_range, request.start_ms, request.end_ms)
+            except service.RunRefused:
+                raise HTTPException(409, "That job id is bound to another Options Backtest request.") from exc
+            header = await with_connection(saved_runs.get_run_header, run_id)
+            if not saved_runs.request_matches_header(header, request.setup,
+                first_session_open_ms=session_window_for_date(sessions[0]).open_ms_utc,
+                last_session_open_ms=session_window_for_date(sessions[-1]).open_ms_utc,
+                sessions_requested=len(sessions)):
+                raise HTTPException(409, "That job id is bound to another Options Backtest request.") from exc
+        live = await asyncio.to_thread(lifecycle.job_is_live, str(payload["job_id"]))
+        if run_id is not None and live is True:
+            return {"job_id": payload["job_id"], "run_id": run_id, "status": "queued"}
+        raise HTTPException(502, "The research runtime did not confirm this backtest; retry the same job id.") from exc
+    return _answer_of(response)

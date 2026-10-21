@@ -17,7 +17,8 @@ JSON, a JSON value that is not an object.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
+from contextlib import AbstractAsyncContextManager, nullcontext
 from decimal import Decimal
 from typing import Any
 
@@ -30,6 +31,7 @@ from app.data_lake.polygon_fetcher import (
     PolygonUnknownSymbolError,
     _raise_for_status,
 )
+from app.data_lake.work_progress import completed_provider_response
 
 #: The vendor writes an option's ticker as its OCC symbol behind this prefix.
 OPTION_TICKER_PREFIX = "O:"
@@ -104,6 +106,7 @@ async def get_json_object(
         raise PolygonFetchError(f"Polygon answer for {label} is not JSON: {exc}", resp.status_code) from exc
     if not isinstance(payload, dict):
         raise PolygonFetchError(f"Polygon answer for {label} is not a JSON object", resp.status_code)
+    completed_provider_response(label, resp.content)
     return payload
 
 
@@ -136,3 +139,65 @@ def require_confirmed_status(payload: dict[str, Any], label: str, http_code: int
     error = payload.get("error")
     detail = f": {error[:200]}" if isinstance(error, str) else ""
     raise PolygonFetchError(f"Polygon payload status={str(status)[:40]} for {label}{detail}", http_code)
+
+
+def _no_hold(pages_read: int) -> AbstractAsyncContextManager[object]:
+    return nullcontext()
+
+
+async def option_pages(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    params: Mapping[str, str | int],
+    api_key: str,
+    label: str,
+    max_pages: int,
+    around_request: Callable[[int], AbstractAsyncContextManager[object]] = _no_hold,
+) -> AsyncIterator[dict[str, Any]]:
+    """Every page of the paged endpoint at ``url``, in order, until the vendor names no next page.
+
+    Each page yielded confirmed its status and says its rows as a ``results`` list. A cursor is
+    followed only on ``url``'s own endpoint: https, the same host and path, no user name, no
+    fragment and no ``apiKey`` in its query, so the key in the header goes nowhere else. Paging
+    that loops, passes ``max_pages``, names a next page that is not a non-empty text, or sends an
+    empty page with a next page raises a typed ``Polygon*`` error; it never ends early.
+    ``params`` go with the first request only. ``around_request(pages_read)`` is held around each
+    request: a caller's request slot, deadline or pause check.
+    """
+    endpoint = httpx.URL(url)
+    read: set[str] = set()
+    next_url: str | None = url
+    while next_url is not None:
+        if next_url in read:
+            raise PolygonFetchError(f"Polygon paging looped back to a page already read for {label}")
+        if len(read) >= max_pages:
+            raise PolygonFetchError(f"Polygon paging passed {max_pages} pages for {label}")
+        if not _on_endpoint(next_url, endpoint):
+            raise PolygonFetchError(f"Polygon's next page for {label} is not on api.polygon.io")
+        async with around_request(len(read)):
+            read.add(next_url)
+            payload = await get_json_object(
+                client, next_url, params=params if next_url == url else None, api_key=api_key, label=label
+            )
+        require_confirmed_status(payload, label, 200)
+        # An empty answer still says ``results: []``; a page without a list is a degraded answer, never the end.
+        if not isinstance(payload.get("results"), list):
+            raise PolygonFetchError(f"Polygon results for {label} are not a list", 200)
+        # No more pages is a cursor that is absent or null; any other value that is not a text with something in it is damage.
+        cursor = payload.get("next_url")
+        if cursor is not None and (not isinstance(cursor, str) or not cursor):
+            raise PolygonFetchError(f"Polygon next page for {label} is not a URL", 200)
+        if cursor is not None and not payload["results"]:
+            raise PolygonFetchError(f"Polygon sent an empty page with a next page for {label}", 200)
+        yield payload
+        next_url = cursor
+
+
+def _on_endpoint(candidate: str, endpoint: httpx.URL) -> bool:
+    try:
+        cursor = httpx.URL(candidate)
+    except httpx.InvalidURL:
+        return False
+    return (cursor.scheme == "https" and cursor.host == endpoint.host and cursor.path == endpoint.path
+            and "apiKey" not in cursor.params and not cursor.userinfo and not cursor.fragment)

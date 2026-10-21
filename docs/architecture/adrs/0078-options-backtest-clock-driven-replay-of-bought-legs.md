@@ -208,6 +208,8 @@ An option contract's minute bars for one session, and the contracts an underlyin
 
 Both use the market name `usa_options`. Stock rows are `usa`. A listing is a `metadata` row with the underlying as its symbol. Bars are a minute-trade row with the contract's OCC symbol.
 
+**Session archive amendment (#3416, #3426, #3427; 2026-10-20).** A versioned session container may hold every resolved contract of one underlying-session under one minute-trade row, using the underlying symbol and a distinct session recipe. Root identity, raw mode, provider, canonical session-open ms and the pinned listing identify it. Each ticker member retains the exact original deterministic minute-trade zip, and the container retains its exact pinned listing zip. Resolved admitted container outcomes win merges; retained legacy and staged outcomes only fill unresolved tickers. A deliberate listing refresh requires an explicit listing rebind: validate the original embedded listing and all members, then carry retained coverage still named by the new listing. Ordinary reads refuse any listing mismatch. This modest nested-zip cost preserves old byte pins during compaction and later retirement. Partial repack preserves unknown coverage; source rows and files are retained until the separately approved retirement gate passes. Collection saves validated ticker outcomes outside the lake, fences collectors with a same-host advisory lock and takes the existing catalog publication lease only after collection. A second short publication lock serializes repack source snapshots with contract publication; no provider request waits under it.
+
 Why a name of its own. Every reader that lists or counts artifacts filters on market, so option rows stay out of every stock answer.
 
 ### 14. A session is captured only after its New York date has passed
@@ -222,9 +224,19 @@ The stock pipeline that fetches the underlying's bars has no such gate. So each 
 
 A contract's bars for a session older than the plan's window (two years, with two days of headroom) are refused before any claim. A day at the edge is left to the vendor, whose own 403 says whether the plan reaches it. That failure is `outside_data_plan`. It is asked again on every call and never latched into `fetch_timeout`, because the owner upgrading the plan clears it.
 
+**Retained history amendment (#3414; 2026-10-20).** The rolling floor limits new vendor requests, never reading admitted retained history. Check data, downloads, replay and Past chain inspect retained listing, underlying and contract data first. Missing data beyond that floor is explicitly missing and unfetchable; unreadable data stays unreadable. Interactive downloads make no provider request for a missing older session. The archive may use its separately probed cutoff for collection without changing this interactive floor.
+
 The window moves forward each day, and a session not fetched in time is lost to the plan. So the lake keeps everything it fetches.
 
 *Rejected:* thirty minutes after the close, the first design.
+
+**Evening-observation exception (2026-10-20, #3419).** A fully paged current
+chain observation is captured after the canonical close plus a named interval,
+inside a bounded same-date window. Its OI, IV and Greeks are labelled vendor
+reference observations with capture times and only their own supported nested
+field timestamps. It is never a historical bar finality claim or settled
+same-session open interest. A missed window remains a permanent observation gap.
+Historical bar/listing capture keeps the date-passed rule above.
 
 ### 15. A "never traded" day is stored only for a contract the stored listing holds
 
@@ -242,6 +254,8 @@ Otherwise the day is refused before any claim, or fails. A wrong "never traded" 
 The same care applies to listings. A listing is stored whole or not at all: every page is read, or the capture fails. An empty listing is refused, because it cannot be told from a vendor that answered nothing.
 
 The vendor key rides in an `Authorization` header and in no URL, so nothing that logs or stores a URL can leak it. The older stock fetchers still put it in the URL. That is not decided here.
+
+**Container absence amendment (#3416; 2026-10-20).** A session manifest partitions the pinned listing into captured tickers, confirmed-empty tickers with validated successful answers, and unresolved tickers. Listed and confirmed-empty is captured with no bars; unresolved is not captured; outside the listing is not listed. A partial repack cannot invent absence evidence, and only a wholly resolved listing gives complete coverage. A complete session also requires admitted underlying bars.
 
 ### 16. One limit on vendor requests for the whole process
 
@@ -272,6 +286,8 @@ At ingest the lake refuses an option bar that does not start on a whole minute, 
 Whether a download fetches an unreadable day again is the lake's to say, and Check data says no more than that. The lake fetches a contract's day again whenever its own parser refuses the file, because its reuse gate runs that parser, and it holds as good the one thing the reader still refuses after it, a close on another New York date. For the underlying the stock capture's own gate decides, and it is not the reader. It rebuilds a day that fails the publication contract (a minute twice, a price of zero), a row it cannot parse, and bytes the catalog does not admit. It keeps a bar off a whole minute, a row of another width and an empty line. Check data says "will be fetched again" only of a day the lake replaces. A session whose stored day the lake keeps cannot be tested. A run that meets such a day fails as unreadable and names the session, in words that tell bars that break the rules of a bar from a file that cannot be read. The table is in the module docstring of `data_check.py`, and a test puts each row through a real download.
 
 *Rejected:* leaving such a bar out and counting it, the lake reader's first design.
+
+**Whole-container admission amendment (#3416; 2026-10-20).** All member hashes, counts, strict minute rows and coverage identities are checked before exposing any requested contract. Unknown, duplicate or unsafe members, a listing/root/recipe mismatch, and compressed or decoded bound violations refuse the entire container. A corrupt published container never falls through to legacy files. A missing container uses legacy storage; an unresolved ticker in a valid partial container may use an admitted legacy day and may be fetched only inside the applicable vendor boundary.
 
 ### 18. Check data comes first, and a request is never shortened
 
@@ -304,6 +320,8 @@ The database refuses figures on a run that is not complete. A running run whose 
 A run **pins** what it read. For each session it stores the sha256 of the underlying's day, of the listing and of each contract's day. It stores the calendar's identity and package version. The pins let data that changed later be told from the data the run read. A saved run's trades are stored and are never recomputed from the lake, so changed data cannot rewrite one. Anything later shown from the lake for a saved run is checked against these pins first (decision 24).
 
 *Rejected:* the stock run store with a result-kind marker.
+
+**Versioned input references amendment (#3421; 2026-10-20).** New container-backed runs keep the container digest, exact member digest or confirmed-empty state, pinned listing digest, root and recipe in each contract's versioned reference. The original per-contract byte digest is retained too. Historical pins remain unchanged: the original zip itself, or its exact retained member bytes, must verify the old digest; decoded equality never substitutes. Timeline reads verify a new reference's container identity as well as its member identity, so a changed container refuses even when one member stayed unchanged.
 
 ### 20. A session is its open in milliseconds, and no date is stored or sent
 
@@ -354,6 +372,8 @@ Reading a saved run closely (its trades, one session for a timeline, an export, 
 - The export holds every trade, never a page, with `unix_ts` first and one readable New York time column beside it (ADR 0022 amendment (f)). Its last column is the side the leg opened on (amended by #3109), so a sold leg's row says that its entry is a sale, its exit a buy-back and its mark an amount owed; a run stored before sold legs has `buy` on every row.
 - **Reading a selling run (amended by #3109).** A session's fills carry the side each traded on and its marks say whether each is owed, so the page names a sale to open, a buy-back and an owed mark in every view, and draws a sold leg's stop above its price and its arrows the way the leg traded. A bought leg reads as it always did. A result of a setup that sells carries three statements the backend writes: legs opened in one minute are one group and minute bars cannot show which printed first; the requirement is Alpaca's published rule for covered positions as of today, worked out by this system; and nothing is claimed of whether a broker would have accepted the orders. A run counts the entries it refused for cover (its cover did not trade, its cover was not yet held), for a second expiry, for a contract held on the other side and for a sale at nothing, each on its own, and a run stored before they were counted reads them as not recorded.
 - Two complete runs of one underlying are compared on the sessions both hold. Every setting that differs is listed, in the words a setup's description uses: one set of phrases writes both. Each run's totals are sums of its stored per-session figures over the shared sessions only.
+
+**Session storage compatibility (#3421; 2026-10-20).** The same timeline and Past chain readers consume both layouts. A versioned pin refuses a missing or changed container; an old pin verifies exact original member bytes retained by compaction, without rewriting stored runs.
 
 Why. The lake moves on: a file can change, be replaced or go. A saved run that followed it would not be the same run each time it is opened. Reading from what was stored keeps the run as it was, and the pin check keeps a series drawn from the lake from passing for the data the run read.
 
