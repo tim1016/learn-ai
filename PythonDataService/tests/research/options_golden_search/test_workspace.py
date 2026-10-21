@@ -8,7 +8,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from app.research.options_golden_search import workspace
+from app.research import options_evidence as workspace
 from app.routers import options_golden_search
 from app.schemas.golden_option_setups import GoldenOptionSetupView
 from app.schemas.options_backtest_runs import OptionsBacktestRunDetailResponse

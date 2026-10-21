@@ -55,7 +55,7 @@ async def workspace_evidence(
     comparator_run_id: Annotated[int | None, Query(ge=1, le=2**53-1)] = None,
 ) -> OptionsEvidenceWorkspace:
     from app.options_bots.golden import GoldenSetupError
-    from app.research.options_golden_search import workspace
+    from app.research import options_evidence as workspace
 
     try:
         return await workspace.read(kind, subject_id, inspected_study_id=inspected_study_id, comparator_run_id=comparator_run_id)
