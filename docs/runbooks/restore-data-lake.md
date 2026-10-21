@@ -36,6 +36,14 @@ Moving a backup to an SSD remains a separate owner action.
    and nights. Correct provider access first, then explicitly recover the
    blocked session with `retry_exhausted:true`; only its successful complete
    capture clears the block. A transient recovery failure leaves it blocked.
+   Full-chain capture shares `OPTION_ARCHIVE_STAGING_MAX_BYTES` (default 1 GiB)
+   across foreground and scheduled collectors, including retained ticker progress,
+   abandoned listing generations and session-publication temporary bytes. A full
+   budget pauses the pass before another request and appears as `capacity_pause`
+   with its recovery reason. Inspect available disk space and retained staging
+   before raising this setting and restarting the data service; repeat the capture
+   trigger afterward. Keep verified progress intact. This pause does not spend a
+   provider retry, stop independent backup, or authorize legacy-file retirement.
 6. Evening observations are reference data. Their JSON retains capture start/end,
    page receipts, field gaps, and only vendor timestamps on the corresponding
    nested metric. Compare a week's observations under

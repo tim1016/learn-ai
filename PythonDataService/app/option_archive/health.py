@@ -58,9 +58,11 @@ def project_health(state: dict[str, Any], *, now_ms: int, config: ArchiveSetting
         failure = next((row.get("reason") for row in reversed(list(rows.values())) if row.get("failed")), None)
         provider_block = state.get("provider_blocks", {}).get(symbol)
         failure = (f'{provider_block["reason"]}: {provider_block["detail"]}' if provider_block else failure) or job.get("failure")
+        capacity_reason = (job.get("pause_reason") if job.get("phase") == "capacity_pause" else None) or next(
+            (row.get("reason") for row in rows.values() if row.get("capacity_paused") and not row.get("complete")), None)
         at_risk = any(gap.permanent or (gap.days_left is not None and gap.days_left <= config.AT_RISK_DAYS) for gap in gaps)
-        severity = "failed" if failure else "at_risk" if at_risk else "catching_up" if gaps else "healthy"
-        reason = failure or ("Archive gaps need attention before their vendor deadline." if at_risk else
+        severity = "failed" if failure else "at_risk" if at_risk or capacity_reason else "catching_up" if gaps else "healthy"
+        reason = failure or capacity_reason or ("Archive gaps need attention before their vendor deadline." if at_risk else
             "The archive is catching up, oldest sessions first." if gaps else "Every required session has been archived.")
         if not config.ENABLED:
             severity, reason = "waiting", "Archive capture is disabled; enable it after reviewing the preservation runbook."

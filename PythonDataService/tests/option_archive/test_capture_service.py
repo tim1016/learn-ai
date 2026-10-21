@@ -153,6 +153,41 @@ async def test_owner_cancellation_and_shutdown_drain_the_session_collector(tmp_p
     assert stopped.is_set() and not service._session_tasks
 
 
+@respx.mock
+async def test_full_staging_budget_pauses_the_pass_and_remains_actionable(
+    fake_catalog, tmp_lake: Path,
+) -> None:
+    from app.data_lake.option_lake import OptionCaptureResult, OptionDataFailure
+
+    calls = []
+    budget = 256 * 1024**2
+    detail = "Archive staging capacity reached; review disk space and raise OPTION_ARCHIVE_STAGING_MAX_BYTES."
+    async def capture(symbol, day, **kwargs):
+        calls.append((symbol, day, kwargs["max_staging_bytes"]))
+        return OptionCaptureResult.failed(OptionDataFailure("lease_timeout", detail, symbol, day))
+    service = service_for(tmp_lake / "state.json", lambda: NOW)
+    service.config = ArchiveSettings(ENABLED=True, STAGING_MAX_BYTES=budget)
+    service.capture = capture
+    await service.capture_pass()
+    assert calls == [("SPY", DAY, budget)]
+    receipt = service.state.read()["jobs"]["capture"]
+    assert receipt["phase"] == "capacity_pause" and receipt["completed_day_ms"] is None
+    assert not service.capture_due(NOW + 1)
+    assert service.capture_due(NOW + 300_001)
+    row = service.state.read()["sessions"]["SPY"][str(session_open_ms_utc(DAY))]
+    assert not row["failed"] and row["retryable"] and row["capacity_paused"]
+    assert "provider_blocks" not in service.state.read() or not service.state.read()["provider_blocks"]
+    assert all(item.severity == "at_risk" and item.phase == "capacity_pause" and detail in item.reason
+               for item in service.health().underlyings)
+    await mount_run(fake_catalog, tmp_lake, spy_status=200)
+    service.capture = None
+    service.config = ArchiveSettings(ENABLED=True)
+    assert (await service.capture_session("SPY", session_open_ms_utc(DAY))).failure is None
+    spy = service.health().underlyings[0]
+    assert spy.phase == "waiting" and spy.severity == "healthy"
+    assert service.state.read()["jobs"]["capture"]["pause_reason"] is None
+
+
 @pytest.mark.parametrize("blocked_reason", ["provider_auth_error", "provider_entitlement_error"])
 async def test_provider_block_survives_other_retries_and_new_nights_until_correct_session_recovers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, blocked_reason: str,

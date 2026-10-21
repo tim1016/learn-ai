@@ -6,11 +6,14 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.data_lake.option_session_staging import DEFAULT_STAGING_MAX_BYTES
+
 
 class ArchiveSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="OPTION_ARCHIVE_", extra="ignore")
 
     ENABLED: bool = False
+    STAGING_MAX_BYTES: int = Field(default=DEFAULT_STAGING_MAX_BYTES, gt=0)
     CAPTURE_START_MINUTE_ET: int = Field(default=60, ge=0, le=1439)
     BACKUP_START_MINUTE_ET: int = Field(default=300, ge=0, le=1439)
     SNAPSHOT_DELAY_MS: int = Field(default=1_800_000, ge=0)

@@ -17,6 +17,7 @@ from app.data_lake import catalog_client
 from app.data_lake.admission import LakeAdmissionError
 from app.data_lake.option_lake import OptionCaptureResult, OptionDataFailure
 from app.data_lake.option_request_priority import archive_request
+from app.data_lake.option_session_staging import CAPACITY_PREFIX
 from app.data_lake.root_identity import active_root_id
 from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms_utc, session_window_for_date
 from app.option_archive.backup import (
@@ -48,6 +49,11 @@ from app.schemas.option_archive import OptionArchiveHealth
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 
 logger = logging.getLogger(__name__)
+
+
+def _capacity_pause(result: OptionCaptureResult) -> bool:
+    failure = result.failure
+    return failure is not None and failure.reason == "lease_timeout" and failure.detail.startswith(CAPACITY_PREFIX)
 
 
 def now_ms() -> int:
@@ -146,7 +152,7 @@ class OptionArchiveService:
             try:
                 result = await (self.capture or capture_option_session)(underlying, et_date_at_ms(session_ms), now_ms=self.clock(),
                     should_pause=self.should_pause, history_floor=archive_history_boundary(et_date_at_ms(self.clock())),
-                    retry_exhausted=retry_exhausted)
+                    retry_exhausted=retry_exhausted, max_staging_bytes=self.config.STAGING_MAX_BYTES)
                 stored = await asyncio.to_thread(read_option_session, underlying, et_date_at_ms(session_ms), check_underlying=True)
                 if stored is not None:
                     counts = {"listed": stored.listed_count, "answered": stored.answered_count,
@@ -159,14 +165,18 @@ class OptionArchiveService:
             retryable = failure is not None and failure.reason in {
                 "provider_rate_limited", "provider_api_error", "lease_timeout", "io_error",
             }
-            paused = failure is not None and failure.reason == "lease_timeout" and self.should_pause()
+            capacity_paused = _capacity_pause(result)
+            paused = capacity_paused or (failure is not None and failure.reason == "lease_timeout" and self.should_pause())
             reason = f"{failure.reason}: {failure.detail}" if failure is not None else None
             changes = dict(**counts, complete=failure is None,
                 failed=failure is not None and not paused, lost=failure is not None and failure.reason == "outside_data_plan",
-                reason=reason, ended_ms=self.clock(), retryable=retryable,
+                reason=reason, ended_ms=self.clock(), retryable=retryable, capacity_paused=capacity_paused,
                 blocked_day_ms=None if retryable or failure is None else et_midnight_ms(et_date_at_ms(self.clock())))
             def record_provider_access(state: dict[str, Any]) -> None:
                 state.setdefault("sessions", {}).setdefault(underlying, {}).setdefault(str(session_ms), {}).update(changes)
+                capture_job = state.get("jobs", {}).get("capture", {})
+                if failure is None and capture_job.get("phase") == "capacity_pause":
+                    capture_job.update(phase="waiting", pause_reason=None)
                 blocks = state.setdefault("provider_blocks", {})
                 if failure is not None and failure.reason in ("provider_auth_error", "provider_entitlement_error"):
                     blocks[underlying] = {"session_ms": session_ms, "reason": failure.reason,
@@ -208,7 +218,7 @@ class OptionArchiveService:
 
     async def capture_pass(self) -> None:
         started = self.clock()
-        await self._job_update("capture", started_ms=started, ended_ms=None, phase="capture", failure=None)
+        await self._job_update("capture", started_ms=started, ended_ms=None, phase="capture", failure=None, pause_reason=None)
         boundary = archive_history_boundary(et_date_at_ms(started))
         def preserve_window(state: dict[str, Any]) -> None:
             baseline = state.setdefault("baseline_ms", archive_baseline_ms(et_date_at_ms(started)))
@@ -237,6 +247,7 @@ class OptionArchiveService:
                             start_minute_et=self.config.CAPTURE_START_MINUTE_ET, margin_ms=self.config.REQUEST_OPEN_MARGIN_MS)
         blocked = set(state.get("provider_blocks", {}))
         paused = plan.phase in ("rth_pause", "waiting")
+        capacity_reason = None
         try:
             for work in plan.work:
                 if self.should_pause():
@@ -249,6 +260,9 @@ class OptionArchiveService:
                     continue
                 result = await self.capture_session(work.underlying, work.session_ms)
                 failure = result.failure
+                if failure is not None and _capacity_pause(result):
+                    capacity_reason = failure.detail
+                    break
                 if failure is not None and failure.reason in ("provider_auth_error", "provider_entitlement_error"):
                     blocked.add(work.underlying)
                 if failure is not None and failure.reason == "lease_timeout" and self.should_pause():
@@ -264,8 +278,13 @@ class OptionArchiveService:
             raise
         retryable = any(row.get("retryable") and not row.get("complete") and not row.get("lost")
             for entries in self.state.read().get("sessions", {}).values() for row in entries.values())
-        await self._job_update("capture", ended_ms=self.clock(), phase=("snapshot_pause" if self.snapshot_due(self.clock()) else "rth_pause") if paused else "complete",
-            completed_day_ms=None if paused or retryable else et_midnight_ms(et_date_at_ms(started)), retry_after_ms=self.clock() + 300_000)
+        phase = "complete"
+        if capacity_reason:
+            phase = "capacity_pause"
+        elif paused:
+            phase = "snapshot_pause" if self.snapshot_due(self.clock()) else "rth_pause"
+        await self._job_update("capture", ended_ms=self.clock(), phase=phase, pause_reason=capacity_reason,
+            completed_day_ms=None if paused or retryable or capacity_reason else et_midnight_ms(et_date_at_ms(started)), retry_after_ms=self.clock() + 300_000)
 
     async def snapshot_pass(self) -> None:
         start = self.clock()
