@@ -5036,6 +5036,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs-internal/options-backtest/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Prepare */
+        post: operations["prepare_api_jobs_internal_options_backtest_prepare_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs-internal/options-golden-search": {
         parameters: {
             query?: never;
@@ -24284,6 +24301,11 @@ export interface components {
          */
         OptionsBacktestJobRequest: {
             /**
+             * Benchmark Cache Mode
+             * @description Internal benchmark control; cold clears each worker once for this job, never financial identity.
+             */
+            benchmark_cache_mode?: ("cold" | "warm") | null;
+            /**
              * End Ms
              * @description New York midnight of the day after the range's last day. Any other instant is refused with a 400 and the code OPTIONS_BACKTEST_RANGE_NOT_ON_MIDNIGHT.
              */
@@ -24497,6 +24519,8 @@ export interface components {
             calendar_package_version: string;
             /** Created At Ms */
             created_at_ms: number;
+            /** Execution Metadata */
+            execution_metadata?: Record<string, never> | null;
             failure?: components["schemas"]["OptionsBacktestRunFailureResponse"] | null;
             /** Fee Policy */
             fee_policy: string;
@@ -24512,6 +24536,8 @@ export interface components {
             job_id: string;
             /** Last Session Open Ms */
             last_session_open_ms: number;
+            /** Phase Timings */
+            phase_timings?: components["schemas"]["PhaseTiming"][];
             /** Sessions Requested */
             sessions_requested: number;
             setup?: components["schemas"]["OptionsBacktestSetup-Output"] | null;
@@ -26754,6 +26780,25 @@ export interface components {
             trade_count?: number;
             /** Win Rate */
             win_rate?: number | null;
+        };
+        /** PhaseTiming */
+        PhaseTiming: {
+            /** Chain Key */
+            chain_key?: string | null;
+            /** Duration Ms */
+            duration_ms: number;
+            /** Finished At Ms */
+            finished_at_ms: number;
+            /** Phase */
+            phase: string;
+            /**
+             * Scope
+             * @default run
+             * @enum {string}
+             */
+            scope?: "run" | "chain";
+            /** Started At Ms */
+            started_at_ms: number;
         };
         /** PlanDefaults */
         PlanDefaults: {
@@ -42334,6 +42379,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    prepare_api_jobs_internal_options_backtest_prepare_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OptionsBacktestJobRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

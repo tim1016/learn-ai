@@ -42991,6 +42991,22 @@
         "additionalProperties": false,
         "description": "Body of ``POST /api/jobs-internal/options-backtest``: the setup, the half-open range, and the minted job id.\n\nThe range is ``[start_ms, end_ms)`` as Grid Search's window is: New York midnight of the first date to New York\nmidnight after the last. ``setup_name`` is the name the setup was saved under, when it was started from one.",
         "properties": {
+          "benchmark_cache_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "cold",
+                  "warm"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Internal benchmark control; cold clears each worker once for this job, never financial identity.",
+            "title": "Benchmark Cache Mode"
+          },
           "end_ms": {
             "description": "New York midnight of the day after the range's last day. Any other instant is refused with a 400 and the code OPTIONS_BACKTEST_RANGE_NOT_ON_MIDNIGHT.",
             "maximum": 253402300799999.0,
@@ -43471,6 +43487,17 @@
             "title": "Created At Ms",
             "type": "integer"
           },
+          "execution_metadata": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Metadata"
+          },
           "failure": {
             "anyOf": [
               {
@@ -43539,6 +43566,13 @@
             "minimum": 0.0,
             "title": "Last Session Open Ms",
             "type": "integer"
+          },
+          "phase_timings": {
+            "items": {
+              "$ref": "#/components/schemas/PhaseTiming"
+            },
+            "title": "Phase Timings",
+            "type": "array"
           },
           "sessions_requested": {
             "title": "Sessions Requested",
@@ -49796,6 +49830,60 @@
           "has_full_coverage"
         ],
         "title": "PerformanceHorizonResponse",
+        "type": "object"
+      },
+      "PhaseTiming": {
+        "additionalProperties": false,
+        "properties": {
+          "chain_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chain Key"
+          },
+          "duration_ms": {
+            "minimum": 0.0,
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "finished_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Finished At Ms",
+            "type": "integer"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "scope": {
+            "default": "run",
+            "enum": [
+              "run",
+              "chain"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "started_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Started At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "phase",
+          "started_at_ms",
+          "finished_at_ms",
+          "duration_ms"
+        ],
+        "title": "PhaseTiming",
         "type": "object"
       },
       "PlanDefaults": {
@@ -85046,6 +85134,63 @@
           }
         },
         "summary": "Start Options Backtest Job",
+        "tags": [
+          "jobs-internal"
+        ]
+      }
+    },
+    "/api/jobs-internal/options-backtest/prepare": {
+      "post": {
+        "operationId": "prepare_api_jobs_internal_options_backtest_prepare_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OptionsBacktestJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Prepare",
         "tags": [
           "jobs-internal"
         ]
