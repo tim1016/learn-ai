@@ -1,13 +1,14 @@
-"""Decode restored artifacts with their normal readers, admitting bytes against the backed-up receipts."""
+"""Decode restored artifacts with their normal readers, admitting bytes against the restored catalog's receipts."""
 from __future__ import annotations
 
 import hashlib
 import os
 from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path, PurePosixPath
+from typing import Any
 from uuid import UUID
 
 from app.data_lake.bar_validation import assert_publishable_stored_minute_bars
@@ -34,17 +35,57 @@ from app.data_lake.path_policy import (
 from app.engine.data.lean_format import LeanDailyDataReader
 from app.engine.live.identity import confine_path_to_root
 from app.lean_sidecar.trading_calendar import session_window_for_date
-from app.option_archive.backup import BackupFile, BackupManifest, BackupRefusedError, require_work_window
+from app.option_archive.backup import BackupRefusedError, require_work_window
 from app.option_archive.snapshot import ChainObservation, snapshot_path
 from app.options.contract import OptionContract
 from app.utils.session_anchors import et_date_at_ms
 
 
 @dataclass(frozen=True)
+class RestoredArtifact:
+    """One complete row of the restored catalog: the receipt its file is admitted by and the identity its reader must match."""
+
+    id: int
+    root_id: str
+    mode: str
+    file_path: str
+    sha256: str
+    size_bytes: int
+    artifact_kind: str
+    market: str | None
+    symbol: str | None
+    trading_date: date | None
+    resolution: str | None
+    data_type: str | None
+
+
+async def read_restored_catalog(connection: Any, schema: str) -> tuple[RestoredArtifact, ...]:
+    """Every complete row of the restored catalog, as the rows themselves say it.
+
+    A row no reader could admit (it names no mode, digest or size) is refused
+    here, so a restored catalog that normal admission rejects cannot pass.
+    """
+    rows = await connection.fetch(f'''SELECT "Id", "DataRootId", "PriceAdjustmentMode", "FilePath", "FileSha256",
+        "FileSizeBytes", "ArtifactKind", "Market", "Symbol", "TradingDate", "Resolution", "DataType"
+        FROM "{schema}"."DataLakeArtifacts" WHERE "Status"='complete' ORDER BY "Id"''')
+    artifacts = []
+    for row in rows:
+        missing = next((label for label, value in (("price-adjustment mode", row["PriceAdjustmentMode"]),
+            ("digest", row["FileSha256"]), ("size", row["FileSizeBytes"])) if value is None), None)
+        if missing is not None:
+            raise BackupRefusedError(f"restored catalog row {row['Id']} is complete without a {missing}, so no reader can admit its file")
+        artifacts.append(RestoredArtifact(id=row["Id"], root_id=str(row["DataRootId"]), mode=row["PriceAdjustmentMode"],
+            file_path=row["FilePath"], sha256=row["FileSha256"], size_bytes=row["FileSizeBytes"],
+            artifact_kind=row["ArtifactKind"], market=row["Market"], symbol=row["Symbol"],
+            trading_date=row["TradingDate"], resolution=row["Resolution"], data_type=row["DataType"]))
+    return tuple(artifacts)
+
+
+@dataclass(frozen=True)
 class _Restored:
     """One committed artifact as restored, and the admission its reader must use."""
 
-    item: BackupFile
+    item: RestoredArtifact
     path: PurePosixPath
     mode_root: Path
     payload: bytes
@@ -58,9 +99,9 @@ class _Restored:
 
     @property
     def day(self) -> date:
-        if self.item.session_ms is None:
+        if self.item.trading_date is None:
             raise BackupRefusedError("restored receipt lacks its session")
-        return et_date_at_ms(self.item.session_ms)
+        return self.item.trading_date
 
     def expect(self, expected: PurePosixPath) -> None:
         if self.path != expected:
@@ -170,34 +211,39 @@ def _layout(path: PurePosixPath) -> tuple[str, str | None]:
     return "lean-metadata", None
 
 
-def decode_restored_lake(manifest: BackupManifest, roots: Mapping[str, Path], *,
+def decode_restored_lake(artifacts: Sequence[RestoredArtifact], roots: Mapping[str, Path], *,
                          should_pause: Callable[[], bool] = lambda: False) -> dict[str, int]:
-    """Admit each restored artifact against its backed-up receipt and decode it with its normal reader."""
-    receipts = {confine_path_to_root(roots[item.root_id] / item.relative_path, roots[item.root_id], label="restored file"): item
-                for item in manifest.files}
+    """Admit each restored file against its restored catalog row and decode it with its normal reader."""
+    def mode_root(artifact: RestoredArtifact) -> Path:
+        root = roots.get(artifact.root_id)
+        if root is None:
+            raise BackupRefusedError("restored catalog names a root the generation does not hold")
+        return lake_root_within(root, artifact.mode)
+
+    files: dict[Path, tuple[RestoredArtifact, ...]] = {}
+    for artifact in artifacts:
+        path = confine_path_to_root(mode_root(artifact) / artifact.file_path, mode_root(artifact), label="restored file")
+        files[path] = (*files.get(path, ()), artifact)
 
     def admission(path: Path) -> bytes:
-        item = receipts.get(Path(os.path.realpath(path)))
-        if item is None or not item.artifact_ids:
+        rows = files.get(Path(os.path.realpath(path)))
+        if not rows:
             raise BackupRefusedError("restored file has no committed catalog receipt")
         payload = path.read_bytes()
-        if hashlib.sha256(payload).hexdigest() != item.sha256 or len(payload) != item.size_bytes:
+        digest = hashlib.sha256(payload).hexdigest()
+        if not any(row.sha256 == digest and row.size_bytes == len(payload) for row in rows):
             raise BackupRefusedError("restored bytes differ from their committed receipt")
         return payload
 
     counts: Counter[str] = Counter()
-    for path, item in receipts.items():
-        require_work_window(should_pause)
-        if item.artifact_kind is None:
-            continue
-        relative = PurePosixPath(item.relative_path)
-        if len(relative.parts) < 3 or relative.parts[0] != "lake":
-            raise BackupRefusedError("catalog artifact is outside its mode root")
-        artifact = PurePosixPath(*relative.parts[2:])
-        layout, market = _layout(artifact)
-        decoder = _DECODERS.get((item.artifact_kind, item.resolution, layout))
-        if decoder is None or (market is not None and item.market != market):
-            raise BackupRefusedError("artifact kind has no canonical restore decoder")
-        decoder(_Restored(item, artifact, lake_root_within(roots[item.root_id], relative.parts[1]), admission(path), admission))
-        counts[item.artifact_kind] += 1
+    for path, rows in files.items():
+        for item in rows:
+            require_work_window(should_pause)
+            artifact = PurePosixPath(item.file_path)
+            layout, market = _layout(artifact)
+            decoder = _DECODERS.get((item.artifact_kind, item.resolution, layout))
+            if decoder is None or (market is not None and item.market != market):
+                raise BackupRefusedError("artifact kind has no canonical restore decoder")
+            decoder(_Restored(item, artifact, mode_root(item), admission(path), admission))
+            counts[item.artifact_kind] += 1
     return dict(counts)

@@ -42,7 +42,7 @@ from app.option_archive.planner import (
     plan_archive,
     regular_hours_pause,
 )
-from app.option_archive.restored_reads import decode_restored_lake
+from app.option_archive.restored_reads import decode_restored_lake, read_restored_catalog
 from app.option_archive.scheduler import ArchiveJob, ArchiveScheduler, JobOwnership, PostgresJobOwnership
 from app.option_archive.settings import STATE_FILE_NAME, ArchiveSettings, archive_settings
 from app.option_archive.snapshot import ChainObservation, SnapshotOutsideWindowError, observe_chain, save_observation
@@ -356,7 +356,8 @@ class OptionArchiveService:
                 with tempfile.TemporaryDirectory(prefix="lake-restore-") as folder:
                     roots = {root_id: Path(folder) / root_id for root_id in manifest.root_ids}
                     await restore_generation(generation=generation, roots=roots, connection=connection, schema=schema, should_pause=self._maintenance_pause)
-                    counts = await bounded_file_work(lambda paused: decode_restored_lake(manifest, roots, should_pause=paused),
+                    artifacts = await read_restored_catalog(connection, schema)
+                    counts = await bounded_file_work(lambda paused: decode_restored_lake(artifacts, roots, should_pause=paused),
                                                      self._maintenance_pause)
                     restored_count = await connection.fetchval(f'SELECT COUNT(*) FROM "{schema}"."DataLakeArtifacts"')
                     if restored_count != manifest.catalog_rows:

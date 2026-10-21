@@ -15,7 +15,6 @@ import shutil
 import threading
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import ExitStack, contextmanager
-from datetime import date
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -27,7 +26,6 @@ from app.data_lake.maintenance import lake_activity
 from app.data_lake.path_policy import lake_container_within, lake_root_within, lake_subpath
 from app.data_lake.root_identity import LakeRootIdentityError, resolve_root_context
 from app.engine.live.identity import confine_path_to_root
-from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.option_archive import lake_restore
 from app.option_archive.settings import STATE_FILE_NAME
 from app.research.runs.hashing import canonical_json
@@ -65,14 +63,7 @@ class BackupFile(BaseModel):
     relative_path: str
     sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     size_bytes: int = Field(ge=0)
-    artifact_kind: str | None = None
     artifact_ids: list[int] = []
-    symbol: str | None = None
-    session_ms: int | None = None
-    resolution: str | None = None
-    data_type: str | None = None
-    market: str | None = None
-    row_count: int | None = None
 
 
 class BackupManifest(BaseModel):
@@ -161,15 +152,14 @@ async def dump_catalog(path: Path) -> CatalogSnapshot:
         schema = await lake_restore.catalog_schema_hash(connection)
         migrations = await connection.fetch("SELECT version FROM public.schema_migrations ORDER BY version")
         rows = await connection.fetch('''SELECT "Id", "DataRootId", "PriceAdjustmentMode", "FilePath",
-            "FileSha256", "FileSizeBytes", "ArtifactKind", "Symbol", "TradingDate", "Resolution", "DataType", "Market", "RowCount" FROM "DataLakeArtifacts"
-            WHERE "Status"='complete' ORDER BY "Id"''')
+            "FileSha256", "FileSizeBytes" FROM "DataLakeArtifacts" WHERE "Status"='complete' ORDER BY "Id"''')
         count = await connection.fetchval('SELECT COUNT(*) FROM "DataLakeArtifacts"')
         with path.open("xb") as output:
             await connection.copy_from_query('SELECT * FROM "DataLakeArtifacts" ORDER BY "Id"', output=output, format="binary")
             output.flush()
             os.fsync(output.fileno())
     return CatalogSnapshot(schema_hash=schema, row_count=count, migration_ids=[row["version"] for row in migrations],
-                           files=[{key: str(value) if isinstance(value, UUID) else session_open_ms_utc(value) if isinstance(value, date) else value for key, value in dict(row).items()} for row in rows])
+                           files=[{key: str(value) if isinstance(value, UUID) else value for key, value in dict(row).items()} for row in rows])
 
 
 def _put_object(destination: Path, payload: bytes, expected: str | None = None) -> str:
@@ -215,9 +205,7 @@ def _copy_snapshot_files(destination: Path, roots: Mapping[str, Path], snapshot:
             previous.artifact_ids.append(row["Id"])
         else:
             indexed[key] = BackupFile(root_id=root_id, relative_path=relative.as_posix(), sha256=digest,
-                size_bytes=len(payload), artifact_kind=row["ArtifactKind"], artifact_ids=[row["Id"]],
-                symbol=row["Symbol"], session_ms=row["TradingDate"], resolution=row["Resolution"],
-                data_type=row["DataType"], market=row["Market"], row_count=row.get("RowCount"))
+                size_bytes=len(payload), artifact_ids=[row["Id"]])
     for root_id, root in roots.items():
         try:
             resolve_root_context(UUID(root_id), base_root=root)

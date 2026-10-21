@@ -46,8 +46,7 @@ def source(tmp_path: Path) -> tuple[Path, dict[str, Path], Path, CatalogSnapshot
     destination.mkdir()
     (destination / ".backup-destination.json").write_text(json.dumps({"host_destination": str(tmp_path / "host-backup")}))
     row = {"Id": 5, "DataRootId": str(root_id), "PriceAdjustmentMode": "raw", "FilePath": "equity/usa/spy.csv",
-           "FileSha256": hashlib.sha256(path.read_bytes()).hexdigest(), "FileSizeBytes": len(path.read_bytes()),
-           "ArtifactKind": "metadata", "Symbol": "SPY", "TradingDate": None, "Resolution": None, "DataType": None, "Market": "usa"}
+           "FileSha256": hashlib.sha256(path.read_bytes()).hexdigest(), "FileSizeBytes": len(path.read_bytes())}
     snapshot = CatalogSnapshot(schema_hash=SCHEMA_HASH, row_count=1, migration_ids=["v1"], files=[row])
     return destination, {str(root_id): root}, path, snapshot
 

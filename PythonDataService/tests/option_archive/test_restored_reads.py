@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
@@ -13,8 +14,7 @@ from app.data_lake.derived_quote import build_minute_quote_zip_bytes
 from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes
 from app.data_lake.option_session_repack import repack_option_session
 from app.data_lake.root_identity import active_root_id
-from app.option_archive.backup import BackupFile, BackupManifest
-from app.option_archive.restored_reads import decode_restored_lake
+from app.option_archive.restored_reads import RestoredArtifact, decode_restored_lake
 from app.option_archive.snapshot import ChainObservation, snapshot_path
 from app.options.contract import OptionContract
 from app.utils.timestamps import ny_datetime
@@ -32,7 +32,7 @@ from tests.options_backtest._lake import tmp_lake as tmp_lake
 
 
 @pytest.fixture
-async def decoded_lake(fake_catalog, tmp_lake: Path) -> tuple[BackupManifest, dict[str, Path]]:
+async def decoded_lake(fake_catalog, tmp_lake: Path) -> tuple[list[RestoredArtifact], dict[str, Path]]:
     root_id = str(active_root_id())
     raw = tmp_lake / "lake/raw"
     bars = [MinuteTradeBar(ny_datetime(FRIDAY_OPEN_MS), *([Decimal('500')] * 4), Decimal('1'))]
@@ -61,21 +61,20 @@ async def decoded_lake(fake_catalog, tmp_lake: Path) -> tuple[BackupManifest, di
     snapshot = raw / str(snapshot_path(observation))
     snapshot.parent.mkdir(parents=True)
     snapshot.write_text(observation.model_dump_json())
-    rows = {"lake/raw/" + row["file_path"]: row for row in fake_catalog.rows.values() if row["status"] == "complete"}
-    files = []
-    for index, path in enumerate(sorted((tmp_lake / "lake").rglob("*")), 1):
+    rows = {row["file_path"]: row for row in fake_catalog.rows.values() if row["status"] == "complete"}
+    artifacts = []
+    for path in sorted((tmp_lake / "lake/raw").rglob("*")):
         if not path.is_file():
             continue
-        relative = path.relative_to(tmp_lake).as_posix()
-        artifact = relative.removeprefix("lake/raw/")
+        artifact = path.relative_to(tmp_lake / "lake/raw").as_posix()
         fields = {}
-        if relative in rows:
-            row = rows[relative]
+        if artifact in rows:
+            row = rows[artifact]
             fields = dict(artifact_kind=row["artifact_kind"], symbol=row["symbol"], market=row["market"],
-                          session_ms=FRIDAY_OPEN_MS if row.get("trading_date") else None,
-                          resolution=row["resolution"], data_type=row["data_type"])
+                          trading_date=row["trading_date"], resolution=row["resolution"], data_type=row["data_type"])
         elif artifact in sources:
-            fields = dict(artifact_kind="time_series_bars", symbol="SPY", market="usa", session_ms=FRIDAY_OPEN_MS,
+            minute = sources[artifact][1] == "minute"
+            fields = dict(artifact_kind="time_series_bars", symbol="SPY", market="usa", trading_date=FRIDAY if minute else None,
                           resolution=sources[artifact][1], data_type=sources[artifact][2])
         elif path in (factor, mapping):
             fields = dict(artifact_kind="factor_file" if path == factor else "map_file", symbol="SPY", market="usa")
@@ -83,18 +82,18 @@ async def decoded_lake(fake_catalog, tmp_lake: Path) -> tuple[BackupManifest, di
             fields = dict(artifact_kind="metadata")
         elif path == snapshot:
             fields = dict(artifact_kind="metadata", symbol="SPY", market="usa_options")
-        payload = path.read_bytes()
-        files.append(BackupFile(root_id=root_id, relative_path=relative, sha256=hashlib.sha256(payload).hexdigest(),
-                                size_bytes=len(payload), artifact_ids=[index] if fields else [], **fields))
-    manifest = BackupManifest(generation_id="a" * 32, started_ms=1000, completed_ms=2000, schema_hash="test",
-        catalog_sha256="a" * 64, catalog_rows=len(files), root_ids=[root_id], files=files, migration_ids=[], restore_files={})
-    return manifest, {root_id: tmp_lake}
+        if fields:
+            payload = path.read_bytes()
+            artifacts.append(RestoredArtifact(id=len(artifacts) + 1, root_id=root_id, mode="raw", file_path=artifact,
+                sha256=hashlib.sha256(payload).hexdigest(), size_bytes=len(payload),
+                **{"market": None, "symbol": None, "trading_date": None, "resolution": None, "data_type": None, **fields}))
+    return artifacts, {root_id: tmp_lake}
 
 
 async def test_all_kinds_partial_empty_and_traded_decode_without_provider_access(decoded_lake: tuple) -> None:
-    manifest, roots = decoded_lake
+    artifacts, roots = decoded_lake
     with respx.mock(assert_all_called=False):
-        counts = decode_restored_lake(manifest, roots)
+        counts = decode_restored_lake(artifacts, roots)
     assert set(counts) == {"time_series_bars", "metadata", "factor_file", "map_file"}
     assert counts["time_series_bars"] == 6
 
@@ -103,10 +102,11 @@ async def test_all_kinds_partial_empty_and_traded_decode_without_provider_access
 async def test_hash_admitted_corruption_still_fails_canonical_decoder(decoded_lake: tuple, damage: str) -> None:
     import io
     import zipfile
-    manifest, roots = decoded_lake
+    artifacts, roots = decoded_lake
     suffix = "equity/usa/map_files/spy.csv" if damage == "map_date" else "equity/usa/minute/spy/20250613_trade.zip"
-    item = next(item for item in manifest.files if item.relative_path.endswith(suffix))
-    path = roots[item.root_id] / item.relative_path
+    index = next(index for index, item in enumerate(artifacts) if item.file_path.endswith(suffix))
+    item = artifacts[index]
+    path = roots[item.root_id] / "lake/raw" / item.file_path
     if damage == "map_date":
         payload = b"not-a-date,spy\nnot-a-date,spy\n"
     else:
@@ -115,19 +115,20 @@ async def test_hash_admitted_corruption_still_fails_canonical_decoder(decoded_la
             archive.writestr("20250613_spy_minute_trade.csv", "90000000,5000000,5000000,5000000,5000000,1\n")
         payload = buffer.getvalue()
     path.write_bytes(payload)
-    item.sha256, item.size_bytes = hashlib.sha256(payload).hexdigest(), len(payload)
+    artifacts[index] = replace(item, sha256=hashlib.sha256(payload).hexdigest(), size_bytes=len(payload))
     with pytest.raises(ValueError):
-        decode_restored_lake(manifest, roots)
+        decode_restored_lake(artifacts, roots)
 
 
 @pytest.mark.parametrize("kind", ["metadata", "session"])
 async def test_reader_cannot_substitute_another_inventory_file_for_wrong_path(decoded_lake: tuple, kind: str) -> None:
     from app.option_archive.backup import BackupRefusedError
-    manifest, roots = decoded_lake
-    item = next(item for item in manifest.files if
-        ("/session/v1/" in item.relative_path if kind == "session" else "/market-hours/" in item.relative_path))
-    source = roots[item.root_id] / item.relative_path
-    item.relative_path = item.relative_path.replace(source.name, "wrong-" + source.name)
-    (roots[item.root_id] / item.relative_path).write_bytes(source.read_bytes())
+    artifacts, roots = decoded_lake
+    index = next(index for index, item in enumerate(artifacts) if
+        ("/session/v1/" in item.file_path if kind == "session" else item.file_path.startswith("market-hours/")))
+    item = artifacts[index]
+    source = roots[item.root_id] / "lake/raw" / item.file_path
+    artifacts[index] = replace(item, file_path=item.file_path.replace(source.name, "wrong-" + source.name))
+    (roots[item.root_id] / "lake/raw" / artifacts[index].file_path).write_bytes(source.read_bytes())
     with pytest.raises(BackupRefusedError):
-        decode_restored_lake(manifest, roots)
+        decode_restored_lake(artifacts, roots)
