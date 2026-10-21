@@ -13,7 +13,8 @@ import os
 import shutil
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from datetime import date
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -26,11 +27,21 @@ from app.data_lake.atomic import _fsync_path
 from app.data_lake.maintenance import lake_activity
 from app.data_lake.root_identity import read_marker
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
+from app.utils.advisory_lock import try_advisory_file_lock
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
 class BackupRefusedError(RuntimeError):
     """The chosen generation cannot establish a recoverable lake/catalog pair."""
+
+
+@contextmanager
+def backup_destination_activity(destination: Path) -> Iterator[None]:
+    """Order rollback protection and retention as one destination transaction (#3432)."""
+    with try_advisory_file_lock(destination.resolve(strict=True) / "retention") as acquired:
+        if not acquired:
+            raise BackupRefusedError("backup retention or rollback protection is active; retry later")
+        yield
 
 
 class BackupPausedError(BackupRefusedError):
@@ -344,48 +355,49 @@ def manifest_digest(generation: Path) -> str:
 
 def prune_generations(destination: Path, *, daily_keep: int = 7, weekly_keep: int = 4,
                       should_pause: Callable[[], bool] = lambda: False) -> None:
-    checked: list[tuple[Path, BackupManifest]] = []
-    for directory in (destination / "generations").iterdir():
-        _require_work_window(should_pause)
-        if directory.name.startswith("."):
-            continue
-        checked.append((directory, verify_generation(directory, should_pause=should_pause)))
-    checked.sort(key=lambda item: item[1].completed_ms, reverse=True)
-    retained = {path for path, _ in checked[:max(1, daily_keep)]}
-    pins = destination / "retention-pins"
-    now = time.time_ns() // 1_000_000
-    for path, manifest in checked:
-        _require_work_window(should_pause)
-        pin_path = pins / (manifest.generation_id + ".json")
-        if not pin_path.exists():
-            continue
-        pin = json.loads(pin_path.read_bytes())
-        if pin.get("manifest_sha256") != manifest_digest(path):
-            raise BackupRefusedError("retention pin does not match its verified generation")
-        if type(pin.get("retain_until_ms")) is not int:
-            raise BackupRefusedError("retention pin has an invalid rollback deadline")
-        if pin["retain_until_ms"] > now:
-            retained.add(path)
-    weeks: set[int] = set()
-    for path, manifest in checked:
-        _require_work_window(should_pause)
-        week = manifest.completed_ms // 604_800_000
-        if week not in weeks and len(weeks) < weekly_keep:
-            retained.add(path)
-            weeks.add(week)
-    referenced: set[str] = set()
-    for path, manifest in checked:
-        _require_work_window(should_pause)
-        if path in retained:
-            referenced.update(item.sha256 for item in manifest.files)
-            referenced.update(manifest.root_markers.values())
-            referenced.update(manifest.restore_files.values())
-        else:
-            shutil.rmtree(path)
-    for path in (destination / "objects").iterdir():
-        _require_work_window(should_pause)
-        if path.name not in referenced and not path.name.startswith("."):
-            path.unlink()
+    with backup_destination_activity(destination):
+        checked: list[tuple[Path, BackupManifest]] = []
+        for directory in (destination / "generations").iterdir():
+            _require_work_window(should_pause)
+            if directory.name.startswith("."):
+                continue
+            checked.append((directory, verify_generation(directory, should_pause=should_pause)))
+        checked.sort(key=lambda item: item[1].completed_ms, reverse=True)
+        retained = {path for path, _ in checked[:max(1, daily_keep)]}
+        pins = destination / "retention-pins"
+        now = time.time_ns() // 1_000_000
+        for path, manifest in checked:
+            _require_work_window(should_pause)
+            pin_path = pins / (manifest.generation_id + ".json")
+            if not pin_path.exists():
+                continue
+            pin = json.loads(pin_path.read_bytes())
+            if pin.get("manifest_sha256") != manifest_digest(path):
+                raise BackupRefusedError("retention pin does not match its verified generation")
+            if type(pin.get("retain_until_ms")) is not int:
+                raise BackupRefusedError("retention pin has an invalid rollback deadline")
+            if pin["retain_until_ms"] > now:
+                retained.add(path)
+        weeks: set[int] = set()
+        for path, manifest in checked:
+            _require_work_window(should_pause)
+            week = manifest.completed_ms // 604_800_000
+            if week not in weeks and len(weeks) < weekly_keep:
+                retained.add(path)
+                weeks.add(week)
+        referenced: set[str] = set()
+        for path, manifest in checked:
+            _require_work_window(should_pause)
+            if path in retained:
+                referenced.update(item.sha256 for item in manifest.files)
+                referenced.update(manifest.root_markers.values())
+                referenced.update(manifest.restore_files.values())
+            else:
+                shutil.rmtree(path)
+        for path in (destination / "objects").iterdir():
+            _require_work_window(should_pause)
+            if path.name not in referenced and not path.name.startswith("."):
+                path.unlink()
 
 
 async def restore_generation(*, generation: Path, roots: Mapping[str, Path], connection: Any,

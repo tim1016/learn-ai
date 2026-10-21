@@ -117,3 +117,22 @@ async def test_apply_requires_exact_approval_and_excludes_active_readers(fake_ca
         await apply_retirement(approval=approval(plan.digest), **args)
     assert (raw_root(tmp_lake) / rows[0].file_path).exists()
     assert not args["journal"].exists()
+
+
+@respx.mock
+async def test_apply_rechecks_rollback_deadline_after_backup_verification(
+    fake_catalog: FakeCatalog, tmp_lake: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.data_lake.option_retirement as retirement
+
+    generation, receipt, rows = await prepare(fake_catalog, tmp_lake, tmp_path / "backup")
+    plan = await asyncio.to_thread(plan_retirement, mode_root=raw_root(tmp_lake), sources=rows,
+                                  generation=generation, restore_receipt=receipt, now_ms=1200)
+    plan = plan.model_copy(update={"rollback_until_ms": 1301})
+    ticks = iter((0.0, 0.0, 1.0))
+    monkeypatch.setattr(retirement, "monotonic", lambda: next(ticks))
+    with pytest.raises(RetirementRefusedError, match="expired"):
+        await apply_retirement(plan=plan, approval=approval(plan.digest), mode_root=raw_root(tmp_lake),
+            generation=generation, restore_receipt=receipt, journal=tmp_path / "journal.json", now_ms=1300)
+    assert (raw_root(tmp_lake) / rows[0].file_path).exists()
+    assert not (tmp_path / "journal.json").exists()

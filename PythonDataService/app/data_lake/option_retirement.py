@@ -11,8 +11,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from time import monotonic
 from typing import TYPE_CHECKING, Annotated, Literal
 from uuid import UUID
 
@@ -210,29 +211,44 @@ async def apply_retirement(
     restore_receipt: Path, journal: Path, now_ms: int,
 ) -> int:
     """Apply exactly the approved plan, under root exclusion and catalog row locks."""
-    from app.option_archive.backup import manifest_digest
+    from app.option_archive.backup import BackupRefusedError, backup_destination_activity, manifest_digest
 
-    if (_root_id(mode_root) != plan.root_id or approval.plan_sha256 != plan.digest
-            or not plan.created_at_ms <= approval.approved_at_ms <= now_ms < plan.rollback_until_ms):
-        raise RetirementRefusedError("approval, root or bounded rollback interval does not match this plan")
-    manifest = await asyncio.to_thread(_restore_evidence, generation, restore_receipt, now_ms=now_ms)
-    if manifest.generation_id != plan.generation_id or manifest_digest(generation) != plan.manifest_sha256:
-        raise RetirementRefusedError("the approved restore point changed")
-    evidence = {"plan_sha256": plan.digest, "approval": approval.model_dump(mode="json")}
-    with lake_activity(mode_root, exclusive=True):
-        if journal.exists() and json.loads(journal.read_bytes()) != evidence:
-            raise RetirementRefusedError("retirement journal belongs to another approved plan")
-        atomic_write_bytes(journal, canonical_json(evidence).encode())
-        pin = generation.parent.parent / "retention-pins" / f"{plan.generation_id}.json"
-        atomic_write_bytes(pin, canonical_json({
-            "manifest_sha256": plan.manifest_sha256, "retain_until_ms": plan.rollback_until_ms,
-        }).encode())
-        for source in plan.sources:
-            await _retire_source(plan, source, mode_root)
+    started = monotonic()
+
+    def require_rollback_window() -> None:
+        current_ms = now_ms + int((monotonic() - started) * 1000)
+        if not plan.created_at_ms <= approval.approved_at_ms <= current_ms < plan.rollback_until_ms:
+            raise RetirementRefusedError("the approved bounded rollback interval expired")
+
+    if _root_id(mode_root) != plan.root_id or approval.plan_sha256 != plan.digest:
+        raise RetirementRefusedError("approval or root does not match this plan")
+    require_rollback_window()
+    try:
+        # Pruning cannot select/remove this generation between verification,
+        # pin publication and the last destructive catalog transaction.
+        with backup_destination_activity(generation.parent.parent):
+            manifest = await asyncio.to_thread(_restore_evidence, generation, restore_receipt, now_ms=now_ms)
+            if manifest.generation_id != plan.generation_id or manifest_digest(generation) != plan.manifest_sha256:
+                raise RetirementRefusedError("the approved restore point changed")
+            require_rollback_window()
+            evidence = {"plan_sha256": plan.digest, "approval": approval.model_dump(mode="json")}
+            with lake_activity(mode_root, exclusive=True):
+                if journal.exists() and json.loads(journal.read_bytes()) != evidence:
+                    raise RetirementRefusedError("retirement journal belongs to another approved plan")
+                atomic_write_bytes(journal, canonical_json(evidence).encode())
+                pin = generation.parent.parent / "retention-pins" / f"{plan.generation_id}.json"
+                atomic_write_bytes(pin, canonical_json({
+                    "manifest_sha256": plan.manifest_sha256, "retain_until_ms": plan.rollback_until_ms,
+                }).encode())
+                for source in plan.sources:
+                    await _retire_source(plan, source, mode_root, require_rollback_window)
+    except BackupRefusedError as exc:
+        raise RetirementRefusedError(str(exc)) from exc
     return len(plan.sources)
 
 
-async def _retire_source(plan: RetirementPlan, source: RetirementSource, root: Path) -> None:
+async def _retire_source(plan: RetirementPlan, source: RetirementSource, root: Path,
+                         require_rollback_window: Callable[[], None]) -> None:
     from app.data_lake.path_policy import OptionSessionPath
 
     day = et_date_at_ms(source.session_ms)
@@ -271,7 +287,9 @@ async def _retire_source(plan: RetirementPlan, source: RetirementSource, root: P
             payload = await asyncio.to_thread(path.read_bytes)
             if hashlib.sha256(payload).hexdigest() != source.sha256 or len(payload) != source.size_bytes:
                 raise RetirementRefusedError("legacy source bytes changed after approval")
+            require_rollback_window()
             await asyncio.to_thread(path.unlink)
             await asyncio.to_thread(fsync_parent_dir, path)
         if row is not None:
+            require_rollback_window()
             await connection.execute('DELETE FROM "DataLakeArtifacts" WHERE "Id"=$1', source.artifact_id)

@@ -73,11 +73,17 @@ async def _result(connection: asyncpg.Connection, run_id: int) -> BenchmarkResul
         return None
     if stored.execution_metadata is None or not stored.phase_timings:
         return None
+    saves = [span for span in stored.phase_timings if span.scope == "run" and span.phase == "save"]
+    if len(saves) != 1:
+        return None
+    saved = saves[0]
+    if not (stored.record.created_at_ms <= saved.started_at_ms <= stored.record.finished_at_ms <= saved.finished_at_ms):
+        return None
     result = await saved_runs.read_result(connection, run_id)
     if result is None:
         return None
     return BenchmarkResultResponse(
-        run_id=run_id, accepted_at_ms=stored.record.created_at_ms, saved_at_ms=stored.record.finished_at_ms,
+        run_id=run_id, accepted_at_ms=stored.record.created_at_ms, saved_at_ms=saved.finished_at_ms,
         result_digest=result_sha256(result), phase_timings=list(stored.phase_timings),
         execution_metadata=stored.execution_metadata,
     )
