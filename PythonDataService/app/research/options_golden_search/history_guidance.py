@@ -4,7 +4,7 @@ Formula: maximize end - start between trading dates with development =
   train + k * test months, k >= 1, followed by final months;
   equal spans prefer the latest end.
 Reference: app/research/walk_forward_study/folds.py and
-  app/research/options_golden_search/planning.py::freeze_protocol.
+  app/research/options_golden_search/planning.py::final_window_start.
 Canonical implementation: this file.
 Validated against: tests/research/options_golden_search/test_history_guidance.py.
 """
@@ -13,7 +13,8 @@ from __future__ import annotations
 from datetime import timedelta
 
 from app.lean_sidecar.trading_calendar import expected_sessions, previous_completed_session_close_ms
-from app.research.walk_forward_study.folds import add_months, plan_folds
+from app.research.options_golden_search.planning import final_window_start
+from app.research.walk_forward_study.folds import add_months
 from app.schemas.options_golden_search import HistoryGuidance, HistoryGuidanceRequest
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 from app.utils.timestamps import now_ms_utc
@@ -41,9 +42,9 @@ def history_guidance(request: HistoryGuidanceRequest, *, now_ms: int | None = No
         for count in range(max_folds, 0, -1):
             final_start = add_months(start, request.train_months + count * request.test_months)
             end = add_months(final_start, request.final_months)
-            if end > until or end - timedelta(days=1) not in session_days or add_months(end, -request.final_months) != final_start:
+            if end > until or end - timedelta(days=1) not in session_days or final_window_start(end, request.final_months) != final_start:
                 continue
-            candidate = ((end - start).days, end, start, final_start)
+            candidate = ((end - start).days, end, start, final_start, count)
             if best is None or candidate > best:
                 best = candidate
             break
@@ -53,15 +54,13 @@ def history_guidance(request: HistoryGuidanceRequest, *, now_ms: int | None = No
             f"{request.test_months} forward-test months and {request.final_months} final-test months. "
             "Reduce the window lengths or capture more history, then reload the setup."
         )
-    _, end, start, final_start = best
-    folds = plan_folds(start=start, end_exclusive=final_start,
-                       training_months=request.train_months, test_months=request.test_months)
+    _, end, start, final_start, fold_count = best
     return HistoryGuidance(
         start_ms=et_midnight_ms(start), end_ms=et_midnight_ms(end), final_start_ms=et_midnight_ms(final_start),
-        fold_count=len(folds),
+        fold_count=fold_count,
         explanation=(
             f"The longest interval within retained history that fits {request.train_months} training months, "
-            f"{len(folds)} complete forward windows of {request.test_months} months and "
+            f"{fold_count} complete forward windows of {request.test_months} months and "
             f"{request.final_months} final-test months. Equal spans use the latest end date. "
             "Selected dates are inclusive ET trading dates; window lengths are calendar months. "
             "Training and forward windows use the same planner as Walk Forward Study. "

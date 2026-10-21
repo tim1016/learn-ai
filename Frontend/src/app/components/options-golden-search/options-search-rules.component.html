@@ -26,7 +26,8 @@
     <label>Forward test months<input type="number" [formField]="fields.testMonths" /></label>
     <label>Final test months<input type="number" [formField]="fields.finalMonths" /></label>
   </div>
-  <app-options-search-history [request]="historyRequest()" [range]="range()" (rangeChanged)="rangeChanged.emit($event)" />
+  @if (windowLengths() === null) { <p class="problem">Use whole months: 1–120 for training and 1–60 for each test window.</p> }
+  <app-options-search-history [retained]="declarations().history_bounds" [lengths]="windowLengths()" [range]="range()" (rangeChanged)="rangeChanged.emit($event)" />
   <details><summary>Search budget and advanced settings</summary>
   <div class="controls">
     <label>Finalists plus frozen original<input type="number" [formField]="fields.finalists" /></label>

@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, effect, input, output, signal } from '@angular/core';
-import { form, FormField, max, min } from '@angular/forms/signals';
+import { form, FormField, max, min, validate } from '@angular/forms/signals';
 
 import type { DateRange } from '../../shared/date-picker';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
@@ -39,8 +39,10 @@ export class OptionsSearchRulesComponent {
     min(path.observations, 2); min(path.zoomPoints, 3); min(path.zoomRefinements, 0);
     max(path.budget, 5000); max(path.finalists, 10); max(path.zoomPoints, 9); max(path.zoomRefinements, 4); max(path.zoomPasses, 5);
     max(path.trainMonths, 120); max(path.testMonths, 60); max(path.finalMonths, 60);
+    for (const field of [path.trainMonths, path.testMonths, path.finalMonths]) validate(field, ({ value }) => Number.isInteger(value()) ? undefined : { kind: 'whole-months' });
   });
-  protected readonly historyRequest = computed(() => ({ bounds: this.declarations().history_bounds, train_months: this.model().trainMonths, test_months: this.model().testMonths, final_months: this.model().finalMonths }), { equal: (a, b) => a.bounds === b.bounds && a.train_months === b.train_months && a.test_months === b.test_months && a.final_months === b.final_months });
+  /** The walk-forward window lengths date guidance reads; null until all three are valid. */
+  protected readonly windowLengths = computed(() => [this.fields.trainMonths, this.fields.testMonths, this.fields.finalMonths].every((field) => field().valid()) ? { train_months: this.model().trainMonths, test_months: this.model().testMonths, final_months: this.model().finalMonths } : null, { equal: (a, b) => a === b || (a !== null && b !== null && a.train_months === b.train_months && a.test_months === b.test_months && a.final_months === b.final_months) });
   protected readonly pairValid = computed(() => this.model().pairFirst === '' || (this.model().pairFirst !== this.model().pairSecond && [this.model().pairFirst, this.model().pairSecond].every((path) => this.dimensions().some((dimension) => dimension.path === path))));
   protected readonly changedPreset = computed(() => {
     const defaults = this.declarations().defaults;

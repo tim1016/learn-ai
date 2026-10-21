@@ -13,10 +13,11 @@ import { declarations, historyGuidance } from './testing';
 @Component({
   imports: [OptionsSearchHistoryComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
-  template: '<app-options-search-history [request]="request()" [range]="range()" (rangeChanged)="range.set($event)" />',
+  template: '<app-options-search-history [retained]="retained" [lengths]="lengths()" [range]="range()" (rangeChanged)="range.set($event)" />',
 })
 class Host {
-  readonly request = signal<HistoryGuidanceRequest>({ bounds: declarations().history_bounds, train_months: 6, test_months: 2, final_months: 6 });
+  readonly retained = declarations().history_bounds;
+  readonly lengths = signal({ train_months: 6, test_months: 2, final_months: 6 });
   readonly range = signal<DateRange>({ from: '', to: '' });
 }
 
@@ -32,7 +33,7 @@ describe('walk-forward history guidance', () => {
     expect(screen.getByRole('textbox', { name: 'Start date' })).toHaveProperty('value', '2024-01-02');
     expect(screen.getByRole('textbox', { name: 'End date' })).toHaveProperty('value', '2026-09-01');
     fireEvent.change(screen.getByRole('textbox', { name: 'Start date' }), { target: { value: '2024-02-01' } });
-    host.request.update(value => ({ ...value, train_months: 8 }));
+    host.lengths.update(value => ({ ...value, train_months: 8 }));
     await screen.findByRole('heading', { name: 'Suggested maximum study interval' });
     expect(screen.getByRole('textbox', { name: 'Start date' })).toHaveProperty('value', '2024-02-01');
     await userEvent.click(await screen.findByRole('button', { name: /^Max\./ }));
@@ -44,13 +45,13 @@ describe('walk-forward history guidance', () => {
     const fake = { historyGuidance: vi.fn(async (request: HistoryGuidanceRequest) => request.test_months === 3 ? { ...historyGuidance(), start_ms: 1706850000000 } : historyGuidance()) };
     const { host } = await history(fake);
     await screen.findByRole('heading', { name: 'Maximum study interval selected' });
-    host.request.update(value => ({ ...value, test_months: 3 }));
+    host.lengths.update(value => ({ ...value, test_months: 3 }));
     await waitFor(() => expect(screen.getByRole('textbox', { name: 'Start date' })).toHaveProperty('value', '2024-02-02'));
     fireEvent.change(screen.getByRole('textbox', { name: 'Start date' }), { target: { value: '2024-02-03' } });
     expect(host.range().from).toBe('');
     expect(screen.getByRole('textbox', { name: 'Start date' })).toHaveProperty('value', '2024-02-03');
     fireEvent.change(screen.getByRole('textbox', { name: 'Start date' }), { target: { value: '' } });
-    host.request.update(value => ({ ...value, final_months: 3 }));
+    host.lengths.update(value => ({ ...value, final_months: 3 }));
     await waitFor(() => expect(fake.historyGuidance).toHaveBeenCalledTimes(3));
     expect(screen.getByRole('textbox', { name: 'Start date' })).toHaveProperty('value', '');
   });
