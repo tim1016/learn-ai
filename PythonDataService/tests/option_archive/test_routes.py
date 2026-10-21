@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
@@ -13,9 +13,11 @@ from fastapi import FastAPI
 
 from app.config import settings
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
+from app.option_archive.scheduler import JobOwnership
 from app.option_archive.service import OptionArchiveService
 from app.option_archive.settings import ArchiveSettings
 from app.option_archive.state import ArchiveState
+from app.routers import option_archive as archive_routes
 from app.routers.option_archive import router
 from app.utils.error_handlers import install_fleet_control_error_handler
 
@@ -65,12 +67,11 @@ class _SharedOwnership:
 
     def __init__(self, held: set[str]) -> None:
         self.held = held
-        self.refused, self.released = threading.Event(), threading.Event()
+        self.released = threading.Event()
 
     @asynccontextmanager
     async def hold(self, name: str) -> AsyncIterator[bool]:
         if name in self.held:
-            self.refused.set()
             yield False
             return
         self.held.add(name)
@@ -81,7 +82,44 @@ class _SharedOwnership:
             self.released.set()
 
 
-async def test_manual_recovery_leaves_the_provider_alone_while_the_nightly_capture_owns_the_archive(
+class _UnreachableOwnership:
+    @asynccontextmanager
+    async def hold(self, name: str) -> AsyncIterator[bool]:
+        raise ConnectionError("the catalog database is unreachable")
+        yield True
+
+
+class _SlowOwnership(_SharedOwnership):
+    """Answers the lock question only once ``answer`` is set."""
+
+    def __init__(self) -> None:
+        super().__init__(held=set())
+        self.answer = threading.Event()
+
+    @asynccontextmanager
+    async def hold(self, name: str) -> AsyncIterator[bool]:
+        await asyncio.to_thread(self.answer.wait, 5)
+        async with super().hold(name) as owned:
+            yield owned
+
+
+REQUEST = {"underlying": "SPY", "session_ms": session_open_ms_utc(date(2026, 10, 9))}
+HEADERS = {"X-Data-Plane-Control-Secret": "local-private-test-secret"}
+
+
+def _recovery_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ownership: JobOwnership,
+                     provider: Callable[..., Awaitable[None]]) -> tuple[httpx.AsyncClient, OptionArchiveService]:
+    service = OptionArchiveService(config=ArchiveSettings(ENABLED=True), state=ArchiveState(tmp_path / "state.json"),
+                                   clock=lambda: 1792558800000, ownership=ownership, capture=provider)
+    app = FastAPI()
+    app.state.option_archive_service = service
+    app.include_router(router)
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "local-private-test-secret")
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test"), service
+
+
+async def test_manual_recovery_is_refused_while_another_job_holds_the_capture_lock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ownership = _SharedOwnership(held={"capture"})
@@ -90,20 +128,71 @@ async def test_manual_recovery_leaves_the_provider_alone_while_the_nightly_captu
     async def provider(underlying: str, day: date, **options: object) -> None:
         provider_calls.append(set(ownership.held))
         raise ValueError("stop at the provider boundary")
-    service = OptionArchiveService(config=ArchiveSettings(ENABLED=True), state=ArchiveState(tmp_path / "state.json"),
-                                   clock=lambda: 1792558800000, ownership=ownership, capture=provider)
-    app = FastAPI()
-    app.state.option_archive_service = service
-    app.include_router(router)
-    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "local-private-test-secret")
-    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
-    request = {"underlying": "SPY", "session_ms": session_open_ms_utc(date(2026, 10, 9))}
-    headers = {"X-Data-Plane-Control-Secret": "local-private-test-secret"}
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
-        beside_nightly = await client.post("/api/option-archive/capture-session", json=request, headers=headers)
-        assert await asyncio.to_thread(ownership.refused.wait, 5), "manual recovery never asked for archive ownership"
-        assert beside_nightly.status_code == 202 and provider_calls == [] and not service.state.path.exists()
+    client, service = _recovery_client(tmp_path, monkeypatch, ownership, provider)
+    async with client:
+        beside_nightly = await client.post("/api/option-archive/capture-session", json=REQUEST, headers=HEADERS)
+        assert beside_nightly.status_code == 409 and "capture lock" in beside_nightly.json()["detail"]
+        assert provider_calls == [] and not service.state.path.exists()
         ownership.held.clear()
-        alone = await client.post("/api/option-archive/capture-session", json=request, headers=headers)
+        alone = await client.post("/api/option-archive/capture-session", json=REQUEST, headers=HEADERS)
         assert await asyncio.to_thread(ownership.released.wait, 5)
     assert alone.status_code == 202 and provider_calls == [{"capture"}]
+
+
+async def test_back_to_back_recoveries_exclude_each_other_until_the_first_ends(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ownership = _SharedOwnership(held=set())
+    in_provider, finish = threading.Event(), threading.Event()
+    provider_calls: list[str] = []
+
+    async def provider(underlying: str, day: date, **options: object) -> None:
+        provider_calls.append(underlying)
+        in_provider.set()
+        await asyncio.to_thread(finish.wait, 5)
+        raise ValueError("stop at the provider boundary")
+    client, _ = _recovery_client(tmp_path, monkeypatch, ownership, provider)
+    async with client:
+        first = await client.post("/api/option-archive/capture-session", json=REQUEST, headers=HEADERS)
+        assert await asyncio.to_thread(in_provider.wait, 5)
+        second = await client.post("/api/option-archive/capture-session", json={**REQUEST, "underlying": "QQQ"}, headers=HEADERS)
+        assert provider_calls == ["SPY"]
+        finish.set()
+        assert await asyncio.to_thread(ownership.released.wait, 5)
+        ownership.released.clear()
+        third = await client.post("/api/option-archive/capture-session", json={**REQUEST, "underlying": "QQQ"}, headers=HEADERS)
+        assert await asyncio.to_thread(ownership.released.wait, 5)
+    assert (first.status_code, second.status_code, third.status_code) == (202, 409, 202)
+    assert provider_calls == ["SPY", "QQQ"]
+
+
+async def test_manual_recovery_that_cannot_ask_for_the_lock_is_reported_not_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_calls: list[str] = []
+
+    async def provider(underlying: str, day: date, **options: object) -> None:
+        provider_calls.append(underlying)
+    client, service = _recovery_client(tmp_path, monkeypatch, _UnreachableOwnership(), provider)
+    async with client:
+        response = await client.post("/api/option-archive/capture-session", json=REQUEST, headers=HEADERS)
+    assert response.status_code == 503 and "capture lock" in response.json()["detail"]
+    assert provider_calls == [] and not service.state.path.exists()
+
+
+async def test_manual_recovery_that_waits_too_long_for_the_lock_never_starts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ownership = _SlowOwnership()
+    provider_calls: list[str] = []
+
+    async def provider(underlying: str, day: date, **options: object) -> None:
+        provider_calls.append(underlying)
+    monkeypatch.setattr(archive_routes, "LOCK_DECISION_TIMEOUT_S", 0.05)
+    client, service = _recovery_client(tmp_path, monkeypatch, ownership, provider)
+    async with client:
+        response = await client.post("/api/option-archive/capture-session", json=REQUEST, headers=HEADERS)
+        ownership.answer.set()
+        assert await asyncio.to_thread(ownership.released.wait, 5)
+    assert response.status_code == 503 and "capture lock" in response.json()["detail"]
+    assert provider_calls == [] and not service.state.path.exists()

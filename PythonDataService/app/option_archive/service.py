@@ -7,6 +7,7 @@ import shutil
 import tempfile
 import time
 from collections.abc import Awaitable, Callable
+from concurrent.futures import Future
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -60,6 +61,10 @@ from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 
 logger = logging.getLogger(__name__)
 
+# The nightly pass and every manual recovery spend one provider budget, so they
+# take one lock; the scheduler derives a job's lock from its name.
+CAPTURE_JOB: ArchiveJobName = "capture"
+
 
 def now_ms() -> int:
     return time.time_ns() // 1_000_000
@@ -77,7 +82,7 @@ class OptionArchiveService:
         self.state = state or ArchiveState(self.root / STATE_FILE_NAME)
         self.capture = capture
         self.scheduler = ArchiveScheduler(jobs=(
-            ArchiveJob("capture", self.capture_due, self.capture_pass),
+            ArchiveJob(CAPTURE_JOB, self.capture_due, self.capture_pass),
             ArchiveJob("snapshot", self.snapshot_due, self.snapshot_pass),
             ArchiveJob("backup", lambda now: self.daily_due("backup", now, config.BACKUP_START_MINUTE_ET), self.backup_pass),
             ArchiveJob("restore", self.restore_due, self.restore_pass),
@@ -235,19 +240,37 @@ class OptionArchiveService:
         finally:
             self._session_tasks.pop(key, None)
 
-    async def recover_session(self, underlying: str, session_ms: int, *, retry_exhausted: bool = False) -> SessionOutcome | None:
-        """An operator's explicit retry of one session, under the capture job's ownership.
+    async def recover_session(self, underlying: str, session_ms: int, *, retry_exhausted: bool = False,
+                              lock_decision: Future[bool] | None = None) -> SessionOutcome | None:
+        """An operator's explicit retry of one session, under the capture lock.
 
-        The nightly pass spends the same provider budget, so a recovery beside it
-        would double the requests. While another holder owns the archive nothing
-        runs and ``None`` returns; the operator retries once that pass ends.
+        The nightly pass and every other recovery spend the same provider budget,
+        so a recovery beside them would double the requests. While another holder
+        has the capture lock nothing runs and ``None`` returns; the operator
+        retries once that holder ends.
+
+        The capture outlives the request that asked for it, so ``lock_decision``
+        tells that request at once whether the lock was granted (or why it could
+        not be asked for). A request that stopped waiting has cancelled it, and
+        then nothing runs: the caller was told the recovery did not start.
         """
-        async with self.scheduler.ownership.hold("capture") as owned:
-            if not owned:
-                logger.warning("Option archive manual recovery yielded to the capture job that owns the archive", extra={
-                    "action": "option_archive_recovery_refused", "underlying": underlying, "session_ms": session_ms})
-                return None
-            return await self.capture_session(underlying, session_ms, retry_exhausted=retry_exhausted)
+        decided = False
+        try:
+            async with self.scheduler.ownership.hold(CAPTURE_JOB) as owned:
+                decided = True
+                if lock_decision is not None:
+                    if not lock_decision.set_running_or_notify_cancel():
+                        return None
+                    lock_decision.set_result(owned)
+                if not owned:
+                    logger.warning("Option archive manual recovery refused: another holder has the capture lock", extra={
+                        "action": "option_archive_recovery_refused", "underlying": underlying, "session_ms": session_ms})
+                    return None
+                return await self.capture_session(underlying, session_ms, retry_exhausted=retry_exhausted)
+        except Exception as exc:
+            if lock_decision is not None and not decided and lock_decision.set_running_or_notify_cancel():
+                lock_decision.set_exception(exc)
+            raise
 
     async def capture_pass(self) -> None:
         started = self.clock()

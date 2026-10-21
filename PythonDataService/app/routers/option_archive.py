@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/option-archive", tags=["option-archive"])
 
+# Asking Postgres for an advisory lock takes milliseconds; far longer means the catalog is unreachable.
+LOCK_DECISION_TIMEOUT_S = 10.0
+
 
 def get_archive_service(request: Request) -> OptionArchiveService:
     service = getattr(request.app.state, "option_archive_service", None)
@@ -58,9 +61,11 @@ async def capture_archive_session(body: ArchiveSessionCaptureRequest,
     if not service.config.ENABLED:
         raise HTTPException(status_code=409, detail="Option archive is disabled.")
     # Completion remains on the normal receipt/status path. Explicit retry
-    # resets only this session's exhausted transient outcomes.
+    # resets only this session's exhausted transient outcomes. The request waits
+    # for the capture lock's answer only, so 202 means the recovery has started.
+    lock_decision: Future[bool] = Future()
     future = asyncio.run_coroutine_threadsafe(service.recover_session(body.underlying, body.session_ms,
-                                    retry_exhausted=body.retry_exhausted), background_loop())
+                                    retry_exhausted=body.retry_exhausted, lock_decision=lock_decision), background_loop())
 
     def report(done: Future[SessionOutcome | None]) -> None:
         try:
@@ -69,4 +74,11 @@ async def capture_archive_session(body: ArchiveSessionCaptureRequest,
             logger.exception("Manual session recovery failed", extra={
                 "action": "manual_archive_session_failed", "underlying": body.underlying, "session_ms": body.session_ms})
     future.add_done_callback(report)
+    try:
+        granted = await asyncio.wait_for(asyncio.wrap_future(lock_decision), LOCK_DECISION_TIMEOUT_S)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Option archive could not check the capture lock, so the recovery did not start; "
+                            "inspect the catalog database and retry.") from exc
+    if not granted:
+        raise HTTPException(status_code=409, detail="Another archive job holds the capture lock; retry the recovery when it ends.")
     return ArchiveTriggerReceipt(accepted=True, job="capture")
