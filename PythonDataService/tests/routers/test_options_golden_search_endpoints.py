@@ -53,7 +53,7 @@ async def test_history_guidance_uses_integer_instants_and_rejects_invalid_months
     from datetime import date
 
     from app.research.options_golden_search import history_guidance
-    from app.utils.session_anchors import et_midnight_ms
+    from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_midnight_ms
 
     monkeypatch.setattr(history_guidance, "now_ms_utc", lambda: et_midnight_ms(date(2026, 10, 21)))
     app, _ = api
@@ -61,12 +61,14 @@ async def test_history_guidance_uses_integer_instants_and_rejects_invalid_months
             "train_months": 6, "test_months": 2, "final_months": 6}
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/options-search/history-guidance", json=body)
+        ceiling = await client.post("/options-search/history-guidance", json={**body, "bounds": {**body["bounds"], "end_ms": MAX_TIMESTAMP_MS}})
         invalid = await client.post("/options-search/history-guidance", json={**body, "test_months": 0})
         string_time = await client.post("/options-search/history-guidance", json={**body, "bounds": {**body["bounds"], "start_ms": "2024-01-01"}})
     assert response.status_code == 200
     assert type(response.json()["start_ms"]) is int
     assert type(response.json()["end_ms"]) is int
     assert response.json()["fold_count"] > 0
+    assert ceiling.status_code == 200
     assert invalid.status_code == string_time.status_code == 422
 
 
