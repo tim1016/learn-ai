@@ -125,3 +125,66 @@ def test_cleanup_has_a_deadline_and_preserves_reservation_until_collector_drains
         assert json.loads((tmp_path / ".reservations.json").read_text()) == {"blocked": 100}
     cleanup_job_inputs(tmp_path, "blocked")
     assert json.loads((tmp_path / ".reservations.json").read_text()) == {}
+
+
+@pytest.mark.parametrize("terminal_status", ["cancelled", "failed"])
+def test_terminal_publication_owns_collector_until_cleanup_and_takeover_are_safe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, terminal_status: str,
+) -> None:
+    from app.config import settings
+    from app.options_backtest import preparation
+    from app.schemas.options_backtest_runs import OptionsBacktestJobRequest
+    from app.utils.session_anchors import et_midnight_ms
+    from tests.options_backtest._run_data import THU, WED
+    from tests.options_backtest.setup_fixtures import setup
+
+    monkeypatch.setattr(settings, "OPTIONS_BACKTEST_INPUT_ROOT", tmp_path)
+    request = OptionsBacktestJobRequest(job_id="stopped-collector", setup=setup(),
+                                       start_ms=et_midnight_ms(WED), end_ms=et_midnight_ms(THU))
+    root = job_root(tmp_path, request.job_id)
+    root.mkdir()
+    (root / "stop-requested").touch()
+    if terminal_status == "failed":
+        def fail(*args, **kwargs) -> None:
+            raise OSError("preparation input is unavailable")
+
+        monkeypatch.setattr(preparation.service, "prepare_run_data", fail)
+    reached, proceed = threading.Event(), threading.Event()
+    journals = []
+    terminal = preparation._Journal.terminal
+
+    def paused_terminal(journal, status, **fields) -> None:
+        assert status == terminal_status
+        journals.append(journal)
+        reached.set()
+        assert proceed.wait(5), "test must release the paused collector"
+        terminal(journal, status, **fields)
+
+    monkeypatch.setattr(preparation._Journal, "terminal", paused_terminal)
+    identity = preparation.preparation_identity(request)
+    with InputStaging(tmp_path, "unrelated") as unrelated:
+        unrelated.reserve(100)
+        (unrelated.root / "kept").write_bytes(b"other live inputs")
+        collector = preparation.start_preparation(request, identity)
+        try:
+            assert reached.wait(5), "collector did not reach its terminal publication"
+            with pytest.raises(TimeoutError, match="did not drain"):
+                cleanup_job_inputs(tmp_path, request.job_id, wait_seconds=0)
+            assert root.exists()
+            assert json.loads((tmp_path / ".reservations.json").read_text()) == {
+                request.job_id: 0, "unrelated": 100}
+            # A reconnect must join the paused owner, never publish a second
+            # terminal journal or take its collection lock during the drain.
+            preparation.ensure_preparation(request, identity)
+            assert len(journals) == 1
+        finally:
+            proceed.set()
+            collector.result(timeout=5)
+        assert preparation.read_preparation(root, identity)["status"] == terminal_status
+        cleanup_job_inputs(tmp_path, request.job_id)
+        # A late provider/admission receipt from abandoned bounded work must
+        # remain inert after the owner released its lock and cleanup won.
+        journals[0].work({"kind": "work", "work_kind": "provider_response", "identity": "late"})
+        assert not root.exists()
+        assert json.loads((tmp_path / ".reservations.json").read_text()) == {"unrelated": 100}
+        assert (unrelated.root / "kept").read_bytes() == b"other live inputs"

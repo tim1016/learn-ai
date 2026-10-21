@@ -105,6 +105,11 @@ class _Journal:
             self.publish()
             self.active = False
 
+    def deactivate(self) -> None:
+        """Drain receipt publication before releasing the collector's file lock."""
+        with self._lock:
+            self.active = False
+
 
 def _verify_frozen(frozen: FrozenRunInputs) -> None:
     blobs = BlobStore(Path(frozen.root))
@@ -120,50 +125,52 @@ def ensure_preparation(req: OptionsBacktestJobRequest, identity: str) -> None:
     journal = None
     try:
         with InputStaging(settings.OPTIONS_BACKTEST_INPUT_ROOT, req.job_id) as stage:
-            journal = _Journal(root, identity, ledger)
-            if journal.state["status"] == "complete":
-                _verify_frozen(FrozenRunInputs.model_validate(journal.state["inputs"]))
-                return
-            if journal.state["status"] != "collecting":
-                return
-            # Resuming the same identity changes no financial input. Completed
-            # phase observations remain operational history, outside results.
-            journal.state["wait"] = None
-            journal.publish()
-            cancelled = CancellationCheck(req.job_id, renews_lease=False)
-            sessions = service.sessions_of_range(req.start_ms, req.end_ms)
-            def stop() -> bool:
-                return (root / "stop-requested").exists() or cancelled.should_cancel()
+            try:
+                journal = _Journal(root, identity, ledger)
+                if journal.state["status"] == "complete":
+                    _verify_frozen(FrozenRunInputs.model_validate(journal.state["inputs"]))
+                    return
+                if journal.state["status"] != "collecting":
+                    return
+                # Resuming the same identity changes no financial input. Completed
+                # phase observations remain operational history, outside results.
+                journal.state["wait"] = None
+                journal.publish()
+                cancelled = CancellationCheck(req.job_id, renews_lease=False)
+                sessions = service.sessions_of_range(req.start_ms, req.end_ms)
+                def stop() -> bool:
+                    return (root / "stop-requested").exists() or cancelled.should_cancel()
 
-            hooks = service.RunHooks(journal.phase, journal.progress, lambda message: None, stop)
-            checkpoint_path = root / "freeze-checkpoint.json"
-            resume = FrozenRunInputs.model_validate_json(checkpoint_path.read_text()) if checkpoint_path.exists() else None
-            stage.retain_verified({} if resume is None else resume.sessions)
-            with observe_work(journal.work):
-                service.prepare_run_data(req.setup, sessions, hooks, now_ms_utc, timings=ledger)
-                journal.phase("freezing_inputs")
-                with ledger.measure("input_freeze"):
-                    frozen = freeze_run_inputs(req.setup, sessions, LakeRunData(req.setup.underlying), root,
-                        should_stop=stop, reserve_bytes=stage.reserve, resume=resume,
-                        on_session=lambda done, total, day: journal.progress(done, total),
-                        on_checkpoint=lambda frozen: atomic_write_bytes(checkpoint_path, frozen.model_dump_json().encode()))
-                journal.terminal("complete", inputs=frozen.model_dump(mode="json"))
+                hooks = service.RunHooks(journal.phase, journal.progress, lambda message: None, stop)
+                checkpoint_path = root / "freeze-checkpoint.json"
+                resume = FrozenRunInputs.model_validate_json(checkpoint_path.read_text()) if checkpoint_path.exists() else None
+                stage.retain_verified({} if resume is None else resume.sessions)
+                with observe_work(journal.work):
+                    service.prepare_run_data(req.setup, sessions, hooks, now_ms_utc, timings=ledger)
+                    journal.phase("freezing_inputs")
+                    with ledger.measure("input_freeze"):
+                        frozen = freeze_run_inputs(req.setup, sessions, LakeRunData(req.setup.underlying), root,
+                            should_stop=stop, reserve_bytes=stage.reserve, resume=resume,
+                            on_session=lambda done, total, day: journal.progress(done, total),
+                            on_checkpoint=lambda frozen: atomic_write_bytes(checkpoint_path, frozen.model_dump_json().encode()))
+                    journal.terminal("complete", inputs=frozen.model_dump(mode="json"))
+            except PreparationConflict:
+                raise
+            except Exception as exc:
+                if journal is None:
+                    raise
+                if isinstance(exc, (service.RunCancelled, service.RunStopped, service.CheckStopped, service.DownloadStopped)):
+                    journal.terminal("cancelled")
+                else:
+                    failure = service.failure_of(exc)
+                    journal.terminal("failed", code=failure.code, reason=failure.reason)
+            finally:
+                if journal is not None:
+                    journal.deactivate()
+
     except CollectorBusy:
         # A reconnect attaches to the existing producer; never a second fetch.
         return
-    except PreparationConflict:
-        raise
-    except Exception as exc:
-        if journal is None:
-            raise
-        if isinstance(exc, (service.RunCancelled, service.RunStopped, service.CheckStopped, service.DownloadStopped)):
-            journal.terminal("cancelled")
-        else:
-            failure = service.failure_of(exc)
-            journal.terminal("failed", code=failure.code, reason=failure.reason)
-    finally:
-        if journal is not None:
-            journal.active = False
 
 
 def start_preparation(req: OptionsBacktestJobRequest, identity: str) -> Future[None]:
