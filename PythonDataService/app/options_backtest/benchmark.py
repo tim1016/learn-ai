@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import statistics
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Annotated, Literal
@@ -26,6 +26,7 @@ from app.options_backtest.cash_ladder import DEFAULT_CASH_LADDER
 from app.options_backtest.run import DEFAULT_SLIPPAGE_LADDER
 from app.options_backtest.setup import MS_PER_MINUTE, OptionsBacktestSetup
 from app.research.runs.hashing import hash_payload
+from app.schemas.options_benchmark import BenchmarkCaseName, BenchmarkResourcesResponse, BenchmarkResultResponse
 from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms, et_midnight_ms
 
 BENCHMARK_SESSIONS = 480
@@ -34,6 +35,9 @@ BENCHMARK_TARGET_MS = 60_000
 BENCHMARK_END_MS = 1_792_157_400_000
 RESEARCH_PROFILE_MEMORY_BYTES = 16 * 1024**3
 RESEARCH_PROFILE_CPUS = 8
+#: The run's top-level phases and the decode nested in its chains, named as the run records them.
+REQUIRED_PHASES = frozenset({"check", "download", "input_freeze", "queue", "admit_decode", "replay", "save"})
+CacheMode = Literal["cold", "warm"]
 _Ms = Annotated[int, Field(strict=True, ge=0, le=MAX_TIMESTAMP_MS)]
 _Nonnegative = Annotated[int, Field(strict=True, ge=0)]
 _Digest = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
@@ -42,7 +46,7 @@ _Digest = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 class BenchmarkCase(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    name: Literal["spy_typical_v1", "spy_eight_leg_cover_v1"]
+    name: BenchmarkCaseName
     setup: OptionsBacktestSetup
     session_open_ms: tuple[_Ms, ...]
     start_ms: _Ms
@@ -117,9 +121,10 @@ class BenchmarkObservation(BaseModel):
     result_digest: _Digest
     code_revision: str = Field(min_length=1)
     worker_width: Annotated[int, Field(strict=True, ge=1, le=8)]
-    cache_mode: Literal["cold", "warm"]
+    cache_mode: CacheMode
     runtime_instance: str = Field(min_length=1)
-    cache_generation: str = Field(min_length=1)
+    #: The generation a cold run cleared each worker's decoded cache into; a warm run reuses its runtime's and has none.
+    cache_epoch: str | None = Field(default=None, min_length=1)
     run_id: Annotated[int, Field(strict=True, ge=1)]
     accepted_at_ms: _Ms
     saved_at_ms: _Ms
@@ -131,8 +136,6 @@ class BenchmarkObservation(BaseModel):
     staging_bytes_peak: _Nonnegative | None = None
     database_connections_peak: _Nonnegative | None = None
     operational_latency_ms: tuple[_Nonnegative, ...] = ()
-    profile_cpus: Annotated[int, Field(strict=True, ge=1)]
-    profile_memory_bytes: Annotated[int, Field(strict=True, ge=1)]
 
     @model_validator(mode="after")
     def _valid_measurement(self) -> BenchmarkObservation:
@@ -140,32 +143,95 @@ class BenchmarkObservation(BaseModel):
             raise ValueError("a saved result cannot precede its acceptance")
         if not self.operational_latency_ms:
             raise ValueError("each repetition needs operational latency observations")
+        if (self.cache_mode == "cold") != (self.cache_epoch is not None):
+            raise ValueError("a cold repetition needs the cache epoch it cleared into; a warm one has none")
         if self.cache_mode == "warm" and self.cache_hits == 0:
             raise ValueError("warm repetitions must demonstrate decoded cache reuse")
         return self
 
 
+class BenchmarkGroupReport(BaseModel):
+    """One case, width and cache mode, over its repetitions; never a capacity qualification."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    case: BenchmarkCaseName
+    case_digest: _Digest
+    input_digest: _Digest
+    result_digest: _Digest
+    code_revision: str
+    worker_width: int
+    cache_mode: CacheMode
+    repetitions: int
+    median_end_to_end_ms: float
+    worst_end_to_end_ms: int
+    median_phase_ms: dict[str, float]
+    cache_bytes_peak: int | None
+    cache_hits: list[int]
+    cache_misses: list[int]
+    cgroup_memory_peak_bytes: int | None
+    staging_bytes_peak: int | None
+    database_connections_peak: int | None
+    worst_operational_latency_ms: int
+    #: Unknown while any resource peak is unknown.
+    target_met: bool | None
+    instrumentation_complete: bool
+    capacity_qualified: Literal[False] = False
+
+
+def observe_repetition(
+    *, case: BenchmarkCase, mode: CacheMode, inventory_digest: str, saved: BenchmarkResultResponse,
+    samples: Sequence[BenchmarkResourcesResponse], operational_latency_ms: Sequence[int],
+) -> BenchmarkObservation:
+    """One repetition's receipt, from its saved run and the resource samples taken while it ran.
+
+    Decode work is nested inside chain replay: its chain spans are summed, and
+    the other chain spans are left out so parallel chains do not add to the
+    run's wall-clock replay span.
+    """
+    phases: dict[str, int] = {}
+    for span in saved.phase_timings:
+        if span.scope == "run" or span.phase == "admit_decode":
+            phases[span.phase] = phases.get(span.phase, 0) + span.duration_ms
+    replay = saved.replay
+    return BenchmarkObservation(
+        case_digest=case.digest, archive_inventory_digest=inventory_digest,
+        frozen_input_digest=replay.frozen_input_digest, result_digest=saved.result_digest,
+        code_revision=replay.execution_identity_digest, worker_width=replay.worker_width, cache_mode=mode,
+        runtime_instance=samples[0].runtime_instance, cache_epoch=replay.cache_epoch,
+        run_id=saved.run_id, accepted_at_ms=saved.accepted_at_ms, saved_at_ms=saved.saved_at_ms,
+        phase_duration_ms=phases, cache_bytes_peak=replay.cache_bytes_peak,
+        cache_hits=replay.cache_hits, cache_misses=replay.cache_misses,
+        cgroup_memory_peak_bytes=_peak(sample.cgroup_memory_bytes for sample in samples),
+        staging_bytes_peak=max(sample.frozen_input_bytes for sample in samples),
+        database_connections_peak=max(sample.database_connections for sample in samples),
+        operational_latency_ms=tuple(operational_latency_ms),
+    )
+
+
+def require_qualified_widths(widths: Iterable[int]) -> frozenset[int]:
+    """The worker widths a measurement may use: the width-1 baseline, and only widths of 1, 2, 4 or 8."""
+    qualified = frozenset(widths)
+    if 1 not in qualified or not qualified <= {1, 2, 4, 8}:
+        raise ValueError("the qualified widths must include the width-1 baseline and be 1, 2, 4 or 8")
+    return qualified
+
+
 def summarize_measurements(
-    observations: Sequence[BenchmarkObservation], *, qualified_widths: Sequence[int] = (1,),
-) -> list[dict[str, object]]:
+    observations: Sequence[BenchmarkObservation], *, qualified_widths: Iterable[int] = (1,),
+) -> list[BenchmarkGroupReport]:
     """Refuse changed results, mixed inputs or incomplete repetitions before comparing speed."""
     cases = {case.digest: case for case in benchmark_cases()}
-    widths = set(qualified_widths)
-    if 1 not in widths or not widths <= {1, 2, 4, 8}:
-        raise ValueError("the qualified widths must include the width-1 baseline")
+    qualified = require_qualified_widths(qualified_widths)
     groups: dict[tuple[str, int, str], list[BenchmarkObservation]] = defaultdict(list)
     identity: dict[str, tuple[str, str, str, str]] = {}
     run_ids: set[int] = set()
     for observation in observations:
-        if observation.case_digest not in cases or observation.worker_width not in widths:
+        if observation.case_digest not in cases or observation.worker_width not in qualified:
             raise ValueError("observation names an unknown case or an unqualified width")
         if observation.run_id in run_ids:
             raise ValueError("a saved run cannot count as two repetitions")
         run_ids.add(observation.run_id)
-        if (observation.profile_cpus, observation.profile_memory_bytes) != (
-            RESEARCH_PROFILE_CPUS, RESEARCH_PROFILE_MEMORY_BYTES,
-        ):
-            raise ValueError("measurement must use the 8-CPU / 16-GiB research profile")
         key = observation.case_digest
         pinned = (observation.frozen_input_digest, observation.result_digest, observation.code_revision,
                   observation.archive_inventory_digest)
@@ -173,52 +239,41 @@ def summarize_measurements(
             raise ValueError("case inputs, code or exact results changed across repetitions/widths")
         identity[key] = pinned
         groups[key, observation.worker_width, observation.cache_mode].append(observation)
-    required = {(digest, width, mode) for digest in cases for width in widths for mode in ("cold", "warm")}
+    required = {(digest, width, mode) for digest in cases for width in qualified for mode in ("cold", "warm")}
     if set(groups) != required or any(len(group) < BENCHMARK_REPETITIONS for group in groups.values()):
         raise ValueError("both cases need at least five cold and five warm repetitions at every qualified width")
-    report: list[dict[str, object]] = []
+    report: list[BenchmarkGroupReport] = []
     for (digest, width, mode), group in sorted(groups.items()):
-        instances = [sample.cache_generation for sample in group]
-        if mode == "cold" and len(instances) != len(set(instances)):
-            raise ValueError("cold repetitions must prove a fresh runtime/cache generation")
-        if mode == "warm" and len(set(instances)) != 1:
-            raise ValueError("warm repetitions must reuse one runtime/cache generation")
+        if mode == "cold" and len({sample.cache_epoch for sample in group}) != len(group):
+            raise ValueError("cold repetitions must each clear into a fresh cache epoch")
         if mode == "warm" and len({sample.runtime_instance for sample in group}) != 1:
             raise ValueError("the runtime restarted during warm measurements")
-        if mode == "warm" and any(sample.cache_hits == 0 for sample in group):
-            raise ValueError("warm repetitions must demonstrate decoded cache reuse")
-        required_phases = {"check", "fetch", "freeze", "queue", "admit_decode", "replay", "save"}
-        if any(not required_phases <= sample.phase_duration_ms.keys() for sample in group):
+        if any(not sample.phase_duration_ms.keys() >= REQUIRED_PHASES for sample in group):
             raise ValueError("a repetition is missing required phase measurements")
-        measured = all(
-            all(value is not None for value in (
-                sample.cache_bytes_peak, sample.cgroup_memory_peak_bytes,
-                sample.staging_bytes_peak, sample.database_connections_peak,
-            )) for sample in group
-        )
+        peaks = {field: _peak(getattr(sample, field) for sample in group) for field in (
+            "cache_bytes_peak", "cgroup_memory_peak_bytes", "staging_bytes_peak", "database_connections_peak")}
+        measured = None not in peaks.values()
         elapsed = [sample.saved_at_ms - sample.accepted_at_ms for sample in group]
         median = statistics.median(elapsed)
-        report.append({
-            "case": cases[digest].name, "case_digest": digest, "input_digest": identity[digest][0],
-            "result_digest": identity[digest][1], "code_revision": identity[digest][2],
-            "worker_width": width, "cache_mode": mode, "repetitions": len(group),
-            "median_end_to_end_ms": median, "worst_end_to_end_ms": max(elapsed),
-            "median_phase_ms": {phase: statistics.median([s.phase_duration_ms[phase] for s in group])
-                                for phase in sorted(required_phases)},
-            "cache_bytes_peak": _peak(group, "cache_bytes_peak"),
-            "cache_hits": [sample.cache_hits for sample in group],
-            "cache_misses": [sample.cache_misses for sample in group],
-            "cgroup_memory_peak_bytes": _peak(group, "cgroup_memory_peak_bytes"),
-            "staging_bytes_peak": _peak(group, "staging_bytes_peak"),
-            "database_connections_peak": _peak(group, "database_connections_peak"),
-            "worst_operational_latency_ms": max(value for s in group for value in s.operational_latency_ms),
-            "target_met": median <= BENCHMARK_TARGET_MS if measured else None,
-            "instrumentation_complete": measured,
-            "capacity_qualified": False,
-        })
+        report.append(BenchmarkGroupReport(
+            case=cases[digest].name, case_digest=digest, input_digest=identity[digest][0],
+            result_digest=identity[digest][1], code_revision=identity[digest][2],
+            worker_width=width, cache_mode=mode, repetitions=len(group),
+            median_end_to_end_ms=median, worst_end_to_end_ms=max(elapsed),
+            median_phase_ms={phase: statistics.median([s.phase_duration_ms[phase] for s in group])
+                             for phase in sorted(REQUIRED_PHASES)},
+            cache_hits=[sample.cache_hits for sample in group],
+            cache_misses=[sample.cache_misses for sample in group],
+            worst_operational_latency_ms=max(value for s in group for value in s.operational_latency_ms),
+            target_met=median <= BENCHMARK_TARGET_MS if measured else None,
+            instrumentation_complete=measured, **peaks,
+        ))
     return report
 
 
-def _peak(samples: Sequence[BenchmarkObservation], field: str) -> int | None:
-    values = [getattr(sample, field) for sample in samples]
-    return max(values) if all(value is not None for value in values) else None
+def _peak(values: Iterable[int | None]) -> int | None:
+    """The largest sample, or ``None`` when any sample is unknown."""
+    known = list(values)
+    if any(value is None for value in known):
+        return None
+    return max(value for value in known if value is not None)

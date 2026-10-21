@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
-from app.options_backtest.timings import PhaseTiming
+from app.options_backtest.timings import PhaseTiming, ReplayObservations
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 Count = Annotated[int, Field(strict=True, ge=0)]
+#: The frozen cases ``app.options_backtest.benchmark.benchmark_cases`` defines.
+BenchmarkCaseName = Literal["spy_typical_v1", "spy_eight_leg_cover_v1"]
 
 
 class BenchmarkResourcesResponse(BaseModel):
@@ -26,16 +28,18 @@ class BenchmarkResourcesResponse(BaseModel):
 
 
 class BenchmarkResultResponse(BaseModel):
+    """A complete saved run of a pooled replay: when it was accepted and saved, and what its replay measured."""
+
     run_id: int
     accepted_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     saved_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     result_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
     phase_timings: list[PhaseTiming]
-    execution_metadata: dict[str, Any]
+    replay: ReplayObservations
 
 
 class BenchmarkPreflightRequest(BaseModel):
-    case: Literal["spy_typical_v1", "spy_eight_leg_cover_v1"]
+    case: BenchmarkCaseName
 
 
 class BenchmarkPreflightResponse(BaseModel):

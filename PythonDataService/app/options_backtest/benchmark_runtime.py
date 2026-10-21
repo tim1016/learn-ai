@@ -11,6 +11,7 @@ from app.config import settings
 from app.options_backtest import saved_runs
 from app.options_backtest.benchmark import BenchmarkCase
 from app.options_backtest.lake_data import LakeRunData
+from app.options_backtest.timings import RunObservations
 from app.options_bots.golden_proof import result_sha256
 from app.research.golden_search.shared_pool import SharedWorkerPool
 from app.research.persistence import ownership
@@ -68,10 +69,11 @@ async def resources() -> BenchmarkResourcesResponse:
 
 
 async def _result(connection: asyncpg.Connection, run_id: int) -> BenchmarkResultResponse | None:
+    """The complete run's measurement, or ``None`` while it has no single post-commit save or no pooled replay."""
     stored = await saved_runs.get_run(connection, run_id, is_live=saved_runs.not_asked)
     if stored is None or stored.record.status != "complete" or stored.record.finished_at_ms is None:
         return None
-    if stored.execution_metadata is None or not stored.phase_timings:
+    if stored.execution_metadata is None:
         return None
     saves = [span for span in stored.phase_timings if span.scope == "run" and span.phase == "save"]
     if len(saves) != 1:
@@ -79,13 +81,17 @@ async def _result(connection: asyncpg.Connection, run_id: int) -> BenchmarkResul
     saved = saves[0]
     if not (stored.record.created_at_ms <= saved.started_at_ms <= stored.record.finished_at_ms <= saved.finished_at_ms):
         return None
+    observations = RunObservations.from_stored(stored.phase_timings, stored.execution_metadata)
+    if observations.replay is None:
+        # Replayed in the data service: no worker cache or frozen-input identity was measured.
+        return None
     result = await saved_runs.read_result(connection, run_id)
     if result is None:
         return None
     return BenchmarkResultResponse(
         run_id=run_id, accepted_at_ms=stored.record.created_at_ms, saved_at_ms=saved.finished_at_ms,
-        result_digest=result_sha256(result), phase_timings=list(stored.phase_timings),
-        execution_metadata=stored.execution_metadata,
+        result_digest=result_sha256(result), phase_timings=list(observations.phase_timings),
+        replay=observations.replay,
     )
 
 

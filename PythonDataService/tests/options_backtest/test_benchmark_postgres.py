@@ -13,6 +13,7 @@ from app.config import settings
 from app.data_lake import catalog_client
 from app.options_backtest import saved_runs
 from app.options_backtest.benchmark import benchmark_cases, summarize_measurements
+from app.options_backtest.timings import ReplayObservations, RunObservations
 from app.research.persistence.db import writer_loop_call
 from app.routers.options_backtest_benchmark import router
 from app.security.data_plane_control import CONTROL_SECRET_HEADER
@@ -42,7 +43,11 @@ async def test_saved_result_http_requires_unambiguous_post_commit_time(
         spans = [] if evidence == "missing" else [save, save] if evidence == "duplicate" else [save]
         if evidence == "invalid_order":
             spans = [{**save, "finished_at_ms": 1_058_000}]
-        await saved_runs.record_timings(conn, run_id, spans, {"measurement_test": True})
+        replay = ReplayObservations(frozen_input_digest="a" * 64, execution_identity_digest="c" * 64,
+            runtime_boot_generation=1, worker_width=1, cache_epoch=None, cache_hits=1, cache_misses=0,
+            cache_bytes_peak=0)
+        await saved_runs.record_timings(conn, run_id, spans,
+            RunObservations(phase_timings=(), wall_duration_ms=62_000, replay=replay).stored_metadata())
         app = FastAPI()
         app.include_router(router, prefix="/api/jobs-internal")
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
@@ -60,9 +65,9 @@ async def test_saved_result_http_requires_unambiguous_post_commit_time(
                    if sample.case_digest == typical.digest and sample.cache_mode == "cold" else sample
                    for sample in observations()]
         cold = next(group for group in summarize_measurements(samples)
-                    if group["case"] == typical.name and group["cache_mode"] == "cold")
-        assert cold["median_end_to_end_ms"] == 62_000
-        assert cold["target_met"] is False
+                    if group.case == typical.name and group.cache_mode == "cold")
+        assert cold.median_end_to_end_ms == 62_000
+        assert cold.target_met is False
     finally:
         await conn.execute("DELETE FROM research_options_backtest_runs WHERE id=$1", run_id)
         await writer_loop_call(catalog_client.close_pool())

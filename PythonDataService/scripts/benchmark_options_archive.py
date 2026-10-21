@@ -32,7 +32,10 @@ from app.options_backtest.benchmark import (
     RESEARCH_PROFILE_MEMORY_BYTES,
     BenchmarkCase,
     BenchmarkObservation,
+    CacheMode,
     benchmark_cases,
+    observe_repetition,
+    require_qualified_widths,
     summarize_measurements,
 )
 from app.schemas.options_benchmark import BenchmarkResourcesResponse, BenchmarkResultResponse
@@ -41,7 +44,6 @@ from app.utils.atomic_file import atomic_write_bytes
 
 logger = logging.getLogger(__name__)
 _PREFIX = "/api/jobs-internal/options-backtest"
-_PHASES = {"download": "fetch", "input_freeze": "freeze"}
 
 
 async def _preflight(client: httpx.AsyncClient, base: str, case: BenchmarkCase, *, timeout_seconds: int = 1800) -> str:
@@ -56,21 +58,23 @@ async def _preflight(client: httpx.AsyncClient, base: str, case: BenchmarkCase, 
     return str(body["inventory_digest"])
 
 
-def _require_profile(sample: BenchmarkResourcesResponse) -> None:
+async def _sample(client: httpx.AsyncClient, runtime: str) -> BenchmarkResourcesResponse:
+    """One resource sample, refused unless the runtime still has the unchanged research profile."""
+    response = await client.get(runtime + _PREFIX + "/benchmark-resources")
+    response.raise_for_status()
+    sample = BenchmarkResourcesResponse.model_validate(response.json())
     if (sample.cgroup_memory_limit_bytes != RESEARCH_PROFILE_MEMORY_BYTES or sample.cpu_period_us is None
             or sample.cpu_quota_us != RESEARCH_PROFILE_CPUS * sample.cpu_period_us):
         raise ValueError("benchmark requires the unchanged 8-CPU / 16-GiB research cgroup profile")
+    return sample
 
 
 async def _measure(
     client: httpx.AsyncClient, *, api: str, runtime: str, operational: str,
-    case: BenchmarkCase, mode: str, qualified_widths: list[int], timeout_seconds: int,
+    case: BenchmarkCase, mode: CacheMode, qualified_widths: list[int], timeout_seconds: int,
 ) -> BenchmarkObservation:
     inventory = await _preflight(client, api, case, timeout_seconds=timeout_seconds)
-    initial = await client.get(runtime + _PREFIX + "/benchmark-resources")
-    initial.raise_for_status()
-    samples = [BenchmarkResourcesResponse.model_validate(initial.json())]
-    _require_profile(samples[0])
+    samples = [await _sample(client, runtime)]
     if samples[0].worker_width not in qualified_widths:
         raise ValueError("runtime Options width has no qualification evidence; no job was started")
     job_id = "benchmark_" + uuid4().hex
@@ -88,10 +92,7 @@ async def _measure(
         operational_response = await client.get(operational)
         operational_response.raise_for_status()
         latency.append(max(0, int((time.perf_counter() - started) * 1000)))
-        resource_response = await client.get(runtime + _PREFIX + "/benchmark-resources")
-        resource_response.raise_for_status()
-        sample = BenchmarkResourcesResponse.model_validate(resource_response.json())
-        _require_profile(sample)
+        sample = await _sample(client, runtime)
         if sample.runtime_instance != samples[0].runtime_instance:
             raise ValueError("research runtime restarted during the measured run")
         samples.append(sample)
@@ -110,42 +111,14 @@ async def _measure(
         raise TimeoutError(f"benchmark run {run_id} has no saved result with complete timing evidence")
     if await _preflight(client, api, case, timeout_seconds=timeout_seconds) != inventory:
         raise ValueError("archived input inventory changed during the measured run")
-    metadata = saved.execution_metadata
-    required = {"worker_width", "frozen_input_digest", "execution_identity_digest", "cache_epoch", "cache_bytes_peak",
-                "cache_hits", "cache_misses"}
-    if not required <= metadata.keys() or (mode == "cold" and not metadata["cache_epoch"]):
-        raise ValueError("saved result lacks the required execution/cache measurement identity")
-    width = int(metadata["worker_width"])
-    if width not in qualified_widths:
-        raise ValueError("runtime used an Options width without qualification evidence")
-    phases: dict[str, int] = {}
-    for span in saved.phase_timings:
-        # Decode work is nested inside chain replay. Keep it visible without
-        # adding every parallel chain's replay to the wall-clock replay span.
-        if span.scope == "run" or span.phase == "admit_decode":
-            phase = _PHASES.get(span.phase, span.phase)
-            phases[phase] = phases.get(phase, 0) + span.duration_ms
-    memory = [sample.cgroup_memory_bytes for sample in samples]
-    return BenchmarkObservation(
-        case_digest=case.digest, archive_inventory_digest=inventory,
-        frozen_input_digest=metadata["frozen_input_digest"], result_digest=saved.result_digest,
-        code_revision=metadata["execution_identity_digest"], worker_width=width, cache_mode=mode,
-        runtime_instance=samples[0].runtime_instance,
-        cache_generation=str(metadata["cache_epoch"]) if mode == "cold" else samples[0].runtime_instance,
-        run_id=run_id, accepted_at_ms=saved.accepted_at_ms, saved_at_ms=saved.saved_at_ms,
-        phase_duration_ms=phases, cache_bytes_peak=metadata["cache_bytes_peak"],
-        cache_hits=metadata["cache_hits"], cache_misses=metadata["cache_misses"],
-        cgroup_memory_peak_bytes=max(memory) if all(value is not None for value in memory) else None,
-        staging_bytes_peak=max(sample.frozen_input_bytes for sample in samples),
-        database_connections_peak=max(sample.database_connections for sample in samples),
-        operational_latency_ms=tuple(latency), profile_cpus=RESEARCH_PROFILE_CPUS,
-        profile_memory_bytes=RESEARCH_PROFILE_MEMORY_BYTES,
-    )
+    return observe_repetition(case=case, mode=mode, inventory_digest=inventory, saved=saved, samples=samples,
+                              operational_latency_ms=latency)
 
 
 async def _run(args: argparse.Namespace) -> None:
-    if args.timeout_seconds <= 0 or 1 not in args.qualified_widths or not set(args.qualified_widths) <= {1, 2, 4, 8}:
-        raise ValueError("provide a positive timeout and qualified widths including the width-1 baseline")
+    if args.timeout_seconds <= 0:
+        raise ValueError("provide a positive timeout")
+    require_qualified_widths(args.qualified_widths)
     secret = os.environ.get("DATA_PLANE_CONTROL_SECRET", "").strip()
     if not secret:
         raise ValueError("DATA_PLANE_CONTROL_SECRET is required for benchmark dispatch and protected observations")
@@ -195,9 +168,12 @@ def main(argv: list[str] | None = None) -> int:
         else:
             observations = [BenchmarkObservation.model_validate_json(line)
                             for line in args.observations.read_text().splitlines() if line.strip()]
-            result = {"cache_scope": "decoded worker cache; OS cache uncontrolled", "sample_interval_ms": 1000,
+            groups = summarize_measurements(observations, qualified_widths=args.qualified_widths)
+            result = {"cache_scope": "decoded worker cache, sized by fixed per-bar, per-contract and per-session "
+                                     "estimates; OS cache uncontrolled",
+                      "sample_interval_ms": 1000,
                       "resources": "maximum observed samples, not an unsampled kernel peak",
-                      "groups": summarize_measurements(observations, qualified_widths=args.qualified_widths)}
+                      "groups": [group.model_dump(mode="json") for group in groups]}
             atomic_write_bytes(args.output, json.dumps(result, indent=2).encode())
     except (ValueError, OSError, httpx.HTTPError) as exc:
         logger.error("Benchmark refused", extra={"action": "options_benchmark_refused", "reason": str(exc)})
