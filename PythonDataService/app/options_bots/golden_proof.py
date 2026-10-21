@@ -40,6 +40,7 @@ from app.options_backtest.lake_data import (
 from app.options_backtest.market import MinuteBar
 from app.options_backtest.picking import Listing
 from app.options_backtest.run import RunResult, RunStopped, run_sessions
+from app.options_backtest.session_result import PinnedDay
 from app.options_backtest.setup import OptionsBacktestSetup
 from app.research.golden_search.proof import BlobStore, default_blob_store
 from app.schemas.signal_program_seal import semantic_payload_hash
@@ -69,7 +70,8 @@ def _canonical(value: Any) -> Any:
             for field in dataclasses.fields(value)
             # Money steps are not stored with historical runs. Their derived
             # capital evidence is compared through the summary instead.
-            if field.name not in {"money_steps", "stamps", "reference"}
+            if field.name not in {"money_steps", "stamps"}
+            and not (isinstance(value, PinnedDay) and field.name == "reference")
         }
     if isinstance(value, Mapping):
         return {str(key): _canonical(item) for key, item in value.items()}
@@ -110,6 +112,7 @@ def _source_digest() -> str:
         _APP_ROOT / "utils/session_anchors.py",
         _APP_ROOT / "data_lake/option_bars.py",
         _APP_ROOT / "data_lake/option_listing.py",
+        _APP_ROOT / "data_lake/option_session.py",
         _APP_ROOT / "engine/data/lean_format.py",
     }
     return semantic_payload_hash(

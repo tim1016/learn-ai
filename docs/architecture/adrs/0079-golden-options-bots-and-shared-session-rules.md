@@ -69,6 +69,8 @@ owner's note. Referenced evidence cannot be deleted. Re-proof and revocation
 are recorded without rewriting the original approval. An unverified proof does
 not become valid through an owner's performance approval.
 
+**Session archive compatibility (#3422; 2026-10-20).** New proofs may retain a versioned session container plus its pinned listing. The proof binds the container digest and its strict decoder's executable identity. Every member is validated before replay. Existing proofs retain their manifests and exact per-contract zip blobs unchanged; compaction can supply an exact original member when building a proof for an old saved pin. Missing originals or a changed container fail. Storage reference metadata is separate from the canonical result identity, whose original member byte digests remain unchanged. Explicit re-proof records a new rules identity without rewriting approved evidence.
+
 An explicit re-proof under new rule bytes can restore qualification for the same
 golden version and exact setup. Existing deployment configuration retains its
 original rule identity as audit evidence; each resumed run records the current

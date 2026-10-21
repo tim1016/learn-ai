@@ -12,9 +12,12 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import lzma
 import re
 import zipfile
+import zlib
 from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -30,6 +33,7 @@ from app.data_lake.option_listing import OptionListing, read_option_listing
 from app.data_lake.path_policy import OptionSessionPath
 from app.data_lake.root_identity import active_root_id, read_marker
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
+from app.utils.advisory_lock import try_advisory_file_lock
 from app.utils.session_anchors import et_date_at_ms
 
 OPTION_SESSION_FORMAT = 1
@@ -39,6 +43,17 @@ MAX_SESSION_DECODED_BYTES = 512 * 1024 * 1024
 MAX_TICKER_DECODED_BYTES = 8 * 1024 * 1024
 _SYMBOL = re.compile(r"[A-Z][A-Z0-9.]*")
 _MANIFEST = "manifest.json"
+
+
+def option_session_publication_lock(underlying: str, trading_date: date) -> AbstractContextManager[bool]:
+    """Fence source refresh and session compaction together, without DB changes.
+
+    Collection uses a different lock and yields before requesting publication.
+    No provider operation or transaction waits while this lock is held.
+    """
+    OptionSessionPath(underlying, trading_date)  # validate the path segment before using it
+    return try_advisory_file_lock(option_read_root().parent.parent / ".option-session-publication" /
+                                 underlying.lower() / str(session_open_ms_utc(trading_date)))
 
 
 class OptionSessionFileError(OptionBarsFileError):
@@ -228,7 +243,7 @@ def parse_option_session(payload: bytes, listing: OptionListing, *, root_id: UUI
                 originals[symbol] = raw
     except OptionSessionFileError:
         raise
-    except (zipfile.BadZipFile, OSError, ValueError, RuntimeError, NotImplementedError, EOFError) as exc:
+    except (zipfile.BadZipFile, OSError, ValueError, RuntimeError, NotImplementedError, EOFError, zlib.error, lzma.LZMAError) as exc:
         raise OptionSessionFileError(f"unreadable option session ({type(exc).__name__})") from exc
     return OptionSession(listing.underlying, str(manifest["data_root_id"]), session_open_ms_utc(listing.as_of), listing.sha256,
                          hashlib.sha256(payload).hexdigest(), days, originals, frozenset(pending))
@@ -257,6 +272,8 @@ def parse_retained_option_session(payload: bytes, listing: OptionListing) -> Opt
     Unlike a lake read, a retained proof is portable and has no physical root.
     Its trusted identity is the immutable blob digest from its frozen manifest.
     """
+    if len(payload) > MAX_SESSION_COMPRESSED_BYTES:
+        raise OptionSessionFileError("retained session exceeds compressed-byte bound")
     try:
         with zipfile.ZipFile(io.BytesIO(payload)) as archive:
             root_id = UUID(_json(archive.read(_MANIFEST))["data_root_id"])

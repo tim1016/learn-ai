@@ -208,6 +208,15 @@ async def _capture_underlying(underlying: str, trading_date: date, now_ms: int |
             price_adjustment_mode="raw",
         )
     except (LakeMaterializationError, CallerStoppedWaitingError) as exc:
+        from app.options_backtest.lake_check import _stock_day_identity
+
+        state = await catalog_client.select_minute_bar_claim_state(_stock_day_identity(underlying, trading_date))
+        terminal: dict[str, DownloadReason] = {
+            "provider_auth_error": "provider_auth_error", "provider_entitlement_error": "provider_entitlement_error",
+            "outside_data_plan": "outside_data_plan",
+        }
+        if state is not None and state.last_error in terminal:
+            return DownloadItem(ItemKind.UNDERLYING, underlying, Outcome.FAILED, terminal[state.last_error], str(exc))
         return DownloadItem(ItemKind.UNDERLYING, underlying, Outcome.FAILED, "underlying_not_fetched", str(exc))
     # Read back through the reader a run uses, as a run's download does: a file the stock pipeline stored with no bar
     # inside the regular session is not held by the lake's coverage rule, so the chain would read it as not stored.
@@ -383,7 +392,7 @@ async def _capture(
                     ItemKind.CONTRACT,
                     contract.occ_symbol,
                     Outcome.FAILED,
-                    "listing_not_captured",
+                    "outside_data_plan" if listing_item.reason == "outside_data_plan" else "listing_not_captured",
                     f"{why}, so no contract of it can be vouched for",
                 )
                 for contract in named

@@ -116,3 +116,17 @@ async def test_explicit_transient_retry_budget_and_planned_pause(fake_catalog, t
     route.mock(return_value=no_trades(CALL.occ_symbol))
     recovered = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS, retry_exhausted=True)
     assert recovered.failure is None and route.call_count == 4
+
+
+@respx.mock
+async def test_aged_out_answer_preserves_successful_progress_as_explicit_partial_coverage(fake_catalog, tmp_lake):
+    from tests._helpers.option_vendor import outside_plan
+
+    await prepare(fake_catalog, tmp_lake, CALL, PUT)
+    respx.get(url(CALL)).mock(return_value=traded(CALL.occ_symbol, [bar()]))
+    respx.get(url(PUT)).mock(return_value=outside_plan())
+    result = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS)
+    assert result.failure.reason == "outside_data_plan"
+    session = await asyncio.to_thread(read_option_session, "SPY", FRIDAY)
+    assert not session.complete and session.captured == {CALL.occ_symbol}
+    assert session.unresolved == {PUT.occ_symbol} and not session.confirmed_empty

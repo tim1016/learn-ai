@@ -601,17 +601,22 @@ async def ensure_option_day_bars(
     # A session with no bars records 0 and 0, as the metadata rows do; the row count says there are none.
     first_bar_ms = bars[0].t_ms if bars else 0
     last_bar_ms = bars[-1].t_ms if bars else 0
-    published = await publish_option_artifact(
-        payload=payload,
-        rel_path=rel_path,
-        lease=held,
-        row_count=len(bars),
-        first_bar_start_ms=first_bar_ms,
-        last_bar_start_ms=last_bar_ms,
-        data_contract_hash=dch,
-        symbol=symbol,
-        trading_date=trading_date,
-    )
+    from app.data_lake.option_session import option_session_publication_lock
+
+    with option_session_publication_lock(listed_under, trading_date) as owns:
+        if not owns:
+            return await fail("lease_timeout", "session compaction is publishing; retry this contract")
+        published = await publish_option_artifact(
+            payload=payload,
+            rel_path=rel_path,
+            lease=held,
+            row_count=len(bars),
+            first_bar_start_ms=first_bar_ms,
+            last_bar_start_ms=last_bar_ms,
+            data_contract_hash=dch,
+            symbol=symbol,
+            trading_date=trading_date,
+        )
     if isinstance(published, OptionDataFailure):
         return OptionCaptureResult.failed(published)
 

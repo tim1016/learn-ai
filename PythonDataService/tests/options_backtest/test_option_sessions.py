@@ -153,3 +153,18 @@ async def test_published_corrupt_session_never_falls_back_to_good_legacy(fake_ca
     replace_the_stored_file(fake_catalog, raw_root(tmp_lake), path, b"different", admit=False)
     with pytest.raises(LakeAdmissionError):
         await asyncio.to_thread(read_option_day_bars, CALL, FRIDAY)
+
+
+@respx.mock
+async def test_ten_thousand_listing_repack_keeps_26_known_days_partial(fake_catalog, tmp_lake):
+    contracts = [OptionContract.of(root="SPY", expiry_date=FRIDAY, right="call", strike=400 + i) for i in range(10_000)]
+    await listing_of(*contracts)
+    for contract in contracts[:26]:
+        await store_option_day(contract, [])
+    outcome = await repack_option_session("SPY", FRIDAY)
+    assert outcome.failure is None
+    session = await asyncio.to_thread(read_option_session, "SPY", FRIDAY)
+    assert not session.complete and session.answered_count == 26 and len(session.unresolved) == 9_974
+    assert session.confirmed_empty == {contract.occ_symbol for contract in contracts[:26]}
+    assert await asyncio.to_thread(read_option_day_bars, contracts[0], FRIDAY) is not None
+    assert await asyncio.to_thread(read_option_day_bars, contracts[-1], FRIDAY) is None

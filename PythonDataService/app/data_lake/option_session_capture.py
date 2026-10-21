@@ -10,10 +10,15 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
+import shutil
 from collections.abc import Callable
 from datetime import date
+from pathlib import Path
 
 from app.config import settings
+from app.data_lake import catalog_client
+from app.data_lake.admission import LakeAdmissionError
 from app.data_lake.bar_validation import CorruptVendorBarsError, assert_publishable_minute_bars
 from app.data_lake.lean_writer import build_minute_trade_zip_bytes
 from app.data_lake.option_bars import (
@@ -37,7 +42,7 @@ from app.data_lake.option_lake import (
 )
 from app.data_lake.option_listing import ensure_option_listing, read_option_listing
 from app.data_lake.option_session import option_session_dch, read_option_session
-from app.data_lake.option_session_repack import publish_option_session
+from app.data_lake.option_session_repack import _complete, admitted_legacy_members, publish_option_session
 from app.data_lake.path_policy import resolve_staging_root
 from app.data_lake.polygon_fetcher import PolygonFetchError
 from app.data_lake.polygon_option_bars import fetch_option_minute_bars
@@ -47,6 +52,18 @@ from app.utils.advisory_lock import try_advisory_file_lock
 from app.utils.atomic_file import atomic_write_bytes
 from app.utils.background_loop import background_loop
 from app.utils.session_anchors import et_date_at_ms
+
+logger = logging.getLogger(__name__)
+
+
+async def _clear_committed_staging(generation: Path, result: OptionCaptureResult) -> OptionCaptureResult:
+    if result.failure is None and generation.is_dir():
+        try:
+            await asyncio.to_thread(shutil.rmtree, generation)
+        except OSError as exc:
+            logger.warning("committed option capture staging could not be cleared",
+                           extra={"action": "option_capture_staging_cleanup_failed", "error_type": type(exc).__name__})
+    return result
 
 
 async def capture_option_session(
@@ -65,6 +82,7 @@ async def capture_option_session(
             underlying, trading_date, now_ms=now_ms, should_pause=should_pause,
             history_floor=history_floor, retry_exhausted=retry_exhausted), background_loop())
         return await asyncio.wrap_future(future)
+    await catalog_client.init_pool()
     now = current_ms() if now_ms is None else now_ms
     def failed(reason: OptionFailureReason, detail: str) -> OptionCaptureResult:
         return OptionCaptureResult.failed(OptionDataFailure(reason, detail, underlying, trading_date))
@@ -87,17 +105,33 @@ async def capture_option_session(
         listing = await asyncio.to_thread(read_option_listing, underlying, trading_date)
         if listing is None:
             return failed("listing_not_captured", "listing was not admitted after capture")
-        existing = await asyncio.to_thread(read_option_session, underlying, trading_date, listing=listing)
-        if existing is not None and existing.complete:
-            return await publish_option_session(listing, dict(existing.original_bytes))
         generation = staging / option_session_dch() / listing.sha256
+        try:
+            existing = await asyncio.to_thread(read_option_session, underlying, trading_date, listing=listing)
+        except LakeAdmissionError:
+            if await _complete(underlying, trading_date) is not None:
+                raise
+            existing = None
+        if existing is not None and existing.complete:
+            underlying_result = await _capture_underlying(underlying, trading_date, now, allow_before_floor=history_floor is not None)
+            if underlying_result.outcome is Outcome.FAILED:
+                reason: OptionFailureReason = {
+                    "provider_auth_error": "provider_auth_error", "provider_entitlement_error": "provider_entitlement_error",
+                    "outside_data_plan": "outside_data_plan",
+                }.get(underlying_result.reason, "provider_api_error")
+                return failed(reason, underlying_result.detail or "underlying bars could not be captured")
+            return await _clear_committed_staging(generation, await publish_option_session(listing, dict(existing.original_bytes)))
         generation.mkdir(parents=True, exist_ok=True)
         captured = {} if existing is None else dict(existing.original_bytes)
+        captured.update(await asyncio.to_thread(admitted_legacy_members, listing))
         for row in listing.rows:
             symbol = row.ticker.removeprefix("O:")
             # The parser rejects unsafe or mismatched symbols before URL or path use.
             from app.options.contract import OptionContract
-            OptionContract.from_occ_symbol(symbol)
+            try:
+                OptionContract.from_occ_symbol(symbol)
+            except ValueError as exc:
+                return failed("validation_failed", f"listed ticker cannot be captured: {exc}")
             path = generation / f"{symbol}.zip"
             if path.is_file():
                 payload = path.read_bytes()
@@ -131,7 +165,12 @@ async def capture_option_session(
                 parse_option_day_zip(payload, symbol, trading_date)
             except PolygonFetchError as exc:
                 atomic_write_bytes(attempts_path, str(attempts + 1).encode())
-                return failed(vendor_reason(exc), str(exc))
+                reason = vendor_reason(exc)
+                if captured and reason in {"outside_data_plan", "provider_auth_error", "provider_entitlement_error"}:
+                    partial = await publish_option_session(listing, captured)
+                    if partial.failure is not None:
+                        return partial
+                return failed(reason, str(exc))
             except (CorruptVendorBarsError, ArithmeticError, ValueError) as exc:
                 atomic_write_bytes(attempts_path, str(attempts + 1).encode())
                 return failed("validation_failed", str(exc))
@@ -144,4 +183,4 @@ async def capture_option_session(
         underlying_result = await _capture_underlying(underlying, trading_date, now, allow_before_floor=history_floor is not None)
         if underlying_result.outcome is Outcome.FAILED:
             return failed("provider_api_error", underlying_result.detail or "underlying bars could not be captured")
-        return await publish_option_session(listing, captured)
+        return await _clear_committed_staging(generation, await publish_option_session(listing, captured))
