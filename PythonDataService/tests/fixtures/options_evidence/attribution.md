@@ -30,6 +30,14 @@ retained development evidence. Its input paths and digests come from the
 recorded session pins; missing-mark causes remain unknown until a separate
 targeted inspection verifies a specific archived input.
 
+`lineage-receipts.json` was read 2026-10-20 from the same study's durable SQL
+ledgers: evaluation counts (27 keys, 27 completed, 27 physical starts), 28 trial
+events (21 evaluated, 7 cache hits, zero invalid), and one development exposure.
+These are distinct accounting measures, not 28 independent strategies. Only
+the first 51 trial receipts and first 201 exposure receipts can be captured;
+this study has 28 and one respectively. No evaluation payloads or credentials
+are included. `capture_lineage.py` reproduces this bounded read into a new file.
+
 These fixtures test identity and display projections. Canonical numerical
 calculations remain covered by their existing engine fixtures/tests. No vendor
 capture, replay, approval or configuration command was issued to capture them.
