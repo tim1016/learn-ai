@@ -30,6 +30,7 @@ import asyncpg
 
 from app.config import settings
 from app.data_lake import catalog_client
+from app.data_lake.maintenance import LakeMaintenanceBusyError, lake_activity
 from app.data_lake.path_policy import lake_root_for
 from app.data_lake.root_identity import LakeRootIdentityError, read_marker
 from app.utils.background_loop import CallerStoppedWaitingError, run_on_background_loop
@@ -50,12 +51,16 @@ def read_committed_bytes(path: Path) -> bytes:
     Plain LEAN reference fixtures retain their file-only contract. Managed
     lake paths require an identity marker even when Postgres is unavailable.
     """
-    payload = path.read_bytes()
     root = lake_root_for(path) or lake_root_for(path.resolve())
     if root is None:
-        return payload
-    verify_committed_digest(path, root, hashlib.sha256(payload).hexdigest(), len(payload))
-    return payload
+        return path.read_bytes()
+    try:
+        with lake_activity(root):
+            payload = path.read_bytes()
+            verify_committed_digest(path, root, hashlib.sha256(payload).hexdigest(), len(payload))
+            return payload
+    except LakeMaintenanceBusyError as exc:
+        raise LakeAdmissionError(f"{path}: lake retirement is in progress; retry later") from exc
 
 
 @dataclass(frozen=True)
