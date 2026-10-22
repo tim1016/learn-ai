@@ -140,3 +140,16 @@ def test_account_probe_pins_inclusive_weekday_anniversary() -> None:
     # SPY241025C00580000 on session1729517400000, earlier Oct17/18 refused.
     assert archive_history_boundary(date(2026, 10, 21)) == date(2024, 10, 21)
     assert session_open_ms_utc(archive_history_boundary(date(2026, 10, 21))) == 1729517400000
+
+
+def test_the_owner_opt_in_keeps_capture_planned_and_due_through_regular_hours() -> None:
+    day = date(2026, 10, 21)
+    window = session_window_for_date(day)
+    baseline = session_open_ms_utc(date(2026, 10, 14))
+    through = plan_archive(now_ms=window.open_ms_utc, baseline_ms=baseline, complete=frozenset(), lost=frozenset(),
+                           pause_regular_hours=False)
+    assert through.phase == "capture" and through.work
+    state = ArchiveStateDoc(version=1, jobs={"capture": JobReceipt()})
+    opted_in = project_health(state, now_ms=window.open_ms_utc,
+                              config=ArchiveSettings(ENABLED=True, CAPTURE_DURING_REGULAR_HOURS=True)).underlyings[0]
+    assert opted_in.next_due_ms == window.open_ms_utc

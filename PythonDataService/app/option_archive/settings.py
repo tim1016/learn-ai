@@ -15,6 +15,9 @@ class ArchiveSettings(BaseSettings):
 
     ENABLED: bool = False
     CAPTURE_START_MINUTE_ET: int = Field(default=60, ge=0, le=1439)
+    #: Owner opt-in: capture keeps fetching through regular trading hours instead of yielding to them.
+    #: Backup and restore still keep out of regular hours, and capture still yields to the evening observation.
+    CAPTURE_DURING_REGULAR_HOURS: bool = False
     BACKUP_START_MINUTE_ET: int = Field(default=300, ge=0, le=1439)
     SNAPSHOT_DELAY_MS: int = Field(default=1_800_000, ge=0)
     SNAPSHOT_WINDOW_MS: int = Field(default=7_200_000, ge=60_000)

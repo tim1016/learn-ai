@@ -48,9 +48,10 @@ def _job_health(receipt: JobReceipt, *, now_ms: int, stale_ms: int, name: str, p
         free_bytes=receipt.free_bytes, manifest_sha256=receipt.manifest_sha256)
 
 
-def _capture_phase(job: JobReceipt, *, now_ms: int, margin_ms: int, capacity_paused: bool) -> ArchivePhase:
+def _capture_phase(job: JobReceipt, *, now_ms: int, margin_ms: int, capacity_paused: bool,
+                   pause_regular_hours: bool = True) -> ArchivePhase:
     """Where capture stands now, read from the last pass's receipt."""
-    if regular_hours_pause(now_ms, margin_ms):
+    if pause_regular_hours and regular_hours_pause(now_ms, margin_ms):
         return "rth_pause"
     if job.failure is not None:
         return "failed"
@@ -73,9 +74,12 @@ def project_health(state: ArchiveStateDoc, *, now_ms: int, config: ArchiveSettin
     # Staging space is one budget, so a capacity pause holds every underlying.
     capacity_reason = next((row.reason for rows in state.sessions.values() for row in rows.values()
                             if row.outcome is SessionOutcome.CAPACITY_PAUSED), None)
-    phase = _capture_phase(job, now_ms=now_ms, margin_ms=config.REQUEST_OPEN_MARGIN_MS, capacity_paused=capacity_reason is not None)
+    pause_regular_hours = not config.CAPTURE_DURING_REGULAR_HOURS
+    phase = _capture_phase(job, now_ms=now_ms, margin_ms=config.REQUEST_OPEN_MARGIN_MS, capacity_paused=capacity_reason is not None,
+                           pause_regular_hours=pause_regular_hours)
     next_due = next_daily_run_ms(now_ms=now_ms, minute_et=config.CAPTURE_START_MINUTE_ET, completed_day_ms=job.completed_day_ms,
-                                 retry_after_ms=job.retry_after_ms, margin_ms=config.REQUEST_OPEN_MARGIN_MS)
+                                 retry_after_ms=job.retry_after_ms, margin_ms=config.REQUEST_OPEN_MARGIN_MS,
+                                 pause_regular_hours=pause_regular_hours)
     result: list[UnderlyingArchiveHealth] = []
     for symbol in UNDERLYINGS:
         rows = state.sessions.get(symbol, {})

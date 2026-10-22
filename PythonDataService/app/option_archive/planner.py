@@ -98,17 +98,18 @@ def snapshot_window_ms(close_ms: int, *, delay_ms: int, window_ms: int) -> tuple
 
 
 def next_daily_run_ms(*, now_ms: int, minute_et: int, completed_day_ms: int | None,
-                      retry_after_ms: int | None, margin_ms: int) -> int:
+                      retry_after_ms: int | None, margin_ms: int, pause_regular_hours: bool = True) -> int:
     """The first instant at or after ``now_ms`` when a once-a-day job is due.
 
     It starts at ``minute_et`` past ET midnight, once per day, never inside the
-    regular-hours pause, and not before a pending retry backoff ends.
+    regular-hours pause unless ``pause_regular_hours`` is off, and not before a
+    pending retry backoff ends.
     """
     day = et_date_at_ms(now_ms)
     if completed_day_ms == et_midnight_ms(day):
         day += timedelta(days=1)
     due = max(now_ms, et_minute_of_day_ms(day, minute_et), retry_after_ms or 0)
-    if regular_hours_pause(due, margin_ms):
+    if pause_regular_hours and regular_hours_pause(due, margin_ms):
         due = session_window_for_date(et_date_at_ms(due)).close_ms_utc
     return due
 
@@ -129,9 +130,10 @@ class ArchivePlan:
 def plan_archive(
     *, now_ms: int, baseline_ms: int, complete: frozenset[tuple[str, int]],
     lost: frozenset[tuple[str, int]], start_minute_et: int = 60, margin_ms: int = 60_000,
+    pause_regular_hours: bool = True,
 ) -> ArchivePlan:
     today = et_date_at_ms(now_ms)
-    if regular_hours_pause(now_ms, margin_ms):
+    if pause_regular_hours and regular_hours_pause(now_ms, margin_ms):
         return ArchivePlan("rth_pause")
     if now_ms < et_minute_of_day_ms(today, start_minute_et):
         return ArchivePlan("waiting")
