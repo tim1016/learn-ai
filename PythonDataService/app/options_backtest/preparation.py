@@ -21,7 +21,6 @@ from app.options_backtest.frozen_inputs import FrozenRunInputs, freeze_run_input
 from app.options_backtest.input_staging import InputStaging, job_root
 from app.options_backtest.lake_data import LakeRunData
 from app.options_backtest.timings import PhaseTiming, RunTimings
-from app.research.golden_search.proof import BlobStore
 from app.research.options_golden_search.protocol import point_hash
 from app.research.persistence import lifecycle
 from app.research.persistence.db import run_sync, with_connection
@@ -90,9 +89,7 @@ def verify_completed(req: OptionsBacktestJobRequest, checkpoint: PreparationChec
         raise ValueError("completed preparation does not contain the exact requested sessions")
     if frozen.root != str(job_root(settings.OPTIONS_BACKTEST_INPUT_ROOT, req.job_id)):
         raise ValueError("prepared input root differs from the configured shared root")
-    blobs = BlobStore(Path(frozen.root))
-    if sum(len(blobs.get(digest)) for digest in frozen.sessions.values()) != frozen.retained_bytes:
-        raise ValueError("completed preparation does not match its retained-byte inventory")
+    frozen.verify_blobs()
     return frozen
 
 
@@ -153,7 +150,7 @@ def _collect_preparation(request: OptionsBacktestPreparationRequest, emit: Progr
                     verify_completed(req, checkpoint)
                     return checkpoint.model_dump(mode="json")
             resume = None if checkpoint is None else checkpoint.inputs
-            stage.retain_verified({} if resume is None else resume.sessions)
+            stage.retain_verified(frozenset() if resume is None else resume.blob_digests)
             sessions = service.sessions_of_range(req.start_ms, req.end_ms)
             hooks = service.RunHooks(receipts.phase, receipts.progress, lambda message: None, owner.stop)
 

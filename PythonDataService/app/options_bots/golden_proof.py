@@ -24,7 +24,7 @@ from app.data_lake.admission import read_committed_bytes
 from app.data_lake.option_bars import parse_option_day_zip
 from app.data_lake.option_lake import option_read_root
 from app.data_lake.option_listing import OptionListing, parse_option_listing_zip
-from app.data_lake.option_session import parse_retained_option_session, read_option_session
+from app.data_lake.option_session import OptionSessionDecodeScope, parse_retained_option_session, read_option_session
 from app.data_lake.path_policy import LeanMinuteBarPath, OptionListingPath, OptionMinuteBarPath, OptionSessionPath
 from app.engine.data.lean_format import LeanMinuteDataReader
 from app.lean_sidecar.trading_calendar import CALENDAR_IDENTITY, CALENDAR_PACKAGE_VERSION
@@ -170,6 +170,7 @@ class ArchivedRunData:
         self.underlying = underlying
         self.manifest = dict(manifest)
         self.blobs = blobs
+        self._decode_scope = OptionSessionDecodeScope()
 
     def _read(self, relative: str) -> tuple[bytes, str]:
         if relative not in self.manifest:
@@ -177,10 +178,10 @@ class ArchivedRunData:
         digest = self.manifest[relative]
         return self.blobs.get(digest), digest
 
-    def read_artifact(self, relative: str, *, max_bytes: int) -> bytes:
+    def read_artifact(self, relative: str, *, max_bytes: int) -> bytes | None:
         """Read one bounded, hash-verified original from this immutable inventory."""
         if relative not in self.manifest:
-            raise GoldenProofError("The replay requested an input outside the approved evidence.")
+            return None
         digest = self.manifest[relative]
         if (self.blobs.root / digest[:2] / digest).stat().st_size > max_bytes:
             raise ValueError("original artifact exceeds the frozen input byte bound")
@@ -218,7 +219,7 @@ class ArchivedRunData:
             listing_raw, listing_digest = self._read(str(OptionListingPath(self.underlying, trading_date).relative_path()))
             listing = OptionListing(self.underlying, trading_date,
                 parse_option_listing_zip(listing_raw, self.underlying, trading_date), listing_digest)
-            session = parse_retained_option_session(payload, listing)
+            session = parse_retained_option_session(payload, listing, decode_scope=self._decode_scope)
             day = session.option_day(contract.occ_symbol)
             if day is not None:
                 return Captured(_named_by_close(day.bars, trading_date, subject="archived contract",

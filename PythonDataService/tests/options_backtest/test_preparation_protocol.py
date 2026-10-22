@@ -19,6 +19,7 @@ from app.options_backtest.preparation import PREPARATION_JOB_TYPE, PreparationCh
 from app.options_backtest.timings import RunTimings
 from app.research.persistence.ownership import GenerationFencedError
 from app.utils.timestamps import now_ms_utc
+from tests.options_backtest._archived_data import archived_scene
 from tests.options_backtest._preparation_jobs_fixture import owner as owner
 from tests.options_backtest._run_data import THU, WED, chain_scene
 
@@ -33,7 +34,7 @@ def _child(fake, job_id: str) -> ProgressEmitter:
 
 
 def _complete(req, tmp_path: Path) -> PreparationCheckpoint:
-    frozen = freeze_run_inputs(req.setup, (WED, THU), chain_scene(), tmp_path / req.job_id)
+    frozen = freeze_run_inputs(req.setup, (WED, THU), archived_scene(chain_scene(), tmp_path / "source"), tmp_path / req.job_id)
     checkpoint = PreparationCheckpoint(identity=preparation_identity(req), inputs=frozen, complete=True)
     (tmp_path / req.job_id / "freeze-checkpoint.json").write_text(checkpoint.model_dump_json())
     return checkpoint
@@ -194,7 +195,7 @@ async def test_completed_checkpoint_refuses_changed_input_binding_without_dispat
     if changed == "identity":
         checkpoint = checkpoint.model_copy(update={"identity": "0" * 64})
     elif changed == "blob":
-        digest = next(iter(frozen.sessions.values()))
+        digest = next(iter(frozen.blob_digests))
         (Path(frozen.root) / digest[:2] / digest).write_bytes(b"changed input bytes")
     else:
         checkpoint = checkpoint.model_copy(update={"inputs": frozen.model_copy(update=updates[changed])})

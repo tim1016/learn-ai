@@ -10,6 +10,7 @@ from app.engine.data.decoded_cache import DecodedArtifactCache
 from app.options_backtest import frozen_inputs
 from app.options_backtest.frozen_inputs import FrozenRunData, FrozenRunInputs, freeze_run_inputs
 from app.options_backtest.run import run_sessions
+from app.options_bots.golden_proof import GoldenProofError
 from app.research.golden_search.proof import BlobStore, ProofMismatchError
 from tests.options_backtest._archived_data import archived_scene
 from tests.options_backtest._run_data import THU, WED, chain_scene
@@ -65,3 +66,16 @@ def test_transitive_inventory_counts_each_original_blob_once_and_refuses_old_che
                sessions={str(anchor): hashlib.sha256(b"former decoded codec").hexdigest()})
     with pytest.raises(ValueError, match=r"unsupported frozen input.*restart preparation"):
         FrozenRunInputs.model_validate(old)
+
+
+def test_warm_inventory_cannot_reuse_a_decode_for_another_session(tmp_path: Path) -> None:
+    source = archived_scene(chain_scene(), tmp_path / "source")
+    frozen = freeze_run_inputs(setup(), (WED,), source, tmp_path / "frozen")
+    anchor, session = next(iter(frozen.sessions.items()))
+    malformed = frozen.model_copy(update={"sessions": {anchor + 86_400_000: session}})
+    for warm in (False, True):
+        cache = DecodedArtifactCache(max_bytes=64 * 1024**2)
+        if warm:
+            assert FrozenRunData(frozen, cache).listing(WED) is not None
+        with pytest.raises(GoldenProofError):
+            FrozenRunData(malformed, cache).listing(THU)

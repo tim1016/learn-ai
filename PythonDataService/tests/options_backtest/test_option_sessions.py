@@ -201,7 +201,7 @@ async def test_contract_reads_of_one_admitted_session_share_one_decode_and_every
     await store_option_day(CALL, [{"t": FRIDAY_OPEN_MS, "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}])
     await store_option_day(PUT, [])
     assert (await repack_option_session("SPY", FRIDAY)).failure is None
-    monkeypatch.setattr(option_session, "_LAST_SESSION", option_session._LastDecodedSession())
+    monkeypatch.setattr(option_session, "_LAST_SESSION", option_session.OptionSessionDecodeScope())
     decodes = []
     real_decode = option_session.parse_option_session
     monkeypatch.setattr(option_session, "parse_option_session", lambda *a, **k: decodes.append(1) or real_decode(*a, **k))

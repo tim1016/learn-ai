@@ -45,7 +45,7 @@ _SESSION_OVERHEAD_BYTES = 64
 
 
 class OriginalRunData(RunData, Protocol):
-    def read_artifact(self, relative: str, *, max_bytes: int) -> bytes: ...
+    def read_artifact(self, relative: str, *, max_bytes: int) -> bytes | None: ...
 
 
 class FrozenSession(BaseModel):
@@ -132,9 +132,11 @@ class _RecordingData:
     def __init__(self, source: OriginalRunData, underlying: str) -> None:
         self.source, self.underlying = source, underlying
         self.artifacts: dict[str, str | None] = {}
+        self.stock: Captured[Sequence[MinuteBar]] | None = None
         self.listed: Captured[Listing] | None = None
         self.options: dict[str, Captured[Sequence[MinuteBar]] | None] = {}
         self.container_recorded = False
+        self._session_checked = False
 
     def record(self, relative: str, expected: str | None) -> None:
         if relative in self.artifacts and self.artifacts[relative] != expected:
@@ -143,6 +145,7 @@ class _RecordingData:
 
     def underlying_day(self, day: date) -> Captured[Sequence[MinuteBar]] | None:
         found = self.source.underlying_day(day)
+        self.stock = found
         self.record(str(LeanMinuteBarPath("usa", self.underlying, day, "trade").relative_path()), None if found is None else found.sha256)
         return found
 
@@ -152,11 +155,16 @@ class _RecordingData:
         return self.listed
 
     def option_day(self, contract: OptionContract, day: date) -> Captured[Sequence[MinuteBar]] | None:
+        if not self._session_checked:
+            relative = str(OptionSessionPath(self.underlying, day).relative_path())
+            payload = self.source.read_artifact(relative, max_bytes=MAX_SESSION_BYTES)
+            self.record(relative, None if payload is None else hashlib.sha256(payload).hexdigest())
+            self.container_recorded = payload is not None
+            self._session_checked = True
         found = self.source.option_day(contract, day)
         self.options[contract.occ_symbol] = found
         if found is not None and found.reference is not None:
             self.record(str(OptionSessionPath(self.underlying, day).relative_path()), found.reference.container_sha256)
-            self.container_recorded = True
         else:
             self.record(str(OptionMinuteBarPath(contract.root, contract.occ_symbol, day).relative_path()), None if found is None else found.sha256)
         return found
@@ -178,14 +186,13 @@ def _verify_session_generation(data: RunData, day: date, recording: _RecordingDa
             representative = symbol
     if len(generations) > 1:
         raise ValueError("option container generation changed during input freeze; retry with one generation")
-    if representative is not None:
-        for symbol, found in recording.options.items():
-            if found is not None and found.reference is not None and symbol != representative:
-                continue
-            current = data.option_day(OptionContract.from_occ_symbol(symbol), day)
-            if (current is None) != (found is None) or (current is not None and found is not None
-                    and (current.sha256, current.reference) != (found.sha256, found.reference)):
-                raise ValueError("option source generation changed during input freeze; retry with one generation")
+    for symbol, found in recording.options.items():
+        if found is not None and found.reference is not None and symbol != representative:
+            continue
+        current = data.option_day(OptionContract.from_occ_symbol(symbol), day)
+        if (current is None) != (found is None) or (current is not None and found is not None
+                and (current.sha256, current.reference) != (found.sha256, found.reference)):
+            raise ValueError("option source generation changed during input freeze; retry with one generation")
     current = data.listing(day)
     if current is None or current.sha256 != original:
         raise ValueError("listing generation changed during input freeze; retry with one generation")
@@ -205,6 +212,8 @@ class _SessionRetention:
                 raise ValueError("input artifact generation changed during input freeze")
             return
         if expected is None:
+            if self.data.read_artifact(relative, max_bytes=MAX_SESSION_BYTES) is not None:
+                raise ValueError("input artifact generation changed during input freeze")
             self.absent.add(relative)
             return
         remaining = min(MAX_SESSION_BYTES - sum(self.session_sizes.values()),
@@ -212,7 +221,7 @@ class _SessionRetention:
         # A duplicate blob still needs admission but consumes no new space.
         limit = MAX_SESSION_BYTES if expected in self.sizes else remaining
         payload = self.data.read_artifact(relative, max_bytes=limit)
-        if hashlib.sha256(payload).hexdigest() != expected:
+        if payload is None or hashlib.sha256(payload).hexdigest() != expected:
             raise ValueError("input artifact generation changed during input freeze; retry with one generation")
         session_size = sum(self.session_sizes.values()) + (0 if expected in self.session_sizes else len(payload))
         retained = sum(self.sizes.values()) + (0 if expected in self.sizes else len(payload))
@@ -275,16 +284,23 @@ def freeze_run_inputs(
         _verify_session_generation(data, day, recording)
         for relative, expected in recording.artifacts.items():
             retention.record(relative, expected)
-        inventory[anchor] = FrozenSession(snapshot=Snapshot(version=2 if recording.container_recorded else 1,
+        session = FrozenSession(snapshot=Snapshot(version=2 if recording.container_recorded else 1,
             manifest=retention.manifest, absent=tuple(sorted(retention.absent)),
             retained_bytes=sum(retention.session_sizes.values())),
             contracts=tuple(recording.options))
+        retained = _decode(session, setup.underlying, day, blobs)
+        if (retained.get("underlying") != recording.stock or retained.get("listing") != recording.listed
+                or retained["options"] != recording.options):
+            raise ValueError("retained originals differ from the admitted setup answers")
+        inventory[anchor] = session
         on_checkpoint(checkpoint())
         on_session(done + 1, len(sessions), day)
     return checkpoint()
 
 
 def _decode(session: FrozenSession, underlying: str, day: date, blobs: BlobStore) -> dict[str, Any]:
+    # The whole container decode is scoped to this call. Only selected replay
+    # values survive in the worker's accounted decoded cache (#3440).
     data = SnapshotRunData(underlying, session.snapshot, blobs)
     rows: dict[str, Any] = {"options": {}}
     if session.snapshot.manifest or session.snapshot.absent:
@@ -310,6 +326,7 @@ class FrozenSessionKey:
     source_root_id: str
     underlying: str
     relative_path: str
+    session_open_ms: int
     decoder_version: str = DECODER_VERSION
 
 
@@ -326,7 +343,9 @@ class FrozenRunData:
         if sum(sizes.values()) != session.snapshot.retained_bytes:
             raise ValueError("frozen session checkpoint byte count differs")
         digest = session.digest
-        key = FrozenSessionKey(digest, self.frozen.source_root_id, self.frozen.underlying, f"sessions/{digest}")
+        anchor = session_window_for_date(day).open_ms_utc
+        key = FrozenSessionKey(digest, self.frozen.source_root_id, self.frozen.underlying,
+                               f"sessions/{anchor}/{digest}", anchor)
         return self.cache.get_or_decode_value(key, lambda: _decode(session, self.frozen.underlying, day, blobs),
                                               estimate=_estimated_bytes)
 
