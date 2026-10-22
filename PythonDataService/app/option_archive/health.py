@@ -11,6 +11,7 @@ from app.option_archive.planner import (
     archive_history_boundary,
     next_daily_run_ms,
     regular_hours_pause,
+    snapshot_window_ms,
 )
 from app.option_archive.settings import ArchiveSettings
 from app.option_archive.state import ArchiveStateDoc, JobReceipt, SessionReceipt
@@ -109,7 +110,9 @@ def project_health(state: ArchiveStateDoc, *, now_ms: int, config: ArchiveSettin
         if state.snapshot_activation_ms is not None:
             for day in expected_sessions(et_date_at_ms(state.snapshot_activation_ms), today):
                 window = session_window_for_date(day)
-                if now_ms >= window.close_ms_utc + config.SNAPSHOT_DELAY_MS + config.SNAPSHOT_WINDOW_MS and window.open_ms_utc not in observations:
+                _, cutoff = snapshot_window_ms(window.close_ms_utc, delay_ms=config.SNAPSHOT_DELAY_MS,
+                                               window_ms=config.SNAPSHOT_WINDOW_MS)
+                if now_ms >= cutoff and window.open_ms_utc not in observations:
                     missed += 1
         incomplete = sum(not row.complete for row in observations.values())
         last_observation = max(observations, default=None)

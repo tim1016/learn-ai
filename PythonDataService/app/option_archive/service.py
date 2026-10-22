@@ -41,6 +41,7 @@ from app.option_archive.planner import (
     next_daily_run_ms,
     plan_archive,
     regular_hours_pause,
+    snapshot_window_ms,
 )
 from app.option_archive.restored_reads import decode_restored_lake, read_restored_catalog
 from app.option_archive.scheduler import ArchiveJob, ArchiveScheduler, JobOwnership, PostgresJobOwnership
@@ -121,8 +122,9 @@ class OptionArchiveService:
             window = session_window_for_date(today)
         except LookupError:
             return False
-        due = window.close_ms_utc + self.config.SNAPSHOT_DELAY_MS
-        return (due <= now < due + self.config.SNAPSHOT_WINDOW_MS
+        due, cutoff = snapshot_window_ms(window.close_ms_utc, delay_ms=self.config.SNAPSHOT_DELAY_MS,
+                                         window_ms=self.config.SNAPSHOT_WINDOW_MS)
+        return (due <= now < cutoff
                 and receipt.completed_day_ms != et_midnight_ms(today)
                 and now >= (receipt.retry_after_ms or 0))
 
@@ -300,7 +302,8 @@ class OptionArchiveService:
         if not self.snapshot_due(start):
             raise SnapshotOutsideWindowError("snapshot capture is outside its bounded evening due window")
         window = session_window_for_date(day)
-        cutoff = window.close_ms_utc + self.config.SNAPSHOT_DELAY_MS + self.config.SNAPSHOT_WINDOW_MS
+        _, cutoff = snapshot_window_ms(window.close_ms_utc, delay_ms=self.config.SNAPSHOT_DELAY_MS,
+                                       window_ms=self.config.SNAPSHOT_WINDOW_MS)
         complete = True
         existing = self.state.read().snapshots
         for symbol in UNDERLYINGS:
