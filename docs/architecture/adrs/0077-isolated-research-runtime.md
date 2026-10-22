@@ -187,3 +187,26 @@ its historical retry and observation policy. A shared lifecycle controlled by
 a mode flag would hide these different guarantees at the call site and make
 an unsafe retry look interchangeable with local recovery. This records the
 existing behavior; it changes no execution or accounting policy.
+
+
+## Amendment 2026-10-21 — frozen replay retains original artifacts (#3440 A3)
+
+**Owner decision, 2026-10-21:** replace the temporary decoded-session codec
+with the original admitted artifacts in the existing Snapshot/BlobStore form.
+This keeps one canonical archive reader and preserves original listing,
+absence and member identities. A session container is retained whole, including
+when every selected contract uses its legacy fallback; extracting members would
+require a different evidence contract. Setup discovery still determines which
+contracts the replay may read.
+
+Keep the existing storage envelope: at most 128 MiB of unique original blob
+bytes per session, 2 GiB per run, and 8 GiB reserved across staged jobs. Count
+whole containers and deduplicate identical blobs within each job. Refuse a
+newly oversized session or run explicitly, even when its former decoded codec
+would have fitted. The owner accepts that narrower admission rather than
+raising the budget without representative full-chain volume evidence.
+
+Temporary checkpoints from the old decoder generation are incompatible and
+must restart preparation; they are never reinterpreted or rewritten into the
+new recipe. Same-generation restarts resume a verified prefix. Durable studies,
+proofs and their original blobs remain unchanged.
