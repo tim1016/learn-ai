@@ -38721,11 +38721,6 @@
             "title": "Generated Ms",
             "type": "integer"
           },
-          "retention_permission": {
-            "const": "awaiting_vendor_reply",
-            "default": "awaiting_vendor_reply",
-            "title": "Retention Permission"
-          },
           "test_restore": {
             "$ref": "#/components/schemas/ArchiveJobHealth"
           },

@@ -23245,12 +23245,6 @@ export interface components {
             enabled: boolean;
             /** Generated Ms */
             generated_ms: number;
-            /**
-             * Retention Permission
-             * @default awaiting_vendor_reply
-             * @constant
-             */
-            retention_permission?: "awaiting_vendor_reply";
             test_restore: components["schemas"]["ArchiveJobHealth"];
             /** Underlyings */
             underlyings: components["schemas"]["UnderlyingArchiveHealth"][];
