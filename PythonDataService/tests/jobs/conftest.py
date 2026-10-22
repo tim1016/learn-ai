@@ -71,14 +71,39 @@ class _FakeRedis:
     def hget(self, key: str, name: str) -> str | None:
         return self.hashes.get(key, {}).get(name)
 
-    def hset(self, key: str, mapping: dict[str, Any] | None = None, **_: Any) -> None:
-        self.hashes.setdefault(key, {}).update(mapping or {})
+    def hset(self, key: str, name: str | None = None, value: str | None = None,
+             mapping: dict[str, Any] | None = None, **_: Any) -> None:
+        fields = self.hashes.setdefault(key, {})
+        if name is not None:
+            fields[name] = str(value)
+        fields.update(mapping or {})
 
     def set(self, key: str, value: str, ex: int | None = None) -> None:
         self.strings[key] = value
 
+    def eval(self, script: str, number_of_keys: int, *values: Any) -> int:
+        if number_of_keys == 2:
+            lease, state, token, _lease_ttl, state_ttl = values
+            fields = self.hashes.get(state, {})
+            if fields.get("status") in {"completed", "failed", "cancelled"} or fields.get("started_at"):
+                return -1
+            if lease in self.strings:
+                return 0
+            self.strings[lease] = token
+            if "status" not in fields:
+                self.hset(state, mapping={"status": "queued"})
+            self.expire(state, state_ttl)
+            return 1
+        if number_of_keys == 1:
+            lease, token = values
+            if self.strings.get(lease) == token:
+                self.delete(lease)
+                return 1
+            return 0
+        raise NotImplementedError("The job-store fake supports only worker claim and release scripts.")
+
     def exists(self, key: str) -> bool:
-        return key in self.strings
+        return key in self.strings or key in self.hashes or key in self.streams or key in self.sets
 
     def delete(self, *keys: str) -> None:
         for key in keys:

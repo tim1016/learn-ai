@@ -25048,6 +25048,18 @@ export interface components {
              */
             reason: "chain_incomplete" | "expiry_not_listed" | "expiry_not_a_session" | "strike_not_listed" | "not_standard";
         };
+        /** OptionsBacktestPreparationRequest */
+        OptionsBacktestPreparationRequest: {
+            /** Generation */
+            generation: number;
+            /** Identity */
+            identity: string;
+            /** Job Id */
+            job_id: string;
+            parent: components["schemas"]["OptionsBacktestJobRequest"];
+            /** Run Id */
+            run_id: number;
+        };
         /** OptionsBacktestProblemResponse */
         OptionsBacktestProblemResponse: {
             /**
@@ -44364,17 +44376,17 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["OptionsBacktestJobRequest"];
+                "application/json": components["schemas"]["OptionsBacktestPreparationRequest"];
             };
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JobAcceptedResponse"];
                 };
             };
             /** @description Validation Error */

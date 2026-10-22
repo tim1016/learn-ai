@@ -124,7 +124,7 @@ async def _close_abandoned_generations(authority: ownership.RuntimeAuthority) ->
         # own in its ``finally``. Its durable row, not the Redis job record, says so: the API's startup sweep
         # or the 24 h TTL may have closed the record first (#3440).
         options_jobs = await conn.fetch(
-            "SELECT owner.job_id FROM research_job_owners owner "
+            "SELECT owner.job_id, run.preparation_job_id FROM research_job_owners owner "
             "JOIN research_options_backtest_runs run ON run.job_id = owner.job_id "
             "WHERE owner.kind='options_backtest' AND owner.boot_generation < $1 AND run.status = 'running'",
             authority.boot_generation,
@@ -135,9 +135,15 @@ async def _close_abandoned_generations(authority: ownership.RuntimeAuthority) ->
 
     if job_ids:
         await asyncio.to_thread(close_orphaned_job_records, job_ids)
+    from app.jobs import facade
     from app.options_backtest.input_staging import release_job_inputs
 
     for row in options_jobs:
+        if row["preparation_job_id"]:
+            try:
+                await facade.request_cancel(row["preparation_job_id"])
+            except facade.JobRecordNotFoundError:
+                logger.debug("abandoned preparation transport already expired", extra={"job_id": row["preparation_job_id"]})
         await asyncio.to_thread(release_job_inputs, settings.OPTIONS_BACKTEST_INPUT_ROOT, row["job_id"])
 
 

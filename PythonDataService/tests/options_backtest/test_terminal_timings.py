@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 from dataclasses import dataclass, field
 from datetime import date
@@ -11,10 +12,12 @@ from typing import Any
 import pytest
 import respx
 
+from app.jobs import facade, progress
 from app.jobs.progress import JobCancelled, ProgressEmitter
 from app.options_backtest import runtime, service
 from app.options_backtest.dispatch import replay_frozen_run
 from app.options_backtest.frozen_inputs import freeze_run_inputs
+from app.options_backtest.preparation import PREPARATION_JOB_TYPE, preparation_identity
 from app.options_backtest.timings import PhaseTiming, RunTimings
 from app.research.golden_search.shared_pool import SharedWorkerPool
 from app.research.golden_search.worker import WorkerDispatchContext
@@ -22,10 +25,10 @@ from app.research.persistence import ownership
 from app.utils.background_loop import CallerStoppedWaitingError
 from tests._helpers.fake_lake_catalog import FakeCatalog
 from tests.options_backtest._a_run import a_busy_run
+from tests.options_backtest._archived_data import archived_scene
 from tests.options_backtest._lake import fake_catalog as fake_catalog
 from tests.options_backtest._lake import tmp_lake as tmp_lake
-from tests.options_backtest._preparation_peer import owner as owner
-from tests.options_backtest._preparation_peer import send, socket_peer
+from tests.options_backtest._preparation_jobs_fixture import owner as owner
 from tests.options_backtest._run_data import THU, WED, chain_scene
 from tests.options_backtest._run_lake import Vendor
 from tests.options_backtest.test_service import FakeStore, Job, _execute, the_scene
@@ -135,9 +138,9 @@ def test_interrupted_shared_pool_retains_elapsed_queue_and_replay(
     from tests.options_backtest.setup_fixtures import leg, setup
 
     given = setup(legs=[leg(expiry={"kind": "same_day"})])
-    frozen = freeze_run_inputs(given, (WED, THU), chain_scene(), tmp_path)
+    frozen = freeze_run_inputs(given, (WED, THU), archived_scene(chain_scene(), tmp_path / "source"), tmp_path)
     if stop_at == "failed_replay":
-        digest = next(iter(frozen.sessions.values()))
+        digest = next(iter(frozen.blob_digests))
         (tmp_path / digest[:2] / digest).write_bytes(b"corrupt admitted input")
     cancelled = threading.Event()
     if stop_at == "queue":
@@ -165,7 +168,7 @@ def test_queue_to_replay_uses_one_boundary_without_dropping_observations(tmp_pat
     from tests.options_backtest.setup_fixtures import leg, setup
 
     given = setup(legs=[leg(expiry={"kind": "same_day"})])
-    frozen = freeze_run_inputs(given, (WED,), chain_scene(), tmp_path)
+    frozen = freeze_run_inputs(given, (WED,), archived_scene(chain_scene(), tmp_path / "source"), tmp_path)
     # Delay between adjacent samples exposes double-counted time. Only the
     # ledger's clocks are replaced; the actual pool runs normally. Samples:
     # start, queue opens, the first chain begins, replay closes, aggregation
@@ -191,27 +194,52 @@ def test_queue_to_replay_uses_one_boundary_without_dropping_observations(tmp_pat
         pool.close()
 
 
-@pytest.mark.parametrize("cancel", [False, True])
+@pytest.mark.parametrize("terminal", ["failed", "child_cancelled", "parent_cancelled"])
 @pytest.mark.parametrize("unavailable", [False, True])
 async def test_runtime_terminal_preparation_keeps_partial_timings_without_masking_outcome(
     owner: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
-    cancel: bool, unavailable: bool,
+    terminal: str, unavailable: bool,
 ) -> None:
-    req, _, authority, _, state = owner
+    cancel = terminal != "failed"
+    req, fake, authority, _, binding = owner
     monkeypatch.setattr(ownership, "process_authority", lambda: authority)
     store = ObservationStore(unavailable=unavailable)
-    checked = PhaseTiming(phase="check", started_at_ms=1, finished_at_ms=1, duration_ms=0).model_dump(mode="json")
-    downloaded = {**checked, "phase": "download"}
-
-    async def peer(writer: Any) -> None:
-        await send(writer, {**state, "timings": [checked]})
-        await send(writer, {**state, "sequence": 2, "status": "cancelled" if cancel else "failed",
-            "timings": [checked, downloaded], "code": service.DOWNLOAD_FAILED, "reason": "The download failed."})
-
-    async with socket_peer(peer, monkeypatch):
+    checked = PhaseTiming(phase="check", started_at_ms=1, finished_at_ms=1, duration_ms=0)
+    downloaded = checked.model_copy(update={"phase": "download"})
+    facade._record_queued(binding.job_id, PREPARATION_JOB_TYPE, {}, internal=True)
+    fake.set(progress.lease_key(binding.job_id), "preparation-owner")
+    child = ProgressEmitter(binding.job_id, renews_lease=False)
+    child.started()
+    identity = preparation_identity(req)
+    child.emit_event("job.observations", {"identity": identity, "phase_timings": [checked.model_dump(mode="json")]})
+    child.phase("checking_data")
+    executing = asyncio.create_task(asyncio.to_thread(runtime.execute_runtime_run,
+        run_id=7, req=req, sessions=(), store=store, emit=ProgressEmitter(req.job_id, renews_lease=False)))
+    try:
+        # The phase follows the first timing receipt. A later terminal must
+        # adopt the latest cumulative spans once, even if they are redelivered.
+        async with asyncio.timeout(5):
+            while not any(json.loads(fields["event"]).get("phase") == "checking_data"
+                          for _, fields in fake.streams.get(progress.events_key(req.job_id), [])):
+                await asyncio.sleep(0)
+        for index in range(130):
+            child.progress(index, 130, unit="artifacts")
+        for _ in range(2):
+            child.emit_event("job.observations", {"identity": identity,
+                "phase_timings": [row.model_dump(mode="json") for row in (checked, downloaded)]})
+        if terminal == "parent_cancelled":
+            fake.hset(progress.state_key(req.job_id), mapping={"cancel_requested": "1"})
+        elif cancel:
+            child.cancelled("input preparation was cancelled")
+        else:
+            child.failed(code=service.DOWNLOAD_FAILED, message="The download failed.")
         with pytest.raises(JobCancelled if cancel else service.RunFailedError) as caught:
-            await asyncio.to_thread(runtime.execute_runtime_run, run_id=7, req=req, sessions=(),
-                store=store, emit=ProgressEmitter(req.job_id, renews_lease=False))
+            await executing
+    finally:
+        if not executing.done():
+            child.cancelled("test observation stopped")
+            with pytest.raises(JobCancelled):
+                await executing
 
     assert store.completed == [] and store.endings == 1
     if not cancel:
@@ -252,3 +280,77 @@ def test_exclusive_phase_sum_includes_coordination_and_excludes_parallel_chain_s
     sealed = ledger.seal()
     assert sealed.wall_duration_ms == 50
     assert sum(row.duration_ms for row in sealed.phase_timings if row.scope == "run") == 50
+
+
+async def test_actual_provider_failure_before_freeze_preserves_closed_preparation_timings(
+    owner: tuple[Any, ...], fake_catalog: FakeCatalog, tmp_lake: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import timedelta
+
+    import httpx
+
+    from app.config import settings
+    from app.jobs.runner import prepared_worker
+    from app.options_backtest import preparation
+    from app.schemas.options_backtest_preparation import OptionsBacktestPreparationRequest
+    from app.utils.session_anchors import et_midnight_ms
+    from tests.options_backtest import test_golden_spy_2025_06_10 as golden
+    from tests.options_backtest._golden_vendor import recorded_vendor
+
+    req, fake, authority, _, binding = owner
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_lake))
+    req = req.model_copy(update={"setup": golden.a_setup(), "start_ms": et_midnight_ms(golden.TRADING_DATE),
+                                "end_ms": et_midnight_ms(golden.TRADING_DATE + timedelta(days=1))})
+    request = OptionsBacktestPreparationRequest(job_id=binding.job_id, run_id=7, generation=authority.boot_generation,
+                                               identity=preparation_identity(req), parent=req)
+    monkeypatch.setattr(ownership, "process_authority", lambda: authority)
+    monkeypatch.setattr(preparation, "get_redis", lambda: fake)
+
+    async def live_binding(*args: Any, **kwargs: Any) -> None:
+        # The provider/collector and observation transport are real; the
+        # separate HTTP fault matrix owns PostgreSQL generation validation.
+        return None
+
+    monkeypatch.setattr(preparation, "with_connection", live_binding)
+    def forbid_freeze(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("failed acquisition must not reach input freeze")
+
+    monkeypatch.setattr(preparation, "freeze_run_inputs", forbid_freeze)
+    entered, release = threading.Event(), threading.Event()
+
+    async def denied(request: httpx.Request) -> httpx.Response:
+        entered.set()
+        assert await asyncio.to_thread(release.wait, 5)
+        return httpx.Response(403, json={"status": "NOT_AUTHORIZED", "message": "recorded acquisition failure"})
+
+    facade._record_queued(req.job_id, "options_backtest", {})
+    ProgressEmitter(req.job_id, renews_lease=False).started()
+    facade._record_queued(binding.job_id, PREPARATION_JOB_TYPE, {}, internal=True)
+    store = ObservationStore()
+    with recorded_vendor(golden.RECORDING, golden.RECORDED_FILES, golden.STOCK_PATH) as router:
+        router.get(host="api.polygon.io", path=golden.CALL_600_PATH).mock(side_effect=denied)
+        with prepared_worker(binding.job_id, emit_renews_lease=False) as worker:
+            worker.cancel.renews_lease = False
+            collector = worker.start(lambda emit, cancel: preparation.collect_preparation(request, emit, cancel))
+        executing = asyncio.create_task(asyncio.to_thread(runtime.execute_runtime_run, run_id=7, req=req,
+            sessions=(), store=store, emit=ProgressEmitter(req.job_id, renews_lease=False)))
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            release.set()
+            with pytest.raises(service.RunFailedError) as caught:
+                await executing
+        finally:
+            release.set()
+            await asyncio.to_thread(collector.join, 5)
+    assert not collector.is_alive()
+    assert caught.value.failure.code == service.DOWNLOAD_FAILED
+    assert store.completed == [] and store.endings == 1
+    [(run_id, rows, metadata)] = store.observations
+    assert run_id == 7
+    assert [row["phase"] for row in rows] == ["check", "download", "coordination"]
+    assert sum(row["duration_ms"] for row in rows if row["scope"] == "run") == metadata["wall_duration_ms"]
+    events = [json.loads(fields["event"]) for _, fields in fake.streams[progress.events_key(binding.job_id)]]
+    assert [row["phase"] for event in events if event["type"] == "job.observations"
+            for row in event["phase_timings"]][-2:] == ["check", "download"]
+    assert events[-1]["type"] == "job.failed"

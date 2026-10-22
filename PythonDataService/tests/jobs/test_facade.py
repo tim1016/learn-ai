@@ -659,3 +659,22 @@ async def test_the_active_list_returns_live_state_records_and_forgets_expired_on
     assert by_default.json() == listed.json()
     assert inactive.json() == []
     assert "expired-job" not in job_store.sets[ACTIVE]
+
+
+async def test_internal_job_uses_normal_cancel_and_result_without_an_extra_public_card(
+    client: httpx.AsyncClient, job_store: _JobStore,
+) -> None:
+    parent_id = await _start(client)
+    child_id = facade.queue_internal_job("internal-preparation", {"parent_job_id": parent_id})
+    emit = ProgressEmitter(child_id)
+    emit.started()
+    listed = await client.get("/api/jobs")
+    assert [row["id"] for row in listed.json()] == [parent_id]
+    refused = await client.post("/api/jobs/internal-preparation", json={})
+    assert refused.status_code == 400
+    cancelled = await client.delete(f"/api/jobs/{child_id}")
+    assert cancelled.status_code == 200
+    assert CancellationCheck(child_id).should_cancel()
+    emit.completed({"frozen": "verified"})
+    result = await client.get(f"/api/jobs/{child_id}/result")
+    assert result.status_code == 200 and result.json() == {"frozen": "verified"}

@@ -43995,6 +43995,46 @@
         "title": "OptionsBacktestPickRefusalCountResponse",
         "type": "object"
       },
+      "OptionsBacktestPreparationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "generation": {
+            "minimum": 1.0,
+            "title": "Generation",
+            "type": "integer"
+          },
+          "identity": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Identity",
+            "type": "string"
+          },
+          "job_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Job Id",
+            "type": "string"
+          },
+          "parent": {
+            "$ref": "#/components/schemas/OptionsBacktestJobRequest"
+          },
+          "run_id": {
+            "maximum": 9007199254740991.0,
+            "minimum": 1.0,
+            "title": "Run Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "job_id",
+          "run_id",
+          "generation",
+          "identity",
+          "parent"
+        ],
+        "title": "OptionsBacktestPreparationRequest",
+        "type": "object"
+      },
       "OptionsBacktestProblemResponse": {
         "properties": {
           "code": {
@@ -88047,17 +88087,19 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/OptionsBacktestJobRequest"
+                "$ref": "#/components/schemas/OptionsBacktestPreparationRequest"
               }
             }
           },
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/JobAcceptedResponse"
+                }
               }
             },
             "description": "Successful Response"

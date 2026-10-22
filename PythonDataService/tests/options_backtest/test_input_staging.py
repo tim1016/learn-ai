@@ -69,6 +69,7 @@ def test_verified_freeze_checkpoint_resumes_without_rereading_or_double_reservin
     from app.options_backtest.frozen_inputs import FrozenRunData, freeze_run_inputs
     from app.options_backtest.run import run_sessions
     from app.research.golden_search.proof import BlobStore, ProofMismatchError
+    from tests.options_backtest._archived_data import archived_scene
     from tests.options_backtest._run_data import THU, WED, chain_scene
     from tests.options_backtest.setup_fixtures import setup
 
@@ -84,15 +85,18 @@ def test_verified_freeze_checkpoint_resumes_without_rereading_or_double_reservin
 
     with InputStaging(tmp_path, "resume") as staging:
         with pytest.raises(InterruptedFreeze):
-            freeze_run_inputs(given, (WED, THU), chain_scene(), staging.root,
+            freeze_run_inputs(given, (WED, THU), archived_scene(chain_scene(), tmp_path / "source"), staging.root,
                               reserve_bytes=staging.reserve, on_checkpoint=interrupt)
         checkpoint = checkpoints[0]
         orphan = BlobStore(staging.root).put(b"crash between blob publication and checkpoint")
         staging.reserve(checkpoint.retained_bytes + 100)
 
-    data = chain_scene()
+    data = archived_scene(chain_scene(), tmp_path / "source")
 
     class RemainingData:
+        def read_artifact(self, relative, *, max_bytes):
+            return data.read_artifact(relative, max_bytes=max_bytes)
+
         def underlying_day(self, day):
             assert day != WED, "an already frozen session must not be admitted again"
             return data.underlying_day(day)
@@ -106,14 +110,14 @@ def test_verified_freeze_checkpoint_resumes_without_rereading_or_double_reservin
             return data.option_day(contract, day)
 
     with InputStaging(tmp_path, "resume") as staging:
-        staging.retain_verified(checkpoint.sessions)
+        staging.retain_verified(checkpoint.blob_digests)
         assert not (staging.root / orphan[:2] / orphan).exists()
         assert json.loads((tmp_path / ".reservations.json").read_text())["resume"] == checkpoint.retained_bytes
         frozen = freeze_run_inputs(given, (WED, THU), RemainingData(), staging.root,
                                    reserve_bytes=staging.reserve, resume=checkpoint)
-        assert run_sessions(given, (WED, THU), FrozenRunData(frozen, DecodedArtifactCache(max_bytes=1_000_000))) == run_sessions(given, (WED, THU), chain_scene())
+        assert run_sessions(given, (WED, THU), FrozenRunData(frozen, DecodedArtifactCache(max_bytes=1_000_000))) == run_sessions(given, (WED, THU), archived_scene(chain_scene(), tmp_path / "source"))
         assert json.loads((tmp_path / ".reservations.json").read_text())["resume"] == frozen.retained_bytes
-        digest = next(iter(checkpoint.sessions.values()))
+        digest = next(iter(checkpoint.blob_digests))
         (staging.root / digest[:2] / digest).write_bytes(b"corrupt checkpoint input")
         with pytest.raises(ProofMismatchError):
             freeze_run_inputs(given, (WED, THU), RemainingData(), staging.root, resume=checkpoint)
@@ -130,63 +134,77 @@ def test_cleanup_has_a_deadline_and_preserves_reservation_until_collector_drains
 
 
 @pytest.mark.parametrize("terminal_status", ["cancelled", "failed"])
-def test_terminal_publication_owns_collector_until_cleanup_and_takeover_are_safe(
+def test_terminal_owner_drains_before_cleanup_and_late_receipts_cannot_publish(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, terminal_status: str,
 ) -> None:
     from app.config import settings
+    from app.jobs import facade, progress
+    from app.jobs.runner import prepared_worker
     from app.options_backtest import preparation
+    from app.schemas.options_backtest_preparation import OptionsBacktestPreparationRequest
     from app.schemas.options_backtest_runs import OptionsBacktestJobRequest
     from app.utils.session_anchors import et_midnight_ms
+    from tests.options_backtest._preparation_jobs_fixture import _Store
     from tests.options_backtest._run_data import THU, WED
     from tests.options_backtest.setup_fixtures import setup
 
     monkeypatch.setattr(settings, "OPTIONS_BACKTEST_INPUT_ROOT", tmp_path)
-    request = OptionsBacktestJobRequest(job_id="stopped-collector", setup=setup(),
-                                       start_ms=et_midnight_ms(WED), end_ms=et_midnight_ms(THU))
-    root = job_root(tmp_path, request.job_id)
-    root.mkdir()
-    (root / "stop-requested").touch()
-    if terminal_status == "failed":
-        def fail(*args, **kwargs) -> None:
-            raise OSError("preparation input is unavailable")
+    fake = _Store()
+    monkeypatch.setattr(progress, "get_redis", lambda: fake)
+    parent = OptionsBacktestJobRequest(job_id="stopped-collector", setup=setup(),
+                                      start_ms=et_midnight_ms(WED), end_ms=et_midnight_ms(THU))
+    request = OptionsBacktestPreparationRequest(job_id="api-collector", run_id=1, generation=1,
+                                               identity=preparation.preparation_identity(parent), parent=parent)
+    # Ownership is supplied by the isolated caller here; the real HTTP fault
+    # tests exercise the PostgreSQL generation fence across both processes.
+    monkeypatch.setattr(preparation._Owner, "check", lambda owner, **kwargs: owner.cancel.raise_if_cancelled())
 
-        monkeypatch.setattr(preparation.service, "prepare_run_data", fail)
+    def stop(*args, **kwargs) -> None:
+        if terminal_status == "cancelled":
+            raise preparation.service.RunCancelled()
+        raise OSError("preparation input is unavailable")
+
+    monkeypatch.setattr(preparation.service, "prepare_run_data", stop)
     reached, proceed = threading.Event(), threading.Event()
-    journals = []
-    terminal = preparation._Journal.terminal
+    receipts = []
+    deactivate = preparation.WorkReceipts.deactivate
 
-    def paused_terminal(journal, status, **fields) -> None:
-        assert status == terminal_status
-        journals.append(journal)
+    def paused_drain(sink) -> None:
+        receipts.append(sink)
         reached.set()
         assert proceed.wait(5), "test must release the paused collector"
-        terminal(journal, status, **fields)
+        deactivate(sink)
+        if terminal_status == "failed":
+            raise RuntimeError("receipt publisher could not confirm its final drain")
 
-    monkeypatch.setattr(preparation._Journal, "terminal", paused_terminal)
-    identity = preparation.preparation_identity(request)
+    monkeypatch.setattr(preparation.WorkReceipts, "deactivate", paused_drain)
+    facade._record_queued(request.job_id, preparation.PREPARATION_JOB_TYPE, {}, internal=True)
+    root = job_root(tmp_path, parent.job_id)
     with InputStaging(tmp_path, "unrelated") as unrelated:
         unrelated.reserve(100)
         (unrelated.root / "kept").write_bytes(b"other live inputs")
-        collector = preparation.start_preparation(request, identity)
+        with prepared_worker(request.job_id, emit_renews_lease=False) as worker:
+            worker.cancel.renews_lease = False
+            thread = worker.start(lambda emit, cancel: preparation.collect_preparation(request, emit, cancel))
         try:
-            assert reached.wait(5), "collector did not reach its terminal publication"
+            assert reached.wait(5)
             with pytest.raises(TimeoutError, match="did not drain"):
-                cleanup_job_inputs(tmp_path, request.job_id, wait_seconds=0)
+                cleanup_job_inputs(tmp_path, parent.job_id, wait_seconds=0)
+            with pytest.raises(ValueError, match="already has"), InputStaging(tmp_path, parent.job_id):
+                pytest.fail("the first collector still owns staging")
             assert root.exists()
-            assert json.loads((tmp_path / ".reservations.json").read_text()) == {
-                request.job_id: 0, "unrelated": 100}
-            # A reconnect must join the paused owner, never publish a second
-            # terminal journal or take its collection lock during the drain.
-            preparation.ensure_preparation(request, identity)
-            assert len(journals) == 1
+            assert json.loads((tmp_path / ".reservations.json").read_text()) == {parent.job_id: 0, "unrelated": 100}
         finally:
             proceed.set()
-            collector.result(timeout=5)
-        assert preparation.read_preparation(root, identity)["status"] == terminal_status
-        cleanup_job_inputs(tmp_path, request.job_id)
-        # A late provider/admission receipt from abandoned bounded work must
-        # remain inert after the owner released its lock and cleanup won.
-        journals[0].work({"kind": "work", "work_kind": "provider_response", "identity": "late"})
+            thread.join(5)
+        assert not thread.is_alive()
+        assert fake.hget(progress.state_key(request.job_id), "status") == terminal_status
+        if terminal_status == "failed":
+            assert "(OSError)" in fake.hget(progress.state_key(request.job_id), "error_message")
+        cleanup_job_inputs(tmp_path, parent.job_id)
+        published = list(fake.streams[progress.events_key(request.job_id)])
+        receipts[0].work({"kind": "work", "work_kind": "provider_response", "identity": "late"})
+        assert fake.streams[progress.events_key(request.job_id)] == published
         assert not root.exists()
         assert json.loads((tmp_path / ".reservations.json").read_text()) == {"unrelated": 100}
         assert (unrelated.root / "kept").read_bytes() == b"other live inputs"

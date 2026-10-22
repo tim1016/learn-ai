@@ -13,7 +13,7 @@ from app.options_backtest import service
 from app.options_backtest.dispatch import replay_frozen_run
 from app.options_backtest.execution_identity import backtest_execution_identity
 from app.options_backtest.input_staging import release_job_inputs
-from app.options_backtest.preparation_stream import prepare_over_api
+from app.options_backtest.preparation_jobs import prepare_over_api
 from app.options_backtest.run import RunResult
 from app.options_backtest.saved_runs import RunFailure
 from app.options_backtest.timings import RunTimings
@@ -35,7 +35,7 @@ def execute_runtime_run(*, run_id: int, req: OptionsBacktestJobRequest, sessions
     timings.start()
     try:
         lease.phase("preparation")
-        frozen = asyncio.run(prepare_over_api(req, emit=emit, lease=lease, timings=timings))
+        frozen = asyncio.run(prepare_over_api(req, run_id=run_id, emit=emit, lease=lease, timings=timings))
         lease.fenced_cancel()
         emit.phase("waiting_for_engine")
         context = WorkerDispatchContext(strategy_key="options_backtest", execution={}, manifest={},
