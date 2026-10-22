@@ -132,3 +132,40 @@ async def test_reader_cannot_substitute_another_inventory_file_for_wrong_path(de
     (roots[item.root_id] / "lake/raw" / artifacts[index].file_path).write_bytes(source.read_bytes())
     with pytest.raises(BackupRefusedError):
         decode_restored_lake(artifacts, roots)
+
+
+def _snapshot_row(row_id: int, root_id: str, file_path: str, *, sha256: str, size_bytes: int) -> RestoredArtifact:
+    return RestoredArtifact(id=row_id, root_id=root_id, mode="raw", file_path=file_path, sha256=sha256, size_bytes=size_bytes,
+        artifact_kind="metadata", market="usa_options", symbol="SPY", trading_date=None, resolution=None, data_type=None)
+
+
+def test_a_row_naming_a_root_the_generation_does_not_hold_is_refused(tmp_path: Path) -> None:
+    from app.option_archive.backup import BackupRefusedError
+    row = _snapshot_row(1, "11111111-1111-1111-1111-111111111111", "usa_options/spy/observations/x.json", sha256="0" * 64, size_bytes=1)
+    with pytest.raises(BackupRefusedError, match="names a root the generation does not hold"):
+        decode_restored_lake([row], {"22222222-2222-2222-2222-222222222222": tmp_path})
+
+
+@pytest.mark.parametrize(("digests", "admitted"), [
+    (("wrong", "right"), True),
+    (("right", "wrong"), True),
+    (("wrong", "wrong"), False),
+])
+def test_a_file_with_several_rows_is_admitted_when_one_row_holds_its_receipt(tmp_path: Path, digests: tuple[str, str], admitted: bool) -> None:
+    from app.option_archive.backup import BackupRefusedError
+    root_id = "11111111-1111-1111-1111-111111111111"
+    observation = ChainObservation(underlying="SPY", session_ms=FRIDAY_OPEN_MS, observation_id="restore-test",
+        started_ms=1749846600000, ended_ms=1749846600000, complete=True, reason=None, page_receipts=[], contracts=[], field_gaps={})
+    relative = str(snapshot_path(observation))
+    path = tmp_path / "lake/raw" / relative
+    path.parent.mkdir(parents=True)
+    payload = observation.model_dump_json().encode()
+    path.write_bytes(payload)
+    sha256 = {"wrong": "0" * 64, "right": hashlib.sha256(payload).hexdigest()}
+    rows = [_snapshot_row(index, root_id, relative, sha256=sha256[digest], size_bytes=len(payload))
+            for index, digest in enumerate(digests, 1)]
+    if admitted:
+        assert decode_restored_lake(rows, {root_id: tmp_path}) == {"metadata": 2}
+    else:
+        with pytest.raises(BackupRefusedError, match="differ from their committed receipt"):
+            decode_restored_lake(rows, {root_id: tmp_path})

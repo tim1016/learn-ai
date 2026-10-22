@@ -66,7 +66,6 @@ class OptionArchiveHealth(BaseModel):
     underlyings: list[UnderlyingArchiveHealth]
     backup: ArchiveJobHealth
     test_restore: ArchiveJobHealth
-    retention_permission: Literal["awaiting_vendor_reply"] = "awaiting_vendor_reply"
 
 
 class ArchiveTriggerReceipt(BaseModel):

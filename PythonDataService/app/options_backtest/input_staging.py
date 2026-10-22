@@ -52,16 +52,35 @@ def _collector_target(base: Path, job_id: str) -> Path:
     return target
 
 
+def _read_ledger(path: Path) -> dict[str, int]:
+    entries = json.loads(path.read_text()) if path.exists() else {}
+    if not isinstance(entries, dict) or any(not _JOB.fullmatch(key) or type(size) is not int or size < 0
+                                            for key, size in entries.items()):
+        raise ValueError("frozen input reservation ledger is invalid")
+    return entries
+
+
 @contextmanager
 def _ledger(base: Path) -> Iterator[dict[str, int]]:
     path = base / ".reservations.json"
     with advisory_file_lock(path):
-        entries = json.loads(path.read_text()) if path.exists() else {}
-        if not isinstance(entries, dict) or any(not _JOB.fullmatch(key) or type(size) is not int or size < 0
-                                                for key, size in entries.items()):
-            raise ValueError("frozen input reservation ledger is invalid")
+        entries = _read_ledger(path)
         yield entries
         atomic_write_bytes(path, json.dumps(entries, sort_keys=True, separators=(",", ":")).encode())
+
+
+def staged_job_ids(base: Path) -> set[str]:
+    """The jobs with anything staged under ``base``: a job directory, or a reservation in the ledger.
+
+    Read-only: it takes no lock and writes nothing, so asking costs nothing for the jobs that left nothing behind.
+    The ledger is replaced atomically, so an unlocked read sees one whole version. A ledger that cannot be read
+    raises, as it does for the collectors that share it.
+    """
+    base = base.resolve()
+    staged = set(_read_ledger(base / ".reservations.json"))
+    if base.is_dir():
+        staged.update(path.name for path in base.iterdir() if path.is_dir() and _JOB.fullmatch(path.name))
+    return staged
 
 
 class InputStaging:

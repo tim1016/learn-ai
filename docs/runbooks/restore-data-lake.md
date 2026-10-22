@@ -26,6 +26,8 @@ Moving a backup to an SSD remains a separate owner action.
 4. An exhausted transient capture can be retried explicitly with authenticated
    `POST /api/option-archive/capture-session` carrying `underlying`, the canonical
    `session_ms`, and `retry_exhausted:true`. This scopes recovery to one session.
+   A recovery answers 409 while the nightly pass or another recovery holds the
+   capture lock; retry it when that one ends.
    Authentication or entitlement failures block that underlying across passes
    and nights. Correct provider access first, then explicitly recover the
    blocked session with `retry_exhausted:true`; only its successful complete

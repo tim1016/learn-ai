@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from app.options_backtest.input_staging import InputStaging, cleanup_job_inputs, job_root
+from app.options_backtest.input_staging import InputStaging, cleanup_job_inputs, job_root, staged_job_ids
 
 
 def test_concurrent_collectors_cannot_overspend_global_staging_bytes(tmp_path: Path) -> None:
@@ -250,3 +250,27 @@ def test_cleanup_keeps_one_lock_inode_through_delete_and_reservation_release(
         (successor.root / "successor").write_bytes(b"new accounted inputs")
     assert json.loads((tmp_path / ".reservations.json").read_text()) == {"reconnecting": 100}
     assert (successor.root / "successor").read_bytes() == b"new accounted inputs"
+
+
+def test_staged_job_ids_name_directories_and_reservations_and_write_nothing(tmp_path: Path) -> None:
+    base = tmp_path / "staging"
+    assert staged_job_ids(base) == set()
+    base.mkdir()
+    assert staged_job_ids(base) == set()
+    (base / "directory-only").mkdir()
+    (base / "a file, not a job").write_text("ignored")
+    (base / ".collector-locks").mkdir()
+    (base / ".reservations.json").write_text('{"reservation-only":5}')
+    before = {path: path.stat().st_mtime_ns for path in base.rglob("*")}
+
+    assert staged_job_ids(base) == {"directory-only", "reservation-only"}
+
+    assert {path: path.stat().st_mtime_ns for path in base.rglob("*")} == before, "asking must change nothing"
+
+
+@pytest.mark.parametrize("ledger", ["{not json", "[]", '{"bad name": 1}', '{"job": -1}'])
+def test_staged_job_ids_refuse_a_ledger_the_collectors_would_refuse(tmp_path: Path, ledger: str) -> None:
+    (tmp_path / ".reservations.json").write_text(ledger)
+
+    with pytest.raises(ValueError):
+        staged_job_ids(tmp_path)

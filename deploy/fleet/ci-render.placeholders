@@ -8,3 +8,6 @@ POSTGRES_PASSWORD=render-placeholder
 REDIS_PASSWORD=render-placeholder
 FRED_API_KEY=render-placeholder
 GIT_SHA=render-placeholder
+# The backup destination defaults under ${HOME}, which differs on every host; a
+# repository-relative path keeps its projected mount source the same everywhere.
+OPTION_ARCHIVE_BACKUP_HOST_DESTINATION=./learn-ai-lake-backup
