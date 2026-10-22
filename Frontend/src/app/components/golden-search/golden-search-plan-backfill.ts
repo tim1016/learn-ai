@@ -1,7 +1,8 @@
 import { DestroyRef, Injectable, computed, inject, signal } from '@angular/core';
 
-import { DataLakeService, classifyDataLakeError, rootFailureOf, toBackfillDayEvent, tradeBackfillSpec, type BackfillFailure } from '../../shared/data-lake';
-import { BackfillJobRunner, type BackfillJobRun, type BackfillProgressTick } from '../../shared/data-lake/backfill-job-runner';
+import { classifyDataLakeError, type BackfillFailure } from '../../shared/data-lake';
+import { type BackfillJobRun, type BackfillProgressTick } from '../../shared/data-lake/backfill-job-runner';
+import { TradeBackfillRunner } from '../../shared/data-lake/trade-backfill-runner';
 import { TickerCatalogService } from '../../shared/ticker-catalog';
 import type { BackfillRemedy } from './golden-search.types';
 
@@ -40,8 +41,7 @@ export function covers(ran: BackfillRemedy, asked: BackfillRemedy): boolean {
  */
 @Injectable()
 export class GoldenSearchPlanBackfill {
-  private readonly lake = inject(DataLakeService);
-  private readonly runner = inject(BackfillJobRunner);
+  private readonly runner = inject(TradeBackfillRunner);
   private readonly catalog = inject(TickerCatalogService);
 
   private readonly job = signal<BackfillJobRun | null>(null);
@@ -114,36 +114,18 @@ export class GoldenSearchPlanBackfill {
 
   /** How the job ended; null when this form stopped watching it. Never rejects: a throw would leave the footer on "running". */
   private async run(remedy: BackfillRemedy): Promise<PlanBackfillEnd | null> {
-    const failed = (message: string): PlanBackfillEnd => ({ kind: 'failed', remedy, message });
-    try {
-      const defaults = await this.lake.backfillDefaults();
-      if (defaults.kind !== 'ok') return failed(defaults.message);
-      const digest = defaults.value.lean_image_digest;
-      if (digest === null) return failed('The data plane has no pinned LEAN image digest, so a backfill spec cannot be composed.');
-      // The worker walks oldest session first, so the last day that reports a failure names what ended or emptied the run.
-      let failure: BackfillFailure | null = null;
-      const job = await this.runner.start(tradeBackfillSpec(remedy, digest), {
-        onDomainEvent: (event) => {
-          failure = rootFailureOf(toBackfillDayEvent(event)?.failures ?? []) ?? failure;
-        },
-      });
-      this.job.set(job);
-      // The form left while the server was taking the job.
-      if (this.left) job.detach();
-      const terminal = await job.terminal;
-      switch (terminal.kind) {
-        case 'completed':
-          return { kind: 'finished', remedy, failure };
-        case 'failed':
-          return failed(terminal.message);
-        case 'cancelled':
-          return failed('The backfill was cancelled.');
-        case 'detached':
-          return null;
-      }
-    } catch (error) {
-      // A refused submission arrives here in the data plane's own words.
-      return failed(error instanceof Error ? error.message : String(error));
+    const end = await this.runner.run(
+      () => this.left ? null : remedy,
+      (job) => {
+        this.job.set(job);
+        if (this.left) job.detach();
+        return !this.left;
+      },
+    );
+    switch (end.kind) {
+      case 'completed': return { kind: 'finished', remedy, failure: end.failure };
+      case 'failed': return { kind: 'failed', remedy, message: end.message };
+      case 'detached': return null;
     }
   }
 }
