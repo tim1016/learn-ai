@@ -9,9 +9,12 @@ function.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
+from dataclasses import dataclass, field
 from typing import Any
 
 from app.jobs.progress import (
@@ -39,6 +42,96 @@ This keeps the simple ``return result`` ergonomic for JSON-bearing jobs
 while letting binary jobs handle their own completion without producing
 duplicate ``job.completed`` events.
 """
+
+
+@dataclass
+class PreparedWorker:
+    """An exclusively held job whose durable binding may commit before its thread starts."""
+
+    job_id: str
+    emitter: ProgressEmitter
+    cancel: CancellationCheck
+    lease_token: str
+    thread_name: str
+    thread: threading.Thread | None = field(default=None, init=False)
+
+    @property
+    def started(self) -> bool:
+        return self.thread is not None and self.thread.ident is not None
+
+    def start(self, work: JobWork) -> threading.Thread:
+        if self.thread is not None:
+            raise RuntimeError("This prepared worker already attempted to start.")
+        self.thread = threading.Thread(target=self._run, args=(work,), name=self.thread_name, daemon=True)
+        self.thread.start()
+        return self.thread
+
+    def _run(self, work: JobWork) -> None:
+        try:
+            self.emitter.started()
+            result = work(self.emitter, self.cancel)
+            if result is not None:
+                self.emitter.completed(result)
+        except JobCancelled as exc:
+            logger.info("job %s cancelled: %s", self.job_id, exc)
+            self.emitter.cancelled(str(exc))
+        except Exception as exc:
+            logger.exception("job %s failed", self.job_id)
+            self.emitter.failed(code=type(exc).__name__, message=str(exc))
+        finally:
+            release_lease(self.job_id, self.lease_token)
+
+    def release(self) -> None:
+        """Drop the claim unless the thread started: from then on the worker releases it. Safe to repeat."""
+        if not self.started:
+            release_lease(self.job_id, self.lease_token)
+
+
+def reserve_worker(
+    job_id: str, *, cancel_check_every_n: int = 1, thread_name: str | None = None,
+    emit_renews_lease: bool = True, progress_min_interval_s: float = 0.0,
+) -> PreparedWorker:
+    """Claim a job's first worker lease and return its unstarted worker; the caller must start or release it."""
+    emitter = ProgressEmitter(job_id, renews_lease=emit_renews_lease, progress_min_interval_s=progress_min_interval_s)
+    cancel = CancellationCheck(job_id, check_every_n=cancel_check_every_n)
+    return PreparedWorker(job_id, emitter, cancel, acquire_lease(job_id), thread_name or f"job-{job_id[:8]}")
+
+
+@contextmanager
+def prepared_worker(
+    job_id: str, *, cancel_check_every_n: int = 1, thread_name: str | None = None,
+    emit_renews_lease: bool = True, progress_min_interval_s: float = 0.0,
+) -> Iterator[PreparedWorker]:
+    """Reserve a job once; release its own lease if its binding or thread cannot start.
+
+    The worker owns release after an actual thread start, even if the caller
+    loses that acknowledgement. A closed or previously started job cannot be
+    reserved again; the caller may join a live redelivery through its record.
+    """
+    launch = reserve_worker(job_id, cancel_check_every_n=cancel_check_every_n, thread_name=thread_name,
+                            emit_renews_lease=emit_renews_lease, progress_min_interval_s=progress_min_interval_s)
+    try:
+        yield launch
+    finally:
+        launch.release()
+
+
+@asynccontextmanager
+async def async_prepared_worker(
+    job_id: str, *, cancel_check_every_n: int = 1, thread_name: str | None = None,
+    emit_renews_lease: bool = True, progress_min_interval_s: float = 0.0,
+) -> AsyncIterator[PreparedWorker]:
+    """The same reservation for an async coordinator; Redis never blocks its writer loop.
+
+    A caller cancelled mid-claim leaves the lease to expire after ``JOB_LEASE_TTL_SECONDS``.
+    """
+    launch = await asyncio.to_thread(
+        reserve_worker, job_id, cancel_check_every_n=cancel_check_every_n, thread_name=thread_name,
+        emit_renews_lease=emit_renews_lease, progress_min_interval_s=progress_min_interval_s)
+    try:
+        yield launch
+    finally:
+        await asyncio.to_thread(launch.release)
 
 
 def run_in_thread(
@@ -74,35 +167,6 @@ def run_in_thread(
     it cares about test determinism; production callers fire-and-forget.
     """
 
-    emitter = ProgressEmitter(job_id, renews_lease=emit_renews_lease, progress_min_interval_s=progress_min_interval_s)
-    cancel = CancellationCheck(job_id, check_every_n=cancel_check_every_n)
-    acquire_lease(job_id)
-
-    def _runner() -> None:
-        try:
-            emitter.started()
-            result = work(emitter, cancel)
-            if result is not None:
-                emitter.completed(result)
-            # else: work has already emitted its own terminal event
-            # (typically completed_blob for binary outputs).
-        except JobCancelled as exc:
-            logger.info("job %s cancelled: %s", job_id, exc)
-            emitter.cancelled(str(exc))
-        except Exception as exc:
-            # Terminal sink — every uncaught error becomes job.failed so
-            # the SSE consumer always sees a final event. Re-raising
-            # would leave the stream open until TTL.
-            logger.exception("job %s failed", job_id)
-            emitter.failed(code=type(exc).__name__, message=str(exc))
-        finally:
-            release_lease(job_id)
-
-    name = thread_name or f"job-{job_id[:8]}"
-    try:
-        thread = threading.Thread(target=_runner, name=name, daemon=True)
-        thread.start()
-    except Exception:
-        release_lease(job_id)
-        raise
-    return thread
+    with prepared_worker(job_id, cancel_check_every_n=cancel_check_every_n, thread_name=thread_name,
+                         emit_renews_lease=emit_renews_lease, progress_min_interval_s=progress_min_interval_s) as launch:
+        return launch.start(work)

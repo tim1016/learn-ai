@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from datetime import date
 
 import pytest
@@ -11,8 +12,10 @@ from app.data_lake.option_listing import read_option_listing
 from app.data_lake.option_session_repack import repack_option_session
 from app.data_lake.path_policy import OptionListingPath, OptionMinuteBarPath, OptionSessionPath
 from app.options.contract import OptionContract
+from app.options_backtest.lake_data import ArtifactBoundExceeded
 from app.research.golden_search.proof import BlobStore, ProofMismatchError
-from app.research.options_golden_search.snapshots import Snapshot, SnapshotRunData
+from app.research.options_golden_search.snapshots import Snapshot, SnapshotRecorder, SnapshotRunData
+from tests.options_backtest._archived_data import HeldArtifacts
 from tests.options_backtest._lake import FRIDAY, raw_root, store_listing, store_option_day, vendor_listing_row
 from tests.options_backtest._lake import fake_catalog as fake_catalog
 from tests.options_backtest._lake import the_clock_is_fixed as the_clock_is_fixed
@@ -67,3 +70,51 @@ async def test_snapshot_actual_reads_identify_only_the_retained_format_used(fake
     assert captured is not None and captured.value == ()
     assert data.actual_reads == ({option_path, listing_path} if container else {legacy_path})
     assert all(path in data.manifest for path in data.actual_reads)
+
+
+def _sha(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
+
+
+def test_recorder_stores_each_unique_original_once_and_versions_a_named_container(tmp_path):
+    shared, other, session = b"one original", b"another original", b"a session container"
+    held = HeldArtifacts({"a": shared, "b": shared, "c": other, "session": session})
+    admitted: list[int] = []
+    recorder = SnapshotRecorder(held, BlobStore(tmp_path), max_bytes=1000, admit=lambda digest, size: admitted.append(size))
+    for relative, payload in (("a", shared), ("b", shared), ("c", other), ("a", shared)):
+        recorder.record(relative, _sha(payload))
+    recorder.record("no-session", None, container=True)
+    snapshot = recorder.snapshot()
+    assert (snapshot.version, snapshot.absent) == (1, ("no-session",))
+    assert snapshot.manifest == {"a": _sha(shared), "b": _sha(shared), "c": _sha(other)}
+    assert (snapshot.retained_bytes, admitted) == (len(shared) + len(other), [len(shared), len(other)])
+    recorder.record("session", _sha(session), container=True)
+    assert recorder.snapshot().version == 2
+
+
+@pytest.mark.parametrize(("files", "records"), [
+    ({"a": b"edited"}, [("a", b"original")]),
+    ({}, [("a", b"original")]),
+    ({"a": b"original"}, [("a", None)]),
+    ({"a": b"original"}, [("a", b"original"), ("a", b"another")]),
+], ids=["edited", "vanished", "appeared", "rerecorded"])
+def test_recorder_refuses_every_kind_of_changed_original(tmp_path, files, records):
+    recorder = SnapshotRecorder(HeldArtifacts(files), BlobStore(tmp_path), max_bytes=1000)
+    with pytest.raises(ValueError, match="generation changed"):
+        for relative, payload in records:
+            recorder.record(relative, None if payload is None else _sha(payload))
+
+
+def test_recorder_refuses_past_its_bounds_before_storing_and_counts_a_repeated_blob_as_nothing(tmp_path):
+    held = HeldArtifacts({"a": b"12345", "b": b"123456", "same": b"12345"})
+    admitted: list[int] = []
+    recorder = SnapshotRecorder(held, BlobStore(tmp_path), max_bytes=10, max_files=2,
+                                admit=lambda digest, size: admitted.append(size))
+    recorder.record("a", _sha(b"12345"))
+    with pytest.raises(ArtifactBoundExceeded, match="byte bound"):
+        recorder.record("b", _sha(b"123456"))
+    assert admitted == [5] and not (tmp_path / _sha(b"123456")[:2] / _sha(b"123456")).exists()
+    recorder.record("same", _sha(b"12345"))
+    with pytest.raises(ArtifactBoundExceeded, match="file bound"):
+        recorder.record("b", _sha(b"123456"))
+    assert (recorder.snapshot().retained_bytes, admitted) == (5, [5])

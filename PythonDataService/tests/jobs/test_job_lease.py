@@ -10,6 +10,8 @@ the 24 h TTL.
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 import redis
 
@@ -18,6 +20,8 @@ from app.jobs.progress import (
     JOB_LEASE_TTL_SECONDS,
     JOB_TTL_SECONDS,
     CancellationCheck,
+    JobAlreadyStarted,
+    JobLeaseOccupied,
     ProgressEmitter,
     acquire_lease,
     release_lease,
@@ -72,10 +76,10 @@ def test_an_unknown_job_and_an_unanswerable_store(fake: _FakeRedis, monkeypatch:
 
 
 def test_acquire_and_release_the_lease(fake: _FakeRedis) -> None:
-    acquire_lease("lease-1")
+    token = acquire_lease("lease-1")
     assert fake.exists(LEASE)
 
-    release_lease("lease-1")
+    release_lease("lease-1", token)
     assert not fake.exists(LEASE)
 
 
@@ -141,3 +145,55 @@ def test_a_worker_that_cannot_start_releases_its_lease(
         run_in_thread("lease-1", lambda emit, cancel: None)
 
     assert not fake.exists(LEASE)
+
+
+@pytest.mark.parametrize(
+    ("previous", "refusal"),
+    [("lease", JobLeaseOccupied), ("terminal", JobAlreadyStarted), ("started", JobAlreadyStarted)],
+)
+def test_a_job_id_cannot_start_a_second_worker(fake: _FakeRedis, previous: str, refusal: type[RuntimeError]) -> None:
+    fake.job("lease-1", "completed" if previous == "terminal" else "queued")
+    if previous == "lease":
+        fake.lease("lease-1")
+    elif previous == "started":
+        fake.hset("job:lease-1:state", mapping={"started_at": "1000"})
+    with pytest.raises(refusal):
+        run_in_thread("lease-1", lambda emit, cancel: None)
+
+
+def test_failed_thread_start_does_not_release_a_replacement_lease(
+    fake: _FakeRedis, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def replace_then_refuse(*args: object, **kwargs: object) -> None:
+        fake.strings[LEASE] = "replacement"
+        raise RuntimeError("cannot start worker")
+    monkeypatch.setattr(runner.threading.Thread, "start", replace_then_refuse)
+    with pytest.raises(RuntimeError, match="cannot start worker"):
+        run_in_thread("lease-1", lambda emit, cancel: None)
+    assert fake.strings[LEASE] == "replacement"
+
+
+async def test_the_async_reservation_claims_and_releases_off_the_event_loop(
+    fake: _FakeRedis, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The async helper exists so Redis I/O never blocks the coordinator's loop."""
+    loop_thread = threading.get_ident()
+    ran_on: dict[str, int] = {}
+    claim, drop = runner.acquire_lease, runner.release_lease
+
+    def claim_here(job_id: str) -> str:
+        ran_on["claim"] = threading.get_ident()
+        return claim(job_id)
+
+    def drop_here(job_id: str, token: str) -> None:
+        ran_on["release"] = threading.get_ident()
+        drop(job_id, token)
+
+    monkeypatch.setattr(runner, "acquire_lease", claim_here)
+    monkeypatch.setattr(runner, "release_lease", drop_here)
+
+    async with runner.async_prepared_worker("lease-1"):
+        assert fake.exists(LEASE)
+    assert not fake.exists(LEASE)
+    assert ran_on.keys() == {"claim", "release"}
+    assert loop_thread not in ran_on.values()

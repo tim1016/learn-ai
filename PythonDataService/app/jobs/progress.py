@@ -28,6 +28,7 @@ from collections.abc import Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from typing import Any
+from uuid import uuid4
 
 import redis
 
@@ -160,8 +161,16 @@ class JobCancelled(Exception):
     """Raised by :class:`CancellationCheck` when cancel was requested."""
 
 
-def acquire_lease(job_id: str) -> None:
-    """Mark a dispatched worker as holding the job: create ``job:{id}:lease``.
+class JobAlreadyStarted(RuntimeError):
+    """The job's first execution started or ended; this id cannot execute again."""
+
+
+class JobLeaseOccupied(RuntimeError):
+    """Another dispatch holds the job's initial lease; this caller acquired nothing."""
+
+
+def acquire_lease(job_id: str) -> str:
+    """Claim the first worker for this job and return its lease ownership token.
 
     Called on the request path by :func:`app.jobs.runner.run_in_thread` so a
     202 implies a held job. Liveness (#1938) is this key's existence, never
@@ -169,15 +178,32 @@ def acquire_lease(job_id: str) -> None:
     or the 24 h TTL, but the lease expires ``JOB_LEASE_TTL_SECONDS`` after
     the worker last proved progress.
     """
-    get_redis().set(lease_key(job_id), "1", ex=JOB_LEASE_TTL_SECONDS)
+    token = uuid4().hex
+    claimed = get_redis().eval("""
+        local status = redis.call('HGET', KEYS[2], 'status')
+        if status == 'completed' or status == 'failed' or status == 'cancelled' then return -1 end
+        if redis.call('HGET', KEYS[2], 'started_at') then return -1 end
+        if redis.call('SET', KEYS[1], ARGV[1], 'NX', 'EX', ARGV[2]) then
+            if not status then redis.call('HSET', KEYS[2], 'status', 'queued') end
+            redis.call('EXPIRE', KEYS[2], ARGV[3])
+            return 1
+        end
+        return 0
+        """, 2, lease_key(job_id), state_key(job_id), token, JOB_LEASE_TTL_SECONDS, JOB_TTL_SECONDS)
+    if claimed == -1:
+        raise JobAlreadyStarted("This job already started and cannot execute again under its old id.")
+    if not claimed:
+        raise JobLeaseOccupied("The initial worker lease is occupied; retry this job shortly.")
+    return token
 
 
-def release_lease(job_id: str) -> None:
+def release_lease(job_id: str, token: str) -> None:
     """Drop the lease when the worker leaves (terminal event or thread exit).
     Best-effort: the status is terminal by then, so liveness is already
     false; this only spares Redis an expired-key wait."""
     try:
-        get_redis().delete(lease_key(job_id))
+        get_redis().eval("if redis.call('GET',KEYS[1]) == ARGV[1] then return redis.call('DEL',KEYS[1]) end return 0",
+                         1, lease_key(job_id), token)
     except redis.RedisError as exc:
         logger.warning("lease release failed for job %s: %s", job_id, exc)
 

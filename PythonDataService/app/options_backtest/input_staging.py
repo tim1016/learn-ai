@@ -13,7 +13,7 @@ import logging
 import re
 import shutil
 import time
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
@@ -93,14 +93,14 @@ class InputStaging:
                 raise ValueError("global frozen input staging byte bound exceeded")
             entries[self.job_id] = retained_bytes
 
-    def retain_verified(self, inventory: dict[int, str]) -> None:
+    def retain_verified(self, inventory: Collection[str]) -> None:
         """Before replay is dispatched, remove only this interrupted freeze's orphan blobs."""
         from app.research.golden_search.proof import BlobStore
 
         if self._lock is None:
             raise ValueError("checkpoint reconciliation requires the collection lock")
         blobs = BlobStore(self.root)
-        kept = set(inventory.values())
+        kept = set(inventory)
         size = sum(len(blobs.get(digest)) for digest in kept)
         for directory in self.root.iterdir():
             if directory.is_dir() and re.fullmatch(r"[a-f0-9]{2}", directory.name):
@@ -144,9 +144,6 @@ def cleanup_job_inputs(base: Path, job_id: str, *, wait_seconds: float = 75.0) -
 def release_job_inputs(base: Path, job_id: str) -> None:
     """Cleanup failures stay visible without reversing a committed run."""
     try:
-        root = job_root(base, job_id)
-        if root.exists():
-            (root / "stop-requested").touch()
         cleanup_job_inputs(base, job_id)
     except (OSError, ValueError):
         logger.error("frozen input cleanup failed; its byte reservation remains held",

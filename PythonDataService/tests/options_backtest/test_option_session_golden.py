@@ -3,24 +3,29 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import io
+import zipfile
 from pathlib import Path
 
 import pytest
 
+from app.data_lake.option_listing import read_option_listing
+from app.data_lake.option_session import build_option_session_bytes, parse_option_session, read_option_session
 from app.data_lake.option_session_repack import repack_option_session
 from app.data_lake.path_policy import OptionMinuteBarPath
 from app.options_backtest.data_check import SessionVerdict, check_data
 from app.options_backtest.fetching import ensure_run_data
 from app.options_backtest.lake_check import LakeCheckData
 from app.options_backtest.lake_data import LakeRunData
+from app.options_backtest.past_chain import PriceState, chain_session, describe_day, describe_expiry
 from app.options_backtest.run import run_sessions
 from app.options_backtest.run_json import option_days_to_json, pins_from_json
-from app.options_backtest.session_series import read_session_series
+from app.options_backtest.session_series import SeriesReason, read_session_series
 from app.options_bots.golden_proof import build_proof, reprove, result_sha256
 from app.research.golden_search.proof import BlobStore
 from tests.options_backtest._golden_vendor import recorded_vendor
 from tests.options_backtest._lake import fake_catalog as fake_catalog
-from tests.options_backtest._lake import raw_root
+from tests.options_backtest._lake import raw_root, replace_the_stored_file
 from tests.options_backtest._lake import the_clock_is_fixed as the_clock_is_fixed
 from tests.options_backtest._lake import tmp_lake as tmp_lake
 
@@ -38,6 +43,13 @@ async def test_recorded_golden_results_ladders_pins_and_proofs_survive_repack(
         legacy = await asyncio.to_thread(run_sessions, setup, [source.TRADING_DATE], LakeRunData("SPY"))
         old_series = await asyncio.to_thread(read_session_series, legacy.sessions[0], run_id=1,
                                              underlying="SPY", data=LakeRunData("SPY"))
+        session = chain_session(legacy.sessions[0].session_open_ms)
+        old_day = await asyncio.to_thread(describe_day, LakeRunData("SPY"), underlying="SPY", session=session)
+        old_chain = await asyncio.to_thread(describe_expiry, LakeRunData("SPY"), underlying="SPY", session=session,
+                                            expiry=source.EXPIRY)
+        assert {contract.state for side in (old_chain.calls, old_chain.puts) for contract in side.contracts} >= {
+            PriceState.TRADED, PriceState.NOT_STORED,
+        }
         store = BlobStore(tmp_path / "proof_blobs")
         old_proof = await asyncio.to_thread(build_proof, legacy, blobs=store)
         repacked = await repack_option_session("SPY", source.TRADING_DATE)
@@ -60,6 +72,11 @@ async def test_recorded_golden_results_ladders_pins_and_proofs_survive_repack(
             assert pins_from_json(new.pins.underlying_sha256, new.pins.listing_sha256, encoded) == new.pins
         assert await asyncio.to_thread(read_session_series, legacy.sessions[0], run_id=1,
                                        underlying="SPY", data=LakeRunData("SPY")) == old_series
+        assert await asyncio.to_thread(read_session_series, day_file.sessions[0], run_id=2,
+                                       underlying="SPY", data=LakeRunData("SPY")) == old_series
+        assert await asyncio.to_thread(describe_day, LakeRunData("SPY"), underlying="SPY", session=session) == old_day
+        assert await asyncio.to_thread(describe_expiry, LakeRunData("SPY"), underlying="SPY", session=session,
+                                       expiry=source.EXPIRY) == old_chain
         new_proof = await asyncio.to_thread(build_proof, day_file, blobs=store)
         assert any("/session/" in path for path in new_proof["manifest"])
         await asyncio.to_thread(reprove, legacy, old_proof, blobs=store)
@@ -68,4 +85,42 @@ async def test_recorded_golden_results_ladders_pins_and_proofs_survive_repack(
         check = await asyncio.to_thread(check_data, setup, [source.TRADING_DATE], now_ms=future_now, data=LakeCheckData("SPY"))
         assert check.sessions[0].verdict is SessionVerdict.READY
         await asyncio.to_thread(ensure_run_data, setup, [source.TRADING_DATE], now_ms=future_now, should_stop=lambda: False)
+
+        assert repacked.record is not None
+        container = raw_root(tmp_lake) / repacked.record.file_path
+        changed = io.BytesIO(container.read_bytes())
+        with zipfile.ZipFile(changed, "a") as archive:
+            archive.comment = b"same original members in a changed container"
+        replace_the_stored_file(fake_catalog, raw_root(tmp_lake), repacked.record.file_path, changed.getvalue(), admit=True)
+        assert await asyncio.to_thread(read_session_series, legacy.sessions[0], run_id=1,
+                                       underlying="SPY", data=LakeRunData("SPY")) == old_series
+        refused = await asyncio.to_thread(read_session_series, day_file.sessions[0], run_id=2,
+                                          underlying="SPY", data=LakeRunData("SPY"))
+        assert refused.underlying == old_series.underlying
+        assert all(series.reason is SeriesReason.CHANGED and not series.points for series in refused.contracts)
+
+        # Identical decoded bars cannot replace an old pin's exact original bytes (#3421).
+        listing = await asyncio.to_thread(read_option_listing, "SPY", source.TRADING_DATE)
+        stored = await asyncio.to_thread(read_option_session, "SPY", source.TRADING_DATE)
+        assert listing is not None and stored is not None
+        symbol = old_series.contracts[0].symbol
+        original = dict(stored.original_bytes)
+        changed_member = io.BytesIO(original[symbol])
+        with zipfile.ZipFile(changed_member, "a") as archive:
+            archive.comment = b"same bars in different original bytes"
+        original[symbol] = changed_member.getvalue()
+        replacement = build_option_session_bytes(listing, original)
+        assert parse_option_session(replacement, listing).days[symbol].bars == stored.days[symbol].bars
+        replace_the_stored_file(fake_catalog, raw_root(tmp_lake), repacked.record.file_path, replacement, admit=True)
+        changed_old = await asyncio.to_thread(read_session_series, legacy.sessions[0], run_id=1,
+                                              underlying="SPY", data=LakeRunData("SPY"))
+        assert {series.symbol: series.reason for series in changed_old.contracts} == {
+            series.symbol: SeriesReason.CHANGED if series.symbol == symbol else None for series in old_series.contracts
+        }
+        assert next(series for series in changed_old.contracts if series.symbol == symbol).points == ()
+
+        container.unlink()
+        gone = await asyncio.to_thread(read_session_series, legacy.sessions[0], run_id=1,
+                                       underlying="SPY", data=LakeRunData("SPY"))
+        assert all(series.reason is SeriesReason.GONE and not series.points for series in gone.contracts)
         assert len(vendor.calls) == before

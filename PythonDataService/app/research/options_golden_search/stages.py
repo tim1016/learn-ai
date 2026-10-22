@@ -26,7 +26,6 @@ from app.research.options_golden_search.planning import budget_plan, pooled_wind
 from app.research.options_golden_search.policy import Metrics, classify
 from app.research.options_golden_search.projections import candidate, exact_data, gates, rejected_candidate
 from app.research.options_golden_search.protocol import (
-    CostScenario,
     OptionsSearchProtocol,
     Window,
     apply_scenario,
@@ -56,6 +55,16 @@ def summary_metrics(summary: dict[str, Any]) -> SimpleNamespace:
         "max_drawdown_fraction": Decimal(summary["max_drawdown_fraction"]),
         "technical_failures": tuple(summary["technical_failures"])})
 
+
+def evidence_payload(result: EvaluationResult) -> bytes:
+    return json.dumps({"sessions": [evidence_to_json(session) for session in result.sessions],
+        "pins": pins_to_wire(result.pins), "input_failures": result.input_failures}, separators=(",", ":"), allow_nan=False).encode()
+
+
+def evaluation_record(result: EvaluationResult, blob: str, size: int, actual_reads: list[str]) -> dict[str, Any]:
+    """What a finished evaluation retains; the offline verifier replays the same record."""
+    return {"evidence_blob": blob, "evidence_bytes": size, "metrics": metric_summary(result.metrics),
+            "metrics_sha256": hash_payload(exact_data(result.metrics)), "complete": result.complete, "actual_reads": actual_reads}
 
 
 class StudyEvaluator:
@@ -149,15 +158,12 @@ class StudyEvaluator:
         computed: dict[str, dict[str, Any]] = {}
 
         def persist(key: str, result: EvaluationResult, actual_reads: list[str], task_gen: int) -> None:
-            payload = json.dumps({"sessions": [evidence_to_json(session) for session in result.sessions],
-                "pins": pins_to_wire(result.pins), "input_failures": result.input_failures}, separators=(",", ":"), allow_nan=False).encode()
+            payload = evidence_payload(result)
             counts = run_sync(with_connection(repo.counters, self.row["id"]))
             retained_bytes = counts["evidence_bytes"]
             if retained_bytes + len(payload) > self.protocol.budget.max_artifact_bytes:
                 raise ValueError("The study evidence exceeds its retained-artifact byte limit.")
-            record = {"evidence_blob": self.blobs.put(payload), "evidence_bytes": len(payload),
-                      "metrics": metric_summary(result.metrics), "metrics_sha256": hash_payload(exact_data(result.metrics)),
-                      "complete": len(result.sessions) == result.scheduled_sessions, "actual_reads": actual_reads}
+            record = evaluation_record(result, self.blobs.put(payload), len(payload), actual_reads)
             run_sync(with_connection(repo.complete, self.row["id"], self.row["attempt"], key, record, task_gen=task_gen))
             computed[key] = record
             async def report(conn):
@@ -184,7 +190,7 @@ class StudyEvaluator:
             snapshot_wire = self.snapshot.model_dump(mode="json")
             window_wires: dict[str, dict[str, Any]] = {}
             for setup, window, scenario, key, _cached in pending:
-                scenario_policy = next((item for item in self.protocol.stress if item.key == scenario), CostScenario(key="base"))
+                scenario_policy = self.protocol.cost_scenario(scenario)
                 stressed = apply_scenario(setup, scenario_policy)
                 generation = [self.row.get("execution_generations", {}).get(key, 1)]
 
@@ -212,7 +218,7 @@ class StudyEvaluator:
                 dispatch.close()
         else:
             for setup, window, scenario, key, _cached in pending:
-                scenario_policy = next((item for item in self.protocol.stress if item.key == scenario), CostScenario(key="base"))
+                scenario_policy = self.protocol.cost_scenario(scenario)
                 stressed = apply_scenario(setup, scenario_policy)
                 data = SnapshotRunData(setup.underlying, self.snapshot, self.blobs)
                 task_gen = self.row.get("execution_generations", {}).get(key, 1)

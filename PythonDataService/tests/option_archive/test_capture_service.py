@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,17 +12,18 @@ import pytest
 import respx
 
 from app.data_lake.ensure_data import _minute_trade_dch
-from app.data_lake.option_lake import OptionCaptureResult, OptionDataFailure
-from app.lean_sidecar.trading_calendar import session_open_ms_utc, session_window_for_date
+from app.data_lake.option_lake import OptionCaptureResult, OptionDataFailure, option_history_floor
+from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms_utc, session_window_for_date
 from app.option_archive import service as service_module
-from app.option_archive.planner import SessionOutcome
+from app.option_archive.planner import UNDERLYINGS, SessionOutcome, archive_history_boundary
 from app.option_archive.service import OptionArchiveService
 from app.option_archive.settings import ArchiveSettings
 from app.option_archive.state import ArchiveState, ArchiveStateDoc
 from app.options.contract import OptionContract
 from app.options_backtest.option_session_capture import read_session_completeness
 from app.services.session_authority import et_minute_of_day_ms
-from tests._helpers.option_vendor import no_trades, traded
+from tests._helpers.fake_lake_catalog import FakeCatalog
+from tests._helpers.option_vendor import no_trades, outside_plan, traded
 from tests.options_backtest._lake import fake_catalog as fake_catalog
 from tests.options_backtest._lake import stock_bar, store_listing, store_underlying_day, vendor_listing_row
 from tests.options_backtest._lake import tmp_lake as tmp_lake
@@ -44,16 +45,16 @@ def with_baseline(state: ArchiveState, baseline_ms: int) -> ArchiveState:
     return state
 
 
-async def seed(fake_catalog, tmp_lake: Path, underlying: str) -> tuple[OptionContract, OptionContract]:
-    call = OptionContract.of(root=underlying, expiry_date=DAY, right="call", strike=500)
-    put = OptionContract.of(root=underlying, expiry_date=DAY, right="put", strike=500)
+async def seed(fake_catalog: FakeCatalog, tmp_lake: Path, underlying: str, *, day: date = DAY) -> tuple[OptionContract, OptionContract]:
+    call = OptionContract.of(root=underlying, expiry_date=day, right="call", strike=500)
+    put = OptionContract.of(root=underlying, expiry_date=day, right="put", strike=500)
     await store_listing([vendor_listing_row(call, underlying=underlying), vendor_listing_row(put, underlying=underlying)],
-                        underlying=underlying, day=DAY)
-    await store_underlying_day(fake_catalog, tmp_lake, [stock_bar(session_open_ms_utc(DAY), "500", "500", "500", "500", symbol=underlying)],
-                               symbol=underlying, day=DAY)
+                        underlying=underlying, day=day)
+    await store_underlying_day(fake_catalog, tmp_lake, [stock_bar(session_open_ms_utc(day), "500", "500", "500", "500", symbol=underlying)],
+                               symbol=underlying, day=day)
     for row in fake_catalog.rows.values():
-        if row["market"] == "usa" and row["symbol"] == underlying:
-            row["data_contract_hash"] = _minute_trade_dch("raw", None, trading_date=DAY)
+        if row["market"] == "usa" and row["symbol"] == underlying and row["trading_date"] == day:
+            row["data_contract_hash"] = _minute_trade_dch("raw", None, trading_date=day)
     return call, put
 
 
@@ -290,5 +291,85 @@ async def test_provider_block_survives_other_retries_and_new_nights_until_correc
     assert "SPY" not in service.state.read().provider_blocks
     await service.capture_pass()
     assert ("SPY", DAY) in calls
+
+
+@respx.mock
+async def test_missed_night_catches_up_at_the_vendor_edge_and_restart_preserves_peers_and_lost_coverage(
+    fake_catalog: FakeCatalog, tmp_lake: Path,
+) -> None:
+    today = date(2026, 10, 21)
+    days = expected_sessions(date(2024, 10, 21), date(2024, 10, 24))
+    edge, *_, paused_day = days
+    assert archive_history_boundary(today) == edge < option_history_floor(today)
+    current = et_minute_of_day_ms(today, 180)
+    metadata: dict[str, tuple[str, date, OptionContract]] = {}
+    for day in days:
+        for symbol in UNDERLYINGS:
+            for contract in await seed(fake_catalog, tmp_lake, symbol, day=day):
+                path = f"/v2/aggs/ticker/O:{contract.occ_symbol}/range/1/minute/{day}/{day}"
+                metadata[path] = symbol, day, contract
+    calls: list[tuple[str, date, str]] = []
+    resume = False
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        nonlocal current
+        symbol, day, contract = metadata[request.url.path]
+        calls.append((symbol, day, contract.right))
+        if symbol == "SPY":
+            return httpx.Response(401, json={"status": "NOT_AUTHORIZED", "message": "key unavailable"})
+        if symbol == "IWM" and day == edge:
+            return outside_plan()
+        if day == paused_day and symbol == ("IWM" if resume else "QQQ"):
+            if resume:
+                current = session_window_for_date(today).close_ms_utc + config.SNAPSHOT_DELAY_MS
+            elif contract.right == "put":
+                current = session_window_for_date(today).open_ms_utc
+        return (no_trades(contract.occ_symbol) if contract.right == "put" else
+                traded(contract.occ_symbol, [{"t": session_open_ms_utc(day), "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}]))
+
+    respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/O:.*").mock(side_effect=answer)
+    state = with_baseline(ArchiveState(tmp_lake / "state.json"), session_open_ms_utc(edge))
+    config = ArchiveSettings(ENABLED=True)
+    service = OptionArchiveService(config=config, state=state, clock=lambda: current)
+    await service.capture_pass()
+    assert state.read().job("capture").phase == "rth_pause"
+    assert [day for _, day, _ in calls] == sorted(day for _, day, _ in calls)
+    assert {symbol for symbol, day, _ in calls if day == edge} == set(UNDERLYINGS)
+    assert [(symbol, day) for symbol, day, _ in calls if symbol == "SPY"] == [("SPY", edge)]
+    for day in days[:-1]:
+        for symbol in ("QQQ", "IWM"):
+            stored, complete = await asyncio.to_thread(read_session_completeness, symbol, day)
+            if symbol == "IWM" and day == edge:
+                assert stored is None and not complete
+            else:
+                assert complete and stored is not None and len(stored.captured) == len(stored.confirmed_empty) == 1
+    lost = state.read().sessions["IWM"][session_open_ms_utc(edge)]
+    assert lost.outcome is SessionOutcome.LOST and lost.reason is not None and lost.reason.startswith("outside_data_plan:")
+    assert lost.recorded_ms == et_minute_of_day_ms(today, 180)
+    assert (await asyncio.to_thread(read_session_completeness, "QQQ", paused_day)) == (None, False)
+
+    # Reopen only the durable state. The real collector resumes its validated
+    # ticker files without fetching them again, then yields to the evening window.
+    previous_calls = list(calls)
+    current = session_window_for_date(today).close_ms_utc + 60_000
+    resume = True
+    restarted = OptionArchiveService(config=config, state=ArchiveState(state.path), clock=lambda: current)
+    await restarted.capture_pass()
+    assert calls[len(previous_calls):] == [("IWM", paused_day, "call")]
+    assert restarted.state.read().job("capture").phase == "snapshot_pause"
+    _, complete = await asyncio.to_thread(read_session_completeness, "QQQ", paused_day)
+    assert complete
+    before_retry = list(calls)
+    await restarted.capture_pass()
+    assert calls == before_retry
+    assert restarted.state.read().sessions["IWM"][session_open_ms_utc(edge)] == lost
+
+    current = session_window_for_date(today + timedelta(days=1)).open_ms_utc
+    await restarted.capture_pass()
+    assert calls == before_retry
+    assert restarted.state.read().sessions["IWM"][session_open_ms_utc(edge)] == lost
+    assert restarted.health().underlyings[2].lost_sessions == 1
+    _, retained_complete = await asyncio.to_thread(read_session_completeness, "QQQ", edge)
+    assert retained_complete
 
 

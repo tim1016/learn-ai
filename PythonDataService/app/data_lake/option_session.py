@@ -284,12 +284,13 @@ class _SessionKey:
     trading_date: date
 
 
-class _LastDecodedSession:
+class OptionSessionDecodeScope:
     """The session decoded most recently, so contract-at-a-time reads of it decode once (#3435).
 
     One slot, not a cache: a session is large and these readers ask about one session at a time. The slot is emptied
     before a different session is decoded, so at most one stays resident. Readers run on worker threads: one lock
     serialises the slot and is held through a decode, so concurrent reads of one session decode it once.
+    Retained readers own their scope, releasing the full container with the reader (#3440).
     """
 
     def __init__(self) -> None:
@@ -306,18 +307,19 @@ class _LastDecodedSession:
             return session
 
 
-_LAST_SESSION = _LastDecodedSession()
+_LAST_SESSION = OptionSessionDecodeScope()
 
 
 def _decoded(payload: bytes, listing_sha256: str, listing: Callable[[], OptionListing], underlying: str,
-             trading_date: date, root_id: UUID) -> OptionSession:
+             trading_date: date, root_id: UUID, *, decode_scope: OptionSessionDecodeScope | None = None) -> OptionSession:
     """``parse_option_session`` of admitted bytes, shared by every read of the same admitted bytes (#3435).
 
     The caller has admitted ``payload`` and the listing whose bytes hash to ``listing_sha256``; a hit reuses only
     the decode. ``listing`` is called only on a miss, so a hit parses neither the container nor the listing.
     """
     key = _SessionKey(hashlib.sha256(payload).hexdigest(), listing_sha256, str(root_id), underlying, trading_date)
-    return _LAST_SESSION.get_or_decode(key, lambda: parse_option_session(payload, listing(), root_id=root_id))
+    scope = _LAST_SESSION if decode_scope is None else decode_scope
+    return scope.get_or_decode(key, lambda: parse_option_session(payload, listing(), root_id=root_id))
 
 
 def read_option_session(underlying: str, trading_date: date, *, admission: Callable[[Path], bytes] = read_committed_bytes,
@@ -341,7 +343,8 @@ def read_option_session(underlying: str, trading_date: date, *, admission: Calla
                     underlying, trading_date, _root_id(lake_root))
 
 
-def parse_retained_option_session(payload: bytes, listing: OptionListing) -> OptionSession:
+def parse_retained_option_session(payload: bytes, listing: OptionListing, *,
+                                  decode_scope: OptionSessionDecodeScope | None = None) -> OptionSession:
     """Decode a digest-verified proof blob in its original root identity.
 
     Unlike a lake read, a retained proof is portable and has no physical root.
@@ -354,7 +357,8 @@ def parse_retained_option_session(payload: bytes, listing: OptionListing) -> Opt
             root_id = UUID(_json(archive.read(_MANIFEST))["data_root_id"])
     except (KeyError, ValueError, TypeError, zipfile.BadZipFile) as exc:
         raise OptionSessionFileError("retained session has no valid original root identity") from exc
-    return _decoded(payload, listing.sha256, lambda: listing, listing.underlying, listing.as_of, root_id)
+    return _decoded(payload, listing.sha256, lambda: listing, listing.underlying, listing.as_of, root_id,
+                    decode_scope=decode_scope)
 
 
 def read_option_session_for_listing_rebind(underlying: str, trading_date: date) -> OptionSession | None:

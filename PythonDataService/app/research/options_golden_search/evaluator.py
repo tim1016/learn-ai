@@ -38,6 +38,10 @@ class EvaluationResult:
     scheduled_sessions: int
     input_failures: tuple[str, ...] = ()
 
+    @property
+    def complete(self) -> bool:
+        return len(self.sessions) == self.scheduled_sessions
+
 
 def with_input_failures(metrics: QualificationMetrics, failures: tuple[str, ...]) -> QualificationMetrics:
     """Retain missing-artifact diagnostics without inventing a session or daily return."""

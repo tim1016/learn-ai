@@ -105,7 +105,7 @@ assumed.
 
 In research mode, Options Backtest dispatches and saves in this runtime.
 The API alone checks, downloads and freezes admitted inputs through an
-authenticated preparation stream. Workers receive an immutable, hashed local
+authenticated ordinary internal job. Workers receive an immutable, hashed local
 inventory, with original storage pins, and receive no provider or database
 credentials. A missing runtime refuses; it never falls back to API replay.
 Explicit local development mode retains its serial path.
@@ -155,3 +155,59 @@ in-process to the `/api/jobs-internal/*` routes, which pass through the same
 research-runtime forwarding a socket call would. The API is still the
 forwarder, so the rejected alternative (a transport dispatching straight to the
 runtime beside it) stays rejected; only the layer that mints ids has changed.
+
+
+## Amendment 2026-10-21 — preparation uses the shared jobs lifecycle (#3440)
+
+API acquisition is an ordinary internal job in the existing jobs framework.
+The research parent keeps replay and saved-result ownership, and stores only
+its current preparation job id and input identity beside the durable run
+binding. The API checks that live, generation-fenced binding before claiming
+the shared worker seam. Preparation uses the existing job events, status and
+cancellation flag; it adds no user job card. The verified freeze checkpoint,
+not the job's result, is the completion record the parent trusts. Actual work
+receipts and bounded I/O starts renew the parent; observing or retrying a
+dispatch never does. The acquisition timeout remains bounded at 31 minutes.
+
+A typed, verified freeze checkpoint is input progress, independent of Redis
+result retention. API startup interrupts an abandoned preparation job through
+the normal startup sweep. Only that explicit interruption lets the live parent
+bind a fresh preparation job id and resume the verified prefix. Missing Redis
+state does not authorize another execution under an old id. Collector locks,
+byte reservations and callback drain remain held until cancellation or fencing
+has stopped the owner; cleanup never releases bytes still owned by a collector.
+
+
+## Amendment 2026-10-21 — local and runtime run-end guarantees stay distinct
+
+**Owner decision, 2026-10-21 (#3440 A5):** retain the separate local and
+research-runtime run-end policies. After an uncertain save or authority loss,
+the runtime makes no further run or observation writes: its generation fence and durable
+reconciliation protect the one result publication. Local development retains
+its historical retry and observation policy. A shared lifecycle controlled by
+a mode flag would hide these different guarantees at the call site and make
+an unsafe retry look interchangeable with local recovery. This records the
+existing behavior; it changes no execution or accounting policy.
+
+
+## Amendment 2026-10-21 — frozen replay retains original artifacts (#3440 A3)
+
+**Owner decision, 2026-10-21:** replace the temporary decoded-session codec
+with the original admitted artifacts in the existing Snapshot/BlobStore form.
+This keeps one canonical archive reader and preserves original listing,
+absence and member identities. A session container is retained whole, including
+when every selected contract uses its legacy fallback; extracting members would
+require a different evidence contract. Setup discovery still determines which
+contracts the replay may read.
+
+Keep the existing storage envelope: at most 128 MiB of unique original blob
+bytes per session, 2 GiB per run, and 8 GiB reserved across staged jobs. Count
+whole containers and deduplicate identical blobs within each job. Refuse a
+newly oversized session or run explicitly, even when its former decoded codec
+would have fitted. The owner accepts that narrower admission rather than
+raising the budget without representative full-chain volume evidence.
+
+Temporary checkpoints from the old decoder generation are incompatible and
+must restart preparation; they are never reinterpreted or rewritten into the
+new recipe. Same-generation restarts resume a verified prefix. Durable studies,
+proofs and their original blobs remain unchanged.

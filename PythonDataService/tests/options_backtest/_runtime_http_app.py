@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import threading
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -44,47 +47,84 @@ def _pause_after_durable_checkpoint() -> None:
 if _RUNTIME:
     from app.research_runtime import app
 
-    if (_FAULTS / "lose-create-ack").exists():
-        actual_create = saved_runs.DbRunStore.create
-        _create_ack_lost = False
+    if (_FAULTS / "kill-chain").exists():
+        from app.config import settings
+        from app.jobs.checkpoints import GatedLease
+        from app.research.golden_search.shared_pool import shared_worker_pool
 
-        async def lose_create_ack(self: Any, new: Any) -> int:
-            global _create_ack_lost
-            run_id = await actual_create(self, new)
-            if not _create_ack_lost:
-                _create_ack_lost = True
-                (_FAULTS / "create-ack-lost").touch()
-                raise CallerStoppedWaitingError("test lost creation acknowledgement after atomic commit")
-            return run_id
+        actual_checkpoint = GatedLease.child_checkpoint
+        killed_chains: list[dict[str, Any]] = []
 
-        saved_runs.DbRunStore.create = lose_create_ack
+        def kill_same_chain(self: Any, message: Any) -> None:
+            actual_checkpoint(self, message)
+            if message.get("phase") != "preparation":
+                return
+            pool = shared_worker_pool(workers=settings.RESEARCH_WORKER_COUNT,
+                submission_bound=2 * settings.RESEARCH_WORKER_COUNT,
+                payload_bound_bytes=settings.RESEARCH_POOL_PAYLOAD_BOUND_BYTES,
+                result_bound_bytes=settings.RESEARCH_POOL_RESULT_BOUND_BYTES)
+            for lane in pool._lanes:
+                if lane.current is None or lane.worker is None:
+                    continue
+                item = lane.current.item
+                if killed_chains and item.key != killed_chains[0]["key"]:
+                    continue
+                killed_chains.append({"key": item.key, "task_gen": item.task_gen})
+                (_FAULTS / "killed-chains.json").write_text(json.dumps(killed_chains))
+                lane.worker._child.kill()
+                return
 
-    if (_FAULTS / "activation-commit-fault").exists():
+        GatedLease.child_checkpoint = kill_same_chain
+
+    if (_FAULTS / "lose-preparation-ack").exists():
+        from app.broker.fleet.internal_http import build_internal_client
+        from app.options_backtest import preparation_jobs
+
+        def short_preparation_client(**kwargs: Any) -> Any:
+            return build_internal_client(timeout_s=5, read_timeout_s=0.5)
+
+        preparation_jobs.build_internal_client = short_preparation_client
+
+    if (_FAULTS / "lose-launch-ack").exists():
+        actual_start = threading.Thread.start
+        _launch_ack_lost = False
+
+        def lose_launch_ack(thread: threading.Thread) -> None:
+            global _launch_ack_lost
+            actual_start(thread)
+            if not _launch_ack_lost and thread.name.startswith("options-backtest-"):
+                _launch_ack_lost = True
+                (_FAULTS / "launch-ack-lost").touch()
+                raise OSError("test lost acknowledgement after actual worker thread start")
+
+        threading.Thread.start = lose_launch_ack
+
+    if (_FAULTS / "bind-commit-fault").exists():
         from asyncpg.transaction import Transaction
 
         actual_exit = Transaction.__aexit__
-        _activation_faulted = False
+        _bind_faulted = False
 
-        async def fault_activation_exit(self: Any, exc_type: Any, exc: Any, tb: Any) -> Any:
-            global _activation_faulted
+        async def fault_bind_exit(self: Any, exc_type: Any, exc: Any, tb: Any) -> Any:
+            global _bind_faulted
             from app.research.persistence import ownership
 
             authority = ownership.process_authority()
-            target = (not _activation_faulted and exc_type is None and authority is not None
+            target = (not _bind_faulted and exc_type is None and authority is not None
                       and self._connection is authority.connection
-                      and await self._connection.fetchval("SELECT count(*) FROM research_job_owners WHERE attempt=1") > 0)
+                      and await self._connection.fetchval("SELECT count(*) FROM research_job_owners") > 0)
             if target:
-                _activation_faulted = True
-                (_FAULTS / "activation-faulted").touch()
-                if (_FAULTS / "activation-rollback").exists():
-                    error = OSError("test rollback after actual worker launch")
+                _bind_faulted = True
+                (_FAULTS / "bind-faulted").touch()
+                if (_FAULTS / "bind-rollback").exists():
+                    error = OSError("test rollback before actual worker launch")
                     await actual_exit(self, type(error), error, None)
                     raise error
                 await actual_exit(self, exc_type, exc, tb)
-                raise OSError("test lost activation acknowledgement after actual commit")
+                raise OSError("test lost binding acknowledgement after actual commit")
             return await actual_exit(self, exc_type, exc, tb)
 
-        Transaction.__aexit__ = fault_activation_exit
+        Transaction.__aexit__ = fault_bind_exit
 
     if (_FAULTS / "lose-save-ack").exists():
         actual_save = saved_runs.run_on_background_loop
@@ -146,10 +186,29 @@ else:
                 raise
 
         research_runtime_client._post_runtime_dispatch = observe_dispatch_timeout
-    app = FastAPI()
+    @asynccontextmanager
+    async def api_lifespan(app: FastAPI):
+        from app.config import settings
+        from app.jobs.progress import fail_jobs_without_a_worker
+        from app.research.persistence.ownership import startup_protection_only
+
+        protection = await startup_protection_only(dsn=settings.POSTGRES_URL)
+        protected = await protection() if protection is not None else set()
+        await asyncio.to_thread(fail_jobs_without_a_worker, protected=lambda: protected)
+        yield
+
+    app = FastAPI(lifespan=api_lifespan)
     app.include_router(options_backtest_runs.jobs_router, prefix="/api/jobs-internal",
                        dependencies=[Depends(require_data_plane_control_secret)])
     app.include_router(options_backtest_runs.router, prefix="/api/options-backtest")
+
+    @app.middleware("http")
+    async def delayed_preparation_ack(request: Request, call_next: Any) -> Any:
+        response = await call_next(request)
+        if request.url.path.endswith("/prepare") and (_FAULTS / "lose-preparation-ack").exists():
+            (_FAULTS / "preparation-ack-delayed").touch()
+            await asyncio.sleep(1.5)
+        return response
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

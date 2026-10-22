@@ -473,19 +473,24 @@ async def test_a_claiming_runtime_closes_the_jobs_of_dead_generations(conn, monk
         await authority.release()
 
 
+@pytest.mark.parametrize("cancel_unreachable", [False, True])
 async def test_a_boot_frees_the_staged_inputs_of_unfinished_options_runs_only(
-    scratch_db, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    scratch_db, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel_unreachable: bool
 ) -> None:
     """A dead generation's unfinished run left its inputs behind; a finished run's are not the boot's to touch (#3440).
 
     The unfinished run is told by its durable row still reading ``running``, not by the job record in Redis: the
-    API's startup sweep, or the 24 h TTL, can close that record before this boot sees it.
+    API's startup sweep, or the 24 h TTL, can close that record before this boot sees it. Asking its preparation
+    job to stop is a courtesy: a Redis error on that request neither aborts the boot nor skips the release.
     """
     import json
     from urllib.parse import urlsplit, urlunsplit
 
+    import redis
+
     import app.jobs.progress as progress_module
-    from app.options_backtest import saved_runs
+    from app.jobs import facade
+    from app.options_backtest import input_staging, saved_runs
     from app.options_backtest.input_staging import InputStaging, job_root
     from app.research.persistence import ownership
     from app.research.persistence.schema import ensure_schema
@@ -512,11 +517,30 @@ async def test_a_boot_frees_the_staged_inputs_of_unfinished_options_runs_only(
             "VALUES ($1, 'options_backtest', $2, 'dead-runtime', 1, 0)", job_id, str(run_id))
         if job_id == "job-finished":
             await saved_runs.complete_run(scratch_db, run_id, result, finished_at_ms=1791828000000)
+        if job_id == "job-crashed":
+            await scratch_db.execute("UPDATE research_options_backtest_runs "
+                "SET preparation_job_id='prepare-crashed',preparation_identity=$2 WHERE id=$1", run_id, "a" * 64)
+            fake.job("prepare-crashed", "running")
+            fake.lease("prepare-crashed")
         fake.job(job_id, status)
         with InputStaging(tmp_path, job_id) as staging:
             staging.reserve(6)
             (staging.root / "blob").write_bytes(b"staged")
 
+    release = input_staging.release_job_inputs
+
+    def unreachable(job_id: str) -> None:
+        raise redis.ConnectionError("the cancel flag could not be written")
+
+    if cancel_unreachable:
+        monkeypatch.setattr(facade, "_request_cancel", unreachable)
+
+    def after_cancel(base: Path, job_id: str) -> None:
+        if job_id == "job-crashed" and not cancel_unreachable:
+            assert fake.hget("job:prepare-crashed:state", "cancel_requested") == "1"
+        release(base, job_id)
+
+    monkeypatch.setattr(input_staging, "release_job_inputs", after_cancel)
     authority = ownership.RuntimeAuthority("current", "research", 2, scratch_db)
     await _close_abandoned_generations(authority)
 

@@ -34,17 +34,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from enum import StrEnum
 from itertools import pairwise
 from typing import Any, Literal
-from uuid import uuid4
 
 import asyncpg
 
 from app.jobs.progress import JOB_LEASE_TTL_SECONDS
+from app.jobs.runner import JobWork
 from app.lean_sidecar.trading_calendar import CALENDAR_IDENTITY, CALENDAR_PACKAGE_VERSION
 from app.options.contract import OptionContract
 from app.options_backtest import run_json
@@ -56,9 +57,11 @@ from app.options_backtest.session_result import SessionResult
 from app.options_backtest.setup import OptionsBacktestSetup
 from app.options_backtest.statistics import RunSummary
 from app.options_backtest.timings import PhaseTiming
-from app.research.persistence import lifecycle
+from app.research.persistence import lifecycle, ownership
 from app.research.persistence.db import with_connection, writer_loop_call
 from app.utils.background_loop import CallerStoppedWaitingError, run_on_background_loop
+
+logger = logging.getLogger(__name__)
 
 StoredStatus = Literal["running", "complete", "failed", "cancelled"]
 PresentedStatus = Literal["running", "complete", "failed", "cancelled", "interrupted"]
@@ -197,10 +200,6 @@ class StoredRun:
     def __post_init__(self) -> None:
         if (self.setup is None) == (self.setup_cannot_open_reason is None):
             raise ValueError("a stored run has its setup, or the reason it cannot be opened, and not both")
-
-
-class RuntimeActivationBlocked(RuntimeError):
-    """A never-started run cannot safely acquire its initial worker lease yet."""
 
 
 class DeleteOutcome(StrEnum):
@@ -961,20 +960,20 @@ def _session_line(row: asyncpg.Record) -> SessionLine:
 
 
 class DbRunStore:
-    """Saves a run to the research tables. ``create`` is awaited by the route; the others block, for a worker thread."""
+    """Accept runs asynchronously; save worker results through the shared writer loop."""
 
     def __init__(self, *, generation: int | None = None) -> None:
         self.generation = generation
 
     async def create(self, new: NewRun) -> int:
-        if self.generation is None:
-            return await writer_loop_call(with_connection(create_run, new))
-        return await writer_loop_call(_create_runtime_run(new, self.generation))
+        if self.generation is not None:
+            raise ValueError("runtime acceptance must bind and launch together")
+        return await writer_loop_call(with_connection(create_run, new))
 
-    async def start_runtime_worker(self, run_id: int, job_id: str, work: Callable[..., Any]) -> bool:
+    async def accept_runtime_run(self, new: NewRun, work_for_run: Callable[[int], JobWork]) -> tuple[int, bool]:
         if self.generation is None:
-            raise ValueError("runtime activation requires a generation")
-        return await writer_loop_call(_start_runtime_worker(run_id, job_id, self.generation, work))
+            raise ValueError("runtime acceptance requires a generation")
+        return await writer_loop_call(_accept_runtime_run(new, self.generation, work_for_run))
 
     def complete(self, run_id: int, result: RunResult, *, finished_at_ms: int) -> None:
         try:
@@ -1003,98 +1002,71 @@ class DbRunStore:
         )
 
 
-async def _create_runtime_run(new: NewRun, generation: int) -> int:
-    """Commit the run, exposure and owner stamp together on the authority session."""
-    from app.research.persistence import ownership
-
-    authority = ownership.process_authority()
-    if authority is None or not authority.connected or authority.boot_generation != generation:
-        raise ownership.GenerationFencedError("Options Backtest creation requires the current runtime authority")
-    async with authority.stamp_lock:
-        if not authority.connected:
-            raise ownership.GenerationFencedError("Options Backtest authority was lost before creation")
+async def _bind_runtime_run(authority: ownership.RuntimeAuthority, new: NewRun) -> int:
+    """Commit the run, exposure and dispatch stamp before a worker may start."""
+    run_id = None
+    try:
         async with authority.connection.transaction():
             run_id = await create_run(authority.connection, new)
             await ownership.record_dispatch(authority.connection, authority, job_id=new.job_id,
                                             kind="options_backtest", record_id=str(run_id))
-            await _lock_runtime_generation(authority.connection, run_id, generation)
-            await authority.connection.execute(
-                "UPDATE research_job_owners SET attempt=0 WHERE job_id=$1", new.job_id)
-            return run_id
+            await _lock_runtime_generation(authority.connection, run_id, authority.boot_generation)
+    except Exception:
+        if (run_id is None or not authority.connected
+                or await run_for_job(authority.connection, new.job_id) != run_id):
+            raise
+        # A commit acknowledgement may be lost while this exclusive acceptance
+        # still owns the first worker claim. Join only its exact committed bind.
+        async with authority.connection.transaction():
+            await _lock_runtime_generation(authority.connection, run_id, authority.boot_generation)
+        logger.warning("Options Backtest binding acknowledgement reconciled",
+                       extra={"action": "options_backtest_bind_reconciled", "job_id": new.job_id, "run_id": run_id},
+                       exc_info=True)
+    return run_id
 
 
-# A failed activation commit can roll its marker back after launching a
-# worker. Keep a no-second-start fence for that live authority until the
-# durable row closes; a successor generation never resumes its job ids.
-_UNCONFIRMED_ACTIVATIONS: set[tuple[str, int, str]] = set()
+async def _accept_runtime_run(new: NewRun, generation: int, work_for_run: Callable[[int], JobWork]) -> tuple[int, bool]:
+    """One authority operation owns first binding through launch, even after a caller stops waiting.
 
-
-async def _start_runtime_worker(run_id: int, job_id: str, generation: int, work: Callable[..., Any]) -> bool:
-    """Only a dispatch without prior worker-start evidence may be activated.
-
-    The marker and fresh lease are claimed once under the live authority.
-    Starting the thread belongs to this writer task too: a caller timeout
-    leaves it running, while loss of this session fences the generation.
+    Returns ``(run_id, joined)``; ``joined`` is a redelivery of the run this job id already has, and nothing started.
     """
-    from app.jobs import progress
-    from app.jobs.runner import run_in_thread
-    from app.research.persistence import ownership
+    from app.jobs.runner import async_prepared_worker
     from app.utils.timestamps import now_ms_utc
 
     authority = ownership.process_authority()
     if authority is None or not authority.connected or authority.boot_generation != generation:
         raise ownership.GenerationFencedError("Options activation requires the current runtime authority")
-    activation = (authority.instance_id, generation, job_id)
-    lease_token = uuid4().hex
     async with authority.stamp_lock:
-        started, claimed = False, False
-        try:
-            async with authority.connection.transaction():
-                await _lock_runtime_generation(authority.connection, run_id, generation)
-                row = await authority.connection.fetchrow(
-                    "SELECT owner.attempt, run.status FROM research_job_owners owner "
-                    "JOIN research_options_backtest_runs run ON run.job_id=owner.job_id "
-                    "WHERE run.id=$1 AND owner.job_id=$2 FOR UPDATE OF owner, run", run_id, job_id)
-                if row is None or row["attempt"] != 0 or row["status"] != "running":
-                    _UNCONFIRMED_ACTIVATIONS.discard(activation)
-                    return False
-                if activation in _UNCONFIRMED_ACTIVATIONS:
-                    return False
-                # Atomic with respect to terminal job state and other lease holders.
-                script = """
-                local status = redis.call('HGET', KEYS[2], 'status')
-                if status == 'completed' or status == 'failed' or status == 'cancelled' then return -1 end
-                if redis.call('HGET', KEYS[2], 'started_at') then return -1 end
-                if redis.call('SET', KEYS[1], ARGV[2], 'NX', 'EX', ARGV[1]) then
-                    if not status then redis.call('HSET', KEYS[2], 'status', 'queued') end
-                    return 1
-                end
-                return 0
-                """
-                claimed = await asyncio.to_thread(progress.get_redis().eval, script, 2,
-                    progress.lease_key(job_id), progress.state_key(job_id), progress.JOB_LEASE_TTL_SECONDS, lease_token)
-                if claimed == -1:
-                    return False
-                if not claimed:
-                    raise RuntimeActivationBlocked("The initial worker lease is occupied; retry this job shortly.")
-                await authority.connection.execute("UPDATE research_job_owners SET attempt=1 WHERE job_id=$1", job_id)
-                run_in_thread(job_id, work, thread_name=f"options-backtest-{job_id[:8]}",
-                              cancel_check_every_n=1, emit_renews_lease=False)
-                started = True
-        except Exception:
-            if started:
-                _UNCONFIRMED_ACTIVATIONS.add(activation)
-            elif claimed == 1:
-                await fail_run(authority.connection, run_id,
-                    RunFailure("JOB_NOT_STARTED", "The run could not be started. Nothing was fetched or run."),
-                    finished_at_ms=now_ms_utc(), generation=generation)
-                await asyncio.to_thread(progress.get_redis().eval,
-                    "if redis.call('GET',KEYS[1]) == ARGV[1] then return redis.call('DEL',KEYS[1]) end return 0",
-                    1, progress.lease_key(job_id), lease_token)
-            # A lost commit acknowledgement cannot reverse a worker that is
-            # already running. Its lease and durable result reconcile it.
-            raise
-        return True
+        if not authority.connected:
+            raise ownership.GenerationFencedError("Options Backtest authority was lost before acceptance")
+        existing = await run_for_job(authority.connection, new.job_id)
+        if existing is not None:
+            header = await get_run_header(authority.connection, existing)
+            if not request_matches_header(header, new.setup, first_session_open_ms=new.first_session_open_ms,
+                last_session_open_ms=new.last_session_open_ms, sessions_requested=new.sessions_requested):
+                raise RunDoesNotMatch("That job id is bound to another Options Backtest request.")
+            if header.record.status != "running":
+                raise RunNotRunning("That Options Backtest already ended; start a new job instead.")
+            try:
+                async with authority.connection.transaction():
+                    await _lock_runtime_generation(authority.connection, existing, generation)
+            except ownership.GenerationFencedError as exc:
+                raise RunNotRunning("That job belongs to an earlier research generation; start a new job instead.") from exc
+            # Never reserve a fresh lease for a durable redelivery. Only the
+            # first execution's pre-existing liveness can make it joinable.
+            return existing, True
+        async with async_prepared_worker(new.job_id, thread_name=f"options-backtest-{new.job_id[:8]}",
+                                         emit_renews_lease=False) as launch:
+            run_id = await _bind_runtime_run(authority, new)
+            try:
+                launch.start(work_for_run(run_id))
+            except Exception:
+                if not launch.started:
+                    await fail_run(authority.connection, run_id,
+                        RunFailure("JOB_NOT_STARTED", "The run could not be started. Nothing was fetched or run."),
+                        finished_at_ms=now_ms_utc(), generation=generation)
+                raise
+            return run_id, False
 
 
 async def record_timings(conn: asyncpg.Connection, run_id: int, timings: list[dict[str, Any]], metadata: dict[str, Any],
@@ -1110,26 +1082,12 @@ async def record_timings(conn: asyncpg.Connection, run_id: int, timings: list[di
 
 
 async def _lock_runtime_generation(conn: asyncpg.Connection, run_id: int, generation: int) -> None:
-    from app.research.persistence.ownership import (
-        COORDINATOR_LOCK_CLASSID,
-        COORDINATOR_LOCK_OBJID,
-        GenerationFencedError,
-    )
+    from app.research.persistence.ownership import GenerationFencedError, lock_job_generation
 
-    # The successor must update this same singleton row to advance generation.
-    # Holding its share lock through the result transaction makes save and
-    # generation takeover mutually ordered, rather than a check/write race.
-    current = await conn.fetchval(
-        "SELECT runtime.boot_generation FROM research_runtime_owners runtime "
-        "JOIN research_job_owners owner ON owner.boot_generation=runtime.boot_generation "
-        "JOIN research_options_backtest_runs run ON run.job_id=owner.job_id "
-        "WHERE run.id=$1 AND owner.kind='options_backtest' AND owner.record_id=run.id::text "
-        "AND EXISTS (SELECT 1 FROM pg_locks WHERE locktype='advisory' AND classid=$2 AND objid=$3 AND granted "
-        "AND database=(SELECT oid FROM pg_database WHERE datname=current_database())) "
-        "FOR SHARE OF runtime, owner", run_id, COORDINATOR_LOCK_CLASSID, COORDINATOR_LOCK_OBJID,
-    )
-    if current != generation:
+    job_id = await conn.fetchval("SELECT job_id FROM research_options_backtest_runs WHERE id=$1", run_id)
+    if job_id is None:
         raise GenerationFencedError("a stale research generation cannot save this Options Backtest")
+    await lock_job_generation(conn, job_id, kind="options_backtest", record_id=str(run_id), generation=generation)
 
 
 async def completion_matches(conn: asyncpg.Connection, run_id: int, result: RunResult) -> bool:

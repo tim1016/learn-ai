@@ -141,7 +141,7 @@ def _internal_base_url() -> str:
     return f"http://{concrete[0] if concrete else 'localhost'}"
 
 
-def _record_queued(job_id: str, job_type: str, body: Mapping[str, Any]) -> None:
+def _record_queued(job_id: str, job_type: str, body: Mapping[str, Any], *, internal: bool = False) -> None:
     key = progress.state_key(job_id)
     pipe = progress.get_redis().pipeline()
     pipe.hset(
@@ -153,11 +153,35 @@ def _record_queued(job_id: str, job_type: str, body: Mapping[str, Any]) -> None:
             "params": json.dumps(redact_sensitive_parameters(body), separators=(",", ":")),
             "created_at": str(int(time.time() * 1000)),
             "cancel_requested": "0",
+            "internal": "1" if internal else "0",
         },
     )
     pipe.expire(key, progress.JOB_TTL_SECONDS)
     pipe.sadd(progress.active_set_key(), job_id)
     pipe.execute()
+
+
+def queue_internal_job(job_type: str, body: Mapping[str, Any]) -> str:
+    """Queue a fresh server-owned job; its caller binds the id before dispatch.
+
+    Internal jobs use the ordinary state, lease, events, cancellation and
+    result contract, but do not create a second card in the public job list.
+    A durable binding never calls this function to recreate its old id.
+    """
+    job_id = str(uuid.uuid4())
+    _record_queued(job_id, job_type, body, internal=True)
+    return job_id
+
+
+async def read_job_state(job_id: str) -> dict[str, str]:
+    """Observe the ordinary state without acquiring or renewing its lease."""
+    return await asyncio.to_thread(progress.get_redis().hgetall, progress.state_key(job_id))
+
+
+async def read_job_events(job_id: str, after: str = "0-0") -> list[tuple[str, dict[str, Any]]]:
+    """Read a bounded batch of ordinary events without a live-stream owner."""
+    rows = await asyncio.to_thread(_read_after, job_id, after)
+    return [(entry_id, json.loads(fields["event"])) for entry_id, fields in rows if "event" in fields]
 
 
 def _record_failed(job_id: str, code: str, message: str) -> None:
@@ -338,7 +362,8 @@ def _read_active_states() -> list[dict[str, str]]:
             # The state expired but the id is still in the active set: clean up.
             store.srem(active_key, job_id)
             continue
-        states.append(state)
+        if state.get("internal") != "1":
+            states.append(state)
     return states
 
 
