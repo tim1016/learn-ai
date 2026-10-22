@@ -7,12 +7,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from app.broker.ibkr.bars import _iter_native_raw_bars
-from app.broker.ibkr.event_codes import (
-    CONNECTIVITY_LOST_CODES,
-    CONNECTIVITY_RESTORED_CODES,
-    DATA_FARM_DEGRADED_CODES,
-    DATA_FARM_OK_CODES,
-)
 from app.broker.ibkr.live.protocol import GREEK_BLOCKS, FeedUnavailable
 from app.broker.ibkr.live.quote_callbacks import (
     REQUEST_FAILURE_CODES,
@@ -48,6 +42,7 @@ class NativeLiveSource:
     def __init__(self, client: IbkrClient) -> None:
         self._client = client
         self._quotes: dict[tuple[int, int, int], _QuoteLine] = {}
+        self._observed_status: tuple[NativeGeneration, bool] | None = None
 
     @property
     def connection_generation(self) -> int:
@@ -115,11 +110,13 @@ class NativeLiveSource:
                     for reader in tuple(line.readers):
                         reader.fail(QuoteFailure("IBKR quote generation is no longer current"))
                     return
+                self._observed_status = self.status_generation, True
                 update = quote_update(ticker, previous_greeks)
                 for reader in tuple(line.readers):
                     reader.publish(update)
 
             if not self._quotes:
+                self._observed_status = self.status_generation, self.is_connected()
                 client.ib.errorEvent += self._on_error
             line = self._quotes[key] = _QuoteLine(ticker, req_id, receive, previous_greeks)
             ticker.updateEvent += receive
@@ -139,9 +136,9 @@ class NativeLiveSource:
         return lease
 
     def _on_error(self, request_id: int, code: int, reason: str, _contract: Any) -> None:
-        transition = code in (
-            CONNECTIVITY_LOST_CODES | CONNECTIVITY_RESTORED_CODES | DATA_FARM_DEGRADED_CODES | DATA_FARM_OK_CODES
-        )
+        current = self.status_generation, self.is_connected()
+        transition = current != self._observed_status
+        self._observed_status = current
         for key, line in tuple(self._quotes.items()):
             if transition:
                 # Recovery can retain vendor analytics changed during the outage.

@@ -74,6 +74,7 @@ class _FakeClient:
 
     def __init__(self) -> None:
         self.connection_generation = 1
+        self.connectivity_lost_count = self.last_event_ms = 0
         self.ib = _FakeIb()
         self.connection_state = "connected"
         self.connection_lost = False

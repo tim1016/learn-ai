@@ -736,3 +736,19 @@ async def test_native_maintained_restore_requires_fresh_receipts_before_next_pol
     emit(ticker)
     assert fact(published[-1]).state == "TRADABLE"
     await status.close()
+
+
+@pytest.mark.parametrize("code", [2104, 2106])
+async def test_healthy_farm_notice_preserves_receipts_when_source_state_did_not_change(source: SourceFixture, code: int) -> None:
+    status, client, ticker = source
+    ticker.bid, ticker.ask = 512.31, 512.36
+    published: list[MarketStatusSnapshot] = []
+    status._publish_snapshot = published.append
+    await poll(status)
+    before = published[-1]
+    generation = client.live_data.status_generation
+    client.ib.errorEvent.emit(-1, code, "farm is connected", None)
+    assert client.live_data.status_generation == generation
+    assert published[-1] is before
+    assert fact(published[-1]).state == "TRADABLE"
+    await status.close()
