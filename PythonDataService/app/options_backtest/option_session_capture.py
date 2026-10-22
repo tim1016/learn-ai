@@ -15,6 +15,7 @@ import json
 import logging
 from collections.abc import Callable
 from contextlib import ExitStack
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from app.data_lake.bar_validation import CorruptVendorBarsError
 from app.data_lake.option_bars import encode_option_day, parse_option_day_zip
 from app.data_lake.option_lake import (
     MAX_CLAIM_RETRIES,
+    MAX_VENDOR_REQUESTS_IN_FLIGHT,
     TERMINAL_PROVIDER_REASONS,
     OptionCaptureResult,
     OptionDataFailure,
@@ -44,6 +46,7 @@ from app.data_lake.option_session_staging import (
     TICKER_RESERVATION_BYTES,
     OptionSessionStaging,
     StagingCapacityError,
+    StagingReservation,
 )
 from app.data_lake.path_policy import resolve_staging_root
 from app.data_lake.polygon_fetcher import PolygonFetchError
@@ -71,6 +74,14 @@ def read_session_completeness(
         return None, False
     underlying_day = LakeRunData(underlying, lake_root=lake_root).underlying_day(trading_date)
     return session, session.contracts_complete and underlying_day is not None
+
+
+@dataclass(frozen=True)
+class _Refusal:
+    """Why one ticker's fetch stopped the capture; ``provider`` marks the vendor's own answer."""
+    reason: OptionFailureReason
+    detail: str
+    provider: bool = False
 
 
 def _receipt(payload: bytes, listing: OptionListing) -> dict[str, str]:
@@ -175,69 +186,124 @@ async def capture_option_session(
         for symbol, payload in (await asyncio.to_thread(admitted_legacy_members, listing)).items():
             captured.setdefault(symbol, payload)
         listed_symbols = frozenset(row.ticker.removeprefix("O:") for row in listing.rows)
-        for row in listing.rows:
-            generation = confine_path_to_root(generation, staging_root, label="option capture generation")
-            symbol = row.ticker.removeprefix("O:")
-            # The parser rejects unsafe or mismatched symbols before URL or path use.
+
+        async def fetch(symbol: str, path: Path, receipt_path: Path, attempts_path: Path, attempts: int,
+                        reservation: StagingReservation) -> _Refusal | None:
+            """Fetch, validate and stage one ticker; a refusal is reported, never raised."""
             try:
-                require_listed_option_symbol(symbol, listed_symbols)
-            except ValueError as exc:
-                return failed("validation_failed", f"listed ticker cannot be captured: {exc}")
-            path = confine_path_to_root(generation / f"{symbol}.zip", generation, label="option capture member")
-            receipt_path = confine_path_to_root(generation / f"{symbol}.json", generation, label="option capture receipt")
-            attempts_path = confine_path_to_root(generation / f"{symbol}.attempts", generation, label="option capture attempts")
-            if path.is_file():
-                payload = path.read_bytes()
-                if json.loads(receipt_path.read_bytes()) != _receipt(payload, listing):
-                    return failed("validation_failed", "staged ticker receipt does not match its exact bytes")
+                async with vendor_request_gate():
+                    if paused():
+                        return _Refusal("paused", "capture paused before a provider request; progress retained")
+                    bars = await fetch_listed_option_minute_bars(symbol, trading_date, settings.POLYGON_API_KEY,
+                                                               listed_tickers=listed_symbols)
+                payload = encode_option_day(bars, symbol=symbol, trading_date=trading_date)
+                check_member_size(payload)
                 parse_option_day_zip(payload, symbol, trading_date)
-                captured.setdefault(symbol, payload)
-            if symbol in captured:
-                continue
-            if paused():
-                return failed("paused", "capture paused; validated ticker outcomes retained")
-            attempts = int(attempts_path.read_text()) if attempts_path.is_file() else 0
-            if attempts >= MAX_CLAIM_RETRIES and not retry_exhausted:
-                return failed("fetch_timeout", "ticker exhausted its transient retries; explicit recovery is required")
-            if retry_exhausted and attempts >= MAX_CLAIM_RETRIES:
-                attempts = 0
-            try:
-                reservation = budget.reserve(TICKER_RESERVATION_BYTES)
-            except StagingCapacityError as exc:
-                return failed("staging_capacity", str(exc))
-            try:
-                try:
-                    async with vendor_request_gate():
-                        if paused():
-                            return failed("paused", "capture paused before a provider request; progress retained")
-                        bars = await fetch_listed_option_minute_bars(symbol, trading_date, settings.POLYGON_API_KEY,
-                                                                   listed_tickers=listed_symbols)
-                    payload = encode_option_day(bars, symbol=symbol, trading_date=trading_date)
-                    check_member_size(payload)
-                    parse_option_day_zip(payload, symbol, trading_date)
-                except PolygonFetchError as exc:
-                    reason = vendor_reason(exc)
-                    if reason != "outside_data_plan":
-                        attempts_path = confine_path_to_root(attempts_path, staging_root, label="option capture attempts")
-                        reservation.write({attempts_path: str(attempts + 1).encode()})
-                    if captured and reason in TERMINAL_PROVIDER_REASONS:
-                        partial = await publish_option_session(listing, captured, max_staging_bytes=max_staging_bytes)
-                        if partial.failure is not None:
-                            if partial.failure.reason == "staging_capacity":
-                                return failed(reason, f"{exc}; partial publication paused: {partial.failure.detail}")
-                            return partial
-                    return failed(reason, str(exc))
-                except (CorruptVendorBarsError, ArithmeticError, ValueError) as exc:
+            except PolygonFetchError as exc:
+                reason = vendor_reason(exc)
+                if reason != "outside_data_plan":
                     attempts_path = confine_path_to_root(attempts_path, staging_root, label="option capture attempts")
                     reservation.write({attempts_path: str(attempts + 1).encode()})
-                    return failed("validation_failed", str(exc))
-                receipt_path = confine_path_to_root(receipt_path, staging_root, label="option capture receipt")
-                path = confine_path_to_root(path, staging_root, label="option capture member")
-                reservation.write({receipt_path: json.dumps(_receipt(payload, listing), sort_keys=True).encode(),
-                                   path: payload})
-                captured[symbol] = payload
-            finally:
-                reservation.close()
+                return _Refusal(reason, str(exc), provider=True)
+            except (CorruptVendorBarsError, ArithmeticError, ValueError) as exc:
+                attempts_path = confine_path_to_root(attempts_path, staging_root, label="option capture attempts")
+                reservation.write({attempts_path: str(attempts + 1).encode()})
+                return _Refusal("validation_failed", str(exc))
+            receipt_path = confine_path_to_root(receipt_path, staging_root, label="option capture receipt")
+            path = confine_path_to_root(path, staging_root, label="option capture member")
+            reservation.write({receipt_path: json.dumps(_receipt(payload, listing), sort_keys=True).encode(),
+                               path: payload})
+            captured[symbol] = payload
+            return None
+
+        # Up to the vendor gate's limit of tickers are in flight at once. Reservations are taken here, in listing
+        # order, so a full staging budget stops the same tickers it did one at a time; a pause or refusal stops new
+        # requests and lets those in flight finish. The container's members are sorted, so its bytes never depend on
+        # which answer came first.
+        in_flight: dict[asyncio.Task[_Refusal | None], int] = {}
+        refusals: list[tuple[int, _Refusal]] = []
+        stop: OptionCaptureResult | None = None
+
+        async def settle(when: str) -> None:
+            done, _ = await asyncio.wait(in_flight, return_when=when)
+            for task in done:
+                index = in_flight.pop(task)
+                if (refusal := task.result()) is not None:
+                    refusals.append((index, refusal))
+
+        try:
+            for index, row in enumerate(listing.rows):
+                generation = confine_path_to_root(generation, staging_root, label="option capture generation")
+                symbol = row.ticker.removeprefix("O:")
+                # The parser rejects unsafe or mismatched symbols before URL or path use.
+                try:
+                    require_listed_option_symbol(symbol, listed_symbols)
+                except ValueError as exc:
+                    return failed("validation_failed", f"listed ticker cannot be captured: {exc}")
+                path = confine_path_to_root(generation / f"{symbol}.zip", generation, label="option capture member")
+                receipt_path = confine_path_to_root(generation / f"{symbol}.json", generation, label="option capture receipt")
+                attempts_path = confine_path_to_root(generation / f"{symbol}.attempts", generation, label="option capture attempts")
+                if path.is_file():
+                    payload = path.read_bytes()
+                    if json.loads(receipt_path.read_bytes()) != _receipt(payload, listing):
+                        return failed("validation_failed", "staged ticker receipt does not match its exact bytes")
+                    parse_option_day_zip(payload, symbol, trading_date)
+                    captured.setdefault(symbol, payload)
+                if symbol in captured:
+                    continue
+                while len(in_flight) >= MAX_VENDOR_REQUESTS_IN_FLIGHT and not refusals:
+                    await settle(asyncio.FIRST_COMPLETED)
+                if refusals:
+                    break
+                if paused():
+                    stop = failed("paused", "capture paused; validated ticker outcomes retained")
+                    break
+                attempts = int(attempts_path.read_text()) if attempts_path.is_file() else 0
+                if attempts >= MAX_CLAIM_RETRIES and not retry_exhausted:
+                    stop = failed("fetch_timeout", "ticker exhausted its transient retries; explicit recovery is required")
+                    break
+                if retry_exhausted and attempts >= MAX_CLAIM_RETRIES:
+                    attempts = 0
+                reservation: StagingReservation | None = None
+                while reservation is None:
+                    try:
+                        reservation = budget.reserve(TICKER_RESERVATION_BYTES)
+                    except StagingCapacityError as exc:
+                        # A budget too small for one more ticker beside those in flight waits for them; only one
+                        # too small for a ticker on its own is full.
+                        if not in_flight:
+                            stop = failed("staging_capacity", str(exc))
+                            break
+                        await settle(asyncio.FIRST_COMPLETED)
+                        if refusals:
+                            break
+                if reservation is None:
+                    break
+                task = asyncio.create_task(fetch(symbol, path, receipt_path, attempts_path, attempts, reservation))
+                # A callback, not the coroutine's own finally: a task cancelled before it starts never runs one.
+                task.add_done_callback(lambda _, held=reservation: held.close())
+                in_flight[task] = index
+            while in_flight:
+                await settle(asyncio.ALL_COMPLETED)
+        except BaseException:
+            for task in in_flight:
+                task.cancel()
+            raise
+        finally:
+            if in_flight:
+                await asyncio.gather(*in_flight, return_exceptions=True)
+        if refusals:
+            # The first refusal in listing order is the one a ticker-by-ticker capture would have reported.
+            _, refusal = min(refusals, key=lambda item: item[0])
+            if refusal.provider and captured and refusal.reason in TERMINAL_PROVIDER_REASONS:
+                partial = await publish_option_session(listing, captured, max_staging_bytes=max_staging_bytes)
+                if partial.failure is not None:
+                    if partial.failure.reason == "staging_capacity":
+                        return failed(refusal.reason, f"{refusal.detail}; partial publication paused: {partial.failure.detail}")
+                    return partial
+            return failed(refusal.reason, refusal.detail)
+        if stop is not None:
+            return stop
         if paused():
             return failed("paused", "capture paused before underlying collection; outcomes retained")
         return await finish(captured)

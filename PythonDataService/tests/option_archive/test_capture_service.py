@@ -12,7 +12,12 @@ import pytest
 import respx
 
 from app.data_lake.ensure_data import _minute_trade_dch
-from app.data_lake.option_lake import OptionCaptureResult, OptionDataFailure, option_history_floor
+from app.data_lake.option_lake import (
+    MAX_VENDOR_REQUESTS_IN_FLIGHT,
+    OptionCaptureResult,
+    OptionDataFailure,
+    option_history_floor,
+)
 from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms_utc, session_window_for_date
 from app.option_archive import service as service_module
 from app.option_archive.planner import UNDERLYINGS, SessionOutcome, archive_history_boundary
@@ -81,8 +86,9 @@ async def test_full_pass_captures_all_three_roots_traded_and_empty_and_keeps_fai
     for symbol in ("QQQ", "IWM"):
         session, complete = await asyncio.to_thread(read_session_completeness, symbol, DAY)
         assert complete and len(session.captured) == len(session.confirmed_empty) == 1
-    requested_spy = [call for call in respx.calls if "/ticker/O:SPY" in str(call.request.url)]
-    assert len(requested_spy) == 1
+    requested_spy = [str(call.request.url) for call in respx.calls if "/ticker/O:SPY" in str(call.request.url)]
+    # The refusal stops new requests; tickers already in flight each asked once.
+    assert requested_spy and len(set(requested_spy)) == len(requested_spy) <= MAX_VENDOR_REQUESTS_IN_FLIGHT
 
 
 async def test_window_rollover_records_permanent_gaps_once_and_never_erases_them(tmp_path: Path) -> None:
@@ -335,7 +341,7 @@ async def test_missed_night_catches_up_at_the_vendor_edge_and_restart_preserves_
     assert state.read().job("capture").phase == "rth_pause"
     assert [day for _, day, _ in calls] == sorted(day for _, day, _ in calls)
     assert {symbol for symbol, day, _ in calls if day == edge} == set(UNDERLYINGS)
-    assert [(symbol, day) for symbol, day, _ in calls if symbol == "SPY"] == [("SPY", edge)]
+    assert {(symbol, day) for symbol, day, _ in calls if symbol == "SPY"} == {("SPY", edge)}
     for day in days[:-1]:
         for symbol in ("QQQ", "IWM"):
             stored, complete = await asyncio.to_thread(read_session_completeness, symbol, day)
@@ -355,7 +361,9 @@ async def test_missed_night_catches_up_at_the_vendor_edge_and_restart_preserves_
     resume = True
     restarted = OptionArchiveService(config=config, state=ArchiveState(state.path), clock=lambda: current)
     await restarted.capture_pass()
-    assert calls[len(previous_calls):] == [("IWM", paused_day, "call")]
+    # The evening window opens on IWM's call; its put, already in flight, still answers.
+    resumed = calls[len(previous_calls):]
+    assert ("IWM", paused_day, "call") in resumed and set(resumed) <= {("IWM", paused_day, "call"), ("IWM", paused_day, "put")}
     assert restarted.state.read().job("capture").phase == "snapshot_pause"
     _, complete = await asyncio.to_thread(read_session_completeness, "QQQ", paused_day)
     assert complete
