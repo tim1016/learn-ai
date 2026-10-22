@@ -146,6 +146,13 @@ class OptionsSearchProtocol(FrozenModel):
     def protocol_hash(self) -> str:
         return hash_payload(self.model_dump(mode="json"))
 
+    def cost_scenario(self, key: str) -> CostScenario:
+        """The frozen scenario an evaluation names; ``base`` is always frozen."""
+        for scenario in (CostScenario(key="base"), *self.stress):
+            if scenario.key == key:
+                return scenario
+        raise ValueError("An evaluation names an unfrozen cost scenario.")
+
     @property
     def search_knobs(self) -> tuple[Knob, ...]:
         return tuple(sorted((k for k in self.knobs if k.mode == "search"), key=lambda k: (-k.priority, k.path)))

@@ -9,7 +9,6 @@ from typing import Any
 import httpx
 import pytest
 import respx
-from fastapi import FastAPI
 
 from app.data_lake.admission import LakeAdmissionError
 from app.lean_sidecar.trading_calendar import session_open_ms_utc, session_window_for_date
@@ -24,7 +23,6 @@ from app.option_archive.snapshot import (
     snapshot_path,
 )
 from app.option_archive.state import ArchiveState, ArchiveStateDoc
-from app.routers.option_archive import router
 from app.utils.background_loop import background_loop
 from tests._helpers.fake_lake_catalog import FakeCatalog
 from tests.options_backtest._lake import FRIDAY, raw_root
@@ -126,31 +124,38 @@ async def test_evening_window_follows_early_close_and_a_later_observation_never_
     assert requests == [(symbol, current) for symbol in UNDERLYINGS]
     assert all(state.read().snapshots[symbol][session_open_ms_utc(half_day)].complete for symbol in UNDERLYINGS)
 
-    # The end of the bounded window is exclusive. No late HTTP request or
-    # observation is allowed to relabel the missed session as observed.
+    # No late HTTP request or observation is allowed to relabel the missed
+    # session as observed.
     current = session_window_for_date(missed_day).close_ms_utc + config.SNAPSHOT_DELAY_MS + config.SNAPSHOT_WINDOW_MS
-    assert not service.snapshot_due(current)
     with pytest.raises(SnapshotOutsideWindowError):
         await background(service.snapshot_pass())
     assert len(requests) == len(UNDERLYINGS)
-    app = FastAPI()
-    app.state.option_archive_service = service
-    app.include_router(router)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
-        missed = await client.get("/api/option-archive/status")
-        assert missed.status_code == 200
-        assert all(item["snapshot_missed_evenings"] == 1 for item in missed.json()["underlyings"])
+    assert all(item.snapshot_missed_evenings == 1 for item in service.health().underlyings)
 
-        current = session_window_for_date(next_day).close_ms_utc + config.SNAPSHOT_DELAY_MS
-        restarted = OptionArchiveService(config=config, state=ArchiveState(state.path), clock=lambda: current)
-        assert restarted.snapshot_due(current)
-        await background(restarted.snapshot_pass())
-        app.state.option_archive_service = restarted
-        latest = await client.get("/api/option-archive/status")
-    assert latest.status_code == 200
-    assert all(item["snapshot_session_ms"] == session_open_ms_utc(next_day)
-               and item["snapshot_missed_evenings"] == 1 for item in latest.json()["underlyings"])
+    current = session_window_for_date(next_day).close_ms_utc + config.SNAPSHOT_DELAY_MS
+    restarted = OptionArchiveService(config=config, state=ArchiveState(state.path), clock=lambda: current)
+    assert restarted.snapshot_due(current)
+    await background(restarted.snapshot_pass())
+    assert all(item.snapshot_session_ms == session_open_ms_utc(next_day) and item.snapshot_missed_evenings == 1
+               for item in restarted.health().underlyings)
     assert requests[-len(UNDERLYINGS):] == [(symbol, current) for symbol in UNDERLYINGS]
     assert len(requests) == 2 * len(UNDERLYINGS)
     for symbol in UNDERLYINGS:
         assert set(restarted.state.read().snapshots[symbol]) == {session_open_ms_utc(half_day), session_open_ms_utc(next_day)}
+
+
+@pytest.mark.parametrize(("edge", "due", "missed"), [("before", False, 0), ("open", True, 0), ("last", True, 0), ("cutoff", False, 1)])
+def test_snapshot_due_and_missed_evening_agree_at_the_window_edges(edge: str, due: bool, missed: int, tmp_path: Path) -> None:
+    """The window is half-open at ``close + delay`` through ``close + delay + window``."""
+    config = ArchiveSettings(ENABLED=True)
+    day = date(2026, 10, 19)
+    start = session_window_for_date(day).close_ms_utc + config.SNAPSHOT_DELAY_MS
+    current = {"before": start - 1, "open": start, "last": start + config.SNAPSHOT_WINDOW_MS - 1,
+               "cutoff": start + config.SNAPSHOT_WINDOW_MS}[edge]
+    state = ArchiveState(tmp_path / "state.json")
+    def initialize(doc: ArchiveStateDoc) -> None:
+        doc.baseline_ms, doc.snapshot_activation_ms = session_open_ms_utc(date(2026, 10, 16)), session_open_ms_utc(day)
+    state.update(initialize)
+    service = OptionArchiveService(config=config, state=state, clock=lambda: current)
+    assert service.snapshot_due(current) is due
+    assert all(item.snapshot_missed_evenings == missed for item in service.health().underlyings)

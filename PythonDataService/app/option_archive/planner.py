@@ -87,6 +87,16 @@ def regular_hours_pause(now_ms: int, margin_ms: int = 60_000) -> bool:
     return window.open_ms_utc - margin_ms <= now_ms < window.close_ms_utc
 
 
+def snapshot_window_ms(close_ms: int, *, delay_ms: int, window_ms: int) -> tuple[int, int]:
+    """The evening observation's half-open window ``[due, cutoff)`` after a session close.
+
+    The due test, the pass's stop line and health's missed-evening count all read
+    it here, so they cannot drift apart.
+    """
+    due = close_ms + delay_ms
+    return due, due + window_ms
+
+
 def next_daily_run_ms(*, now_ms: int, minute_et: int, completed_day_ms: int | None,
                       retry_after_ms: int | None, margin_ms: int) -> int:
     """The first instant at or after ``now_ms`` when a once-a-day job is due.

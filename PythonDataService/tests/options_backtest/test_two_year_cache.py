@@ -94,7 +94,10 @@ async def test_two_year_replay_is_exact_with_bounded_eviction_and_warm_reuse(
     expected = run_sessions(given, sessions, FrozenRunData(frozen, uncached), slippage_ladder=(), cash_ladder=())
     assert uncached.metrics()["resident_entries"] == 0
     assert uncached.metrics()["uncached_decodes"] == len(sessions)
-    cache = DecodedArtifactCache(max_bytes=9_000)
+    sizing = DecodedArtifactCache(max_bytes=64 * 1024**2)
+    FrozenRunData(frozen, sizing).listing(sessions[0])
+    bound = 2 * sizing.metrics()["resident_bytes"]  # room for two sessions, so the 501 must evict
+    cache = DecodedArtifactCache(max_bytes=bound)
     first = FrozenRunData(frozen, cache).listing(sessions[0])
 
     def check_residency(done: int, total: int, day: date) -> None:
@@ -102,8 +105,7 @@ async def test_two_year_replay_is_exact_with_bounded_eviction_and_warm_reuse(
         hits = cache.metrics()["hits"]
         assert FrozenRunData(frozen, cache).listing(day) is not None
         assert cache.metrics()["hits"] == hits + 1
-        assert cache.metrics()["resident_bytes"] <= 9_000
-        assert cache.take_peak_bytes() <= 9_000
+        assert cache.take_peak_bytes() <= bound
 
     assert run_sessions(given, sessions, FrozenRunData(frozen, cache), on_session=check_residency,
                         slippage_ladder=(), cash_ladder=()) == expected
