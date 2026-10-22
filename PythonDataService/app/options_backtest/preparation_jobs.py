@@ -26,10 +26,10 @@ from app.options_backtest.preparation import (
 from app.options_backtest.saved_runs import RunFailure
 from app.options_backtest.timings import PhaseTiming, RunTimings
 from app.research.persistence.db import with_connection, writer_loop_call
+from app.research.persistence.ownership import GenerationFencedError
 from app.schemas.options_backtest_preparation import OptionsBacktestPreparationRequest
 from app.schemas.options_backtest_runs import OptionsBacktestJobRequest
 from app.security.data_plane_control import CONTROL_SECRET_HEADER
-from app.utils.background_loop import CallerStoppedWaitingError
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +83,15 @@ async def _drain_observations(job_id: str, after: str, closed: _ClosedTimings, i
     return after
 
 
+async def _close_unbound_job(job_id: str) -> None:
+    try:
+        # No worker exists to acknowledge the ordinary cooperative cancel flag.
+        await asyncio.to_thread(lambda: ProgressEmitter(job_id, renews_lease=False).cancelled(
+            "preparation binding did not commit"))
+    except Exception:
+        logger.warning("unbound preparation job could not be closed", exc_info=True, extra={"job_id": job_id})
+
+
 async def _bind_fresh(run_id: int, req: OptionsBacktestJobRequest, lease: GatedLease,
                       identity: str, previous: str | None) -> str:
     lease.fenced_cancel()
@@ -90,14 +99,25 @@ async def _bind_fresh(run_id: int, req: OptionsBacktestJobRequest, lease: GatedL
     try:
         return await writer_loop_call(with_connection(preparation_binding.bind_preparation, run_id, req.job_id,
             lease.generation, identity, job_id, previous=previous))
-    except CallerStoppedWaitingError:
-        # The write continues on the writer loop. Read behind its transaction
-        # to reconcile this exact id; never queue an uncertain second child.
-        current = await writer_loop_call(with_connection(preparation_binding.current_binding, run_id, req.job_id,
-                                                          lease.generation, identity))
-        if current != job_id:
-            raise
-        return job_id
+    except (ValueError, GenerationFencedError):
+        # These failures precede the binding write and roll back its transaction.
+        await _close_unbound_job(job_id)
+        raise
+    except Exception as failure:
+        # A wait or commit acknowledgement can fail after the binding commits.
+        # Reconcile the exact id before closing any possibly owned work.
+        try:
+            current = await writer_loop_call(with_connection(preparation_binding.current_binding, run_id, req.job_id,
+                                                              lease.generation, identity))
+        except Exception as reconciliation_failure:
+            logger.warning("preparation binding could not be reconciled; its job remains queued", exc_info=True,
+                           extra={"job_id": job_id})
+            raise failure from reconciliation_failure
+        if current == job_id:
+            return job_id
+        await _close_unbound_job(job_id)
+        raise
+
 
 
 async def prepare_over_api(req: OptionsBacktestJobRequest, *, run_id: int, emit: ProgressEmitter,
