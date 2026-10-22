@@ -61,6 +61,9 @@ from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 
 logger = logging.getLogger(__name__)
 
+# The container mounts this runbook's folder, not the file, so a pull that replaces it never strands the backup (#3460).
+RESTORE_RUNBOOK = Path("docs/runbooks/restore-data-lake.md")
+
 # The nightly pass and every manual recovery spend one provider budget, so they
 # take one lock; the scheduler derives a job's lock from its name.
 CAPTURE_JOB: ArchiveJobName = "capture"
@@ -376,13 +379,10 @@ class OptionArchiveService:
     async def backup_pass(self) -> None:
         config = self.config
         await asyncio.to_thread(self._check_destination)
-        runbook = self.service_root / "restore-data-lake.md"
-        if not runbook.is_file():
-            runbook = self.checkout / "docs/runbooks/restore-data-lake.md"
         manifest = await create_generation(destination=config.BACKUP_DESTINATION, roots=self._backup_roots(),
             clock=self.clock, should_pause=lambda: regular_hours_pause(self.clock(), config.REQUEST_OPEN_MARGIN_MS),
             restore_files={"restore_lake_generation.py": self.service_root / "app/option_archive/lake_restore.py",
-                           "restore-data-lake.md": runbook})
+                           "restore-data-lake.md": self.checkout / RESTORE_RUNBOOK})
         generation = config.BACKUP_DESTINATION / "generations" / manifest.generation_id
         unverified = await bounded_file_work(lambda paused: prune_generations(config.BACKUP_DESTINATION,
             clock=self.clock, daily_keep=config.BACKUP_DAILY_KEEP, weekly_keep=config.BACKUP_WEEKLY_KEEP, should_pause=paused), self._maintenance_pause)

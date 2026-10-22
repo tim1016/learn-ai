@@ -18,6 +18,7 @@ from pathlib import Path
 
 import yaml
 
+from app.option_archive.service import RESTORE_RUNBOOK
 from tests.contracts.compose_files import render_module
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -222,3 +223,16 @@ def test_the_coordinator_keeps_every_base_data_plane_mount_except_lane_custody()
     rendered = {entry.rsplit("->", 1)[1].rsplit(":", 1)[0]
                 for entry in _snapshot()["service_detail"]["python-service"]["volumes"]}
     assert sorted(expected - rendered) == [], "the fleet coordinator drops these base data-plane mounts"
+
+
+def test_the_data_plane_mounts_the_restore_runbook_folder_so_a_pull_never_strands_the_backup() -> None:
+    """A single-file bind mount keeps the file a pull replaced, so every backup refused until the data plane
+    was recreated (#3460). In the container the service is its own checkout, at /app."""
+    assert (ROOT / RESTORE_RUNBOOK).is_file()
+    folder = RESTORE_RUNBOOK.parent.as_posix()
+    for compose in ("compose.yaml", "compose.fleet.dev.yaml"):
+        volumes = yaml.load((ROOT / compose).read_text(), Loader=yaml.BaseLoader)["services"]["python-service"]["volumes"]
+        sources = {_mount_target(entry): entry.split(":")[0] for entry in volumes}
+        assert sources.get(f"/app/{folder}") == f"./{folder}", f"{compose} does not mount ./{folder}"
+        assert [source for source in sources.values() if source.startswith(f"./{folder}/")] == [], (
+            f"{compose} bind-mounts a single runbook file")
