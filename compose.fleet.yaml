@@ -37,6 +37,7 @@ x-fleet-agent: &fleet-agent
     IBKR_BROKER_ENABLED: "true"
     IBKR_HOST: auto
     IBKR_PORT: "4002"
+    IBKR_SHARED_FEED_URL: http://ibkr-market-data:8000
     # The current Settings construction requires a value; lane market data is
     # still the retained read-only IBKR feed below, never coordinator-owned.
     POLYGON_API_KEY: ""
@@ -56,8 +57,45 @@ x-fleet-agent: &fleet-agent
     - "host.docker.internal:host-gateway"
   networks:
     - fleet-private
+  depends_on:
+    ibkr-market-data:
+      condition: service_healthy
 
 services:
+  ibkr-market-data:
+    build:
+      context: ./PythonDataService
+      target: runtime
+    profiles: ["fleet"]
+    command: uvicorn app.broker.ibkr.live.server:production_app --factory --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 10
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    pids_limit: 128
+    cpus: "1.0"
+    mem_limit: 512m
+    env_file:
+      - path: ${FLEET_MARKET_DATA_ENV_FILE:-./deploy/fleet/env/market-data.env}
+        required: true
+    environment:
+      IBKR_BROKER_ENABLED: "true"
+      IBKR_READONLY: "true"
+      IBKR_HOST: auto
+      IBKR_PORT: "4002"
+      IBKR_CLIENT_ID: ${FLEET_MARKET_DATA_IBKR_CLIENT_ID:-3}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    extra_hosts:
+      - "host.containers.internal:host-gateway"
+      - "host.docker.internal:host-gateway"
+    networks:
+      - fleet-private
+
   fleet-coordinator:
     build:
       context: ./PythonDataService

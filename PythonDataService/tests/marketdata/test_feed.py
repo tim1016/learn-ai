@@ -28,6 +28,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.broker.ibkr import bars as bars_module
+from app.marketdata import ibkr_feed as feed_module
 from app.marketdata.feed import (
     ContinuityEventRef,
     ContinuityPolicy,
@@ -44,6 +45,7 @@ from tests._helpers.ibkr_feed_adversarial import (
     ScriptedLinesFeedFixture,
     raw_minute,
 )
+from tests._helpers.live_source import native_source
 
 # ---------------------------------------------------------------------------
 # Helpers and fakes
@@ -91,7 +93,8 @@ def _make_ibkr_bar_with(**overrides: Any) -> SimpleNamespace:
 
 
 def _fake_connected_client(*, connected: bool = True, connection_lost: bool = False) -> MagicMock:
-    client = MagicMock()
+    client = MagicMock(connection_state="connected")
+    native_source(client)
     client.is_connected.return_value = connected
     client.connection_lost = connection_lost
     return client
@@ -133,7 +136,7 @@ class _FakeBarSource:
         self.call_count += 1
         for idx, bar in enumerate(self._bars):
             if on_source_bar is not None:
-                on_source_bar(bar.start_ms)
+                on_source_bar(bar.start_ms, feed_module.now_ms_utc())
             yield bar
             if self._raise_after is not None and idx + 1 >= self._raise_after:
                 raise IBKRBarStreamError(self._error_msg)
@@ -333,7 +336,7 @@ async def test_stalled_subscription_is_replaced_without_ending_the_bot_feed(
         if call_count == 1:
             raise IBKRBarSubscriptionStalled("simulated stalled subscription")
         if on_source_bar is not None:
-            on_source_bar(bar.start_ms)
+            on_source_bar(bar.start_ms, feed_module.now_ms_utc())
         yield bar
 
     monkeypatch.setattr(
@@ -368,7 +371,7 @@ async def test_health_is_scoped_per_symbol_when_one_sibling_never_advances(
         del use_rth
         if symbol == "SPY":
             if on_source_bar is not None:
-                on_source_bar(spy_bar.start_ms)
+                on_source_bar(spy_bar.start_ms, feed_module.now_ms_utc())
             yield spy_bar
             await asyncio.Event().wait()
         aapl_attached.set()
@@ -432,7 +435,7 @@ async def test_health_active_without_first_closed_bar_is_stale(
 
     assert health.stale is True
     assert health.last_bar_ms is None
-    assert "first closed bar" in health.reason.lower()
+    assert health.waiting is True
     pending_bar.cancel()
     await asyncio.gather(pending_bar, return_exceptions=True)
     await stream.aclose()
@@ -485,7 +488,7 @@ def test_health_withdrawn_proof_with_no_delivery_since_is_not_warming(monkeypatc
     health = feed.health("SPY")
 
     assert (health.stale, health.warming) == (True, False)
-    assert "first closed bar" in health.reason
+    assert health.waiting is False
 
 
 @pytest.mark.parametrize(

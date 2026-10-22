@@ -1,0 +1,93 @@
+[
+  {
+    "bid": 2.0,
+    "ask": 3.0,
+    "last": 2.25,
+    "bidSize": 1.0,
+    "askSize": 1.0
+  },
+  {
+    "bid": 2.0,
+    "ask": 3.0,
+    "last": 1.0,
+    "bidSize": 1.0,
+    "askSize": 1.0
+  },
+  {
+    "bid": 2.0,
+    "ask": 3.0,
+    "last": 4.0,
+    "bidSize": 1.0,
+    "askSize": 1.0
+  },
+  {
+    "bid": 2.0,
+    "ask": 3.0,
+    "last": null,
+    "bidSize": 1.0,
+    "askSize": 1.0
+  },
+  {
+    "bid": null,
+    "ask": 3.0,
+    "last": 2.25,
+    "bidSize": 1.0,
+    "askSize": 1.0
+  },
+  {
+    "bid": 2.0,
+    "ask": null,
+    "last": 2.25,
+    "bidSize": 1.0,
+    "askSize": 1.0
+  },
+  {
+    "bid": 2.0,
+    "ask": 3.0,
+    "last": 2.25,
+    "bidSize": 0.0,
+    "askSize": 1.0
+  },
+  {
+    "bid": 2.0,
+    "ask": 3.0,
+    "last": 2.25,
+    "bidSize": 1.0,
+    "askSize": null
+  },
+  {
+    "bid": -1.0,
+    "ask": 3.0,
+    "last": 2.25,
+    "bidSize": 1.0,
+    "askSize": 1.0
+  },
+  {
+    "bid": 0.0,
+    "ask": 1.0,
+    "last": null,
+    "bidSize": 1.0,
+    "askSize": 1.0
+  },
+  {
+    "bid": 3.0,
+    "ask": 2.0,
+    "last": 2.25,
+    "bidSize": 1.0,
+    "askSize": 1.0
+  },
+  {
+    "bid": null,
+    "ask": null,
+    "last": null,
+    "bidSize": 1.0,
+    "askSize": 1.0
+  },
+  {
+    "bid": 100.1,
+    "ask": 100.3,
+    "last": 100.4,
+    "bidSize": 1.0,
+    "askSize": 1.0
+  }
+]

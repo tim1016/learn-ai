@@ -39,6 +39,7 @@ SECRET_KEYS = frozenset(
         "ALPACA_API_SECRET_KEY",
         "POSTGRES_URL",
         "REDIS_URL",
+        "IBKR_SHARED_FEED_TOKEN",
     }
 )
 

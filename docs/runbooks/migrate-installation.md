@@ -115,7 +115,8 @@ Copy these to the new Mac directly (for example USB or `scp`), into the same
 paths in the new checkout:
 
 - the bundle file;
-- `deploy/fleet/env/*.env`;
+- `deploy/fleet/env/*.env`, including `market-data.env` with the same
+  `IBKR_SHARED_FEED_TOKEN` as the lane files;
 - the repo-root `.env`;
 - `PythonDataService/.env`.
 

@@ -789,6 +789,7 @@ async def _service_lifespan(
 
     if _ROLE_RUNS_CLERK and ibkr_settings.broker_enabled:
         ibkr_client = IbkrClient()
+        ibkr_client.live_data.start()
         # Install the client immediately so /health reports the
         # disconnected-but-available state and the monitor can retry after
         # a soft-fail auto-connect without replacing the process-local client.
@@ -837,9 +838,7 @@ async def _service_lifespan(
 
         monitor = AutoReconnectMonitor(
             ibkr_client,
-            recovery_callbacks=[
-                LIVE_BAR_AGGREGATOR.resubscribe_all,
-            ],
+            recovery_callbacks=[lambda: ibkr_client.live_data.history_recovered(LIVE_BAR_AGGREGATOR.resubscribe_all)],
         )
         monitor.start()
         set_monitor(monitor)
@@ -1234,8 +1233,10 @@ async def _service_lifespan(
         if monitor is not None:
             await monitor.stop()
             set_monitor(None)
-        if ibkr_client is not None and ibkr_client.is_connected():
-            await ibkr_client.disconnect()
+        if ibkr_client is not None:
+            await ibkr_client.live_data.close()
+            if ibkr_client.is_connected():
+                await ibkr_client.disconnect()
         set_client(None)
         # Clear the shared MarketDataFeed after the IBKR client is down.
         from app.marketdata.ibkr_feed import set_market_data_feed as _clear_feed

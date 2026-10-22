@@ -139,7 +139,7 @@ class ContinuityLoop:
     interruption: _OpenInterruption | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
-        self.generation = self.client.connection_generation
+        self.generation = self.client.live_data.connection_generation
 
     # -- the three steps the feed's retry loop drives -----------------------
 
@@ -239,7 +239,7 @@ class ContinuityLoop:
                 f"{self.symbol} was asked to recover with no interruption open"
             )
         await self._wait_for_healthy(deadline_ms=interruption.deadline_ms)
-        new_generation = self.client.connection_generation
+        new_generation = self.client.live_data.connection_generation
         interruption.recovered_ref = await self._record(
             self._event(
                 "recovered",

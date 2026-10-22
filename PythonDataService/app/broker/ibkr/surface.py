@@ -39,10 +39,10 @@ from app.broker.ibkr.contracts import (
     build_chain_contracts,
     qualify_underlying,
 )
+from app.broker.ibkr.live.quotes import QuoteLease
 from app.broker.ibkr.market_data import (
-    GENERIC_TICK_LIST,
+    _quote_to_model,
     _resolve_market_price,
-    _ticker_to_quote,
 )
 from app.broker.ibkr.models import (
     IbkrOptionQuote,
@@ -135,26 +135,19 @@ async def stream_option_surface(
             )
         qualified_by_expiry[exp] = contracts
 
-    # Index each ticker by (expiry, conId) → (strike, right) so the
-    # debounce loop can rebuild per-expiry quote groups in O(N) per cycle
-    # without re-walking the qualified-contracts dict.
-    by_expiry_conid: dict[int, dict[int, tuple[float, OptionRight]]] = {}
-    tickers_by_expiry: dict[int, list] = {}
-    stock_ticker = None
-    all_contracts: list = []
+    quotes_by_expiry: dict[int, list[tuple[float, OptionRight, QuoteLease]]] = {}
+    leases: list[QuoteLease] = []
 
     try:
-        stock_ticker = client.ib.reqMktData(stock, "", False, False)
+        stock_lease = client.live_data.quote(stock)
+        leases.append(stock_lease)
         for exp, contracts in qualified_by_expiry.items():
-            conid_map: dict[int, tuple[float, OptionRight]] = {}
-            tlist: list = []
+            qlist: list[tuple[float, OptionRight, QuoteLease]] = []
             for c in contracts:
-                conid_map[int(c.conId)] = (float(c.strike), c.right)
-                ticker = client.ib.reqMktData(c, GENERIC_TICK_LIST, False, False)
-                tlist.append(ticker)
-                all_contracts.append(c)
-            by_expiry_conid[exp] = conid_map
-            tickers_by_expiry[exp] = tlist
+                lease = client.live_data.quote(c)
+                leases.append(lease)
+                qlist.append((float(c.strike), c.right, lease))
+            quotes_by_expiry[exp] = qlist
 
         logger.info(
             "Subscribed surface: symbol=%s expiries=%d strikes=%d lines=%d",
@@ -168,21 +161,16 @@ async def stream_option_surface(
             await asyncio.sleep(debounce_seconds)
             expiry_groups: list[IbkrSurfaceExpiry] = []
             for exp in sorted_expiries:
-                conid_map = by_expiry_conid[exp]
                 quotes: list[IbkrOptionQuote] = []
-                for t in tickers_by_expiry[exp]:
-                    conid = int(t.contract.conId)
-                    if conid not in conid_map:
-                        continue
-                    strike, right = conid_map[conid]
+                for strike, right, lease in quotes_by_expiry[exp]:
                     quotes.append(
-                        _ticker_to_quote(t, symbol, exp, strike, right),
+                        _quote_to_model(lease.latest, symbol, exp, strike, right),
                     )
                 expiry_groups.append(
                     IbkrSurfaceExpiry(expiry_ms=exp, quotes=quotes),
                 )
 
-            underlying_price = _resolve_market_price(stock_ticker)
+            underlying_price = _resolve_market_price(stock_lease.latest)
 
             yield IbkrSurfaceSnapshot(
                 symbol=symbol,
@@ -192,13 +180,5 @@ async def stream_option_surface(
                 as_of_ms=now_ms_utc(),
             )
     finally:
-        # Cancel every subscription so we don't leak market-data lines.
-        for c in all_contracts:
-            try:
-                client.ib.cancelMktData(c)
-            except Exception as exc:
-                logger.debug("cancelMktData(%s) raised on shutdown: %s", c, exc)
-        try:
-            client.ib.cancelMktData(stock)
-        except Exception as exc:
-            logger.debug("cancelMktData(underlying) raised on shutdown: %s", exc)
+        for lease in leases:
+            lease.release()

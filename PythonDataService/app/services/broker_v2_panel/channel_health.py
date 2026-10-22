@@ -148,10 +148,12 @@ def evaluate_channels_at_account_scope(
     )
 
 
-def channel_state(*, healthy: bool, observed_at_ms: int, now_ms: int) -> ChannelState:
+def channel_state(*, healthy: bool, observed_at_ms: int, now_ms: int, warming: bool = False) -> ChannelState:
     """Derive the closed channel state from health + freshness."""
     if now_ms - observed_at_ms > CHANNEL_FRESH_THRESHOLD_MS:
         return "unknown"
+    if warming:
+        return "warming"
     return "healthy" if healthy else "unhealthy"
 
 

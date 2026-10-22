@@ -23,6 +23,7 @@ from app.options.contract import OptionContract
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteFault, QuoteSide, quote_fault
 from app.options.resolver import UnderlyingObservation, resolve_contracts
 from app.options.watch import LineClass, NoLine
+from tests._helpers.live_source import native_source
 
 # The resolver's own scenes: SPY with its bar closed at 585, a dollar-wide ladder, selected on a Tuesday at 10:31:02.
 from tests.options import test_resolver as scenes
@@ -50,6 +51,7 @@ class Gateway:
         allowance: int | None = None,
     ) -> None:
         self.now = NOW
+        monkeypatch.setattr("app.broker.ibkr.live.quote_callbacks.now_ms_utc", lambda: self.now)
         self.allowance = allowance
         self.strikes, self.expiries = list(strikes), list(expiries)
         self._stocks: dict[str, Stock] = {}
@@ -69,6 +71,7 @@ class Gateway:
             connection_state="connected", last_event_ms=NOW, last_ibkr_code=None,
         )
         self.client.is_connected.return_value = True
+        native_source(self.client)
         self.client.ib.errorEvent = Event()
         self.client.ib.wrapper.ticker2ReqId = {"mktData": self._request_ids}
         self.client.ib.reqMktData.side_effect = self._request
@@ -1063,7 +1066,7 @@ async def test_when_what_is_wanted_cannot_be_read_the_last_answer_stands_and_the
     assert (ibkr.open_option_lines(), ibkr.cancelled) == (open_before, [])
 
 
-@pytest.mark.parametrize("step", ["underlyings", "adopt", "release", "on_error"])
+@pytest.mark.parametrize("step", ["underlyings", "adopt", "release"])
 async def test_no_step_of_the_option_side_takes_the_stock_quotes_down(monkeypatch: pytest.MonkeyPatch, step: str) -> None:
     """A stock bot wants SPY's quote too. Through a reconnect and a refusal, with one step of the option side
     broken, the stock side still asks for its line again, hands its quote over and hears IBKR refuse it."""
@@ -1432,3 +1435,26 @@ async def test_a_clerk_that_watches_no_option_contract_has_no_option_feed(monkey
     assert (status.option_feed(), status.underlying_quote("SPY")) == (None, None)
     assert ibkr.asked == ["SPY"]
 
+
+
+async def test_greeks_changed_during_outage_cannot_gain_a_receipt_on_maintained_restore(monkeypatch: pytest.MonkeyPatch) -> None:
+    status, lines, ibkr, _ = _watching(monkeypatch, _bot())
+    await _settle(status)
+    name = _call(585).occ_symbol
+    ibkr.lines[name].modelGreeks = OptionComputation(0, delta=0.61)
+    ibkr.tick(name, bid=4.10, ask=4.14)
+    assert lines._lines[name].vendor_delta == 0.61
+    ibkr.client.connection_state = "soft_lost"
+    ibkr.client.ib.errorEvent.emit(-1, 1100, "lost", None)
+    ibkr.lines[name].modelGreeks = OptionComputation(0, delta=0.88)
+    ibkr.tick(name, sizes=True)
+    ibkr.client.connection_state = "connected"
+    ibkr.client.connectivity_lost_count += 1
+    ibkr.client.last_ibkr_code = 1102
+    ibkr.client.ib.errorEvent.emit(-1, 1102, "maintained", None)
+    await _settle(status, passes=1)
+    ibkr.tick(name, sizes=True)
+    assert lines._lines[name].vendor_delta is None
+    ibkr.lines[name].modelGreeks = OptionComputation(0, delta=0.58)
+    ibkr.tick(name, sizes=True)
+    assert lines._lines[name].vendor_delta == 0.58

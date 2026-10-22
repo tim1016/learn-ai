@@ -12,6 +12,8 @@ from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
+from app.broker.ibkr.live.protocol import QuoteUpdate
+from app.broker.ibkr.live.quotes import QuoteLease
 from app.broker.ibkr.models import _coerce_quote, _coerce_size
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
 from app.schemas.market_liveness import (
@@ -28,9 +30,6 @@ DECISION_DATA_MAX_AGE_MS = 5_000
 # already blocks ENTER; waiting for repair never grants additional trading time.
 SUBSCRIPTION_TIMEOUT_MS = 30_000
 MAX_RETRY_MS = 30_000
-# IBKR's answers that refuse a market-data request: 101 is "too many tickers", the rest name the
-# instrument or the account's permissions.
-REQUEST_FAILURE_CODES = frozenset({101, 200, 354, 10089, 10090, 10167, 10186})
 
 
 def retry_delay_ms(attempt: int) -> int:
@@ -38,44 +37,6 @@ def retry_delay_ms(attempt: int) -> int:
     return min(1_000 * 2 ** min(attempt, 5), MAX_RETRY_MS)
 
 
-def install_market_data_callbacks(wrapper: Any) -> None:
-    """Keep tick 49's -1/0 distinction at the ib_async ingestion boundary.
-
-    ib_async 2.x's generic-size normalization maps nonpositive values to its
-    empty size (zero). For halt status that turns unavailable (-1) into a
-    resume (0). All other tick types keep the library decoder unchanged.
-    Installed idempotently by the status-subscription owner; history-only
-    clients keep their decoder unchanged.
-    """
-    from ib_async.objects import TickData
-
-    if getattr(wrapper, "_market_status_callbacks_installed", False) is True:
-        return
-    wrapper._market_status_callbacks_installed = True
-    generic = wrapper.tickGeneric
-    data_type = wrapper.marketDataType
-
-    def tick_generic(req_id: int, tick_type: int, value: float) -> None:
-        if tick_type != 49:
-            generic(req_id, tick_type, value)
-            return
-        ticker = wrapper.reqId2Ticker.get(req_id)
-        if ticker is not None:
-            ticker.halted = float(value)
-            ticker.ticks.append(TickData(wrapper.lastTime, tick_type, ticker.halted, 0))
-            wrapper.pendingTickers.add(ticker)
-
-    wrapper.tickGeneric = tick_generic
-
-    def market_data_type(req_id: int, kind: int) -> None:
-        data_type(req_id, kind)
-        ticker = wrapper.reqId2Ticker.get(req_id)
-        if ticker is not None:
-            # The vendor decoder changes the cache without emitting an update.
-            # Readiness must see a delayed/frozen transition on this callback.
-            wrapper.pendingTickers.add(ticker)
-
-    wrapper.marketDataType = market_data_type
 
 
 @dataclass
@@ -85,9 +46,10 @@ class MarketSubscription:
     symbol: str
     started_at_ms: int
     generation: str = field(default_factory=lambda: uuid4().hex)
-    ticker: Any = None
+    update: QuoteUpdate | None = None
     callback: Any = None
-    request_id: int | None = None
+    failure_callback: Any = None
+    lease: QuoteLease | None = None
     last_received_at_ms: int | None = None
     bid_received_at_ms: int | None = None
     ask_received_at_ms: int | None = None
@@ -101,33 +63,36 @@ class MarketSubscription:
     failure: str | None = None
     market_data_type: int | None = None
 
-    def ingest(self, ticker: Any, now: int) -> tuple[SymbolTradingStatusEvidence, ...]:
+    def ingest(self, update: QuoteUpdate) -> tuple[SymbolTradingStatusEvidence, ...]:
         """Accept actual callbacks, preserving every halt/resume in a batch."""
+        self.update = update
+        now = update.received_at_ms
+        self.failure = None
         self.last_received_at_ms = now
-        if self.market_data_type != ticker.marketDataType:
+        if self.market_data_type != update.data_type:
             self.bid_received_at_ms = self.ask_received_at_ms = None
             self.bid_priced = self.ask_priced = False
             self.trade_timestamp_ms = self.trade_received_at_ms = None
-            self.market_data_type = ticker.marketDataType
+            self.market_data_type = update.data_type
+        trade_ms = update.trade_ms
         transitions: list[SymbolTradingStatusEvidence] = []
-        for tick in ticker.ticks:
+        for tick in update.ticks:
             # Negative status evidence remains load-bearing even if the
             # subscription switches mode in the same network packet. Only
             # a live clear can release a retained halt.
-            if ticker.marketDataType != 1 and (tick.tickType != 49 or tick.price == 0):
+            if update.data_type != 1 and (tick.kind != 49 or tick.price == 0):
                 continue
-            if tick.tickType in (0, 1):
+            if tick.kind in (0, 1):
                 self.bid_received_at_ms = now
-                self.bid_priced = self.bid_priced or tick.tickType == 1
-            elif tick.tickType in (2, 3):
+                self.bid_priced = self.bid_priced or tick.kind == 1
+            elif tick.kind in (2, 3):
                 self.ask_received_at_ms = now
-                self.ask_priced = self.ask_priced or tick.tickType == 2
-            elif tick.tickType in (48, 77) and ticker.rtTime is not None:
-                trade_ms = int(ticker.rtTime.timestamp() * 1000)
+                self.ask_priced = self.ask_priced or tick.kind == 2
+            elif tick.kind in (48, 77) and trade_ms is not None:
                 if self.trade_timestamp_ms is None or trade_ms > self.trade_timestamp_ms:
                     self.trade_timestamp_ms = trade_ms
                     self.trade_received_at_ms = now
-            elif tick.tickType == 49:
+            elif tick.kind == 49:
                 state = "HALTED" if tick.price in (1, 2) else "TRADABLE" if tick.price == 0 else "UNKNOWN"
                 self.status = SymbolTradingStatusEvidence(
                     symbol=self.symbol, state=state, source=SOURCE, observed_at_ms=now,
@@ -139,17 +104,17 @@ class MarketSubscription:
 
     def quote(self, now: int) -> TopOfBookQuote | None:
         """Return a usable book with its original two-sided receipt age."""
-        if self.ticker is None or self.ticker.marketDataType != 1 or self.failure:
+        if self.update is None or self.update.data_type != 1 or self.failure:
             return None
         if self.bid_received_at_ms is None or self.ask_received_at_ms is None:
             return None
         received = min(self.bid_received_at_ms, self.ask_received_at_ms)
-        bid, ask = _coerce_quote(self.ticker.bid), _coerce_quote(self.ticker.ask)
+        bid, ask = _coerce_quote(self.update.values.get("bid")), _coerce_quote(self.update.values.get("ask"))
         if not bid or not ask or bid > ask or not 0 <= now - received <= DECISION_DATA_MAX_AGE_MS:
             return None
         return TopOfBookQuote(
             symbol=self.symbol, bid=bid, ask=ask,
-            bid_size=_coerce_size(self.ticker.bidSize), ask_size=_coerce_size(self.ticker.askSize),
+            bid_size=_coerce_size(self.update.values.get("bidSize")), ask_size=_coerce_size(self.update.values.get("askSize")),
             source=SOURCE, observed_at_ms=received,
         )
 
@@ -157,13 +122,13 @@ class MarketSubscription:
         """The book as it was received, each side with its own receipt time, untested: for a reader that
         asks the usability tests itself (ADR 0076). None until a live price tick has arrived for each side
         in this subscription: a tick of a side's size alone would hand over a price from before it."""
-        if self.ticker is None or self.failure or self.ticker.marketDataType != 1:
+        if self.update is None or self.failure or self.update.data_type != 1:
             return None
         if not (self.bid_priced and self.ask_priced):
             return None
         if self.bid_received_at_ms is None or self.ask_received_at_ms is None:
             return None
-        bid, ask = _coerce_quote(self.ticker.bid), _coerce_quote(self.ticker.ask)
+        bid, ask = _coerce_quote(self.update.values.get("bid")), _coerce_quote(self.update.values.get("ask"))
         if bid is None or ask is None:
             return None
         return HeldQuote(
@@ -179,7 +144,7 @@ class MarketSubscription:
         trade = self.trade_timestamp_ms
         trade_valid = (
             self.trade_received_at_ms is not None and trade is not None
-            and self.ticker is not None and self.ticker.marketDataType == 1
+            and self.update is not None and self.update.data_type == 1
             and 0 <= now - trade <= DECISION_DATA_MAX_AGE_MS
             and 0 <= now - self.trade_received_at_ms <= DECISION_DATA_MAX_AGE_MS
         )
@@ -188,7 +153,7 @@ class MarketSubscription:
         )
         if self.failure:
             state, code, reason = "UNAVAILABLE", "MARKET_DATA_UNAVAILABLE", self.failure
-        elif self.ticker is not None and self.ticker.marketDataType != 1:
+        elif self.update is not None and self.update.data_type != 1:
             state, code, reason = "UNAVAILABLE", "MARKET_DATA_NOT_LIVE", "IBKR is delivering delayed or frozen market data."
         elif proof_times:
             state, code, reason = "READY", "MARKET_DATA_READY", "Current IBKR market data is ready for trading."

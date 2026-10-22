@@ -263,6 +263,9 @@ class IbkrClient:
         from ib_async import IB
 
         self._settings = settings or get_settings()
+        from app.broker.ibkr.live.factory import create_live_source
+
+        self.live_data = create_live_source(self)
         self._ib: IB = IB()
         self._ib.client.MaxRequests = _API_MAX_REQUESTS_PER_SECOND
         self._ib.client.RequestsInterval = _API_REQUEST_INTERVAL_SECONDS

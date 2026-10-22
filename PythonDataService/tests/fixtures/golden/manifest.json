@@ -2668,6 +2668,53 @@
       "validated_by": [
         "tests/fixtures/test_bs_browser_parity_fixture.py"
       ]
+    },
+    {
+      "id": "IB-MARK-001",
+      "name": "IBKR display mark from accepted quote receipts",
+      "category": "market-data",
+      "canonical_module": "PythonDataService/app/broker/ibkr/market_data.py",
+      "canonical_callable": "_resolve_market_price",
+      "reference": {
+        "kind": "external_reference",
+        "oracle": "ib_async==2.1.0 Ticker.marketPrice/hasBidAsk/midpoint/isUnset",
+        "citation": "Installed reference source hash pinned in output.json; https://ib-api-reloaded.github.io/ib_async/api.html#ib_async.ticker.Ticker.marketPrice"
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "tests/fixtures/golden/market-data/IB-MARK-001/v1/regenerate.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-09,
+        "rtol": 0.0,
+        "note": "Strict float over existing vendor selection and float64 midpoint, without iterative or transcendental operations."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.json": "3b146df835cb3d3566de7bae33aa1f2c15642d25db75adf7a415070ed9e4750d",
+            "output.json": "cf8bf15de38bb792536631c1c6fb9f1b53a5df65201c87cae75b8303fb8626bc",
+            "attribution.md": "b23c9a9964dfd8bdfb92c846beb653c67547b4a654a45c882951368e1bf7ba79",
+            "regenerate.py": "44baecaba123159936bb0a14cf4bdfbf8b2dc2a95c49c3f635be2ff9b30b98ae"
+          },
+          "file_sha256": {
+            "input.json": "8276a96f9a37480dc865e2ff840e63611675c95402ad60d3690f58a7d9884a5a",
+            "output.json": "25216989bf693dd8043f6dcd9cd0db035ea5beb342192069567f0fecbcf4a955",
+            "attribution.md": "b23c9a9964dfd8bdfb92c846beb653c67547b4a654a45c882951368e1bf7ba79",
+            "regenerate.py": "44baecaba123159936bb0a14cf4bdfbf8b2dc2a95c49c3f635be2ff9b30b98ae"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/marketdata/shared/test_mark_parity.py"
+      ]
     }
   ]
 }

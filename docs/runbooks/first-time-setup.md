@@ -118,8 +118,10 @@ it.
 
 `./restart.sh` runs the **fleet** posture. It also loads
 `compose.fleet.dev.yaml`, which adds one clerk container per Alpaca account
-(`alpaca-live-clerk`, `alpaca-paper-clerk`), so six containers. It needs the
-gitignored lane files `deploy/fleet/env/live.env` and `paper.env`; until they
+(`alpaca-live-clerk`, `alpaca-paper-clerk`) and the read-only
+`ibkr-market-data` source, so seven containers. It needs the gitignored lane
+files `deploy/fleet/env/live.env`, `paper.env` and the shared source
+`market-data.env`; until they
 exist it fails with `env file … not found`. Setting them up:
 [`fleet-dev-two-lane-posture.md`](fleet-dev-two-lane-posture.md) and
 [`add-an-alpaca-account.md`](add-an-alpaca-account.md).

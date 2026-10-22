@@ -486,6 +486,8 @@ class _FakeIb:
 class _FakeClient:
     def __init__(self, *, connected: bool = True, connection_lost: bool = False) -> None:
         self.ib = _FakeIb()
+        from tests._helpers.live_source import native_source
+        native_source(self)
         self._connected = connected
         self.connection_lost = connection_lost
         # The generation fence is unconditional on the real client, so every
@@ -527,7 +529,7 @@ async def test_stream_minute_bars_reports_raw_source_activity() -> None:
         client,
         "SPY",
         use_rth=True,
-        on_source_bar=source_ms.append,
+        on_source_bar=lambda stamp, received: source_ms.append(stamp),
         assembler=MinuteAssembler(),
     )
 
@@ -597,7 +599,7 @@ async def test_minute_stream_one_print_then_silence_invalidates_without_a_closed
         client,
         "SPY",
         use_rth=True,
-        on_source_bar=source_ms.append,
+        on_source_bar=lambda stamp, received: source_ms.append(stamp),
         stall_timeout_s=0.01,
         assembler=MinuteAssembler(),
     )
@@ -907,7 +909,7 @@ async def test_reconnecting_consumer_resumes_after_its_watermark_not_at_the_tail
         client,
         "SPY",
         use_rth=True,
-        on_source_bar=seen.append,
+        on_source_bar=lambda stamp, received: seen.append(stamp),
         assembler=assembler,
         stall_timeout_s=1.0,  # without the resume this waits for a print that never comes
     )
@@ -1671,7 +1673,7 @@ async def test_a_print_ignored_after_a_timer_emit_is_not_reported_as_source_prog
         "SPY",
         use_rth=False,
         stall_timeout_s=3_600.0,
-        on_source_bar=reported.append,
+        on_source_bar=lambda stamp, received: reported.append(stamp),
         assembler=MinuteAssembler(),
     )
     try:

@@ -3,6 +3,10 @@
 # command, and fleet roles. Only the external provider/market endpoints below
 # are fake; they are not present in the production topology.
 services:
+  # The qualification uses its fake market-data service, never the real
+  # Gateway owner or an operator's source credential file (#3388).
+  ibkr-market-data:
+    env_file: !override []
   # Qualification has isolated support stores so it never joins an operator's
   # base stack. Production gets db/redis from compose.yaml instead.
   fleet-db:
@@ -77,6 +81,8 @@ services:
     healthcheck:
       disable: true
     environment:
+      IBKR_SHARED_FEED_URL: !reset null
+      IBKR_BROKER_ENABLED: "false"
       NUMBA_DISABLE_JIT: "1"
       FLEET_FAKE_BROKER_URL: http://fleet-fake-paper-provider:8011
       FLEET_FAKE_MARKET_DATA_URL: http://fleet-fake-market-data:8013
@@ -89,7 +95,7 @@ services:
     stop_grace_period: 2s
     volumes:
       - ./PythonDataService/scripts/run_broker_fleet_compose_qualification.py:/app/scripts/run_broker_fleet_compose_qualification.py:ro
-    depends_on:
+    depends_on: !override
       fleet-fake-paper-provider:
         condition: service_healthy
       fleet-fake-market-data:
@@ -101,6 +107,8 @@ services:
     healthcheck:
       disable: true
     environment:
+      IBKR_SHARED_FEED_URL: !reset null
+      IBKR_BROKER_ENABLED: "false"
       NUMBA_DISABLE_JIT: "1"
       FLEET_FAKE_BROKER_URL: http://fleet-fake-live-provider:8012
       FLEET_FAKE_MARKET_DATA_URL: http://fleet-fake-market-data:8013
@@ -108,7 +116,7 @@ services:
     stop_grace_period: 2s
     volumes:
       - ./PythonDataService/scripts/run_broker_fleet_compose_qualification.py:/app/scripts/run_broker_fleet_compose_qualification.py:ro
-    depends_on:
+    depends_on: !override
       fleet-fake-live-provider:
         condition: service_healthy
       fleet-fake-market-data:

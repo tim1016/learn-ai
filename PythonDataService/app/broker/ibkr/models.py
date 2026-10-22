@@ -308,8 +308,7 @@ class IbkrOptionQuote(BaseModel):
     underlying_price: float | None = None
     greeks_source: Literal["model", "bid", "ask", "last", "none"] = "none"
 
-    # Stamp of when this snapshot was assembled. Sourced from
-    # ``Ticker.time`` if present, else process clock at conversion time.
+    # Original accepted quote receipt; the snapshot clock only while no quote has arrived.
     ts_ms: int
 
 

@@ -724,8 +724,9 @@ def test_insufficient_disk_refuses_before_anything_is_staged_or_moved(
 
 @pytest.mark.parametrize(
     "missing",
-    [Path(".env"), Path("PythonDataService") / ".env", Path("deploy") / "fleet" / "env" / "live.env"],
-    ids=["root", "data_plane", "fleet_live_env"],
+    [Path(".env"), Path("PythonDataService") / ".env", Path("deploy") / "fleet" / "env" / "live.env",
+     Path("deploy") / "fleet" / "env" / "market-data.env"],
+    ids=["root", "data_plane", "fleet_live_env", "shared_source_env"],
 )
 def test_import_refuses_without_the_env_files(
     tmp_path: Path, exported, missing: Path

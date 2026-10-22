@@ -550,6 +550,10 @@ def _ibkr_only_down(channels: list[ChannelHealth], evaluation: ChannelHealthEval
 def _channel_recovery(channels: list[ChannelHealth], evaluation: ChannelHealthEvaluation) -> str | None:
     if evaluation.ready:
         return None
+    if evaluation.failing == {"market_data"} and "market_data" not in evaluation.stale and any(
+        channel.stream == "market_data" and channel.awaiting_bar for channel in channels
+    ):
+        return "Wait for fresh, complete bar evidence, then refresh the deployment check."
     if _ibkr_only_down(channels, evaluation):
         return f"{_IBKR_LOGIN}; then refresh this page."
     if _ibkr_disconnected(channels, evaluation):

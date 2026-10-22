@@ -222,6 +222,9 @@ class FeedHealth(BaseModel):
                     closed its first minute yet. Gates that need a closed
                     minute read ``stale`` and still refuse; a run that will
                     share the subscription may start on it.
+    ``waiting``   — connected, but awaiting its scheduled session or initial
+                    source callback. Presentation only; it grants neither
+                    delivery proof nor permission to join a delivering run.
     ``last_bar_ms`` — ``start_ms`` of the most recently emitted bar, or ``None``
                       if no bar has been emitted yet.
     ``reason``    — human-readable detail when unhealthy (empty string when healthy).
@@ -234,6 +237,7 @@ class FeedHealth(BaseModel):
     connected: bool
     stale: bool
     warming: bool = False
+    waiting: bool = False
     last_bar_ms: int | None
     reason: str
     active_subscription_count: int
@@ -241,7 +245,7 @@ class FeedHealth(BaseModel):
 
     @model_validator(mode="after")
     def _warming_is_a_kind_of_stale(self) -> FeedHealth:
-        if self.warming and not (self.connected and self.stale):
+        if (self.warming or self.waiting) and not (self.connected and self.stale):
             raise ValueError("A warming feed is connected and stale.")
         return self
 

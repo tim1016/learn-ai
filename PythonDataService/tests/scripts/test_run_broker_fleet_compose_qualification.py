@@ -408,6 +408,7 @@ def test_full_stack_overlay_suppresses_combined_and_retargets_ingress() -> None:
         pytest.skip("requires a reachable Docker/Podman daemon for a real Compose render")
     environment = {
         **os.environ,
+        "FLEET_MARKET_DATA_ENV_FILE": str(qualification.REPOSITORY_ROOT / "deploy/fleet/env/market-data.env.example"),
         "FLEET_POSTGRES_PASSWORD": "qualification-postgres-password",
         "POSTGRES_PASSWORD": "qualification-postgres-password",
         "REDIS_PASSWORD": "qualification-redis-password",

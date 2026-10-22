@@ -193,6 +193,7 @@ class ChannelHealth(BaseModel):
     stream: Literal["market_data", "execution"]
     healthy: bool
     connected: bool
+    awaiting_bar: bool = False
     reason: str = ""
     observed_at_ms: int
 
@@ -205,6 +206,8 @@ class ChannelHealth(BaseModel):
         symbol-scoped one contradict each other, and the contradiction would
         surface as an unexplainable deploy refusal rather than an error here.
         """
+        if self.awaiting_bar and (self.healthy or not self.connected or self.stream != "market_data"):
+            raise ValueError("Only connected, not-yet-usable market data can await a complete bar")
         if self.healthy and not self.connected:
             raise ValueError(
                 "ChannelHealth(healthy=True, connected=False) is not a real "

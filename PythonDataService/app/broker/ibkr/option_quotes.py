@@ -60,7 +60,6 @@ import asyncio
 import logging
 import math
 from collections.abc import Awaitable, Callable, Hashable, Iterable, Mapping, Sequence
-from copy import copy
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
@@ -69,7 +68,10 @@ from types import MappingProxyType
 from typing import Any
 
 from app.broker.ibkr.client import IbkrClient
-from app.broker.ibkr.market_subscription import REQUEST_FAILURE_CODES, SUBSCRIPTION_TIMEOUT_MS, retry_delay_ms
+from app.broker.ibkr.live.protocol import ASK_PRICE_TICKS, ASK_SIZE_TICKS, BID_PRICE_TICKS, BID_SIZE_TICKS, QuoteUpdate
+from app.broker.ibkr.live.quote_callbacks import REQUEST_FAILURE_CODES
+from app.broker.ibkr.live.quotes import QuoteFailure, QuoteLease
+from app.broker.ibkr.market_subscription import SUBSCRIPTION_TIMEOUT_MS, retry_delay_ms
 from app.broker.ibkr.models import _coerce_optional_float
 from app.broker.ibkr.option_chain import (
     ListedContract,
@@ -99,8 +101,6 @@ from app.utils.timestamps import Clock, now_ms_utc
 logger = logging.getLogger(__name__)
 
 # IBKR's tick ids for a side's price and for its size, live and delayed.
-_BID_PRICE_TICKS, _BID_SIZE_TICKS = frozenset({1, 66}), frozenset({0, 69})
-_ASK_PRICE_TICKS, _ASK_SIZE_TICKS = frozenset({2, 67}), frozenset({3, 70})
 _DATA_TYPES = {
     1: QuoteDataType.LIVE,
     2: QuoteDataType.FROZEN,
@@ -176,39 +176,36 @@ class OptionLine:
     contract: OptionContract
     # When the line was opened, or last lost a side it held. The wait for a whole quote counts from here.
     incomplete_since_ms: int
-    ticker: Any = None
     callback: Any = None
-    request_id: int | None = None
+    failure_callback: Any = None
+    lease: QuoteLease | None = None
     bid: QuoteSide | None = None
     ask: QuoteSide | None = None
     market_data_type: int | None = None
     # IBKR's own model delta, when it has sent one on this line. Kept beside the quote, never used for a pick.
     vendor_delta: float | None = None
-    # The model figures the library already held for the contract when this line began: another line's, or
-    # from before a data loss.
-    stale_greeks: Any = None
-
-    def ingest(self, ticker: Any, now: int) -> None:
+    def ingest(self, update: QuoteUpdate) -> None:
         """Accept one callback. Only the ticks it carries are read, never the library's cache of prices."""
+        now = update.received_at_ms
         whole = self.has_a_whole_quote
-        if self.market_data_type != ticker.marketDataType:
+        if self.market_data_type != update.data_type:
             # A quote is of one kind of data. A switch of kind leaves nothing received.
             self.bid = self.ask = None
-            self.market_data_type = ticker.marketDataType
-        for tick in ticker.ticks:
-            if tick.tickType in _BID_PRICE_TICKS:
+            self.market_data_type = update.data_type
+        for tick in update.ticks:
+            if tick.kind in BID_PRICE_TICKS:
                 self.bid = _priced(tick.price, now)
-            elif tick.tickType in _ASK_PRICE_TICKS:
+            elif tick.kind in ASK_PRICE_TICKS:
                 self.ask = _priced(tick.price, now)
-            elif tick.tickType in _BID_SIZE_TICKS:
+            elif tick.kind in BID_SIZE_TICKS:
                 self.bid = _sized(self.bid, tick.size, now)
-            elif tick.tickType in _ASK_SIZE_TICKS:
+            elif tick.kind in ASK_SIZE_TICKS:
                 self.ask = _sized(self.ask, tick.size, now)
         if whole and not self.has_a_whole_quote:
             self.incomplete_since_ms = now
-        greeks = getattr(ticker, "modelGreeks", None)
-        if greeks is not None and greeks is not self.stale_greeks:
-            self.vendor_delta = _coerce_optional_float(greeks.delta)
+        greeks = update.greeks.get("modelGreeks")
+        if greeks is not None and "modelGreeks" in update.greeks_changed:
+            self.vendor_delta = _coerce_optional_float(greeks.get("delta"))
 
     @property
     def has_a_whole_quote(self) -> bool:
@@ -333,8 +330,9 @@ class OptionQuoteLines:
         self._read_backoff.forget_all()
         if maintained and client is self._owner:
             for symbol, line in tuple(self._lines.items()):
-                line.ticker.updateEvent -= line.callback
-                self._lines[symbol] = OptionLine(line.contract, now, ticker=line.ticker)
+                line.lease.updates -= line.callback
+                line.lease.failures -= line.failure_callback
+                self._lines[symbol] = OptionLine(line.contract, now, lease=line.lease)
                 self._attach(self._lines[symbol], client)
         else:
             self.release()
@@ -388,10 +386,10 @@ class OptionQuoteLines:
             request.line_class is LineClass.PREVIEW for request in self._wanted
         )
 
-    def on_error(self, req_id: int, code: int) -> None:
-        """IBKR's answer to a request for a line."""
-        line = next((line for line in self._lines.values() if line.request_id == req_id), None)
-        if line is None or code not in REQUEST_FAILURE_CODES:
+    def on_failure(self, line: OptionLine, failure: QuoteFailure) -> None:
+        """A typed request refusal belongs to this lease, never a synthetic request id."""
+        code = failure.code
+        if self._lines.get(line.contract.occ_symbol) is not line or code not in REQUEST_FAILURE_CODES:
             return
         symbol = line.contract.occ_symbol
         self._drop(symbol)
@@ -625,39 +623,37 @@ class OptionQuoteLines:
         self._without = without
 
     def _open(self, contract: OptionContract, listed: ListedContract, client: IbkrClient, now: int) -> None:
-        ticker = client.ib.reqMktData(copy(listed.ibkr_contract), "", False, False)
-        line = OptionLine(contract, now, ticker=ticker)
+        lease = client.live_data.quote(listed.ibkr_contract)
+        line = OptionLine(contract, now, lease=lease)
         self._lines[contract.occ_symbol] = line
         self._attach(line, client)
 
     def _attach(self, line: OptionLine, client: IbkrClient) -> None:
         generation, symbol = self._generation, line.contract.occ_symbol
 
-        def receive(ticker: Any) -> None:
-            if (
-                self._lines.get(symbol) is not line
-                or self._generation != generation
-                or client.connection_state != "connected"
-            ):
+        def receive(update: QuoteUpdate) -> None:
+            if (self._lines.get(symbol) is not line or self._generation != generation
+                    or not client.live_data.is_connected()):
                 return
-            line.ingest(ticker, self._clock())
+            line.ingest(update)
             if line.has_a_whole_quote:
                 self._line_backoff.succeeded(symbol)
 
-        line.callback = receive
-        line.stale_greeks = getattr(line.ticker, "modelGreeks", None)
-        line.ticker.updateEvent += receive
-        line.request_id = self._request_id(client, line)
+        def failed(failure: QuoteFailure) -> None:
+            line.bid = line.ask = None
+            line.vendor_delta = None
+            line.market_data_type = None
+            line.incomplete_since_ms = self._clock()
+            self.on_failure(line, failure)
 
-    @staticmethod
-    def _request_id(client: IbkrClient, line: OptionLine) -> int | None:
-        request_id = client.ib.wrapper.ticker2ReqId["mktData"].get(line.ticker)
-        return request_id if isinstance(request_id, int) else None
+        line.callback, line.failure_callback = receive, failed
+        assert line.lease is not None
+        line.lease.updates += receive
+        line.lease.failures += failed
 
     def _drop(self, symbol: str) -> None:
         line = self._lines.pop(symbol)
-        line.ticker.updateEvent -= line.callback
-        owner = self._owner
-        # After a reconnect the library has forgotten the request; there is nothing left to cancel.
-        if owner is not None and owner.is_connected() and self._request_id(owner, line) is not None:
-            owner.ib.cancelMktData(line.ticker.contract)
+        if line.lease is not None:
+            line.lease.updates -= line.callback
+            line.lease.failures -= line.failure_callback
+            line.lease.release()

@@ -10869,6 +10869,11 @@ export interface components {
          *     ``healthy`` implies ``connected``.
          */
         ChannelHealth: {
+            /**
+             * Awaiting Bar
+             * @default false
+             */
+            awaiting_bar?: boolean;
             /** Connected */
             connected: boolean;
             /** Healthy */
@@ -10905,7 +10910,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "healthy" | "unhealthy" | "unknown";
+            state: "healthy" | "unhealthy" | "warming" | "unknown";
             /**
              * Stream
              * @enum {string}

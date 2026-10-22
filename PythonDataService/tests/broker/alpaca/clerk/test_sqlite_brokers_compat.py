@@ -119,6 +119,7 @@ async def test_existing_reads_project_active_sqlite_authority(sqlite_desk: FastA
             "connected": True,
             "reason": "",
             "observed_at_ms": 10,
+            "awaiting_bar": False,
         },
         {
             "stream": "execution",
@@ -126,6 +127,7 @@ async def test_existing_reads_project_active_sqlite_authority(sqlite_desk: FastA
             "connected": True,
             "reason": "",
             "observed_at_ms": 11,
+            "awaiting_bar": False,
         },
     ]
     assert diagnosis.status_code == 200
