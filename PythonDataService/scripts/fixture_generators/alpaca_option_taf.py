@@ -4,7 +4,8 @@ The oracle is the broker. Nothing is computed: each day is a posted row and the 
 charged on. Three days are read from the committed recordings
 (``tests/fixtures/alpaca/option_paper_recordings``); the fourth, 2026-10-16, is the run record of 2026-10-21 in
 ``docs/runbooks/qualify-option-orders-on-paper.md``, because its rows were read offline and no recording of them
-is committed. The script never imports the option fee model the fixture checks. It writes ``input.json`` and
+is committed (its sold contracts are counted from a committed capture; only its posted $0.09 is the runbook's).
+The script never imports the option fee model the fixture checks. It writes ``input.json`` and
 ``output.json`` and records their hashes, and the hand-written ``attribution.md``'s, in the manifest. Run from
 ``PythonDataService/``:
 
@@ -89,13 +90,11 @@ def _write_json(path: Path, value: dict[str, Any]) -> None:
 def main() -> None:
     recorded = _recorded_days()
     assert not recorded.keys() & _RUNBOOK_DAYS.keys(), "a day is in the recordings: read it from there"
-    days = sorted(
-        [(day, row, _RECORDINGS_SOURCE) for day, row in recorded.items()]
-        + [
-            (day, (_sells_in_capture(step, day),) * 2 + (posted,), _RUNBOOK_SOURCE)
-            for day, (step, posted) in _RUNBOOK_DAYS.items()
-        ]
-    )
+    runbook_days = []
+    for day, (step, posted) in _RUNBOOK_DAYS.items():
+        sold = _sells_in_capture(step, day)
+        runbook_days.append((day, (sold, sold, posted), _RUNBOOK_SOURCE))
+    days = sorted([(day, row, _RECORDINGS_SOURCE) for day, row in recorded.items()] + runbook_days)
 
     FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
     _write_json(

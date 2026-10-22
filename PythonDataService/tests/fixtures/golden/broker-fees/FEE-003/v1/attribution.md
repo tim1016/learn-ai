@@ -38,4 +38,4 @@ Four days, keyed by `trade_date_ms`: 4 contracts and `0.02`; 19 and `0.06`; 2 an
 
 ## Regeneration
 
-`cd PythonDataService && .venv/bin/python -m scripts.fixture_generators.alpaca_option_taf`. It rereads the three recorded days and carries the runbook's day as a literal. Regenerate only when a recording or the runbook's record changes, and say which in the commit.
+`cd PythonDataService && .venv/bin/python -m scripts.fixture_generators.alpaca_option_taf`. It rereads the three recorded days, counts the runbook day's sold contracts from the `3225-C4` capture, and carries only that day's $0.09 as a literal. Regenerate only when a recording or the runbook's record changes, and say which in the commit.
