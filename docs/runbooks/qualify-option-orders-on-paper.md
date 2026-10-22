@@ -593,6 +593,10 @@ When the experiment ends, with or without a promotion:
    applies whether or not a capability is promoted. Recreate the lane and
    verify its effective window before ending the experiment; combine this
    with step 3's recreate when applicable.
+   A temporary memory limit given to the lane in `compose.override.yaml`
+   (#3467) is removed the same way: take the override out, recreate, and read
+   the container's limit back (`podman inspect "$LANE" --format
+   '{{.HostConfig.Memory}}'`, 805306368 for 768 MiB).
 5. If a second lane was added only for this, leave it at rest or remove it by
    [section 6 of the account runbook](add-an-alpaca-account.md#6-removal), as
    the owner chooses. Do not delete its volume.
@@ -700,7 +704,7 @@ shown.
 | A bot's entry is refused `RECONCILIATION_IN_PROGRESS` ("Account reconciliation is proving fresh broker truth") two seconds after another bot's entry on the same bar | Two bots decided on the same signal in the same second; the second's decision reached the lane while the first's order was being proven. Under a lagging lane (event loop unserved 1 to 4 s) it happened 2 of 2 times on 2026-10-14 | Nothing was sent; the bot decides again on the next bar. For an overlapping pass, wait for a bar where one bot holds and the other enters (it came a minute later). Close the bot pages first. |
 | An entry's comparison reads *unknown, FIRST_READING_FAILED* (or *CASH_MOVEMENT_UNREAD*) although Alpaca answered in under 100 ms | The first reading's 1.5 s bound ran out while the lane's event loop was stalled: the account call began late and its answer was discarded | Not a discrepancy and never promoted. Close the bot pages and repeat the step; the lane's log has "the account's option buying power could not be read" at the same second. |
 | A stopped bot holds a two-leg structure and its warning says *Use Flatten to close this position* with no Flatten button; the bot page's Sell answers *Flatten is offered for a stopped bot holding one position* | The stranded-position warning offers Flatten only when the bot holds exactly one position, and a safe flatten sends one single-contract exit per leg, never one `mleg` order | Do not close the legs one by one at Alpaca. The Clerk closes the structure itself at its scheduled close, 10 minutes before the session's close for a held sold leg (page: *This system closes the position itself at ...*), as one order. Seen on 2026-10-14: sent 15:50:00 ET, filled 0.17 seconds later. |
-| The lane restarts (`podman inspect` shows `OOMKilled` true) within a minute of deploying an option bot, and the bot's run has ended | The lane's 768 MiB cap: on 2026-10-22 one option bot took the lane from about 480 MB to over 750 MB, and memory did not come back when the bot stopped (#3467) | Read Alpaca for any order the bot sent, then stop the bot flat. For the experiment only, give the Paper lane a larger limit in the gitignored `compose.override.yaml` (`deploy.resources.limits.memory` on `alpaca-paper-clerk`, marked temporary), recreate it, and remove the override with the setting at section 9. Never `podman exec` into the lane while a bot runs. |
+| The lane restarts (`podman inspect` shows `OOMKilled` true) within a minute of deploying an option bot, and the bot's run has ended | The lane's 768 MiB cap: on 2026-10-22 one option bot took the lane from about 480 MB to over 750 MB, and memory did not come back when the bot stopped (#3467) | Read Alpaca for any order the bot sent, then stop the bot flat. For the experiment only, give the Paper lane a larger limit in the gitignored `compose.override.yaml` (`deploy.resources.limits.memory` on `alpaca-paper-clerk`, marked temporary), recreate it, and remove it at section 9 step 4. Never `podman exec` into the lane while a bot runs. |
 | Deploy says *Account hold ... Review the unexplained order in this account's Activity order records*, and Activity lists no order to review | The legs of an outside multi-leg order (a sign check) hold the account until each leg is reviewed, and the app has no control for it yet (#3468). It appears at the first lane restart after #3389, even when the parents were acknowledged before | Read Alpaca flat and match each leg to its recorded outside order. Then acknowledge each leg with `POST /api/accounts/<account>/transactions/external-orders/<leg order id>/acknowledge` on the lane, body `{"operator": "<who>"}`. The hold resolves on the next pass. |
 
 ## Repair record: 2026-10-13
@@ -1425,7 +1429,24 @@ is the fee model's figure.
 
 At teardown the setting line and the memory override were removed and only the
 Paper lane recreated. The container read several-leg orders, judgment, Live
-options and the window override absent; IBKR enabled and read-only with 84
-lines; 768 MiB. Deploy refused the two-leg plan again. Nothing was promoted.
+options and the window override absent; IBKR enabled and read-only with
+line budget 84; 768 MiB. Deploy refused the two-leg plan again. Nothing was promoted.
 A refused buy-back was not seen, and the dashboard's own ticket for one was
 not used.
+
+## Promotion record: 2026-10-22 (#3225)
+
+After reading the evidence above, the owner turned on, in words, both
+capabilities that switch on Paper: several-leg option orders (entries and
+closes are one setting) and the comparison's judgment. The words were recorded at
+1792683440729 ms UTC, on the unverified list as written in
+[ADR 0076 decision 29](../architecture/adrs/0076-option-structures-on-the-money-path.md#29-paper-takes-several-leg-orders-and-judges-the-comparison-on-the-qualifications-evidence).
+`ALPACA_MULTI_LEG_OPTION_ORDERS_ENABLED=true` and
+`ALPACA_OPTION_BUYING_POWER_JUDGED=true` were added to the Paper lane's env file
+and only the Paper lane was recreated; it was healthy from 1792683652000 ms UTC.
+The container read both settings `true`, Live options absent, IBKR enabled and
+read-only with line budget 84, and 768 MiB. Section 4's check passed: Deploy's
+review of a two-leg Paper plan had no setting row. The account was flat with no
+bot running. `ALPACA_LIVE_OPTION_BOTS_ENABLED` and the Live lane were not
+touched. Until #3467 is settled, one option bot can take the lane past its
+memory cap.

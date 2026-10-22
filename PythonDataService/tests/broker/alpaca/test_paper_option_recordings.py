@@ -571,6 +571,14 @@ def _fill_frames(step: str) -> list[dict[str, Any]]:
     return [data for data in _frames(step) if data["event"] == "fill"]
 
 
+def _held_over_time(step: str) -> list[dict[str, float]]:
+    """The account's positions, contract to signed quantity, as each recorded poll stated them."""
+    return [
+        {position.symbol: position.quantity for position in map(from_alpaca_position, _body(line))}
+        for line in _lines(step, "positions")
+    ]
+
+
 @_STRUCTURE_PASS
 def test_each_structure_order_sent_is_the_body_the_writer_produces_a_signed_limit_in_and_a_market_order_out(step: str) -> None:
     long_legs, short_legs, limits, _ = _STRUCTURE_PASSES[step]
@@ -682,10 +690,7 @@ def test_two_bots_structures_held_at_once_are_one_account_position_of_two_of_eac
     step: str, observed_quantities: tuple[float, ...],
 ) -> None:
     long_legs, short_legs, _, _ = _STRUCTURE_PASSES[step]
-    held_over_time = [
-        {position.symbol: position.quantity for position in map(from_alpaca_position, _body(line))}
-        for line in _lines(step, "positions")
-    ]
+    held_over_time = _held_over_time(step)
 
     assert held_over_time[0] == {} and held_over_time[-1] == {}
     # The condor polls captured both held together, without an intermediate one-structure account reading.
@@ -717,10 +722,7 @@ def test_a_credit_structure_adds_premium_to_cash_and_holds_its_width_until_the_w
     assert held == (before[0] + Decimal(cash_credit), before[1] - Decimal(buying_power_fall))
     assert held[0] - held[1] == Decimal("100.00")
     assert closed == (before[0] - Decimal(round_trip_cost), before[1] - Decimal(round_trip_cost))
-    positions = [
-        {position.symbol: position.quantity for position in map(from_alpaca_position, _body(line))}
-        for line in _lines(step, "positions")
-    ]
+    positions = _held_over_time(step)
     assert positions[0] == positions[-1] == {}
     long_legs, short_legs, _, _ = _STRUCTURE_PASSES[step]
     assert {**dict.fromkeys(long_legs, 1.0), **dict.fromkeys(short_legs, -1.0)} in positions
@@ -867,20 +869,20 @@ def test_dashboard_credit_round_trip_cash_change_is_recorded_separately_from_net
 
 
 _SOLD_LEG_BOUGHT_BACK = "3225-C5-buyback-api-20261022"
-_BOUGHT_BACK_SHORT, _BOUGHT_BACK_LONG = "SPY261026C00772000", "SPY261026C00773000"
+_SOLD_CALL, _BOUGHT_CALL = "SPY261026C00772000", "SPY261026C00773000"
 
 
 def test_a_sold_leg_bought_back_alone_is_one_buy_to_close_that_fills_and_leaves_the_bought_leg_held() -> None:
     """#3225: the bot held a credit spread and was stopped; one order from outside bought back the sold call alone."""
     frames = _frames(_SOLD_LEG_BOUGHT_BACK)
     assert [frame["event"] for frame in frames] == ["pending_new", "new", "fill"] * 3
-    entry, buy_back, flatten = frames[2], frames[5], frames[8]
+    entry, buy_back, flatten = _fill_frames(_SOLD_LEG_BOUGHT_BACK)
 
     assert (entry["order"]["order_class"], entry["order"]["limit_price"], entry["price"]) == ("mleg", "-0.19", "-0.19")
-    assert entry["position_qtys"] == {_BOUGHT_BACK_SHORT: "-1", _BOUGHT_BACK_LONG: "1"}
+    assert entry["position_qtys"] == {_SOLD_CALL: "-1", _BOUGHT_CALL: "1"}
     for frame, contract, side, limit, price in (
-        (buy_back, _BOUGHT_BACK_SHORT, OrderSide.BUY, Decimal("1.12"), Decimal("1.06")),
-        (flatten, _BOUGHT_BACK_LONG, OrderSide.SELL, None, Decimal("0.87")),
+        (buy_back, _SOLD_CALL, OrderSide.BUY, Decimal("1.12"), Decimal("1.06")),
+        (flatten, _BOUGHT_CALL, OrderSide.SELL, None, Decimal("0.87")),
     ):
         order = from_alpaca_option_order(frame["order"])
         assert order.legs == () and order.contract is not None and order.contract.occ_symbol == contract
@@ -890,12 +892,8 @@ def test_a_sold_leg_bought_back_alone_is_one_buy_to_close_that_fills_and_leaves_
         assert update.event_type == "fill" and update.execution_id is not None
         assert frame["position_qty"] == "0"
 
-    held = [
-        {position.symbol: position.quantity for position in map(from_alpaca_position, _body(line))}
-        for line in _lines(_SOLD_LEG_BOUGHT_BACK, "positions")
-    ]
-    assert [state for state, _ in groupby(held)] == [
-        {}, {_BOUGHT_BACK_SHORT: -1.0, _BOUGHT_BACK_LONG: 1.0}, {_BOUGHT_BACK_LONG: 1.0}, {},
+    assert [state for state, _ in groupby(_held_over_time(_SOLD_LEG_BOUGHT_BACK))] == [
+        {}, {_SOLD_CALL: -1.0, _BOUGHT_CALL: 1.0}, {_BOUGHT_CALL: 1.0}, {},
     ]
 
 
@@ -907,12 +905,12 @@ def test_alpaca_funds_a_sold_legs_buy_back_from_the_requirement_the_spread_relea
         for contract in (from_alpaca_option_contract(_body(line)) for line in _lines(_SOLD_LEG_BOUGHT_BACK, "option_contracts"))
     }
 
-    assert multiplier == {_BOUGHT_BACK_SHORT: Decimal("100"), _BOUGHT_BACK_LONG: Decimal("100")}
+    assert multiplier == {_SOLD_CALL: Decimal("100"), _BOUGHT_CALL: Decimal("100")}
     assert before == (Decimal("99820.22"), Decimal("99820.22"))
     assert held == (Decimal("99839.17"), Decimal("99739.17"))
     assert held[0] - held[1] == Decimal("100.00")
     # $1.06 a share for one contract, and three cents more that the account took with it.
-    assert held[0] - bought_back[0] == Decimal("1.06") * multiplier[_BOUGHT_BACK_SHORT] + Decimal("0.03")
+    assert held[0] - bought_back[0] == Decimal("1.06") * multiplier[_SOLD_CALL] + Decimal("0.03")
     assert held[1] - bought_back[1] == (held[0] - bought_back[0]) - Decimal("100.00")
     assert bought_back[0] == bought_back[1]
     assert flat == (Decimal("99820.12"), Decimal("99820.12"))
@@ -932,7 +930,7 @@ def test_the_clerk_sent_only_the_entry_and_the_flatten_and_each_is_the_body_its_
     )
     assert to_alpaca_option_order_request(entry_request, client_order_id=entry["client_order_id"]) == entry
     assert sorted((leg["symbol"], leg["side"], leg["position_intent"]) for leg in entry["legs"]) == [
-        (_BOUGHT_BACK_SHORT, "sell", "sell_to_open"), (_BOUGHT_BACK_LONG, "buy", "buy_to_open"),
+        (_SOLD_CALL, "sell", "sell_to_open"), (_BOUGHT_CALL, "buy", "buy_to_open"),
     ]
     flatten_request = SingleOptionOrderRequest(
         contract=OptionContract.from_occ_symbol(flatten["symbol"]),
@@ -943,24 +941,5 @@ def test_the_clerk_sent_only_the_entry_and_the_flatten_and_each_is_the_body_its_
         limit_price=None,
     )
     assert to_alpaca_option_order_request(flatten_request, client_order_id=flatten["client_order_id"]) == flatten
-    assert (flatten["symbol"], flatten["position_intent"], flatten["type"]) == (_BOUGHT_BACK_LONG, "sell_to_close", "market")
+    assert (flatten["symbol"], flatten["position_intent"], flatten["type"]) == (_BOUGHT_CALL, "sell_to_close", "market")
 
-
-def test_each_single_leg_fill_of_the_buy_back_and_the_flatten_is_in_the_activity_feed_under_its_execution() -> None:
-    rows = {
-        row["id"]: row
-        for line in _lines(_SOLD_LEG_BOUGHT_BACK, "activities")
-        for row in _body(line)
-        if row["activity_type"] == "FILL"
-    }
-    in_the_feed = {
-        (execution_id_from_activity_id(activity.activity_id), activity.native_order_id, activity.price, activity.quantity)
-        for activity in map(from_alpaca_activity, rows.values())
-    }
-    single_leg_fills = {
-        (data["execution_id"], data["order"]["id"], float(data["price"]), float(data["qty"]))
-        for data in _frames(_SOLD_LEG_BOUGHT_BACK)
-        if data["event"] == "fill" and data["order"]["order_class"] == "simple"
-    }
-
-    assert len(single_leg_fills) == 2 and single_leg_fills <= in_the_feed

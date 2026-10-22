@@ -22,7 +22,19 @@
       "trade_date_ms": 1792157400000,
       "sold_contracts": 30,
       "trades": 30,
-      "source": "docs/runbooks/qualify-option-orders-on-paper.md, run record 2026-10-21"
+      "source": "tests/fixtures/alpaca/option_paper_recordings"
+    },
+    {
+      "trade_date_ms": 1792416600000,
+      "sold_contracts": 3,
+      "trades": 3,
+      "source": "tests/fixtures/alpaca/option_paper_recordings"
+    },
+    {
+      "trade_date_ms": 1792503000000,
+      "sold_contracts": 1,
+      "trades": 1,
+      "source": "tests/fixtures/alpaca/option_paper_recordings"
     }
   ]
 }

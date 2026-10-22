@@ -1730,8 +1730,8 @@
       "canonical_callable": "settle_option_session",
       "reference": {
         "kind": "vendor_observed",
-        "oracle": "the OPT TAF FEE activities Alpaca Paper posted for 2026-10-13 to 2026-10-16, and the contracts each row's text says it was charged on",
-        "citation": "Alpaca Paper account activity feed, non-trade FEE activities of sub type TAF: 2026-10-13, -14 and -15 from tests/fixtures/alpaca/option_paper_recordings; 2026-10-16 from the run record of 2026-10-21 in docs/runbooks/qualify-option-orders-on-paper.md. See the fixture attribution."
+        "oracle": "the OPT TAF FEE activities Alpaca Paper posted for 2026-10-13 to 2026-10-20, and the contracts each row's text says it was charged on",
+        "citation": "Alpaca Paper account activity feed, non-trade FEE activities of sub type TAF, from tests/fixtures/alpaca/option_paper_recordings. See the fixture attribution."
       },
       "market_input": {
         "source": "vendored",
@@ -1751,13 +1751,13 @@
           "output": "output.json",
           "attribution": "attribution.md",
           "content_sha256": {
-            "input.json": "f8dbc51b5da4eb6fc27a1a9fb5edd0b25b15d0b199126dfb47afad1b6e0311a5",
-            "output.json": "ca47112ce825aaf5df4c603b160e65fe6e4338c6865381d682e1a2c5578fd0aa"
+            "input.json": "d70efc5140620c93783fa4318a102e25d055cd94d90302b561cbb1b10720a766",
+            "output.json": "bc03a0f01c91f36e948709833e85d13defcc3e4d6feed538afdcf3891542b08a"
           },
           "file_sha256": {
-            "input.json": "67a34210e75cfa85ef15a68657912d3998c40e1c443f4759d627dcbecea07802",
-            "output.json": "5414160cba006f87b2393a238555e53bbd841e537421a21c8016f8b259e290c7",
-            "attribution.md": "d35ce569866b248ec90ef727a6c54d58fee93814b5de787bb7e210d08f287515"
+            "input.json": "55f7e06bd7d8e4b6f72c03d9cc32f69fdc23e1a1e52c4679da53cb5f52e52712",
+            "output.json": "81a46326eecda8b02f12a7f38822569e2f53983ece878570307d1fb2080a1a2d",
+            "attribution.md": "786961318e5fcf356d3cfa4f18f290f181a8d75a61705e39c91cbdd09c626c05"
           }
         }
       },
