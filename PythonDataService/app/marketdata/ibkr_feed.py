@@ -351,9 +351,10 @@ class IbkrMarketDataFeed:
                             self._client,
                             symbol,
                             use_rth=use_rth,
-                            on_source_bar=lambda source_ms: self._observe_source_bar(
+                            on_source_bar=lambda source_ms, received_at_ms: self._observe_source_bar(
                                 symbol,
                                 source_ms,
+                                received_at_ms,
                             ),
                             assembler=assembler,
                         )
@@ -439,8 +440,8 @@ class IbkrMarketDataFeed:
             client=self._client, feed_id=self.feed_id, symbol=symbol, policy=policy
         )
 
-        def _on_source_bar(source_ms: int) -> None:
-            self._observe_source_bar(symbol, source_ms)
+        def _on_source_bar(source_ms: int, received_at_ms: int) -> None:
+            self._observe_source_bar(symbol, source_ms, received_at_ms)
             loop.observe_source_bar(source_ms)
 
         while True:
@@ -614,10 +615,7 @@ class IbkrMarketDataFeed:
 
     def health(self, symbol: str | None = None) -> FeedHealth:
         """Return aggregate or symbol-scoped point-in-time feed health."""
-        shared = getattr(self._client, "shared_feed", None)
-        connected = shared.is_connected() if shared is not None else (
-            self._client.is_connected() and not self._client.connection_lost
-        )
+        connected = self._client.live_data.is_connected()
         now = now_ms_utc()
         stale = False
         reason = ""
@@ -697,12 +695,11 @@ class IbkrMarketDataFeed:
         """Return the one mutable liveness record for ``symbol``."""
         return self._symbol_liveness.setdefault(symbol.upper(), _SymbolLiveness())
 
-    def _observe_source_bar(self, symbol: str, source_ms: int) -> None:
+    def _observe_source_bar(self, symbol: str, source_ms: int, received_at_ms: int) -> None:
         """Advance the raw-source liveness watermark at the ingestion edge."""
         state = self._state_for(symbol)
         state.last_source_ms = source_ms
-        shared = getattr(self._client, "shared_feed", None)
-        state.last_source_wall_ms = now_ms_utc() if shared is None else shared.bar_receipts.get(symbol.upper())
+        state.last_source_wall_ms = received_at_ms
 
     @staticmethod
     def _translate(ibkr_bar: IbkrMinuteBar) -> MarketDataBar:

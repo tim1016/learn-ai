@@ -6,16 +6,20 @@ import httpx
 import pytest
 import respx
 
-from app.marketdata.shared.hub import FeedHub
-from app.marketdata.shared.protocol import FeedUnavailable
-from app.marketdata.shared.server import create_app
-from app.marketdata.shared.transport import MAX_FRAME_BYTES, FeedTransport
+from app.broker.ibkr.live.hub import FeedHub
+from app.broker.ibkr.live.protocol import FeedUnavailable, SourceEpoch, SourceHealth
+from app.broker.ibkr.live.server import create_app
+from app.broker.ibkr.live.transport import MAX_FRAME_BYTES, FeedTransport
 from tests.marketdata.shared.test_hub import Source, quote, subscription
 
 
 async def test_authentication_refuses_before_opening_a_source() -> None:
     source = Source()
-    app = create_app(FeedHub(source), "secret")
+    app = create_app(
+        FeedHub(source),
+        "secret",
+        lambda: SourceHealth(connected=True, epoch=SourceEpoch(started_at_ms=0, owner="test"), observed_at_ms=1000),
+    )
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
         response = await client.post("/stream", json=subscription().model_dump())
     assert response.status_code == 403 and not source.opened

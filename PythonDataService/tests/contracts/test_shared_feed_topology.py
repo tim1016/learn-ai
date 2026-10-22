@@ -20,7 +20,7 @@ def test_each_fleet_uses_one_private_readonly_owner_without_execution_credential
     source = document["services"]["ibkr-market-data"]
     environment = source["environment"]
     assert environment["IBKR_BROKER_ENABLED"] == environment["IBKR_READONLY"] == "true"
-    assert "app.marketdata.shared.server:app" in source["command"]
+    assert "app.broker.ibkr.live.server:production_app --factory" in source["command"]
     assert source["read_only"] and source["pids_limit"] > 0
     assert not source.get("ports") and not source.get("volumes")
     assert not any(key.startswith("ALPACA_") for key in environment)

@@ -9,8 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
-from copy import copy
+from collections.abc import Awaitable, Callable, Hashable
 from decimal import Decimal
 from inspect import isawaitable
 from pathlib import Path
@@ -20,16 +19,16 @@ from pydantic import TypeAdapter
 
 from app.broker.ibkr.client import IbkrClient, get_client
 from app.broker.ibkr.contracts import qualify_underlying
+from app.broker.ibkr.live.protocol import QuoteUpdate
+from app.broker.ibkr.live.quote_callbacks import REQUEST_FAILURE_CODES
+from app.broker.ibkr.live.quotes import QuoteFailure
 from app.broker.ibkr.market_subscription import (
     DECISION_DATA_MAX_AGE_MS,
-    REQUEST_FAILURE_CODES,
     SOURCE,
     SUBSCRIPTION_TIMEOUT_MS,
     MarketSubscription,
-    install_market_data_callbacks,
     retry_delay_ms,
 )
-from app.marketdata.shared.quotes import quotes_connected, request_quote
 from app.options.quotes import HeldQuote, quote_fault
 from app.schemas.market_liveness import MarketStatusSnapshot, SymbolTradingStatusEvidence
 from app.utils.atomic_file import atomic_write_bytes
@@ -70,7 +69,7 @@ class IbkrMarketStatusSource:
         self._halt_write_task: asyncio.Task[None] | None = None
         self._persistence_failed = False
         self._owner: IbkrClient | None = None
-        self._generation: tuple[int, int, int, int] | None = None
+        self._generation: Hashable | None = None
         self._subscriptions: dict[str, MarketSubscription] = {}
         self._pending: dict[str, asyncio.Task[None]] = {}
         self._attempts: dict[str, int] = {}
@@ -148,8 +147,6 @@ class IbkrMarketStatusSource:
             self._release(subscription)
         self._subscriptions.clear()
         self._option_side(lambda lines: lines.release())
-        if self._owner is not None:
-            self._owner.ib.errorEvent -= self._on_error
         self._owner = None
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
@@ -160,19 +157,16 @@ class IbkrMarketStatusSource:
                 break
 
     def _release(self, subscription: MarketSubscription) -> None:
-        ticker = subscription.ticker
-        if ticker is None:
+        lease = subscription.lease
+        if lease is None:
             return
-        ticker.updateEvent -= subscription.callback
-        if subscription.lease is not None:
-            subscription.lease.release()
+        lease.updates -= subscription.callback
+        lease.failures -= subscription.failure_callback
+        lease.release()
 
     @staticmethod
-    def _client_generation(client: IbkrClient) -> tuple[int, int, int, int]:
-        shared = getattr(client, "shared_feed", None)
-        if shared is not None:
-            return id(client), shared.connection_generation, 0, 0
-        return id(client), client.connection_generation, client.connectivity_lost_count, client.last_event_ms
+    def _client_generation(client: IbkrClient) -> Hashable:
+        return client.live_data.status_generation
 
     async def __call__(self) -> MarketStatusSnapshot:
         await self._flush_halts()
@@ -183,33 +177,23 @@ class IbkrMarketStatusSource:
         symbols = (*symbols, *self._option_side(lambda lines: lines.underlyings(), ()))
         self._demand = tuple(dict.fromkeys(symbol.upper() for symbol in symbols))
         client, now = self._client(), self._clock()
-        shared = None if client is None else getattr(client, "shared_feed", None)
-        connected = client is not None and (client.is_connected() if shared is None else shared.is_connected())
-        if not connected:
-            await self.close()
-            return self._snapshot(self._clock(), connected=False)
-        if getattr(client, "shared_feed", None) is None and client.connection_state != "connected":
-            # 1100 may recover as 1102 (data maintained). Keep ownership while
-            # refusing all data; the restore transition fences prior receipts.
-            if client.connection_state != "soft_lost":
+        if client is None or not client.live_data.is_connected():
+            if client is None or not client.live_data.retains_requests():
                 await self.close()
             return self._snapshot(self._clock(), connected=False)
         generation = self._client_generation(client)
-        if generation != self._generation:
-            maintained = (
-                self._owner is client and self._generation is not None
-                and self._generation[:2] == generation[:2] and client.last_ibkr_code == 1102
-            )
+        if client is not self._owner or generation != self._generation:
+            maintained = (self._owner is client and self._generation is not None
+                          and client.live_data.maintains(self._generation))
             if maintained:
                 for symbol, previous in tuple(self._subscriptions.items()):
-                    if previous.ticker is not None:
-                        previous.ticker.updateEvent -= previous.callback
-                        self._subscriptions[symbol] = MarketSubscription(symbol, now, ticker=previous.ticker, lease=previous.lease)
+                    if previous.lease is not None:
+                        previous.lease.updates -= previous.callback
+                        previous.lease.failures -= previous.failure_callback
+                        self._subscriptions[symbol] = MarketSubscription(symbol, now, lease=previous.lease)
             else:
                 await self.close()
                 self._owner = client
-                install_market_data_callbacks(client.ib.wrapper)
-                client.ib.errorEvent += self._on_error
             self._generation = generation
             self._connection_changed_at_ms = now
             self._attempts.clear()
@@ -217,7 +201,7 @@ class IbkrMarketStatusSource:
             self._option_side(lambda lines: lines.adopt(client, now, maintained=maintained))
             if maintained:
                 for subscription in self._subscriptions.values():
-                    if subscription.ticker is not None:
+                    if subscription.lease is not None:
                         self._attach(subscription, client, generation)
         admitted = self._demand[:_MAX_SUBSCRIPTIONS]
         for symbol in tuple(self._subscriptions):
@@ -235,13 +219,13 @@ class IbkrMarketStatusSource:
                 if subscription.evidence(now).state == "READY":
                     self._attempts[symbol] = 0
                 progress = subscription.last_received_at_ms or subscription.started_at_ms
-                if subscription.ticker is not None and not subscription.failure and now - progress > SUBSCRIPTION_TIMEOUT_MS:
+                if subscription.lease is not None and not subscription.failure and now - progress > SUBSCRIPTION_TIMEOUT_MS:
                     self._release(subscription)
-                    subscription.ticker = None
+                    subscription.lease = None
                     self._retry_at[symbol] = now + self._retry_delay(symbol)
                     logger.warning("Repairing stalled symbol subscription", extra={"action": "market_subscription_stalled", "symbol": symbol})
             if (
-                symbol not in self._pending and (subscription is None or subscription.ticker is None)
+                symbol not in self._pending and (subscription is None or subscription.lease is None)
                 and now >= self._retry_at.get(symbol, 0)
             ):
                 subscription = MarketSubscription(symbol, now)
@@ -315,17 +299,14 @@ class IbkrMarketStatusSource:
         self._attempts[symbol] = attempt + 1
         return retry_delay_ms(attempt)
 
-    async def _subscribe(self, subscription: MarketSubscription, client: IbkrClient, generation: tuple[int, int, int, int]) -> None:
+    async def _subscribe(self, subscription: MarketSubscription, client: IbkrClient, generation: Hashable) -> None:
         symbol = subscription.symbol
         try:
             async with self._qualifications:
                 contract = await asyncio.wait_for(qualify_underlying(client, symbol), timeout=3)
-                if self._generation != generation or not quotes_connected(client):
+                if self._generation != generation or not client.live_data.is_connected():
                     return
-                # ib_async keys market-data requests by contract object identity.
-                # A dedicated object prevents another consumer cancelling ours.
-                subscription.lease = request_quote(client, copy(contract))
-                subscription.ticker = subscription.lease.ticker
+                subscription.lease = client.live_data.quote(contract)
                 self._attach(subscription, client, generation)
         except asyncio.CancelledError:
             raise
@@ -337,32 +318,31 @@ class IbkrMarketStatusSource:
             self._pending.pop(symbol, None)
             self._publish()
 
-    def _attach(self, subscription: MarketSubscription, client: IbkrClient, generation: tuple[int, int, int, int]) -> None:
-        def receive(ticker: Any) -> None:
+    def _attach(self, subscription: MarketSubscription, client: IbkrClient, generation: Hashable) -> None:
+        def receive(update: QuoteUpdate) -> None:
             if (
                 self._subscriptions.get(subscription.symbol) is not subscription
                 or self._generation != generation or self._client_generation(client) != generation
-                or not quotes_connected(client)
+                or not client.live_data.is_connected()
             ):
                 return
-            received = subscription.lease.received_at_ms if subscription.lease is not None else None
-            for transition in subscription.ingest(ticker, self._clock() if received is None else received):
+            for transition in subscription.ingest(update):
                 self._retain_halt(transition)
             self._publish()
-        subscription.callback = receive
-        subscription.ticker.updateEvent += receive
-        request_id = None if subscription.lease is None else subscription.lease.request_id
-        subscription.request_id = request_id if isinstance(request_id, int) else None
 
-    def _on_error(self, req_id: int, code: int, _message: str, _contract: Any) -> None:
-        self._option_side(lambda lines: lines.on_error(req_id, code))
-        if code in REQUEST_FAILURE_CODES:
-            for subscription in self._subscriptions.values():
-                if subscription.request_id == req_id:
-                    subscription.failure = "IBKR refused this symbol's live market-data subscription. Check permissions and instrument availability."
-        # Connectivity callbacks invalidate a READY view immediately. The
-        # supervisor performs the async repair on its next independent tick.
-        self._publish()
+        def failed(failure: QuoteFailure) -> None:
+            subscription.update = None
+            subscription.bid_priced = subscription.ask_priced = False
+            subscription.bid_received_at_ms = subscription.ask_received_at_ms = None
+            subscription.trade_timestamp_ms = subscription.trade_received_at_ms = None
+            if failure.code in REQUEST_FAILURE_CODES:
+                subscription.failure = failure.reason
+            self._publish()
+
+        subscription.callback, subscription.failure_callback = receive, failed
+        assert subscription.lease is not None
+        subscription.lease.updates += receive
+        subscription.lease.failures += failed
 
     def _publish(self) -> None:
         if self._publish_snapshot is not None:
@@ -370,7 +350,7 @@ class IbkrMarketStatusSource:
 
     def _connected(self) -> bool:
         return (
-            self._owner is not None and quotes_connected(self._owner)
+            self._owner is not None and self._owner.live_data.is_connected()
             and self._generation == self._client_generation(self._owner)
         )
 

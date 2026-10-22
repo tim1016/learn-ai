@@ -105,8 +105,7 @@ class ResolvedBar:
 
 
 def _feed_generation(client: IbkrClient) -> int:
-    shared = getattr(client, "shared_feed", None)
-    return client.connection_generation if shared is None else shared.connection_generation
+    return client.live_data.connection_generation
 
 
 def _healthy(client: IbkrClient) -> bool:

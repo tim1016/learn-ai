@@ -36,6 +36,7 @@ from app.services import feed_continuity_policy as fcp
 from app.services.decision_session import RunDecisionSession
 from app.services.session_authority import session_state_at_ms
 from tests._helpers.ibkr_feed_adversarial import RTH_MINUTE, ScriptedLinesFeedFixture, raw_minute
+from tests._helpers.live_source import native_source
 
 _WINDOW = ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60)
 _MINUTE0 = 1_788_375_600_000  # 2026-09-02 15:00:00 ET
@@ -113,8 +114,8 @@ def _extended_policy(sink: _RecordingSink) -> ContinuityPolicy:
 
 
 def _client(*, generation: int = 1) -> MagicMock:
-    client = MagicMock()
-    client.shared_feed = None
+    client = MagicMock(connection_state="connected")
+    native_source(client)
     client.is_connected.return_value = True
     client.connection_lost = False
     client.connection_generation = generation
@@ -165,12 +166,12 @@ class _Source:
                             use_rth=use_rth,
                         )
                         if on_source_bar is not None and assembler.last_source_ms is not None:
-                            on_source_bar(assembler.last_source_ms)
+                            on_source_bar(assembler.last_source_ms, feed_module.now_ms_utc())
                         if emitted is not None:
                             yield emitted
                         continue
                     if on_source_bar is not None:
-                        on_source_bar(item.start_ms)
+                        on_source_bar(item.start_ms, feed_module.now_ms_utc())
                     yield item
             finally:
                 self.closed += 1

@@ -11,41 +11,18 @@ teardown logic — actual tick conversion is covered in
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 from types import SimpleNamespace
 
 import pytest
+from eventkit import Event
+from ib_async import Ticker
+from ib_async.objects import TickData
 
 from app.broker.ibkr.client import BrokerError
 from app.broker.ibkr.surface import stream_option_surface
 from app.options.expiry import option_expiry_anchor_ms
-
-
-def _greeks(*, iv: float, delta: float) -> SimpleNamespace:
-    return SimpleNamespace(
-        impliedVol=iv,
-        delta=delta,
-        gamma=0.04,
-        theta=-0.05,
-        vega=0.10,
-        undPrice=420.0,
-    )
-
-
-def _make_ticker(contract, *, bid: float, ask: float) -> SimpleNamespace:
-    return SimpleNamespace(
-        contract=contract,
-        bid=bid,
-        ask=ask,
-        last=(bid + ask) / 2,
-        bidSize=10,
-        askSize=10,
-        modelGreeks=_greeks(iv=0.20, delta=0.55 if contract.right == "C" else -0.45),
-        bidGreeks=None,
-        askGreeks=None,
-        lastGreeks=None,
-        time=datetime(2026, 5, 2, 14, 30, tzinfo=UTC),
-    )
+from tests._helpers.live_source import native_source
 
 
 def _make_contract(*, conid: int, strike: float, right: str) -> SimpleNamespace:
@@ -57,7 +34,8 @@ class _FakeIb:
 
     def __init__(self) -> None:
         self.cancel_calls: list = []
-        self.wrapper = SimpleNamespace(ticker2ReqId={"mktData": SimpleNamespace(get=lambda ticker: None)})
+        self.errorEvent = Event()
+        self.wrapper = SimpleNamespace(ticker2ReqId={"mktData": {}}, tickGeneric=lambda *args: None, marketDataType=lambda *args: None)
         self._next_conid = 100
         self._qualify_calls = 0
 
@@ -75,10 +53,16 @@ class _FakeIb:
             out.append(c)
         return out
 
-    def reqMktData(self, contract, _generic_ticks, _snapshot, _regulatory_snapshot):        # Underlying gets a "spot" ticker with a marketPrice attribute.
-        if not hasattr(contract, "strike") or contract.strike == 0 or contract.strike is None:
-            return SimpleNamespace(contract=contract, marketPrice=420.50, time=None)
-        return _make_ticker(contract, bid=1.20, ask=1.25)
+    def reqMktData(self, contract, _generic_ticks, _snapshot, _regulatory_snapshot):
+        stock = not getattr(contract, "strike", 0)
+        bid, ask = (420.50, 420.50) if stock else (1.20, 1.25)
+        ticker = Ticker(contract=contract, marketDataType=1)
+        ticker.bid, ticker.ask, ticker.last = bid, ask, bid
+        ticker.bidSize = ticker.askSize = 10
+        ticker.ticks = [TickData(None, 1, bid, 10), TickData(None, 2, ask, 10)]
+        self.wrapper.ticker2ReqId["mktData"][ticker] = len(self.wrapper.ticker2ReqId["mktData"]) + 1
+        asyncio.get_running_loop().call_soon(ticker.updateEvent.emit, ticker)
+        return ticker
 
     def cancelMktData(self, contract) -> None:        self.cancel_calls.append(contract)
 
@@ -90,8 +74,10 @@ class _FakeClient:
 
     def __init__(self) -> None:
         self.connection_generation = 1
-        self.shared_feed = None
         self.ib = _FakeIb()
+        self.connection_state = "connected"
+        self.connection_lost = False
+        native_source(self)
 
     def require_connected(self) -> None:
         return None

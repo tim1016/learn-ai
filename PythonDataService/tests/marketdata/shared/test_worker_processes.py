@@ -17,14 +17,14 @@ from ib_async import Option
 
 from app.broker.ibkr.bars import stream_minute_bars, stream_raw_5s_bars
 from app.broker.ibkr.config import IbkrSettings
+from app.broker.ibkr.live.connection import SharedConnection
+from app.broker.ibkr.live.hub import FeedHub
+from app.broker.ibkr.live.protocol import Frame, Instrument, SourceBar, SourceHealth, Subscription
+from app.broker.ibkr.live.server import create_app
 from app.broker.ibkr.minute_assembler import MinuteAssembler
 from app.broker.ibkr.option_quotes import OptionLine
-from app.marketdata.shared.connection import SharedConnection
-from app.marketdata.shared.hub import FeedHub
-from app.marketdata.shared.protocol import Frame, Instrument, SourceBar, SourceHealth, Subscription
-from app.marketdata.shared.quotes import request_quote
-from app.marketdata.shared.server import create_app
 from app.utils.timestamps import now_ms_utc
+from tests._helpers.live_source import unused_qualifier
 from tests.marketdata.shared.test_consumers import EPOCH, RTH, quote_update
 
 
@@ -79,23 +79,25 @@ def run_worker(url: str, mode: str, events: Any, release: Any, probe: Any) -> No
                             first = False
                         yield frame
 
-        shared = ObservedConnection(IbkrSettings(_env_file=None, shared_feed_url=url, shared_feed_token="test-secret"))
-        shared.underlyings["IWM"] = Instrument(con_id=22, exchange="SMART", currency="USD", sec_type="STK")
-        client = SimpleNamespace(shared_feed=shared, mode=mode, ib=SimpleNamespace(errorEvent=Event()))
+        shared = ObservedConnection(
+            IbkrSettings(_env_file=None, shared_feed_url=url, shared_feed_token="test-secret"), qualify=unused_qualifier
+        )
+        shared._underlyings["IWM"] = Instrument(con_id=22, exchange="SMART", currency="USD", sec_type="STK")
+        client = SimpleNamespace(live_data=shared, mode=mode, ib=SimpleNamespace(errorEvent=Event()))
         shared.start()
-        lease = request_quote(client, Option(conId=987654, symbol="QQQ", exchange="SMART", currency="USD"))
+        lease = client.live_data.quote(Option(conId=987654, symbol="QQQ", exchange="SMART", currency="USD"))
         line = OptionLine(contract=None, incomplete_since_ms=0)
         complete = asyncio.Event()
 
         def receive(ticker: Any) -> None:
-            line.ingest(ticker, lease.received_at_ms)
+            line.ingest(ticker)
             if line.has_a_whole_quote:
                 complete.set()
                 if probe.is_set():
                     probe.clear()
                     events.put(("alive", mode, line.bid.received_ms))
 
-        lease.ticker.updateEvent += receive
+        lease.updates += receive
         bars = (
             stream_raw_5s_bars(client, "IWM", use_rth=False)
             if mode == "paper"
@@ -111,7 +113,7 @@ def run_worker(url: str, mode: str, events: Any, release: Any, probe: Any) -> No
         finally:
             await bars.aclose()
             lease.release()
-            await asyncio.gather(lease.task, return_exceptions=True)
+            await asyncio.sleep(0)
             await shared.close()
 
     asyncio.run(run())

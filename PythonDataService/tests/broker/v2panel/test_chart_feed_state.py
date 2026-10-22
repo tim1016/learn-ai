@@ -96,6 +96,9 @@ class _Transport:
 class _Client:
     def __init__(self, transport: _Transport, *, max_active: int) -> None:
         self.ib = transport
+        self.connection_state = "connected"
+        from tests._helpers.live_source import native_source
+        native_source(self)
         self.connection_lost = False
         self.connection_generation = 1
         self.data_loss_epoch = 0

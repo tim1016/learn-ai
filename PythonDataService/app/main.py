@@ -789,8 +789,7 @@ async def _service_lifespan(
 
     if _ROLE_RUNS_CLERK and ibkr_settings.broker_enabled:
         ibkr_client = IbkrClient()
-        if ibkr_client.shared_feed is not None:
-            ibkr_client.shared_feed.start()
+        ibkr_client.live_data.start()
         # Install the client immediately so /health reports the
         # disconnected-but-available state and the monitor can retry after
         # a soft-fail auto-connect without replacing the process-local client.
@@ -839,7 +838,7 @@ async def _service_lifespan(
 
         monitor = AutoReconnectMonitor(
             ibkr_client,
-            recovery_callbacks=([] if ibkr_client.shared_feed is not None else [LIVE_BAR_AGGREGATOR.resubscribe_all]),
+            recovery_callbacks=[lambda: ibkr_client.live_data.history_recovered(LIVE_BAR_AGGREGATOR.resubscribe_all)],
         )
         monitor.start()
         set_monitor(monitor)
@@ -1235,8 +1234,7 @@ async def _service_lifespan(
             await monitor.stop()
             set_monitor(None)
         if ibkr_client is not None:
-            if ibkr_client.shared_feed is not None:
-                await ibkr_client.shared_feed.close()
+            await ibkr_client.live_data.close()
             if ibkr_client.is_connected():
                 await ibkr_client.disconnect()
         set_client(None)

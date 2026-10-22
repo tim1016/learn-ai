@@ -952,6 +952,14 @@ async def test_build_snapshot_reads_the_real_aggregator_line_status(
     class _ConnectedClient:
         connection_lost = False
 
+        def __init__(self) -> None:
+            from tests._helpers.live_source import native_source
+            native_source(self)
+
+        @property
+        def connection_state(self) -> str:
+            return "connected" if self.is_connected() and not self.connection_lost else "disconnected"
+
         def is_connected(self) -> bool:
             return True
 

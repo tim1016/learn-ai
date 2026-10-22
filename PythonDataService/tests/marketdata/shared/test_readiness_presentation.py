@@ -77,8 +77,8 @@ def test_october_20_delivering_but_incomplete_bar_is_presented_as_warming_and_st
 
 @pytest.mark.parametrize("healthy,connected", [(True, True), (False, False)])
 def test_warming_cannot_claim_readiness_or_cover_a_disconnection(healthy: bool, connected: bool) -> None:
-    with pytest.raises(ValueError, match="warming"):
-        ChannelHealth(stream="market_data", warming=True, healthy=healthy, connected=connected, observed_at_ms=1)
+    with pytest.raises(ValueError, match="await a complete bar"):
+        ChannelHealth(stream="market_data", awaiting_bar=True, healthy=healthy, connected=connected, observed_at_ms=1)
 
 
 def test_deployment_guidance_waits_for_preparation_but_does_not_hide_stale_health() -> None:
@@ -86,7 +86,7 @@ def test_deployment_guidance_waits_for_preparation_but_does_not_hide_stale_healt
     from app.services.broker_v2_panel.paper_deploy_service import _channel_recovery
 
     channels = [
-        ChannelHealth(stream="market_data", healthy=False, connected=True, warming=True, observed_at_ms=1000),
+        ChannelHealth(stream="market_data", healthy=False, connected=True, awaiting_bar=True, observed_at_ms=1000),
         ChannelHealth(stream="execution", healthy=True, connected=True, observed_at_ms=1000),
     ]
     evaluation = evaluate_channel_health(channels, 1000)

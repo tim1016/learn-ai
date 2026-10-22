@@ -17,3 +17,14 @@ fact requires an actual recent source observation. Both retain the closed-bar
 order gate. Initial source silence during a scheduled session has a bounded
 wait; established delivery going quiet remains a fault. This distinction avoids
 turning a correction to the operator's explanation into a trading permission.
+
+
+Source selection belongs to the IBKR client construction seam. Both local and
+installation delivery expose typed quote receipts and lease failures, alongside
+raw bar receipts with original arrival times. Consumers must not detect which
+adapter supplies them or reconstruct vendor objects. This keeps reconnect and
+receipt authority in the source, avoids circular dependencies through the
+broker-neutral market-data port, and makes the same consumer tests applicable
+to both delivery modes. The alternative of adapting shared frames into synthetic
+ib_async tickers and errors is rejected because it leaks transport selection and
+vendor cache semantics into every consumer.

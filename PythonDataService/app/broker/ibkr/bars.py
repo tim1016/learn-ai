@@ -38,6 +38,7 @@ from typing import Any, Literal, NamedTuple, Protocol, runtime_checkable
 from app.broker.ibkr.bar_models import IbkrMinuteBar
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.contracts import qualify_underlying
+from app.broker.ibkr.live.source import BarRequest, RawBarReceipt
 from app.broker.ibkr.minute_assembler import (
     IBKRBarStreamError,
     MinuteAssembler,
@@ -855,14 +856,6 @@ async def fetch_historical_minute_bars(
     return out
 
 
-class _LeasedBar(NamedTuple):
-    """One raw 5-second bar, with the facts about the line that delivered it."""
-
-    raw: object
-    venue: str | None
-    generation: int
-
-
 def _resume_index(bars: Sequence[object], start_index: int, last_source_ms: int | None) -> int:
     """Where a consumer's delivery begins on a leased list.
 
@@ -881,7 +874,7 @@ def _resume_index(bars: Sequence[object], start_index: int, last_source_ms: int 
     return index
 
 
-async def _iter_leased_raw_bars(
+async def _iter_native_raw_bars(
     client: IbkrClient,
     symbol: str,
     *,
@@ -891,10 +884,10 @@ async def _iter_leased_raw_bars(
     no_bar_message: str,
     first_bar_message: str,
     last_source_ms: int | None = None,
-    on_source_bar: Callable[[int], None] | None = None,
+    on_source_bar: Callable[[int, int], None] | None = None,
     request_deadline_ms: int | None = None,
     stall_deferred: Callable[[], bool] | None = None,
-) -> AsyncIterator[_LeasedBar | None]:
+) -> AsyncIterator[RawBarReceipt | None]:
     """Yield raw 5-second bars off one leased ``reqRealTimeBars`` line.
 
     Everything both public streams do around the bar itself lives here: the
@@ -917,15 +910,6 @@ async def _iter_leased_raw_bars(
     ``stall_deferred`` lets that consumer hold the stall verdict while its
     clock-driven emit is still due.
     """
-    if getattr(client, "shared_feed", None) is not None:
-        from app.marketdata.shared.bars import shared_raw_bars
-
-        async with aclosing(shared_raw_bars(client, symbol, use_rth=use_rth,
-                                          request_deadline_ms=request_deadline_ms,
-                                          stall_deferred=stall_deferred)) as frames:
-            async for frame in frames:
-                yield frame
-        return
     client.require_connected()
     contract = await qualify_underlying(client, symbol)
     lease = await _REALTIME_BAR_SUBSCRIPTIONS.acquire(
@@ -952,7 +936,7 @@ async def _iter_leased_raw_bars(
     )
     last_progress_at = time.monotonic()
 
-    def _observe(raw_bar) -> _LeasedBar:
+    def _observe(raw_bar) -> RawBarReceipt:
         nonlocal last_progress_at, last_source_ms
         source_ms = _bar_time_ms(raw_bar)
         if last_source_ms is None or source_ms > last_source_ms:
@@ -960,8 +944,8 @@ async def _iter_leased_raw_bars(
             last_source_ms = source_ms
             last_progress_at = time.monotonic()
             if on_source_bar is not None:
-                on_source_bar(source_ms)
-        return _LeasedBar(raw_bar, venue, lease.generation)
+                on_source_bar(source_ms, now_ms_utc())
+        return RawBarReceipt(raw_bar, venue, lease.generation, now_ms_utc())
 
     try:
         while True:
@@ -1047,14 +1031,15 @@ async def stream_raw_5s_bars(
     """
     sym = symbol.upper()
     async with aclosing(
-        _iter_leased_raw_bars(
-            client,
+        client.live_data.raw_bars(
             symbol,
+            BarRequest(
             use_rth=use_rth,
             stall_timeout_s=stall_timeout_s,
             consumer_label="raw 5-second bar",
             no_bar_message="IBKR reqRealTimeBars has not delivered raw 5-second bars",
             first_bar_message="IBKR reqRealTimeBars delivered first raw 5-second bar",
+            ),
         )
     ) as leased_bars:
         async for leased in leased_bars:
@@ -1084,7 +1069,7 @@ async def stream_minute_bars(
     symbol: str,
     *,
     use_rth: bool = True,
-    on_source_bar: Callable[[int], None] | None = None,
+    on_source_bar: Callable[[int, int], None] | None = None,
     stall_timeout_s: float = REALTIME_BAR_STALL_TIMEOUT_S,
     assembler: MinuteAssembler,
     request_deadline_ms: int | None = None,
@@ -1112,9 +1097,9 @@ async def stream_minute_bars(
     sym = symbol.upper()
     try:
         async with aclosing(
-            _iter_leased_raw_bars(
-                client,
+            client.live_data.raw_bars(
                 symbol,
+                BarRequest(
                 use_rth=use_rth,
                 stall_timeout_s=stall_timeout_s,
                 consumer_label="minute-bar",
@@ -1123,6 +1108,7 @@ async def stream_minute_bars(
                 last_source_ms=assembler.last_source_ms,
                 request_deadline_ms=request_deadline_ms,
                 stall_deferred=assembler.awaits_clock_emit,
+                ),
             )
         ) as leased_bars:
             async for leased in leased_bars:
@@ -1143,7 +1129,7 @@ async def stream_minute_bars(
                     # continuity loop must never take it as a recovery landing
                     # (#2376 review). Still before the minute is yielded (#1411).
                     if on_source_bar is not None and assembler.last_source_ms != accepted_before:
-                        on_source_bar(assembler.last_source_ms)
+                        on_source_bar(assembler.last_source_ms, leased.received_at_ms)
                 if emitted is not None:
                     yield emitted
     finally:

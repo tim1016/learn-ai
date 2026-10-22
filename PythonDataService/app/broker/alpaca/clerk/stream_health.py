@@ -62,7 +62,7 @@ def market_data_channel_health(
         stream="market_data",
         healthy=healthy,
         connected=feed_health.connected,
-        warming=feed_health.warming or feed_health.waiting,
+        awaiting_bar=feed_health.warming or feed_health.waiting,
         reason="" if healthy else (feed_health.reason or "Market-data feed is unhealthy."),
         observed_at_ms=feed_health.observed_at_ms,
     )

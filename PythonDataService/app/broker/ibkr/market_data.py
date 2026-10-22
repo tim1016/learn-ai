@@ -12,7 +12,7 @@ producer:
    get bid/ask sizes and historical/implied volatility on top of the
    default top-of-book + Greeks.
 4. Coalesces tick events on a debounce timer (default 250 ms) into a
-   chain snapshot, converts ``Ticker`` → ``IbkrOptionQuote``, yields.
+   chain snapshot, converts typed quote receipts → ``IbkrOptionQuote``, yields.
 
 Cancellation: when the consumer breaks out of the iterator, the
 ``finally`` clause cancels every outstanding ``reqMktData`` so we don't
@@ -31,7 +31,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
 from typing import Literal
 
 from app.broker.ibkr.client import BrokerError, IbkrClient
@@ -39,6 +38,8 @@ from app.broker.ibkr.contracts import (
     build_chain_contracts,
     qualify_underlying,
 )
+from app.broker.ibkr.live.protocol import QuoteUpdate
+from app.broker.ibkr.live.quotes import QuoteLease
 from app.broker.ibkr.models import (
     IbkrChainSnapshot,
     IbkrOptionQuote,
@@ -48,47 +49,26 @@ from app.broker.ibkr.models import (
     _coerce_quote,
     _coerce_size,
 )
-from app.marketdata.shared.quotes import QuoteLease, request_quote
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
 
-GENERIC_TICK_LIST = "100,101,106"  # bid/ask sizes + historical IV
 DEFAULT_DEBOUNCE_S = 0.25
 
 
-def _greeks_block(ticker, attr: Literal["modelGreeks", "bidGreeks", "askGreeks", "lastGreeks"]):
-    """Return the named Greeks block from ``ticker`` or None."""
-    return getattr(ticker, attr, None)
+def _resolve_market_price(update: QuoteUpdate | None) -> float | None:
+    return None if update is None else update.market_price
 
 
-def _resolve_market_price(ticker) -> float | None:
-    """Read ``ticker.marketPrice`` whether it's a method or a plain attribute.
-
-    ``ib_async``'s ``Ticker.marketPrice`` is a method that derives the best
-    mark from last / bid / ask. Test shims and earlier versions sometimes
-    expose it as a plain attribute. Passing the bound method directly to
-    ``_coerce_optional_float`` raises ``TypeError`` because ``float()``
-    cannot accept a method, so callers route through this helper.
-    """
-    mp_attr = getattr(ticker, "marketPrice", None)
-    if callable(mp_attr):
-        try:
-            return _coerce_optional_float(mp_attr())
-        except Exception:
-            return None
-    return _coerce_optional_float(mp_attr)
-
-
-def _ticker_to_quote(
-    ticker,
+def _quote_to_model(
+    update: QuoteUpdate | None,
     symbol: str,
     expiry_ms: int,
     strike: float,
     right: OptionRight,
 ) -> IbkrOptionQuote:
-    """Convert one ``ib_async.Ticker`` snapshot to our wire model.
+    """Convert one typed live receipt to the chain wire model.
 
     Greeks selection priority: ``modelGreeks`` → ``bidGreeks`` →
     ``askGreeks`` → ``lastGreeks`` → ``none``. Recorded in the
@@ -99,11 +79,11 @@ def _ticker_to_quote(
     # so IBKR's "no quote available" sentinel ``-1.0`` is stripped at the
     # ingestion boundary instead of leaking through to mid-price math
     # and the UI table.
-    bid = _coerce_quote(getattr(ticker, "bid", None))
-    ask = _coerce_quote(getattr(ticker, "ask", None))
-    last = _coerce_quote(getattr(ticker, "last", None))
-    bid_size = _coerce_size(getattr(ticker, "bidSize", None))
-    ask_size = _coerce_size(getattr(ticker, "askSize", None))
+    bid = _coerce_quote(None if update is None else update.values.get("bid"))
+    ask = _coerce_quote(None if update is None else update.values.get("ask"))
+    last = _coerce_quote(None if update is None else update.values.get("last"))
+    bid_size = _coerce_size(None if update is None else update.values.get("bidSize"))
+    ask_size = _coerce_size(None if update is None else update.values.get("askSize"))
 
     greeks_source: Literal["model", "bid", "ask", "last", "none"] = "none"
     iv = delta = gamma = theta = vega = underlying = None
@@ -113,39 +93,22 @@ def _ticker_to_quote(
         ("askGreeks", "ask"),
         ("lastGreeks", "last"),
     ):
-        block = _greeks_block(ticker, attr)
+        block = None if update is None else update.greeks.get(attr)
         if block is None:
             continue
-        candidate_iv = _coerce_iv(getattr(block, "impliedVol", None))
+        candidate_iv = _coerce_iv(block.get("impliedVol"))
         if candidate_iv is None:
             continue
         iv = candidate_iv
-        delta = _coerce_optional_float(getattr(block, "delta", None))
-        gamma = _coerce_optional_float(getattr(block, "gamma", None))
-        theta = _coerce_optional_float(getattr(block, "theta", None))
-        vega = _coerce_optional_float(getattr(block, "vega", None))
-        underlying = _coerce_optional_float(getattr(block, "undPrice", None))
+        delta = _coerce_optional_float(block.get("delta"))
+        gamma = _coerce_optional_float(block.get("gamma"))
+        theta = _coerce_optional_float(block.get("theta"))
+        vega = _coerce_optional_float(block.get("vega"))
+        underlying = _coerce_optional_float(block.get("undPrice"))
         greeks_source = label  # type: ignore[assignment]
         break
 
-    # ib_async stamps Ticker.time when ticks land. Only a tz-aware datetime is
-    # trustworthy: .timestamp() on a naive datetime interprets it as process-
-    # local time, yielding a ts_ms off by the UTC offset (timestamp-rigor ban,
-    # and inconsistent with bars._to_utc_ms which rejects naive outright).
-    # Convert tz-aware → UTC ms; otherwise fall back to wall clock.
-    t = getattr(ticker, "time", None)
-    if (received_at_ms := getattr(ticker, "source_received_at_ms", None)) is not None:
-        ts_ms = received_at_ms
-    elif isinstance(t, datetime) and t.tzinfo is not None:
-        ts_ms = int(t.astimezone(UTC).timestamp() * 1000)
-    else:
-        if isinstance(t, datetime):
-            logger.warning(
-                "Ignoring naive Ticker.time for %s; using wall clock",
-                symbol,
-                extra={"action": "naive_ticker_time"},
-            )
-        ts_ms = now_ms_utc()
+    ts_ms = now_ms_utc() if update is None else update.received_at_ms
 
     return IbkrOptionQuote(
         symbol=symbol,
@@ -213,25 +176,19 @@ async def stream_option_chain(
             f"contracts for {symbol} expiry={expiry_ms}. Refusing to stream a partial chain."
         )
 
-    # Index contracts so the tick handler can recover (strike, right).
-    by_conid: dict[int, tuple[float, OptionRight]] = {}
-    tickers: list = []
-    stock_ticker = None
+    quotes_by_contract: list[tuple[float, OptionRight, QuoteLease]] = []
     leases: list[QuoteLease] = []
     try:
-        stock_lease = request_quote(client, stock)
+        stock_lease = client.live_data.quote(stock)
         leases.append(stock_lease)
-        stock_ticker = stock_lease.ticker
         for c in contracts:
-            by_conid[int(c.conId)] = (float(c.strike), c.right)
-            lease = request_quote(client, c, GENERIC_TICK_LIST)
+            lease = client.live_data.quote(c)
             leases.append(lease)
-            ticker = lease.ticker
-            tickers.append(ticker)
+            quotes_by_contract.append((float(c.strike), c.right, lease))
 
         logger.info(
             "Subscribed %d tickers for %s expiry=%s strikes=%s",
-            len(tickers),
+            len(quotes_by_contract),
             symbol,
             expiry_ms,
             strikes,
@@ -240,16 +197,12 @@ async def stream_option_chain(
         while True:
             await asyncio.sleep(debounce_seconds)
             quotes: list[IbkrOptionQuote] = []
-            for t in tickers:
-                conid = int(t.contract.conId)
-                if conid not in by_conid:
-                    continue
-                strike, right = by_conid[conid]
+            for strike, right, lease in quotes_by_contract:
                 quotes.append(
-                    _ticker_to_quote(t, symbol, expiry_ms, strike, right),
+                    _quote_to_model(lease.latest, symbol, expiry_ms, strike, right),
                 )
 
-            underlying_price = _resolve_market_price(stock_ticker)
+            underlying_price = _resolve_market_price(stock_lease.latest)
 
             yield IbkrChainSnapshot(
                 symbol=symbol,

@@ -9,16 +9,18 @@ import respx
 from pydantic import ValidationError
 
 from app.broker.ibkr.config import IbkrSettings
-from app.marketdata.shared.connection import SharedConnection
-from app.marketdata.shared.protocol import FeedUnavailable, SourceHealth
+from app.broker.ibkr.live.connection import SharedConnection
+from app.broker.ibkr.live.protocol import FeedUnavailable, SourceHealth
 from app.utils.timestamps import now_ms_utc
+from tests._helpers.live_source import unused_qualifier
 from tests.marketdata.shared.test_consumers import EPOCH, quote_update
 from tests.marketdata.shared.test_hub import subscription
 
 
 def connection() -> SharedConnection:
     return SharedConnection(
-        IbkrSettings(_env_file=None, shared_feed_url="http://feed", shared_feed_token="test-secret")
+        IbkrSettings(_env_file=None, shared_feed_url="http://feed", shared_feed_token="test-secret"),
+        qualify=unused_qualifier,
     )
 
 
@@ -47,7 +49,7 @@ async def test_source_health_is_authenticated_and_independent_of_contract_refusa
 
 async def test_old_quote_epoch_is_rejected_but_known_pre_disconnect_bar_epoch_keeps_its_identity() -> None:
     shared = connection()
-    new_epoch = EPOCH.replace(":1:0:0", ":2:0:0")
+    new_epoch = EPOCH.model_copy(update={"generation": 2})
     frames = [
         quote_update((1, 2, 1)),
         quote_update((1, 3, 1)).model_copy(update={"epoch": new_epoch}),

@@ -11,9 +11,9 @@ from eventkit import Event
 from ib_async import Contract, Ticker
 from ib_async.objects import TickData
 
-from app.marketdata.shared.hub import FeedHub
-from app.marketdata.shared.native import IbkrSource
-from app.marketdata.shared.protocol import Subscription
+from app.broker.ibkr.live.hub import FeedHub
+from app.broker.ibkr.live.native import IbkrSource
+from app.broker.ibkr.live.protocol import Subscription
 from tests.marketdata.shared.test_hub import started, subscription
 
 
@@ -45,9 +45,15 @@ class Client:
     settings = SimpleNamespace(readonly=True)
     connection_generation = data_loss_epoch = connectivity_lost_count = 1
     connection_lost = False
+    connection_state = "connected"
+    last_event_ms = 0
+    last_ibkr_code = None
 
     def __init__(self) -> None:
         self.ib = Broker()
+        from app.broker.ibkr.live.local import NativeLiveSource
+
+        self.live_data = NativeLiveSource(self)
 
     def require_connected(self) -> None:
         return None

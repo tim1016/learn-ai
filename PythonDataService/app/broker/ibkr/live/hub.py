@@ -9,7 +9,7 @@ from contextlib import aclosing
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from app.marketdata.shared.protocol import FeedUnavailable, Frame, Subscription
+from app.broker.ibkr.live.protocol import FeedUnavailable, Frame, Subscription
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -112,7 +112,7 @@ class FeedHub:
                 line,
                 Frame(
                     kind="error",
-                    epoch="",
+                    epoch=None,
                     received_at_ms=now_ms_utc(),
                     reason=str(exc),
                     cause=exc.cause if isinstance(exc, FeedUnavailable) else None,
@@ -125,7 +125,7 @@ class FeedHub:
     async def close(self) -> None:
         for line in self._lines.values():
             self._publish(
-                line, Frame(kind="error", epoch="", received_at_ms=now_ms_utc(), reason="Shared feed stopped")
+                line, Frame(kind="error", epoch=None, received_at_ms=now_ms_utc(), reason="Shared feed stopped")
             )
         tasks = [line.producer for line in self._lines.values() if line.producer is not None]
         for task in tasks:

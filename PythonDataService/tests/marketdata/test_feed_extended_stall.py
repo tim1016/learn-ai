@@ -71,6 +71,9 @@ class _Transport:
 class _Client:
     def __init__(self, transport: _Transport) -> None:
         self.ib = transport
+        self.connection_state = "connected"
+        from tests._helpers.live_source import native_source
+        native_source(self)
         self.connection_lost = False
         self.connection_generation = 1
         # The 1101 data-loss fence is unconditional too (#2393); nothing here sends a 1101.

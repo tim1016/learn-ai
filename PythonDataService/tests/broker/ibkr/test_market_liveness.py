@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, Mock
 
@@ -19,6 +18,7 @@ from app.broker.ibkr.market_liveness import IbkrMarketStatusSource
 from app.schemas.market_liveness import MarketLivenessFact, MarketStatusSnapshot
 from app.services.market_liveness import MarketLivenessStore
 from app.utils.timestamps import now_ms_utc
+from tests._helpers.live_source import native_source
 
 SourceFixture = tuple[IbkrMarketStatusSource, Mock, Ticker]
 
@@ -57,16 +57,18 @@ def fact(snapshot: MarketStatusSnapshot, at: int = NOW) -> MarketLivenessFact:
 
 @pytest.fixture
 def source(monkeypatch: pytest.MonkeyPatch) -> SourceFixture:
+    monkeypatch.setattr("app.broker.ibkr.live.quote_callbacks.now_ms_utc", lambda: NOW)
     ticker = Ticker(
         halted=float("nan"), marketDataType=1,
         rtTime=datetime.fromtimestamp(NOW / 1000, tz=UTC), contract=Stock("SPY", "SMART", "USD"),
     )
     client = Mock(
-        shared_feed=None, connection_generation=1, connectivity_lost_count=0,
+        connection_generation=1, connectivity_lost_count=0,
         connection_lost=False, connection_state="connected", last_event_ms=NOW,
         last_ibkr_code=None,
     )
     client.is_connected.return_value = True
+    native_source(client)
     client.ib.errorEvent = Event()
     client.ib.wrapper.ticker2ReqId = {"mktData": Mock(get=Mock(return_value=7))}
     client.ib.reqMktData.return_value = ticker
@@ -81,7 +83,9 @@ def source(monkeypatch: pytest.MonkeyPatch) -> SourceFixture:
     monkeypatch.setattr(
         "app.broker.ibkr.market_liveness.qualify_underlying", AsyncMock(return_value=ticker.contract),
     )
-    return IbkrMarketStatusSource(symbols=lambda: ("SPY",), client=lambda: client, clock=lambda: NOW), client, ticker
+    status = IbkrMarketStatusSource(symbols=lambda: ("SPY",), client=lambda: client, clock=lambda: NOW)
+    monkeypatch.setattr("app.broker.ibkr.live.quote_callbacks.now_ms_utc", lambda: status._clock())
+    return status, client, ticker
 
 
 async def test_fresh_live_trade_proves_activity_without_a_watchlist_only_zero_tick(source: SourceFixture) -> None:
@@ -313,7 +317,7 @@ async def test_live_quotes_keep_a_quiet_trade_stream_ready(source: SourceFixture
     await poll(status)
     status._clock = lambda: NOW + 5_001
     ticker.time = datetime.fromtimestamp((NOW + 5_001) / 1000, tz=UTC)
-    ticker.ticks = [SimpleNamespace(tickType=1), SimpleNamespace(tickType=2)]
+    ticker.ticks = [TickData(ticker.time, 1, ticker.bid, ticker.bidSize), TickData(ticker.time, 2, ticker.ask, ticker.askSize)]
     ticker.updateEvent.emit(ticker)
 
     snapshot = await poll(status)
@@ -484,7 +488,7 @@ async def test_panel_poll_frequency_has_no_effect_on_deadline_or_subscription(so
 def test_ingestion_preserves_the_vendor_halt_value(halted: int) -> None:
     from ib_async import IB
 
-    from app.broker.ibkr.market_subscription import install_market_data_callbacks
+    from app.broker.ibkr.live.quote_callbacks import install_market_data_callbacks
 
     ib = IB()
     install_market_data_callbacks(ib.wrapper)
@@ -512,7 +516,7 @@ async def test_data_type_change_invalidates_prices_until_new_live_receipts(sourc
 def test_data_type_decoder_publishes_the_mode_transition() -> None:
     from ib_async import IB
 
-    from app.broker.ibkr.market_subscription import install_market_data_callbacks
+    from app.broker.ibkr.live.quote_callbacks import install_market_data_callbacks
 
     ib = IB()
     install_market_data_callbacks(ib.wrapper)

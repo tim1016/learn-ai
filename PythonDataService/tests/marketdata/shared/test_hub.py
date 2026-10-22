@@ -7,8 +7,8 @@ from collections.abc import AsyncIterator
 
 import pytest
 
-from app.marketdata.shared.hub import FeedHub
-from app.marketdata.shared.protocol import Frame, Instrument, QuoteUpdate, Subscription, Tick
+from app.broker.ibkr.live.hub import FeedHub
+from app.broker.ibkr.live.protocol import Frame, Instrument, QuoteUpdate, SourceEpoch, Subscription, Tick
 
 
 def subscription(con_id: int = 1, kind: str = "quotes") -> Subscription:
@@ -20,9 +20,10 @@ def subscription(con_id: int = 1, kind: str = "quotes") -> Subscription:
 def quote(price: float, receipt: int = 1000, tick: int = 1, data_type: int = 1) -> Frame:
     return Frame(
         kind="quote",
-        epoch="boot:1",
+        epoch=SourceEpoch(started_at_ms=0, owner="boot:1"),
         received_at_ms=receipt,
         quote=QuoteUpdate(
+            received_at_ms=receipt,
             data_type=data_type,
             ticks=(Tick(kind=tick, price=price, size=1),),
             values={"bid": price},

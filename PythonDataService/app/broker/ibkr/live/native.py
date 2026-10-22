@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import math
 import time
 from collections.abc import AsyncIterator
 from contextlib import aclosing
@@ -11,6 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.broker.ibkr.bars import (
+    REALTIME_BAR_STALL_TIMEOUT_S,
     IBKRBarInterrupted,
     IBKRBarSubscriptionStalled,
     _check_realtime_subscription_liveness,
@@ -18,39 +18,23 @@ from app.broker.ibkr.bars import (
     _RealtimeBarSubscriptionRegistry,
 )
 from app.broker.ibkr.client import IbkrClient, NotConnectedError
-from app.broker.ibkr.market_subscription import REQUEST_FAILURE_CODES, install_market_data_callbacks
-from app.broker.ibkr.minute_assembler import IBKRImpossibleBarError, _bar_time_ms, _validated_contribution
-from app.marketdata.shared.protocol import (
-    GREEK_BLOCKS,
+from app.broker.ibkr.live.protocol import (
     FeedUnavailable,
     Frame,
-    QuoteUpdate,
     SourceBar,
+    SourceEpoch,
     SourceHealth,
     Subscription,
-    Tick,
 )
+from app.broker.ibkr.live.quote_callbacks import (
+    REQUEST_FAILURE_CODES,
+    generic_ticks,
+    install_market_data_callbacks,
+    quote_update,
+    reset_greeks,
+)
+from app.broker.ibkr.minute_assembler import IBKRImpossibleBarError, _bar_time_ms, _validated_contribution
 from app.utils.timestamps import now_ms_utc
-
-QUOTE_FIELDS = (
-    "bid",
-    "ask",
-    "last",
-    "close",
-    "bidSize",
-    "askSize",
-    "lastSize",
-    "halted",
-    "callOpenInterest",
-    "putOpenInterest",
-    "callVolume",
-    "putVolume",
-)
-GREEK_FIELDS = ("impliedVol", "delta", "gamma", "theta", "vega", "undPrice", "optPrice", "pvDividend")
-
-
-def _number(value: Any) -> float | None:
-    return float(value) if value is not None and math.isfinite(value) else None
 
 
 class IbkrSource:
@@ -58,13 +42,19 @@ class IbkrSource:
         if not client.settings.readonly:
             raise ValueError("Shared IBKR source must be read-only")
         self._client = client
-        self._boot = f"{now_ms_utc()}-{uuid4().hex}"
+        self._started_at_ms, self._owner = now_ms_utc(), uuid4().hex
         self._active: set[tuple[str, int]] = set()
         self._bar_registry = _RealtimeBarSubscriptionRegistry()
 
-    def _epoch(self) -> str:
+    def _epoch(self) -> SourceEpoch:
         client = self._client
-        return f"{self._boot}:{client.connection_generation}:{client.data_loss_epoch}:{client.connectivity_lost_count}"
+        return SourceEpoch(
+            started_at_ms=self._started_at_ms,
+            owner=self._owner,
+            generation=client.connection_generation,
+            data_loss=client.data_loss_epoch,
+            connectivity_loss=client.connectivity_lost_count,
+        )
 
     def health(self) -> SourceHealth:
         return SourceHealth(connected=self._current(self._epoch()), epoch=self._epoch(), observed_at_ms=now_ms_utc())
@@ -113,7 +103,7 @@ class IbkrSource:
         finally:
             self._active.remove(slot)
 
-    def _current(self, epoch: str) -> bool:
+    def _current(self, epoch: SourceEpoch) -> bool:
         return self._epoch() == epoch and self._client.is_connected() and not self._client.connection_lost
 
     async def _bars(self, contract: Any) -> AsyncIterator[Frame]:
@@ -183,7 +173,7 @@ class IbkrSource:
                         lease=lease,
                         symbol=contract.symbol,
                         use_rth=False,
-                        stall_timeout_s=60,
+                        stall_timeout_s=REALTIME_BAR_STALL_TIMEOUT_S,
                         last_progress_at=last_progress,
                         last_source_ms=last_source_ms,
                         stall_deferred=not queue.empty(),
@@ -230,28 +220,11 @@ class IbkrSource:
             else:
                 queue.put_nowait(frame)
 
+        previous_greeks: dict[str, Any] = {}
+
         def receive(ticker: Any) -> None:
-            trade = ticker.rtTime
-            publish(
-                Frame(
-                    kind="quote",
-                    epoch=epoch,
-                    received_at_ms=now_ms_utc(),
-                    quote=QuoteUpdate(
-                        data_type=ticker.marketDataType,
-                        ticks=tuple(
-                            Tick(kind=t.tickType, price=_number(t.price), size=_number(t.size)) for t in ticker.ticks
-                        ),
-                        values={key: _number(getattr(ticker, key, None)) for key in QUOTE_FIELDS},
-                        greeks={
-                            block: {key: _number(getattr(greeks, key, None)) for key in GREEK_FIELDS}
-                            for block in GREEK_BLOCKS
-                            if (greeks := getattr(ticker, block, None)) is not None
-                        },
-                        trade_ms=None if trade is None else int(trade.timestamp() * 1000),
-                    ),
-                )
-            )
+            update = quote_update(ticker, previous_greeks)
+            publish(Frame(kind="quote", epoch=epoch, received_at_ms=update.received_at_ms, quote=update))
 
         def failed(request_id: int, code: int, message: str, _contract: Any) -> None:
             if request_id == req_id and code in REQUEST_FAILURE_CODES:
@@ -259,12 +232,8 @@ class IbkrSource:
 
         # One fixed superset per security type means the chain, status watcher
         # and bots reuse the same quote. None requests a delayed entitlement.
-        ticks = "100,101,106" if contract.secType == "OPT" else "233"
-        ticker = client.ib.reqMktData(contract, ticks, False, False)
-        # ib_async retains tickers by conId even after cancellation. A new
-        # source cannot give retained analytics a current receipt (#3388).
-        for block in GREEK_BLOCKS:
-            setattr(ticker, block, None)
+        ticker = client.ib.reqMktData(contract, generic_ticks(contract), False, False)
+        reset_greeks(ticker)
         req_id = client.ib.wrapper.ticker2ReqId["mktData"][ticker]
         ticker.updateEvent += receive
         client.ib.errorEvent += failed

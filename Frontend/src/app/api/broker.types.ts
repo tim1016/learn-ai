@@ -10869,6 +10869,11 @@ export interface components {
          *     ``healthy`` implies ``connected``.
          */
         ChannelHealth: {
+            /**
+             * Awaiting Bar
+             * @default false
+             */
+            awaiting_bar?: boolean;
             /** Connected */
             connected: boolean;
             /** Healthy */
@@ -10885,11 +10890,6 @@ export interface components {
              * @enum {string}
              */
             stream: "market_data" | "execution";
-            /**
-             * Warming
-             * @default false
-             */
-            warming?: boolean;
         };
         /**
          * ChannelHealthView

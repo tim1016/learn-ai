@@ -97,12 +97,18 @@ class _AdversarialIbkrClient:
 
     def __init__(self, transport: _AdversarialRealtimeBarTransport) -> None:
         self.ib = transport
+        from tests._helpers.live_source import native_source
+        native_source(self)
         self.connection_lost = False
         # The real client's generation fence is unconditional; this fixture
         # drives the production bar stream, so it carries one too.
         self.connection_generation = 1
         # The 1101 data-loss fence is unconditional too (#2393); nothing here sends a 1101.
         self.data_loss_epoch = 0
+
+    @property
+    def connection_state(self) -> str:
+        return "soft_lost" if self.connection_lost else "connected"
 
     def require_connected(self) -> None:
         return

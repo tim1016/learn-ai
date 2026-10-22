@@ -14,10 +14,10 @@ from urllib.request import urlopen
 
 import pytest
 
-from app.marketdata.shared.hub import FeedHub
-from app.marketdata.shared.protocol import Frame, Subscription
-from app.marketdata.shared.server import create_app
-from app.marketdata.shared.transport import FeedTransport
+from app.broker.ibkr.live.hub import FeedHub
+from app.broker.ibkr.live.protocol import Frame, SourceEpoch, SourceHealth, Subscription
+from app.broker.ibkr.live.server import create_app
+from app.broker.ibkr.live.transport import FeedTransport
 from tests.marketdata.shared.test_hub import quote, subscription
 
 
@@ -34,9 +34,18 @@ def serve(listener: socket.socket, events: Any) -> None:
             finally:
                 events.put(("closed", key.instrument.con_id))
 
-    uvicorn.Server(uvicorn.Config(create_app(FeedHub(Source()), "test-secret"), log_level="error")).run(
-        sockets=[listener]
-    )
+    uvicorn.Server(
+        uvicorn.Config(
+            create_app(
+                FeedHub(Source()),
+                "test-secret",
+                lambda: SourceHealth(
+                    connected=True, epoch=SourceEpoch(started_at_ms=0, owner="test"), observed_at_ms=1000
+                ),
+            ),
+            log_level="error",
+        )
+    ).run(sockets=[listener])
 
 
 def consume(url: str, con_id: int, events: Any, release: Any) -> None:

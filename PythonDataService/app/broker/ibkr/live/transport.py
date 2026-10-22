@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 import httpx
 from pydantic import ValidationError
 
-from app.marketdata.shared.protocol import FeedUnavailable, Frame, SourceHealth, Subscription
+from app.broker.ibkr.live.protocol import FeedUnavailable, Frame, SourceHealth, Subscription
 
 MAX_FRAME_BYTES = 262_144
 

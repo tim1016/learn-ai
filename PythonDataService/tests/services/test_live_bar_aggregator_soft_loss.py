@@ -102,6 +102,12 @@ class FakeClient:
         self.data_loss_epoch = 0
         self.settings = SimpleNamespace(realtime_bar_max_active=100, feed_continuity_enabled=True)
         self.ib = FakeIB(world, self)
+        from tests._helpers.live_source import native_source
+        native_source(self)
+
+    @property
+    def connection_state(self) -> str:
+        return "connected" if self.is_connected() and not self.connection_lost else "disconnected"
 
     def is_connected(self) -> bool:
         return self.connected

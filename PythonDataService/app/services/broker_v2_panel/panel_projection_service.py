@@ -159,7 +159,7 @@ def _build_health_card(
 def _channel_views(clerk_status: ClerkStatus, now_ms: int) -> list[ChannelHealthView]:
     views: list[ChannelHealthView] = []
     for health in clerk_status.channel_healths or []:
-        state = channel_state(healthy=health.healthy, observed_at_ms=health.observed_at_ms, now_ms=now_ms, warming=health.warming)
+        state = channel_state(healthy=health.healthy, observed_at_ms=health.observed_at_ms, now_ms=now_ms, warming=health.awaiting_bar)
         copy = copy_for(state)
         views.append(
             ChannelHealthView(

@@ -11,12 +11,11 @@ import pytest
 from ib_async import IB, Contract
 from ib_async.objects import RealTimeBarList, TickData
 
+from app.broker.ibkr.live.hub import FeedHub
+from app.broker.ibkr.live.native import IbkrSource
+from app.broker.ibkr.live.protocol import Frame, SourceBar, SourceEpoch
 from app.broker.ibkr.market_subscription import MarketSubscription
 from app.broker.ibkr.option_quotes import OptionLine
-from app.marketdata.shared.hub import FeedHub
-from app.marketdata.shared.native import IbkrSource
-from app.marketdata.shared.protocol import Frame, SourceBar
-from app.marketdata.shared.quotes import request_quote
 from tests.marketdata.shared.test_hub import Source, quote, started, subscription
 from tests.marketdata.shared.test_native import Broker, Client
 
@@ -35,12 +34,7 @@ async def test_late_option_join_does_not_reconstruct_price_across_a_destructive_
         await source.input.put(frame)
         delivered = await read
         tick = delivered.quote.ticks[0]
-        line.ingest(
-            SimpleNamespace(
-                marketDataType=1, ticks=[TickData(None, tick.kind, tick.price, tick.price)], modelGreeks=None
-            ),
-            delivered.received_at_ms,
-        )
+        line.ingest(delivered.quote.model_copy(update={"ticks": (tick.model_copy(update={"size": tick.price}),)}))
         if frame.received_at_ms != 3000:
             read = asyncio.create_task(anext(original))
     assert getattr(line, side) is None
@@ -57,7 +51,9 @@ async def test_terminal_source_frame_releases_owner_before_another_join() -> Non
     source = Source()
     hub = FeedHub(source)
     old, read = await started(hub, subscription())
-    await source.input.put(Frame(kind="error", epoch="boot:1", received_at_ms=1, reason="refused"))
+    await source.input.put(
+        Frame(kind="error", epoch=SourceEpoch(started_at_ms=0, owner="boot:1"), received_at_ms=1, reason="refused")
+    )
     assert (await read).kind == "error"
     fresh, pending = await started(hub, subscription())
     assert len(source.opened) == 2
@@ -81,7 +77,7 @@ async def test_quote_received_while_awaiting_a_frame_is_fenced_when_connection_i
     ticker.ticks = [TickData(None, 1, 2, 1)]
     ticker.updateEvent.emit(ticker)
     client.connection_lost = True
-    from app.marketdata.shared.protocol import FeedUnavailable
+    from app.broker.ibkr.live.protocol import FeedUnavailable
 
     try:
         with pytest.raises(FeedUnavailable):
@@ -110,18 +106,21 @@ async def test_shared_book_withdraws_a_side_cleared_by_the_native_size_callback(
     native = Client()
     native.ib = RealWrapperBroker()
     hub = FeedHub(IbkrSource(native))
-    shared = SimpleNamespace(stream=hub.stream, is_connected=lambda: True)
-    client = SimpleNamespace(shared_feed=shared, ib=native.ib)
+    from tests.marketdata.shared.test_consumers import Delivery
+
+    shared = Delivery()
+    shared.stream = hub.stream
+    client = SimpleNamespace(live_data=shared, ib=native.ib)
     contract = Contract(conId=2345, secType="OPT", exchange="SMART", currency="USD")
-    lease = request_quote(client, contract)
-    book = MarketSubscription(symbol="QQQ", started_at_ms=0, ticker=lease.ticker, lease=lease)
+    lease = client.live_data.quote(contract)
+    book = MarketSubscription(symbol="QQQ", started_at_ms=0, lease=lease)
     updates: asyncio.Queue[None] = asyncio.Queue()
 
     def receive(ticker: Any) -> None:
-        book.ingest(ticker, lease.received_at_ms)
+        book.ingest(ticker)
         updates.put_nowait(None)
 
-    lease.ticker.updateEvent += receive
+    lease.updates += receive
 
     async def delivered() -> None:
         await asyncio.wait_for(updates.get(), 1)
@@ -143,43 +142,43 @@ async def test_shared_book_withdraws_a_side_cleared_by_the_native_size_callback(
         ticker.updateEvent.emit(ticker)
         await delivered()
         assert book.held(1) is not None
-        assert book.evidence(lease.received_at_ms).state == "READY"
+        assert book.evidence(lease.latest.received_at_ms).state == "READY"
 
         for size in (0, 1):
             ticker.ticks.clear()
             wrapper.tickSize(1, size_kind, size)
             ticker.updateEvent.emit(ticker)
             await delivered()
-            assert book.quote(lease.received_at_ms) is None
+            assert book.quote(lease.latest.received_at_ms) is None
             held = book.held(1)
             assert held is None or getattr(held, "bid" if size_kind == 0 else "ask").price == 0
-            assert book.evidence(lease.received_at_ms).state != "READY"
+            assert book.evidence(lease.latest.received_at_ms).state != "READY"
 
         ticker.ticks.clear()
         wrapper.priceSizeTick(1, 1 if size_kind == 0 else 2, 2 if size_kind == 0 else 3, 1)
         ticker.updateEvent.emit(ticker)
         await delivered()
-        assert book.quote(lease.received_at_ms) is not None
+        assert book.quote(lease.latest.received_at_ms) is not None
     finally:
         lease.release()
-        await asyncio.gather(lease.task, return_exceptions=True)
+        await asyncio.sleep(0)
         await hub.close()
 
 
 async def test_native_quote_venue_can_change_after_the_final_lease_is_released() -> None:
-    from app.marketdata.shared.protocol import FeedUnavailable
+    from app.broker.ibkr.live.protocol import FeedUnavailable
 
     client = Client()
     client.ib = RealWrapperBroker()
     first = Contract(conId=34, secType="OPT", exchange="SMART", currency="USD")
     second = Contract(conId=34, secType="OPT", exchange="CBOE", currency="USD")
-    lease = request_quote(client, first)
+    lease = client.live_data.quote(first)
     with pytest.raises(FeedUnavailable, match="venue"):
-        request_quote(client, second)
+        client.live_data.quote(second)
     assert len(client.ib.opened) == 1
     lease.release()
-    replacement = request_quote(client, second)
-    assert replacement.ticker.contract.exchange == "CBOE"
+    replacement = client.live_data.quote(second)
+    assert client.ib.opened[-1][0].exchange == "CBOE"
     assert len(client.ib.opened) == 2
     replacement.release()
     assert [contract.exchange for contract in client.ib.closed] == ["SMART", "CBOE"]
@@ -212,11 +211,11 @@ def test_frame_payload_must_match_its_tag() -> None:
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
-        Frame(kind="quote", epoch="a", received_at_ms=1)
+        Frame(kind="quote", epoch=SourceEpoch(started_at_ms=0, owner="a"), received_at_ms=1)
     with pytest.raises(ValidationError):
         Frame(
             kind="idle",
-            epoch="a",
+            epoch=SourceEpoch(started_at_ms=0, owner="a"),
             received_at_ms=1,
             bar=SourceBar(start_ms=1, open="1", high="1", low="1", close="1", volume="1"),
         )
@@ -266,11 +265,17 @@ async def test_pre_disconnect_bars_reach_consumer_before_the_interruption() -> N
             for start in (1000, 6000):
                 yield Frame(
                     kind="bar",
-                    epoch="a",
+                    epoch=SourceEpoch(started_at_ms=0, owner="a"),
                     received_at_ms=start,
                     bar=SourceBar(start_ms=start, open="2", high="2", low="2", close="2", volume="1"),
                 )
-            yield Frame(kind="error", epoch="a", received_at_ms=11000, cause="socket_down", reason="lost")
+            yield Frame(
+                kind="error",
+                epoch=SourceEpoch(started_at_ms=0, owner="a"),
+                received_at_ms=11000,
+                cause="socket_down",
+                reason="lost",
+            )
 
     hub = FeedHub(Burst())
     stream = hub.stream(subscription(kind="bars"))
@@ -281,7 +286,7 @@ async def test_pre_disconnect_bars_reach_consumer_before_the_interruption() -> N
 
 
 async def test_reconnect_during_bar_acquisition_never_labels_new_data_with_old_epoch() -> None:
-    from app.marketdata.shared.protocol import FeedUnavailable
+    from app.broker.ibkr.live.protocol import FeedUnavailable
 
     client = Client()
     client.ib = BarBroker()
@@ -348,7 +353,7 @@ async def test_native_bar_stall_keeps_the_recoverable_failure_kind(monkeypatch: 
     def stalled(**kwargs: Any) -> Any:
         raise IBKRBarSubscriptionStalled("source stopped advancing")
 
-    monkeypatch.setattr("app.marketdata.shared.native._check_realtime_subscription_liveness", stalled)
+    monkeypatch.setattr("app.broker.ibkr.live.native._check_realtime_subscription_liveness", stalled)
     client = Client()
     client.ib = BarBroker()
     stream = FeedHub(IbkrSource(client)).stream(subscription(kind="bars"))
@@ -368,7 +373,7 @@ async def test_impossible_source_bar_keeps_its_durable_refusal_across_shared_del
     native.ib = BarBroker()
     hub = FeedHub(IbkrSource(native))
     delivery = Delivery()
-    delivery.underlyings["QQQ"] = subscription(kind="bars").instrument
+    delivery._underlyings["QQQ"] = subscription(kind="bars").instrument
 
     async def wire_frames(key: Any) -> Any:
         async with aclosing(hub.stream(key)) as frames:

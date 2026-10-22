@@ -9,7 +9,21 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.broker.ibkr.market_data import _resolve_market_price, _ticker_to_quote
+from app.broker.ibkr.live.protocol import QuoteUpdate
+from app.broker.ibkr.live.quote_callbacks import number
+from app.broker.ibkr.market_data import _quote_to_model
+
+
+def receipt(ticker):
+    return QuoteUpdate(
+        received_at_ms=1234567890000,
+        data_type=1,
+        ticks=(),
+        values={key: number(getattr(ticker, key, None)) for key in ("bid", "ask", "last", "bidSize", "askSize")},
+        greeks={name: {key: number(value) for key, value in vars(block).items()}
+                for name in ("modelGreeks", "bidGreeks", "askGreeks", "lastGreeks")
+                if (block := getattr(ticker, name, None)) is not None},
+    )
 
 
 def _greeks(*, iv, delta, gamma, theta, vega, und):
@@ -36,13 +50,13 @@ def test_ticker_with_model_greeks_picks_model_source() -> None:
         lastGreeks=None,
         time=datetime(2026, 5, 2, 14, 30, tzinfo=UTC),
     )
-    q = _ticker_to_quote(ticker, "SPY", 1_800_000_000_000, 420.0, "C")
+    q = _quote_to_model(receipt(ticker), "SPY", 1_800_000_000_000, 420.0, "C")
     assert q.greeks_source == "model"
     assert q.iv == 0.21
     assert q.delta == 0.55
     assert q.bid == 1.20
     assert q.bid_size == 10
-    assert q.ts_ms == int(ticker.time.timestamp() * 1000)
+    assert q.ts_ms == 1234567890000
 
 
 def test_ticker_falls_back_to_bid_greeks_when_model_missing() -> None:
@@ -57,7 +71,7 @@ def test_ticker_falls_back_to_bid_greeks_when_model_missing() -> None:
         askGreeks=None,
         lastGreeks=None,
     )
-    q = _ticker_to_quote(ticker, "SPY", 1_800_000_000_000, 420.0, "C")
+    q = _quote_to_model(receipt(ticker), "SPY", 1_800_000_000_000, 420.0, "C")
     assert q.greeks_source == "bid"
     assert q.iv == 0.20
 
@@ -67,7 +81,7 @@ def test_ticker_with_no_greeks_marks_source_none() -> None:
         bid=1.20, ask=1.25, last=None, bidSize=None, askSize=None,
         modelGreeks=None, bidGreeks=None, askGreeks=None, lastGreeks=None,
     )
-    q = _ticker_to_quote(ticker, "SPY", 1_800_000_000_000, 420.0, "C")
+    q = _quote_to_model(receipt(ticker), "SPY", 1_800_000_000_000, 420.0, "C")
     assert q.greeks_source == "none"
     assert q.iv is None
     assert q.delta is None
@@ -87,7 +101,7 @@ def test_negative_iv_in_model_greeks_falls_through_to_bid_greeks() -> None:
         askGreeks=None,
         lastGreeks=None,
     )
-    q = _ticker_to_quote(ticker, "SPY", 1_800_000_000_000, 420.0, "C")
+    q = _quote_to_model(receipt(ticker), "SPY", 1_800_000_000_000, 420.0, "C")
     assert q.greeks_source == "bid"
     assert q.iv == 0.205
 
@@ -116,7 +130,7 @@ def test_sentinel_quote_fields_become_none(price: float, size: float | None) -> 
         askGreeks=None,
         lastGreeks=None,
     )
-    q = _ticker_to_quote(ticker, "SPY", 1_800_000_000_000, 420.0, "C")
+    q = _quote_to_model(receipt(ticker), "SPY", 1_800_000_000_000, 420.0, "C")
     assert q.bid is None, "bid becomes none"
     assert q.ask is None, "ask becomes none"
     assert q.last is None, "last becomes none"
@@ -139,7 +153,7 @@ def test_zero_bid_is_preserved() -> None:
         askGreeks=None,
         lastGreeks=None,
     )
-    q = _ticker_to_quote(ticker, "SPY", 1_800_000_000_000, 420.0, "C")
+    q = _quote_to_model(receipt(ticker), "SPY", 1_800_000_000_000, 420.0, "C")
     assert q.bid == 0.0
     assert q.ask == 0.05
 
@@ -159,59 +173,8 @@ def test_negative_one_delta_is_preserved() -> None:
         askGreeks=None,
         lastGreeks=None,
     )
-    q = _ticker_to_quote(ticker, "SPY", 1_800_000_000_000, 420.0, "P")
+    q = _quote_to_model(receipt(ticker), "SPY", 1_800_000_000_000, 420.0, "P")
     assert q.delta == -1.0  # NOT stripped — legitimate Greek value
-
-
-def test_resolve_market_price_handles_method_nan_plain_attribute_raising_and_missing() -> None:
-    def raise_runtime_error() -> float:
-        raise RuntimeError("boom")
-
-    # Regression: ib_async Ticker.marketPrice is a method, not an attribute.
-    # Passing the bound method to _coerce_optional_float raised TypeError.
-    ticker = SimpleNamespace(marketPrice=lambda: 580.42)
-    assert _resolve_market_price(ticker) == 580.42, "regression: a marketPrice method returning a float is called"
-    ticker = SimpleNamespace(marketPrice=lambda: math.nan)
-    assert _resolve_market_price(ticker) is None, "a marketPrice method returning nan resolves to none"
-    ticker = SimpleNamespace(marketPrice=580.42)
-    assert _resolve_market_price(ticker) == 580.42, "a plain marketPrice attribute is read as is"
-    ticker = SimpleNamespace(marketPrice=raise_runtime_error)
-    assert _resolve_market_price(ticker) is None, "a marketPrice method that raises resolves to none"
-    ticker = SimpleNamespace()
-    assert _resolve_market_price(ticker) is None, "a ticker with no marketPrice resolves to none"
-
-
-# ── B-10: naive Ticker.time must not be trusted ────────────────────────
-
-
-def test_ticker_naive_time_falls_back_to_wall_clock() -> None:
-    """Regression (B-10): a naive Ticker.time would be read by .timestamp() as
-    process-local time, producing a ts_ms off by the UTC offset. The conversion
-    now ignores naive datetimes and stamps wall-clock time instead.
-
-    The naive value is dated year 2000; before the fix ts_ms landed near that
-    (~9.46e11), after the fix it lands at "now" (well past 2023)."""
-    ticker = SimpleNamespace(
-        bid=1.0, ask=1.1, last=None, bidSize=None, askSize=None,
-        modelGreeks=None, bidGreeks=None, askGreeks=None, lastGreeks=None,
-        time=datetime(2000, 1, 1, 12, 0),  # naive — no tzinfo
-    )
-    q = _ticker_to_quote(ticker, "SPY", 1_800_000_000_000, 420.0, "C")
-    assert q.ts_ms > 1_700_000_000_000  # wall clock, not the year-2000 naive value
-
-
-def test_ticker_tz_aware_non_utc_time_converts_to_utc_ms() -> None:
-    """A tz-aware non-UTC Ticker.time is converted to the correct UTC epoch."""
-    from datetime import timedelta, timezone
-
-    aware = datetime(2026, 5, 2, 9, 30, tzinfo=timezone(timedelta(hours=-4)))
-    ticker = SimpleNamespace(
-        bid=1.0, ask=1.1, last=None, bidSize=None, askSize=None,
-        modelGreeks=None, bidGreeks=None, askGreeks=None, lastGreeks=None,
-        time=aware,
-    )
-    q = _ticker_to_quote(ticker, "SPY", 1_800_000_000_000, 420.0, "C")
-    assert q.ts_ms == int(aware.astimezone(UTC).timestamp() * 1000)
 
 
 # ── B-12: IBKR negative "no size" sentinel must be stripped ─────────────
@@ -224,7 +187,7 @@ def test_ticker_negative_size_sentinel_coerced_to_none() -> None:
         bid=1.20, ask=1.25, last=None, bidSize=-1.0, askSize=-1,
         modelGreeks=None, bidGreeks=None, askGreeks=None, lastGreeks=None,
     )
-    q = _ticker_to_quote(ticker, "SPY", 1_800_000_000_000, 420.0, "C")
+    q = _quote_to_model(receipt(ticker), "SPY", 1_800_000_000_000, 420.0, "C")
     assert q.bid_size is None
     assert q.ask_size is None
 
@@ -234,6 +197,6 @@ def test_ticker_positive_size_passes_through() -> None:
         bid=1.20, ask=1.25, last=None, bidSize=7, askSize=9.0,
         modelGreeks=None, bidGreeks=None, askGreeks=None, lastGreeks=None,
     )
-    q = _ticker_to_quote(ticker, "SPY", 1_800_000_000_000, 420.0, "C")
+    q = _quote_to_model(receipt(ticker), "SPY", 1_800_000_000_000, 420.0, "C")
     assert q.bid_size == 7
     assert q.ask_size == 9
