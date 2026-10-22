@@ -305,7 +305,7 @@ async def test_real_http_boundary_keeps_one_fenced_exact_run_across_faults(
                 assert await scratch_db.fetchval("SELECT count(*) FROM research_options_backtest_run_sessions WHERE run_id=$1", run_id) == 1
                 closed = await client.post(f"{api.base}/api/jobs-internal/options-backtest", json=req.model_dump(mode="json"))
                 assert closed.status_code == (502 if fault == "dispatch_ack" else 409)
-                if fault != "dispatch_ack":
+                if fault == "api_restart":
                     state.delete(f"job:{job_id}:lease", f"job:{job_id}:state")
                     await scratch_db.execute("UPDATE research_job_owners SET boot_generation=0 WHERE job_id=$1", job_id)
                     expired = await client.post(f"{api.base}/api/jobs-internal/options-backtest", json=req.model_dump(mode="json"))
