@@ -46,7 +46,9 @@ def verify_study(exported: Mapping[str, Any], blobs: BlobStore) -> dict[str, Any
     protocol = evaluator.protocol
     if protocol.protocol_hash != row["protocol_hash"]:
         raise ValueError("The exported protocol differs from its recorded identity.")
-    total_bytes = sum(len(blobs.get(digest)) for digest in evaluator.snapshot.manifest.values())
+    # The recorder counts each unique blob once, however many paths name it.
+    total_bytes = sum(len(blobs.get(digest, max_bytes=protocol.budget.max_snapshot_bytes))
+                      for digest in set(evaluator.snapshot.manifest.values()))
     if total_bytes != evaluator.snapshot.retained_bytes:
         raise ValueError("The snapshot's retained byte count differs from its manifest.")
     records = exported["evaluations"]

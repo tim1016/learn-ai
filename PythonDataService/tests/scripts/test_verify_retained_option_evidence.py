@@ -34,7 +34,9 @@ from tests.options_backtest._lake import the_clock_is_fixed as the_clock_is_fixe
 from tests.options_backtest._lake import tmp_lake as tmp_lake
 
 
-async def retained_bundle(tmp_path: Path, *, container: bool) -> tuple[dict[str, Any], BlobStore]:
+async def retained_bundle(
+    tmp_path: Path, *, container: bool, share_a_blob: bool = False,
+) -> tuple[dict[str, Any], BlobStore]:
     blobs = BlobStore(tmp_path / "blobs")
     with recorded_vendor(recording.RECORDING, recording.RECORDED_FILES, recording.STOCK_PATH):
         await recording.capture_the_recording()
@@ -48,6 +50,10 @@ async def retained_bundle(tmp_path: Path, *, container: bool) -> tuple[dict[str,
         start_ms=et_midnight_ms(date(2025, 1, 1)), end_ms=et_midnight_ms(date(2025, 7, 1)),
         train_months=1, test_months=1, final_months=1)
     snapshot = await asyncio.to_thread(capture_snapshot, protocol, blobs)
+    if share_a_blob:
+        # A second path holding the same bytes: ``retained_bytes`` counts that blob once, as the recorder does.
+        path, digest = next(iter(snapshot.manifest.items()))
+        snapshot = snapshot.model_copy(update={"manifest": {**snapshot.manifest, f"{path}.copy": digest}})
     assert snapshot.version == (2 if container else 1)
     assert any("/session/" in path for path in snapshot.manifest) is container
     protocol = protocol.model_copy(update={"snapshot_id": snapshot.snapshot_id})
@@ -82,6 +88,17 @@ async def test_actual_replay_checks_exported_study_and_proof_without_mutating_so
     assert report["proofs"][0]["sessions_replayed"] == 1
     assert bundle == original
     assert {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in blobs.root.rglob("*") if path.is_file()} == before
+
+
+async def test_a_blob_shared_by_two_manifest_paths_is_counted_once_against_retained_bytes(
+    fake_catalog: Any, tmp_lake: Path, tmp_path: Path,
+) -> None:
+    bundle, blobs = await retained_bundle(tmp_path, container=False, share_a_blob=True)
+    manifest = bundle["studies"][0]["document"]["snapshot"]["manifest"]
+    assert len(set(manifest.values())) < len(manifest)
+    with respx.mock(assert_all_mocked=True, assert_all_called=False):
+        report = await asyncio.to_thread(verify_export, bundle, blobs)
+    assert report["passed"], report["studies"]
 
 
 @pytest.mark.parametrize(("damage", "failing", "reason"), [

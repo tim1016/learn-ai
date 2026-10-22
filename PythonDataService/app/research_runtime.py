@@ -111,6 +111,7 @@ async def _close_abandoned_generations(authority: ownership.RuntimeAuthority) ->
     generation never finished are released with its record.
     """
     import asyncpg
+    import redis
 
     from app.research.persistence import ownership
 
@@ -144,6 +145,11 @@ async def _close_abandoned_generations(authority: ownership.RuntimeAuthority) ->
                 await facade.request_cancel(row["preparation_job_id"])
             except facade.JobRecordNotFoundError:
                 logger.debug("abandoned preparation transport already expired", extra={"job_id": row["preparation_job_id"]})
+            except redis.RedisError:
+                # As in ``close_orphaned_job_records`` above, an unreachable Redis must not abort boot. The cancel is a
+                # courtesy: the child fences itself on the parent binding, and the release below waits out a live collector.
+                logger.warning("abandoned preparation cancel could not be requested", exc_info=True,
+                               extra={"job_id": row["preparation_job_id"]})
         await asyncio.to_thread(release_job_inputs, settings.OPTIONS_BACKTEST_INPUT_ROOT, row["job_id"])
 
 
