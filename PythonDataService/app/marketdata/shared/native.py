@@ -17,10 +17,11 @@ from app.broker.ibkr.bars import (
     _contract_venue,
     _RealtimeBarSubscriptionRegistry,
 )
-from app.broker.ibkr.client import IbkrClient
+from app.broker.ibkr.client import IbkrClient, NotConnectedError
 from app.broker.ibkr.market_subscription import REQUEST_FAILURE_CODES, install_market_data_callbacks
 from app.broker.ibkr.minute_assembler import _bar_time_ms, _validated_contribution
 from app.marketdata.shared.protocol import (
+    GREEK_BLOCKS,
     FeedUnavailable,
     Frame,
     QuoteUpdate,
@@ -46,7 +47,6 @@ QUOTE_FIELDS = (
     "putVolume",
 )
 GREEK_FIELDS = ("impliedVol", "delta", "gamma", "theta", "vega", "undPrice", "optPrice", "pvDividend")
-GREEK_BLOCKS = ("modelGreeks", "bidGreeks", "askGreeks", "lastGreeks")
 
 
 def _number(value: Any) -> float | None:
@@ -72,7 +72,10 @@ class IbkrSource:
     async def stream(self, subscription: Subscription) -> AsyncIterator[Frame]:
         from ib_async import Contract
 
-        self._client.require_connected()
+        try:
+            self._client.require_connected()
+        except NotConnectedError as exc:
+            raise FeedUnavailable(str(exc), cause="socket_down") from exc
         epoch = self._epoch()
         identity = subscription.instrument
         contract = Contract(conId=identity.con_id, exchange=identity.exchange)
@@ -80,7 +83,7 @@ class IbkrSource:
         if len(qualified) != 1 or qualified[0] is None:
             raise FeedUnavailable("Shared source could not qualify the instrument")
         if not self._current(epoch):
-            raise FeedUnavailable("Shared source changed while qualifying the instrument")
+            raise FeedUnavailable("Shared source changed while qualifying the instrument", cause="generation_changed")
         contract = qualified[0]
         if (contract.conId, contract.secType, contract.currency, contract.exchange) != (
             identity.con_id,
@@ -111,7 +114,7 @@ class IbkrSource:
         lease = await self._bar_registry.acquire(client, contract, bar_size=5, what_to_show="TRADES", use_rth=False)
         if not self._current(epoch):
             lease.release()
-            raise FeedUnavailable("Shared source changed while acquiring bars")
+            raise FeedUnavailable("Shared source changed while acquiring bars", cause="generation_changed")
         bars = lease.bars
         queue: asyncio.Queue[tuple[object, int]] = asyncio.Queue(256)
         overflow = False

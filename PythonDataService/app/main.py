@@ -839,9 +839,7 @@ async def _service_lifespan(
 
         monitor = AutoReconnectMonitor(
             ibkr_client,
-            recovery_callbacks=[
-                LIVE_BAR_AGGREGATOR.resubscribe_all,
-            ],
+            recovery_callbacks=([] if ibkr_client.shared_feed is not None else [LIVE_BAR_AGGREGATOR.resubscribe_all]),
         )
         monitor.start()
         set_monitor(monitor)

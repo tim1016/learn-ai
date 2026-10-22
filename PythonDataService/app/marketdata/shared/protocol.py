@@ -8,6 +8,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
+FailureCause = Literal["socket_down", "soft_loss_1100", "data_lost_1101", "generation_changed", "stalled"]
+GREEK_BLOCKS = ("modelGreeks", "bidGreeks", "askGreeks", "lastGreeks")
+
 
 class WireModel(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -61,7 +64,7 @@ class Frame(WireModel):
     bar: SourceBar | None = None
     quote: QuoteUpdate | None = None
     reason: str = ""
-    cause: Literal["socket_down", "soft_loss_1100", "data_lost_1101", "generation_changed", "stalled"] | None = None
+    cause: FailureCause | None = None
     error_code: int | None = None
 
     @model_validator(mode="after")
@@ -73,6 +76,10 @@ class Frame(WireModel):
 
 class FeedUnavailable(Exception):
     """A source or delivery failed. It never grants permission to trade."""
+
+    def __init__(self, message: str, *, cause: FailureCause | None = None) -> None:
+        super().__init__(message)
+        self.cause = cause
 
 
 class SourceHealth(WireModel):

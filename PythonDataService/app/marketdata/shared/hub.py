@@ -108,7 +108,16 @@ class FeedHub:
             raise
         except Exception as exc:
             logger.exception("Shared source ended", extra={"action": "shared_feed_source_failed"})
-            self._publish(line, Frame(kind="error", epoch="", received_at_ms=now_ms_utc(), reason=str(exc)))
+            self._publish(
+                line,
+                Frame(
+                    kind="error",
+                    epoch="",
+                    received_at_ms=now_ms_utc(),
+                    reason=str(exc),
+                    cause=exc.cause if isinstance(exc, FeedUnavailable) else None,
+                ),
+            )
         finally:
             if self._lines.get(subscription) is line:
                 del self._lines[subscription]

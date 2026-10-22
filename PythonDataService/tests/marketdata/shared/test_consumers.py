@@ -282,3 +282,91 @@ async def test_shared_stall_allows_sparse_minute_emit_then_raises_retryable_stal
         pending.cancel()
         await asyncio.gather(pending, return_exceptions=True)
         await minute.aclose()
+
+
+async def test_pre_delivery_snapshot_has_no_fabricated_epoch_receipt(monkeypatch: Any) -> None:
+    monkeypatch.setattr("app.broker.ibkr.market_data.now_ms_utc", lambda: 1792503057393)
+    delivery = Delivery()
+    lease = request_quote(client_for(delivery), Option(conId=10, exchange="SMART", currency="USD"))
+    try:
+        assert lease.received_at_ms is None
+        assert _ticker_to_quote(lease.ticker, "QQQ", 1792526400000, 500, "C").ts_ms == 1792503057393
+    finally:
+        lease.release()
+        await asyncio.gather(lease.task, return_exceptions=True)
+
+
+async def test_quote_greeks_cannot_survive_source_generation_replacement() -> None:
+    delivery = Delivery()
+    lease = request_quote(client_for(delivery), Option(conId=10, exchange="SMART", currency="USD"))
+    try:
+        await asyncio.sleep(0)
+        frame = quote_update((1, 2, 1), (2, 3, 1))
+        await delivery.publish(
+            frame.model_copy(
+                update={
+                    "quote": frame.quote.model_copy(
+                        update={"greeks": {"modelGreeks": {"impliedVol": 0.2, "delta": 0.5}}}
+                    )
+                }
+            )
+        )
+        assert _ticker_to_quote(lease.ticker, "QQQ", 1792526400000, 500, "C").iv == 0.2
+        await delivery.publish(frame.model_copy(update={"epoch": EPOCH.replace(":1:0:0", ":2:0:0")}))
+        snapshot = _ticker_to_quote(lease.ticker, "QQQ", 1792526400000, 500, "C")
+        assert snapshot.iv is None and snapshot.delta is None
+    finally:
+        lease.release()
+        await asyncio.gather(lease.task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("phase", ["qualification", "acquisition", "disconnected"])
+async def test_source_acquisition_races_reach_the_bar_consumer_as_retryable_interruptions(phase: str) -> None:
+    from app.broker.ibkr.bars import IBKRBarInterrupted
+    from app.broker.ibkr.client import NotConnectedError
+    from app.marketdata.shared.hub import FeedHub
+    from app.marketdata.shared.native import IbkrSource
+    from tests.marketdata.shared.test_review_regressions import BarBroker
+
+    native = Client()
+    native.ib = BarBroker()
+    source = IbkrSource(native)
+    if phase == "qualification":
+        qualify = native.ib.qualifyContractsAsync
+
+        async def changed(contract: Any) -> Any:
+            result = await qualify(contract)
+            native.connection_generation += 1
+            return result
+
+        native.ib.qualifyContractsAsync = changed
+    elif phase == "acquisition":
+        acquire = source._bar_registry.acquire
+
+        async def changed_acquire(*args: Any, **kwargs: Any) -> Any:
+            native.connection_generation += 1
+            return await acquire(*args, **kwargs)
+
+        source._bar_registry.acquire = changed_acquire
+    else:
+
+        def disconnected() -> None:
+            raise NotConnectedError("socket unavailable")
+
+        native.require_connected = disconnected
+    hub = FeedHub(source)
+
+    class HubDelivery(Delivery):
+        def stream(self, key: Subscription) -> AsyncIterator[Frame]:
+            return hub.stream(key)
+
+    shared = HubDelivery()
+    shared.underlyings["QQQ"] = Instrument(con_id=987654, exchange="SMART", currency="USD", sec_type="OPT")
+    stream = stream_raw_5s_bars(client_for(shared), "QQQ")
+    try:
+        with pytest.raises(IBKRBarInterrupted) as failure:
+            await asyncio.wait_for(anext(stream), 1)
+        assert failure.value.cause == ("socket_down" if phase == "disconnected" else "generation_changed")
+    finally:
+        await stream.aclose()
+        await hub.close()

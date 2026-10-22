@@ -44,7 +44,10 @@ def create_app(hub: FeedHub, token: str, source_health: Callable[[], SourceHealt
                         yield frame.model_dump_json() + "\n"
             except FeedUnavailable as exc:
                 yield (
-                    Frame(kind="error", epoch="", received_at_ms=now_ms_utc(), reason=str(exc)).model_dump_json() + "\n"
+                    Frame(
+                        kind="error", epoch="", received_at_ms=now_ms_utc(), reason=str(exc), cause=exc.cause
+                    ).model_dump_json()
+                    + "\n"
                 )
 
         return StreamingResponse(encode(), media_type="application/x-ndjson")

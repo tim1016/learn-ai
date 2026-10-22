@@ -14,7 +14,7 @@ from weakref import WeakKeyDictionary
 
 from ib_async import Ticker
 
-from app.marketdata.shared.protocol import FeedUnavailable, Instrument, Subscription
+from app.marketdata.shared.protocol import GREEK_BLOCKS, FeedUnavailable, Instrument, Subscription
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ _REQUEST_IDS = itertools.count(-1, -1)
 
 @dataclass(eq=False)
 class SharedTicker(Ticker):
-    source_received_at_ms: int = 0
+    source_received_at_ms: int | None = None
     source_trade_ms: int | None = None
 
 
@@ -108,6 +108,8 @@ def _invalidate(lease: QuoteLease) -> None:
     ticker.marketDataType, ticker.ticks = 0, []
     for name in ("bid", "ask", "last", "bidSize", "askSize", "lastSize"):
         setattr(ticker, name, float("nan"))
+    for name in GREEK_BLOCKS:
+        setattr(ticker, name, None)
     ticker.source_received_at_ms, ticker.source_trade_ms = now_ms_utc(), None
     ticker.updateEvent.emit(ticker)
 
