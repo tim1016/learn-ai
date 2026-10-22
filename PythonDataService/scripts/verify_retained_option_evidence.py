@@ -8,7 +8,7 @@ Obtain those records together in a read-only database snapshot. This tool
 has no database export, migration, provider, repair or publication path.
 
 Every study evaluation is replayed from SnapshotRunData and compared exactly
-with its retained trace, pins and recomputed metrics. Every Golden Options
+with its retained trace, pins, recomputed metrics and completeness flag. Every Golden Options
 proof uses the normal reprove function. Study selection/gate reconstruction
 is a separate check; replaying its recorded evaluations does not perform it.
 Only the new receipt is written. Original documents, proofs and blobs stay
@@ -30,10 +30,9 @@ from app.options_backtest.setup import OptionsBacktestSetup
 from app.options_bots.golden_proof import proof_sha256, reprove
 from app.research.golden_search.proof import BlobStore, ProofMismatchError
 from app.research.options_golden_search.evaluator import evaluate_setup
-from app.research.options_golden_search.protocol import CostScenario, Window, apply_scenario
+from app.research.options_golden_search.protocol import Window, apply_scenario
 from app.research.options_golden_search.snapshots import SnapshotRunData
 from app.research.options_golden_search.stages import StudyEvaluator
-from app.research.runs.hashing import hash_payload
 from app.utils.atomic_file import atomic_write_bytes
 from app.utils.timestamps import now_ms_utc
 
@@ -56,15 +55,11 @@ def verify_study(exported: Mapping[str, Any], blobs: BlobStore) -> dict[str, Any
         raise ValueError("A study needs distinct completed evaluation records.")
     for record in records:
         identity = record["identity"]
-        if (hash_payload(identity) != record["key"] or identity["protocol"] != row["protocol_hash"]
-                or identity["snapshot"] != protocol.snapshot_id or identity["identities"] != protocol.identities):
-            raise ValueError("An evaluation is not bound to the exported study.")
         window = Window.model_validate(identity["window"])
         setup = OptionsBacktestSetup.model_validate(identity["setup"])
-        scenario = next((item for item in (CostScenario(key="base"), *protocol.stress)
-                         if item.key == identity["scenario"]), None)
-        if scenario is None:
-            raise ValueError("An evaluation names an unfrozen cost scenario.")
+        scenario = protocol.cost_scenario(identity["scenario"])
+        if evaluator.key(setup, window, scenario.key) != (record["key"], identity):
+            raise ValueError("An evaluation is not bound to the exported study.")
         if record["result"] is None:
             raise ValueError("An unfinished evaluation cannot be verified.")
         expected = evaluator.load(record["result"], window)
@@ -72,7 +67,7 @@ def verify_study(exported: Mapping[str, Any], blobs: BlobStore) -> dict[str, Any
             SnapshotRunData(setup.underlying, evaluator.snapshot, blobs),
             risk_free_daily_return=protocol.policy.risk_free_daily_return,
             fee_multiplier=scenario.effective_fee_multiplier)
-        if replayed != expected:
+        if replayed != expected or record["result"]["complete"] != replayed.complete:
             raise ValueError(f"Evaluation {record['key']} does not reproduce its exact retained evidence.")
     return {"snapshot_id": protocol.snapshot_id, "manifest_files": len(evaluator.snapshot.manifest),
             "retained_bytes": total_bytes, "evaluations_replayed": len(records),
