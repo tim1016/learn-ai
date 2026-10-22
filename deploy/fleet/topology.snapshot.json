@@ -25,7 +25,7 @@
       "container_name": "alpaca-live-clerk",
       "containment": {
         "cpus": "1",
-        "mem_limit": "805306368"
+        "mem_limit": "1610612736"
       },
       "env_file": [
         "${FLEET_LIVE_ENV_FILE:-./deploy/fleet/env/live.env}"
@@ -78,7 +78,7 @@
       "container_name": "alpaca-paper-clerk",
       "containment": {
         "cpus": "1",
-        "mem_limit": "805306368"
+        "mem_limit": "1610612736"
       },
       "env_file": [
         "${FLEET_PAPER_ENV_FILE:-./deploy/fleet/env/paper.env}"

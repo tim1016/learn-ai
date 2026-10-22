@@ -26,7 +26,7 @@ COPY requirements-light.txt .
 RUN pip install -r requirements-light.txt
 
 # --- Runtime stage ---
-FROM python:3.12-slim AS runtime
+FROM python:3.12-slim AS runtime-base
 
 ARG GIT_SHA=unknown
 ENV GIT_SHA="${GIT_SHA}"
@@ -61,3 +61,11 @@ HEALTHCHECK --interval=10s --timeout=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--timeout-graceful-shutdown", "10"]
+
+# Opt-in, networkless capacity qualification; serving Compose targets stay on runtime.
+FROM runtime-base AS option-lane-memory-qualification
+COPY requirements-heavy.txt requirements-light.txt requirements-dev.txt /tmp/requirements/
+RUN pip install --no-cache-dir -r /tmp/requirements/requirements-dev.txt
+
+# Keep an untargeted build on the serving image too.
+FROM runtime-base AS runtime

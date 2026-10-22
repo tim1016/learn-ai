@@ -469,9 +469,8 @@ podman cp "$LANE:$OUT" "$EVIDENCE/$STEP"
 cat "$EVIDENCE/$STEP/summary.md"
 ```
 
-**Never run the bundle with `podman exec` in the lane.** The lane carries a
-768 MiB memory cap under both fleet compose files: on 2026-10-14 the command run
-there was killed (exit 137), took the lane's main process with it
+**Never run the bundle with `podman exec` in the lane.** On 2026-10-14 the command run
+under the former 768 MiB cap was killed (exit 137), took the lane's main process with it
 (`OOMKilled`), and the restart ended both bots' runs. The one-off container
 above has its own memory, shares the lane's volumes (which include the
 bind-mounted `app/`), mounts this checkout's scripts, and has no network at all.
@@ -593,10 +592,10 @@ When the experiment ends, with or without a promotion:
    applies whether or not a capability is promoted. Recreate the lane and
    verify its effective window before ending the experiment; combine this
    with step 3's recreate when applicable.
-   A temporary memory limit given to the lane in `compose.override.yaml`
-   (#3467) is removed the same way: take the override out, recreate, and read
-   the container's limit back (`podman inspect "$LANE" --format
-   '{{.HostConfig.Memory}}'`, 805306368 for 768 MiB).
+   Remove any temporary memory override the same way. Both fleet files now
+   specify 1536 MiB (#3467); after the planned recreate, verify the effective
+   limit with `podman inspect "$LANE" --format '{{.HostConfig.Memory}}'`
+   (1610612736 bytes). An older 768 MiB local override wins over the new default.
 5. If a second lane was added only for this, leave it at rest or remove it by
    [section 6 of the account runbook](add-an-alpaca-account.md#6-removal), as
    the owner chooses. Do not delete its volume.
@@ -704,8 +703,53 @@ shown.
 | A bot's entry is refused `RECONCILIATION_IN_PROGRESS` ("Account reconciliation is proving fresh broker truth") two seconds after another bot's entry on the same bar | Two bots decided on the same signal in the same second; the second's decision reached the lane while the first's order was being proven. Under a lagging lane (event loop unserved 1 to 4 s) it happened 2 of 2 times on 2026-10-14 | Nothing was sent; the bot decides again on the next bar. For an overlapping pass, wait for a bar where one bot holds and the other enters (it came a minute later). Close the bot pages first. |
 | An entry's comparison reads *unknown, FIRST_READING_FAILED* (or *CASH_MOVEMENT_UNREAD*) although Alpaca answered in under 100 ms | The first reading's 1.5 s bound ran out while the lane's event loop was stalled: the account call began late and its answer was discarded | Not a discrepancy and never promoted. Close the bot pages and repeat the step; the lane's log has "the account's option buying power could not be read" at the same second. |
 | A stopped bot holds a two-leg structure and its warning says *Use Flatten to close this position* with no Flatten button; the bot page's Sell answers *Flatten is offered for a stopped bot holding one position* | The stranded-position warning offers Flatten only when the bot holds exactly one position, and a safe flatten sends one single-contract exit per leg, never one `mleg` order | Do not close the legs one by one at Alpaca. The Clerk closes the structure itself at its scheduled close, 10 minutes before the session's close for a held sold leg (page: *This system closes the position itself at ...*), as one order. Seen on 2026-10-14: sent 15:50:00 ET, filled 0.17 seconds later. |
-| The lane restarts (`podman inspect` shows `OOMKilled` true) within a minute of deploying an option bot, and the bot's run has ended | The lane's 768 MiB cap: on 2026-10-22 one option bot took the lane from about 480 MB to over 750 MB, and memory did not come back when the bot stopped (#3467) | Read Alpaca for any order the bot sent, then stop the bot flat. For the experiment only, give the Paper lane a larger limit in the gitignored `compose.override.yaml` (`deploy.resources.limits.memory` on `alpaca-paper-clerk`, marked temporary), recreate it, and remove it at section 9 step 4. Never `podman exec` into the lane while a bot runs. |
+| The lane restarts (`podman inspect` shows `OOMKilled` true) within a minute of deploying an option bot, and the bot's run has ended | The former 768 MiB cap left no headroom for the application and option search workers (#3467) | Read Alpaca for any order the bot sent, then stop the bot flat. Check the effective limit and any local override; the committed limit is 1536 MiB. Recreate only in the account's planned maintenance window, preserving its volume. Repeat the isolated memory qualification below if the workload changes. Never run evidence bundles inside a serving lane. |
 | Deploy says *Account hold ... Review the unexplained order in this account's Activity order records*, and Activity lists no order to review | The legs of an outside multi-leg order (a sign check) hold the account until each leg is reviewed, and the app has no control for it yet (#3468). It appears at the first lane restart after #3389, even when the parents were acknowledged before | Read Alpaca flat and match each leg to its recorded outside order. Then acknowledge each leg with `POST /api/accounts/<account>/transactions/external-orders/<leg order id>/acknowledge` on the lane, body `{"operator": "<who>"}`. The hold resolves on the next pass. |
+
+## Qualify Clerk memory without a brokerage connection
+
+The lane limit is **1536 MiB**, including every child process (#3467). The
+previous 768 MiB cap was nearly exhausted by one deployed bot in the incident.
+The container qualification covers up to four concurrent flat option bots on
+separate underlyings, four-leg watched windows (368 lines at width 20), both
+real spawned search workers, thirty simulated minutes and three start/stop
+rounds. It requires at least 20% peak headroom, a stable final ten-minute
+window and release of every bot's quote demand. It does not qualify real
+Gateway traffic, holdings, fills or arbitrary historical account sizes.
+
+From the checkout root, build the optional test image and run it separately.
+Only test sources are mounted; no env file, custody volume or network is used.
+The extra packages are the existing development requirements, confined to
+this test image; serving images still use the `runtime` target.
+
+```bash
+podman build --target option-lane-memory-qualification \
+  -t learn-ai-option-lane-memory PythonDataService
+LANE_MEMORY_EVIDENCE="$HOME/.fleet-recovery/option-lane-memory-$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$LANE_MEMORY_EVIDENCE"
+podman run --rm --network none --memory 1536m --cpus 1 \
+  -e POLYGON_API_KEY= -e FLEET_ROLE=clerk_agent \
+  -e FLEET_MAX_INFLIGHT_REQUESTS=16 -e FLEET_MAX_INFLIGHT_STREAMS=4 \
+  -e FLEET_MAX_INFLIGHT_COMMANDS=16 -e OPTION_LANE_MEMORY_CHECK=1 \
+  -e OPTION_LANE_BOTS=4 -e PYTHONDONTWRITEBYTECODE=1 \
+  -v "$PWD/PythonDataService/tests:/app/tests:ro" \
+  -v "$PWD/PythonDataService/conftest.py:/app/conftest.py:ro" \
+  -v "$PWD/PythonDataService/pytest.ini:/app/pytest.ini:ro" \
+  -v "$LANE_MEMORY_EVIDENCE:/evidence" \
+  learn-ai-option-lane-memory python -m pytest -q \
+  -o cache_dir=/tmp/pytest-cache -o junit_family=xunit1 \
+  --junitxml=/evidence/profile.xml \
+  tests/services/bot_runner/test_option_lane_memory.py
+```
+
+The evidence folder is under the host home so VM-backed engines can mount it.
+Save the JUnit memory properties with the issue or PR. Keep `--memory` equal to
+the intended deployment's effective cap. If four bots fail, repeat with
+`OPTION_LANE_BOTS=3`, then `2`, then `1`; report the largest passing count and
+the failed measurements. A different quote-line budget or wider windows
+requires another qualification. Apply a reviewed limit change during the
+account's maintenance window, then inspect the recreated lane's limit;
+changing a Compose file alone does not update a running container.
 
 ## Repair record: 2026-10-13
 
