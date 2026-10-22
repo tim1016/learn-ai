@@ -141,3 +141,35 @@ def test_extended_session_initial_wait_has_grace_at_the_calendar_open(session_da
         True,
         False,
     ]
+
+
+@pytest.mark.parametrize("use_rth", [True, False])
+@pytest.mark.parametrize("session_date", ["2026-10-20", "2026-11-27"])
+def test_expired_initial_silence_stays_unhealthy_after_close_and_across_dates(
+    use_rth: bool,
+    session_date: str,
+    monkeypatch: Any,
+) -> None:
+    from datetime import date
+
+    from app.lean_sidecar.trading_calendar import next_trading_day
+    from app.marketdata.ibkr_feed import _SymbolLiveness
+    from app.services.session_authority import scheduled_extended_session_bounds
+
+    bounds = scheduled_extended_session_bounds(date.fromisoformat(session_date))
+    following = scheduled_extended_session_bounds(next_trading_day(date.fromisoformat(session_date)))
+    assert bounds is not None and following is not None
+    opening = bounds.rth_open_ms if use_rth else bounds.open_ms
+    close = bounds.rth_close_ms if use_rth else bounds.close_ms
+    monkeypatch.setattr("app.marketdata.ibkr_feed.now_ms_utc", lambda: opening)
+    state = _SymbolLiveness(active_count=1, rth_count=int(use_rth))
+    state.await_first_bar(initial=True)
+    assert not state.waiting(opening + 30_000, 30_000)
+    assert not state.waiting(close + 1, 30_000)
+    assert not state.waiting(following.open_ms, 30_000)
+    # An actually new subscription after close may wait for its next session.
+    monkeypatch.setattr("app.marketdata.ibkr_feed.now_ms_utc", lambda: close + 1)
+    state.await_first_bar(initial=True)
+    next_open = following.rth_open_ms if use_rth else following.open_ms
+    assert state.waiting(next_open + 29_999, 30_000)
+    assert not state.waiting(next_open + 30_000, 30_000)

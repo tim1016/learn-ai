@@ -58,6 +58,7 @@ from app.broker.ibkr.minute_assembler import (
 )
 from app.lean_sidecar.trading_calendar import (
     expected_sessions,
+    next_trading_day,
     session_close_ms_utc,
     session_open_ms_utc,
 )
@@ -72,7 +73,7 @@ from app.marketdata.feed import (
     warmup_window_start_ms,
 )
 from app.marketdata.ibkr_continuity import MINUTE_INCOMPLETE_REASON_CODE, ContinuityLoop, ResolvedBar
-from app.services.session_authority import scheduled_exchange_phase_at_ms, scheduled_extended_session_bounds
+from app.services.session_authority import scheduled_extended_session_bounds
 from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import now_ms_utc
 
@@ -104,14 +105,17 @@ class _SymbolLiveness:
         """An expected wait grants no source-delivery or closed-bar proof."""
         if self.first_bar_seen or self.last_source_wall_ms is not None or self.waiting_since_ms is None:
             return False
-        phase = scheduled_exchange_phase_at_ms(now_ms)
-        if phase == "CLOSED" or (self.rth_count == self.active_count and phase != "RTH"):
-            return True
-        bounds = scheduled_extended_session_bounds(et_date_at_ms(now_ms))
-        assert bounds is not None  # The calendar just classified an active session.
-        opening = bounds.rth_open_ms if self.rth_count == self.active_count else bounds.open_ms
+        # Anchor the deadline to activation, so an expired source fault cannot
+        # become preparation again when the calendar closes or changes date.
+        session_date = et_date_at_ms(self.waiting_since_ms)
+        bounds = scheduled_extended_session_bounds(session_date)
+        rth_only = self.rth_count == self.active_count
+        if bounds is None or self.waiting_since_ms >= (bounds.rth_close_ms if rth_only else bounds.close_ms):
+            bounds = scheduled_extended_session_bounds(next_trading_day(session_date))
+        assert bounds is not None
+        opening = bounds.rth_open_ms if rth_only else bounds.open_ms
         started = max(self.waiting_since_ms, opening)
-        return 0 <= now_ms - started < stale_threshold_ms
+        return self.waiting_since_ms <= now_ms < started + stale_threshold_ms
 
     def warming(self, now_ms: int, stale_threshold_ms: int) -> bool:
         """A source bar arrived since the proof was withdrawn, within the threshold."""
