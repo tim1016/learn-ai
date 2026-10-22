@@ -144,13 +144,19 @@ class BlobStore:
             raise ProofMismatchError(f"proof blob {digest[:12]}… did not read back as written", code="BLOB_CORRUPT")
         return digest
 
-    def get(self, digest: str) -> bytes:
-        """The bytes stored at ``digest``, refused unless they still hash to it."""
+    def get(self, digest: str, *, max_bytes: int | None = None) -> bytes:
+        """The bytes stored at ``digest``, refused unless they still hash to it.
+
+        With ``max_bytes`` a larger blob is refused after reading at most one byte past the bound.
+        """
         path = self._path(digest)
         try:
-            payload = path.read_bytes()
+            with path.open("rb") as stream:
+                payload = stream.read() if max_bytes is None else stream.read(max_bytes + 1)
         except FileNotFoundError as exc:
             raise ProofMismatchError(f"proof blob {digest[:12]}… is missing", code="BLOB_MISSING") from exc
+        if max_bytes is not None and len(payload) > max_bytes:
+            raise ValueError(f"stored original {digest[:12]}… exceeds its {max_bytes}-byte bound")
         actual = _sha256(payload)
         if actual != digest:
             raise ProofMismatchError(
