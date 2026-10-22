@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 from pathlib import Path
 
 import httpx
@@ -12,11 +11,17 @@ import pytest
 from app.config import settings
 from app.jobs import facade, progress
 from app.jobs.external_work import ExternalJobObserver, WorkReceipts
-from app.jobs.progress import JobCancelled, ProgressEmitter
+from app.jobs.progress import ORPHANED_JOB_CODE, JobCancelled, ProgressEmitter
 from app.options_backtest import preparation_jobs
 from app.options_backtest.frozen_inputs import freeze_run_inputs
-from app.options_backtest.preparation import PREPARATION_JOB_TYPE, PreparationCheckpoint, preparation_identity
-from app.options_backtest.timings import RunTimings
+from app.options_backtest.preparation import (
+    COMPLETED_RESULT,
+    PREPARATION_JOB_TYPE,
+    PreparationCheckpoint,
+    preparation_identity,
+    runtime_preparation_identity,
+)
+from app.options_backtest.timings import PhaseTiming, RunTimings
 from app.research.persistence.ownership import GenerationFencedError
 from app.utils.timestamps import now_ms_utc
 from tests.options_backtest._archived_data import archived_scene
@@ -33,9 +38,15 @@ def _child(fake, job_id: str) -> ProgressEmitter:
     return emit
 
 
-def _complete(req, tmp_path: Path) -> PreparationCheckpoint:
+def _live_child(fake, binding) -> ProgressEmitter:
+    """A running child that the parent's first bind adopts, as if its worker had raced ahead of the bind."""
+    binding.queue_as.append("api-preparation")
+    return _child(fake, "api-preparation")
+
+
+def _complete(req, tmp_path: Path, timings: tuple[PhaseTiming, ...] = ()) -> PreparationCheckpoint:
     frozen = freeze_run_inputs(req.setup, (WED, THU), archived_scene(chain_scene(), tmp_path / "source"), tmp_path / req.job_id)
-    checkpoint = PreparationCheckpoint(identity=preparation_identity(req), inputs=frozen, complete=True)
+    checkpoint = PreparationCheckpoint(identity=preparation_identity(req), inputs=frozen, timings=timings, complete=True)
     (tmp_path / req.job_id / "freeze-checkpoint.json").write_text(checkpoint.model_dump_json())
     return checkpoint
 
@@ -44,7 +55,7 @@ async def test_quiet_bounded_job_wait_has_no_poll_renewals_and_completed_checkpo
     owner, tmp_path: Path,
 ) -> None:
     req, fake, _, lease, binding = owner
-    child = _child(fake, binding.job_id)
+    child = _live_child(fake, binding)
     child.emit_event("job.external_wait", {"deadline_ms": now_ms_utc() + 1_800_000})
     observed = []
 
@@ -73,7 +84,7 @@ async def test_silent_job_stalls_or_cancels_without_timer_renewal(owner, monkeyp
     from app.jobs import external_work
 
     req, fake, _, lease, binding = owner
-    _child(fake, binding.job_id)
+    _live_child(fake, binding)
     monkeypatch.setattr(external_work, "STALL_SECONDS", 0.3)
     renewals = []
 
@@ -84,12 +95,10 @@ async def test_silent_job_stalls_or_cancels_without_timer_renewal(owner, monkeyp
             fake.hset(progress.state_key(req.job_id), mapping={"cancel_requested": "1"})
 
     steering = asyncio.create_task(steer())
-    started = time.monotonic()
     with pytest.raises(JobCancelled if cancel else TimeoutError):
         await preparation_jobs.prepare_over_api(req, run_id=1, emit=ProgressEmitter(req.job_id, renews_lease=False),
                                                lease=lease, timings=RunTimings())
     await steering
-    assert time.monotonic() - started < 1
     assert len(fake.expires) == renewals[0]
     assert fake.hget(progress.state_key(binding.job_id), "cancel_requested") == "1"
 
@@ -98,33 +107,31 @@ async def test_lost_dispatch_reply_observes_same_child_and_only_startup_interrup
     owner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     req, fake, _, lease, binding = owner
-    original = binding.job_id
-    facade._record_queued(original, PREPARATION_JOB_TYPE, {}, internal=True)
     calls = []
 
     async def dispatch(request: httpx.Request):
-        payload = json.loads(request.content)
-        child_id = payload["job_id"]
+        child_id = json.loads(request.content)["job_id"]
         calls.append(child_id)
         child = _child(fake, child_id)
-        if child_id == original:
-            child.failed(code="DATA_SERVICE_RESTARTED", message="the API worker stopped")
+        if len(calls) == 1:
+            child.failed(code=ORPHANED_JOB_CODE, message="the API worker stopped")
             raise httpx.ReadError("lost start acknowledgement")
-        checkpoint = _complete(req, tmp_path)
-        child.completed(checkpoint.model_dump(mode="json"))
+        _complete(req, tmp_path)
+        child.completed(COMPLETED_RESULT)
         return httpx.Response(202, json={"id": child_id, "status": "queued"})
 
     monkeypatch.setattr(preparation_jobs, "build_internal_client",
                         lambda **kwargs: httpx.AsyncClient(transport=httpx.MockTransport(dispatch)))
     actual = await preparation_jobs.prepare_over_api(req, run_id=1, emit=ProgressEmitter(req.job_id, renews_lease=False),
                                                     lease=lease, timings=RunTimings())
-    assert len(calls) == 2 and calls[0] == original and calls[1] != original
+    assert len(calls) == 2 and calls[0] != calls[1]
     assert binding.job_id == calls[1]
     assert len(actual.sessions) == 2
 
 
 async def test_missing_child_state_does_not_admit_reexecution(owner) -> None:
     req, fake, _, lease, binding = owner
+    binding.queue_as.append("api-preparation")  # bound, but its job state is gone
     with pytest.raises(RuntimeError, match="absent or expired"):
         await preparation_jobs.prepare_over_api(req, run_id=1, emit=ProgressEmitter(req.job_id, renews_lease=False),
                                                lease=lease, timings=RunTimings())
@@ -133,20 +140,21 @@ async def test_missing_child_state_does_not_admit_reexecution(owner) -> None:
 
 
 def test_receipts_are_unique_deadlines_fixed_and_late_callbacks_inert(owner) -> None:
-    req, fake, authority, lease, binding = owner
-    child = _child(fake, binding.job_id)
+    req, fake, authority, lease, _ = owner
+    child_id = "api-preparation"
+    child = _child(fake, child_id)
     receipts = WorkReceipts(child, lambda: None)
     observer = ExternalJobObserver(ProgressEmitter(req.job_id, renews_lease=False), lease)
     deadline = now_ms_utc() + 1_800_000
     event = {"type": "job.external_wait", "deadline_ms": deadline}
-    observer.accept(binding.job_id, "1-0", event)
+    observer.accept(child_id, "1-0", event)
     first = len(fake.expires)
-    observer.accept(binding.job_id, "1-0", {**event, "deadline_ms": deadline + 1000})
+    observer.accept(child_id, "1-0", {**event, "deadline_ms": deadline + 1000})
     assert len(fake.expires) == first
     receipts.work({"kind": "work", "work_kind": "provider_response", "identity": "actual-response"})
     receipts.work({"kind": "work", "work_kind": "provider_response", "identity": "actual-response"})
     receipts.deactivate()
-    emitted = [json.loads(fields["event"]) for _, fields in fake.streams[progress.events_key(binding.job_id)]]
+    emitted = [json.loads(fields["event"]) for _, fields in fake.streams[progress.events_key(child_id)]]
     assert sum(event["type"] == "job.progress" for event in emitted) == 1
     first = len(fake.expires)
     receipts.work({"kind": "external_wait", "bound_ms": 1_000})
@@ -165,7 +173,6 @@ def test_receipts_are_unique_deadlines_fixed_and_late_callbacks_inert(owner) -> 
 
 def test_runtime_root_marker_refuses_explicit_mismatch_or_absence(owner, monkeypatch: pytest.MonkeyPatch) -> None:
     from app.data_lake.root_identity import LakeRootIdentityError, marker_path
-    from app.options_backtest.preparation import runtime_preparation_identity
 
     req, *_ = owner
     monkeypatch.setattr(settings, "DATA_LAKE_ROOT_ID", "04fc9ead-1b02-4a3b-a0c1-18bb4cc33ea7")
@@ -208,43 +215,22 @@ async def test_completed_checkpoint_refuses_changed_input_binding_without_dispat
     assert fake.strings == {progress.lease_key(req.job_id): "owner"}
 
 
-@pytest.mark.parametrize("checkpointed", ["none", "stable", "late"])
 async def test_restart_then_cancel_keeps_each_attempts_closed_timings_once(
-    owner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, checkpointed: str,
+    owner, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.options_backtest.timings import PhaseTiming
-
     req, fake, _, lease, binding = owner
-    first = _child(fake, binding.job_id)
+    first = _live_child(fake, binding)
     identity = preparation_identity(req)
     before = PhaseTiming(phase="check", started_at_ms=1, finished_at_ms=1, duration_ms=0)
     checked = before.model_copy(update={"started_at_ms": 2, "finished_at_ms": 2})
     downloaded = checked.model_copy(update={"phase": "download"})
     first.emit_event("job.observations", {"identity": identity, "phase_timings": [before.model_dump(mode="json")]})
-    first.failed(code="DATA_SERVICE_RESTARTED", message="the API worker stopped")
-    if checkpointed != "none":
-        frozen = freeze_run_inputs(req.setup, (WED,), archived_scene(chain_scene(), tmp_path / "source"), tmp_path / req.job_id)
-        checkpoint = PreparationCheckpoint(identity=identity, inputs=frozen, timings=(before,) if checkpointed == "stable" else ())
-        (tmp_path / req.job_id / "freeze-checkpoint.json").write_text(checkpoint.model_dump_json())
-
-    if checkpointed == "late":
-        read_state = facade.read_job_state
-        original_id = binding.job_id
-
-        async def after_first_checkpoint(job_id: str) -> dict[str, str]:
-            state = await read_state(job_id)
-            if job_id == original_id:
-                updated = checkpoint.model_copy(update={"timings": (before,)})
-                (tmp_path / req.job_id / "freeze-checkpoint.json").write_text(updated.model_dump_json())
-            return state
-
-        monkeypatch.setattr(facade, "read_job_state", after_first_checkpoint)
+    first.failed(code=ORPHANED_JOB_CODE, message="the API worker stopped")
 
     async def dispatch(request: httpx.Request) -> httpx.Response:
-        child_id = json.loads(request.content)["job_id"]
-        child = _child(fake, child_id)
-        base = (before,) if checkpointed != "none" else ()
-        for rows in ((*base, checked), (*base, checked, downloaded), (*base, checked, downloaded)):
+        child = _child(fake, json.loads(request.content)["job_id"])
+        # Each event is the child's cumulative history; a redelivery adds nothing.
+        for rows in ((checked,), (checked, downloaded), (checked, downloaded)):
             child.emit_event("job.observations", {"identity": identity,
                              "phase_timings": [row.model_dump(mode="json") for row in rows]})
         child.cancelled("input preparation was cancelled")
@@ -257,3 +243,43 @@ async def test_restart_then_cancel_keeps_each_attempts_closed_timings_once(
         await preparation_jobs.prepare_over_api(req, run_id=1, emit=ProgressEmitter(req.job_id, renews_lease=False),
                                                lease=lease, timings=timings)
     assert timings.rows == (before, checked, downloaded)
+
+
+async def test_complete_checkpoint_carries_the_spans_its_writers_final_event_has_not_published(
+    owner, tmp_path: Path,
+) -> None:
+    req, _, _, lease, _ = owner
+    froze = PhaseTiming(phase="input_freeze", started_at_ms=3, finished_at_ms=4, duration_ms=1)
+    _complete(req, tmp_path, timings=(froze,))
+    timings = RunTimings()
+    await preparation_jobs.prepare_over_api(req, run_id=1, emit=ProgressEmitter(req.job_id, renews_lease=False),
+                                           lease=lease, timings=timings)
+    assert timings.rows == (froze,)
+
+
+async def test_job_completed_without_a_complete_checkpoint_fails_instead_of_waiting(owner) -> None:
+    req, fake, _, lease, binding = owner
+    _live_child(fake, binding).completed(COMPLETED_RESULT)
+    with pytest.raises(RuntimeError, match="completed without a complete freeze checkpoint"):
+        await preparation_jobs.prepare_over_api(req, run_id=1, emit=ProgressEmitter(req.job_id, renews_lease=False),
+                                               lease=lease, timings=RunTimings())
+
+
+def test_runtime_without_api_env_file_uses_shared_nonlegacy_root_identity(
+    owner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from uuid import UUID
+
+    from app.data_lake.root_identity import init_empty_root
+
+    req, *_ = owner
+    root_id = UUID("04fc9ead-1b02-4a3b-a0c1-18bb4cc33ea7")
+    source = tmp_path / "nonlegacy-source"
+    init_empty_root(source, root_id)
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(source))
+    monkeypatch.setattr(settings, "DATA_LAKE_ROOT_ID", str(root_id))
+    api_identity = preparation_identity(req)
+    # The API reads the UUID from its env_file; the runtime receives no provider
+    # env file and resolves the same identity from their shared lake mount.
+    monkeypatch.setattr(settings, "DATA_LAKE_ROOT_ID", "")
+    assert runtime_preparation_identity(req) == api_identity

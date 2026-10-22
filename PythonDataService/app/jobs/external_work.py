@@ -9,13 +9,12 @@ from collections.abc import Callable
 from typing import Any
 
 from app.jobs import progress
-from app.jobs.checkpoints import GatedLease
+from app.jobs.checkpoints import MAX_EXTERNAL_WAIT_MS, GatedLease
 from app.jobs.progress import ProgressEmitter
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
-MAX_EXTERNAL_WAIT_MS = 1_860_000
 WORK_PUBLICATION_INTERVAL_S = 0.5
 MAX_PENDING_WORK_RECEIPTS = 4096
 STALL_SECONDS = 65.0
@@ -113,7 +112,8 @@ class WorkReceipts:
 
     def _renew(self) -> None:
         remaining_s = 0 if self._deadline_ms is None else max(0, (self._deadline_ms - now_ms_utc() + 999) // 1000)
-        if not progress.get_redis().expire(progress.lease_key(self.emit.job_id), max(300, remaining_s + 5)):
+        ttl = max(progress.JOB_LEASE_TTL_SECONDS, remaining_s + 5)
+        if not progress.get_redis().expire(progress.lease_key(self.emit.job_id), ttl):
             raise progress.JobCancelled("the acquisition worker lease expired")
 
     def _work(self, receipt: dict[str, Any]) -> None:

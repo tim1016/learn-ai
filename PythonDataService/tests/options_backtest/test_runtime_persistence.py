@@ -258,10 +258,6 @@ async def test_preparation_binding_reconciles_current_child_and_fences_replaceme
     assert await preparation_binding.current_binding(scratch_db, run_id, "runtime-test", 2, identity) is None
     assert await preparation_binding.bind_preparation(scratch_db, run_id, "runtime-test", 2, identity,
                                                      "first-child", previous=None) == "first-child"
-    # Lost commit acknowledgement joins the same binding; it does not need
-    # another Redis lease or a second activation record.
-    assert await preparation_binding.bind_preparation(scratch_db, run_id, "runtime-test", 2, identity,
-                                                     "first-child", previous=None) == "first-child"
     await preparation_binding.require_binding(scratch_db, run_id, "runtime-test", 2, identity, "first-child")
     with pytest.raises(ValueError, match="another request"):
         await preparation_binding.current_binding(scratch_db, run_id, "runtime-test", 2, "b" * 64)

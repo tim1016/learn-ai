@@ -33,6 +33,9 @@ from app.utils.timestamps import now_ms_utc
 logger = logging.getLogger(__name__)
 
 PREPARATION_JOB_TYPE = "options_backtest_preparation"
+# The verified checkpoint file is the only carrier of the inputs; the job's own
+# result just lets the ordinary lifecycle reach "completed".
+COMPLETED_RESULT: dict[str, Any] = {"complete": True}
 
 
 class PreparationConflict(ValueError):
@@ -43,6 +46,10 @@ class PreparationCheckpoint(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     identity: str
     inputs: FrozenRunInputs
+    # Set on the complete checkpoint only: the writer's final observation event
+    # follows that file, so a parent that returns on the file still gets every
+    # closed span (the benchmark requires input_freeze). Earlier children's
+    # spans travel on their own job.observations events.
     timings: tuple[PhaseTiming, ...] = ()
     complete: bool = False
 
@@ -114,6 +121,8 @@ class _Owner:
             self._checked = time.monotonic()
 
     def stop(self) -> bool:
+        """The acquisition code's stop hook: it raises the publisher's deferred failure (cancellation, an expired
+        lease or a lost fence) so its caller sees the cause, and never answers True."""
         self.receipts.check()
         return False
 
@@ -123,8 +132,6 @@ def collect_preparation(request: OptionsBacktestPreparationRequest, emit: Progre
     """Publish a canonical terminal only after receipt drain and collector release."""
     try:
         return _collect_preparation(request, emit, cancel)
-    except (service.RunCancelled, service.RunStopped, service.CheckStopped, service.DownloadStopped) as exc:
-        raise JobCancelled("input preparation was cancelled") from exc
     except JobCancelled:
         raise
     except Exception as exc:
@@ -146,11 +153,9 @@ def _collect_preparation(request: OptionsBacktestPreparationRequest, emit: Progr
         try:
             owner.check()
             checkpoint = read_checkpoint(stage.root, request.identity)
-            if checkpoint is not None:
-                ledger.adopt(checkpoint.timings)
-                if checkpoint.complete:
-                    verify_completed(req, checkpoint)
-                    return checkpoint.model_dump(mode="json")
+            if checkpoint is not None and checkpoint.complete:
+                verify_completed(req, checkpoint)
+                return COMPLETED_RESULT
             resume = None if checkpoint is None else checkpoint.inputs
             stage.retain_verified(frozenset() if resume is None else resume.blob_digests)
             sessions = service.sessions_of_range(req.start_ms, req.end_ms)
@@ -163,12 +168,11 @@ def _collect_preparation(request: OptionsBacktestPreparationRequest, emit: Progr
 
             hooks = service.RunHooks(phase, receipts.progress, lambda message: None, owner.stop)
 
-            def save(frozen: FrozenRunInputs, *, complete: bool = False) -> PreparationCheckpoint:
+            def save(frozen: FrozenRunInputs, *, complete: bool = False) -> None:
                 owner.check(force=True)
                 checkpoint = PreparationCheckpoint(identity=request.identity, inputs=frozen,
-                                                   timings=ledger.rows, complete=complete)
+                                                   timings=ledger.rows if complete else (), complete=complete)
                 atomic_write_bytes(stage.root / "freeze-checkpoint.json", checkpoint.model_dump_json().encode())
-                return checkpoint
 
             with observe_work(receipts.work):
                 service.prepare_run_data(req.setup, sessions, hooks, now_ms_utc, timings=ledger)
@@ -177,7 +181,8 @@ def _collect_preparation(request: OptionsBacktestPreparationRequest, emit: Progr
                     frozen = freeze_run_inputs(req.setup, sessions, LakeRunData(req.setup.underlying), stage.root,
                         should_stop=owner.stop, reserve_bytes=stage.reserve, resume=resume,
                         on_session=lambda done, total, day: receipts.progress(done, total), on_checkpoint=save)
-                return save(frozen, complete=True).model_dump(mode="json")
+                save(frozen, complete=True)
+                return COMPLETED_RESULT
         except BaseException as exc:
             failure = exc
             raise

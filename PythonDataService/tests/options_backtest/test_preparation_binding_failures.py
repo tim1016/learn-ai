@@ -20,7 +20,7 @@ async def test_definitive_binding_failure_closes_only_the_new_job_and_preserves_
     error_type: type[Exception], cleanup_fails: bool,
 ) -> None:
     req, fake, _, lease, binding = owner
-    old_id = binding.job_id
+    old_id = binding.job_id = "api-preparation"
     facade._record_queued(old_id, PREPARATION_JOB_TYPE, {}, internal=True)
     fake.set(progress.lease_key(old_id), "old-owner")
     old_state = fake.hgetall(progress.state_key(old_id))
@@ -59,7 +59,7 @@ async def test_lost_binding_ack_closes_only_reconciled_unbound_job(
     error_type: type[Exception], reconciled: str,
 ) -> None:
     req, fake, _, lease, binding = owner
-    old_id = binding.job_id
+    old_id = binding.job_id = "api-preparation"
     facade._record_queued(old_id, PREPARATION_JOB_TYPE, {}, internal=True)
     old_state = fake.hgetall(progress.state_key(old_id))
     failure = error_type("binding acknowledgement was lost")
