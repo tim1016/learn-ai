@@ -10,6 +10,8 @@ the 24 h TTL.
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 import redis
 
@@ -169,3 +171,29 @@ def test_failed_thread_start_does_not_release_a_replacement_lease(
     with pytest.raises(RuntimeError, match="cannot start worker"):
         run_in_thread("lease-1", lambda emit, cancel: None)
     assert fake.strings[LEASE] == "replacement"
+
+
+async def test_the_async_reservation_claims_and_releases_off_the_event_loop(
+    fake: _FakeRedis, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The async helper exists so Redis I/O never blocks the coordinator's loop."""
+    loop_thread = threading.get_ident()
+    ran_on: dict[str, int] = {}
+    claim, drop = runner.acquire_lease, runner.release_lease
+
+    def claim_here(job_id: str) -> str:
+        ran_on["claim"] = threading.get_ident()
+        return claim(job_id)
+
+    def drop_here(job_id: str, token: str) -> None:
+        ran_on["release"] = threading.get_ident()
+        drop(job_id, token)
+
+    monkeypatch.setattr(runner, "acquire_lease", claim_here)
+    monkeypatch.setattr(runner, "release_lease", drop_here)
+
+    async with runner.async_prepared_worker("lease-1"):
+        assert fake.exists(LEASE)
+    assert not fake.exists(LEASE)
+    assert ran_on.keys() == {"claim", "release"}
+    assert loop_thread not in ran_on.values()
