@@ -163,10 +163,11 @@ API acquisition is an ordinary internal job in the existing jobs framework.
 The research parent keeps replay and saved-result ownership, and stores only
 its current preparation job id and input identity beside the durable run
 binding. The API checks that live, generation-fenced binding before claiming
-the shared worker seam. Preparation uses the existing job events, status,
-result and cancellation flag; it adds no user job card. Actual work receipts
-and bounded I/O starts renew the parent; observing or retrying a dispatch
-never does. The acquisition timeout remains bounded at 31 minutes.
+the shared worker seam. Preparation uses the existing job events, status and
+cancellation flag; it adds no user job card. The verified freeze checkpoint,
+not the job's result, is the completion record the parent trusts. Actual work
+receipts and bounded I/O starts renew the parent; observing or retrying a
+dispatch never does. The acquisition timeout remains bounded at 31 minutes.
 
 A typed, verified freeze checkpoint is input progress, independent of Redis
 result retention. API startup interrupts an abandoned preparation job through
