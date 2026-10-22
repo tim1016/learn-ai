@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 
 import pytest
 
@@ -13,8 +12,12 @@ from app.utils.timestamps import now_ms_utc
 from tests.jobs.test_facade import job_store as job_store
 
 
-def test_delayed_publication_keeps_original_wait_deadline_and_polling_renews_nothing(job_store) -> None:
+def test_delayed_publication_keeps_original_wait_deadline_and_polling_renews_nothing(
+    job_store, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     entered, release = threading.Event(), threading.Event()
+    clock = [now_ms_utc()]
+    monkeypatch.setattr(external_work, "now_ms_utc", lambda: clock[0])
 
     def check() -> None:
         entered.set()
@@ -24,17 +27,17 @@ def test_delayed_publication_keeps_original_wait_deadline_and_polling_renews_not
     sink.phase("downloading")
     try:
         assert entered.wait(2)
-        started_ms = now_ms_utc()
+        started_ms = clock[0]
         sink.work({"kind": "external_wait", "bound_ms": 2_000})
         sink.check()
-        time.sleep(0.1)
+        clock[0] += 100
         assert not job_store.expires
     finally:
         release.set()
         sink.deactivate()
     events = [json.loads(fields["event"]) for _, fields in job_store.streams[progress.events_key("bounded")]]
     wait = next(event for event in events if event["type"] == "job.external_wait")
-    assert started_ms + 2_000 <= wait["deadline_ms"] <= started_ms + 2_020
+    assert wait["deadline_ms"] == started_ms + 2_000
     assert len([key for key, _ in job_store.expires if key == progress.lease_key("bounded")]) == 2
 
 
