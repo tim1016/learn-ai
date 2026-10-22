@@ -320,7 +320,17 @@ async def test_quote_greeks_cannot_survive_source_generation_replacement() -> No
         await asyncio.gather(lease.task, return_exceptions=True)
 
 
-@pytest.mark.parametrize("phase", ["qualification", "acquisition", "disconnected"])
+@pytest.mark.parametrize(
+    "phase",
+    [
+        "qualification",
+        "qualification_empty",
+        "qualification_failure",
+        "acquisition",
+        "acquisition_failure",
+        "disconnected",
+    ],
+)
 async def test_source_acquisition_races_reach_the_bar_consumer_as_retryable_interruptions(phase: str) -> None:
     from app.broker.ibkr.bars import IBKRBarInterrupted
     from app.broker.ibkr.client import NotConnectedError
@@ -331,20 +341,26 @@ async def test_source_acquisition_races_reach_the_bar_consumer_as_retryable_inte
     native = Client()
     native.ib = BarBroker()
     source = IbkrSource(native)
-    if phase == "qualification":
+    if phase.startswith("qualification"):
         qualify = native.ib.qualifyContractsAsync
 
         async def changed(contract: Any) -> Any:
             result = await qualify(contract)
             native.connection_generation += 1
+            if phase == "qualification_empty":
+                return []
+            if phase == "qualification_failure":
+                raise ConnectionError("Socket disconnected while qualifying")
             return result
 
         native.ib.qualifyContractsAsync = changed
-    elif phase == "acquisition":
+    elif phase.startswith("acquisition"):
         acquire = source._bar_registry.acquire
 
         async def changed_acquire(*args: Any, **kwargs: Any) -> Any:
             native.connection_generation += 1
+            if phase == "acquisition_failure":
+                raise ConnectionError("Socket disconnected on the pacer")
             return await acquire(*args, **kwargs)
 
         source._bar_registry.acquire = changed_acquire
