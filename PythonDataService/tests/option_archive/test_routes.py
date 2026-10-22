@@ -205,13 +205,13 @@ async def test_a_lock_granted_as_the_wait_gives_up_still_answers_that_the_recove
     """Once the service has taken the decision the request cannot cancel it, so its answer stands (#3455)."""
     async def provider(underlying: str, day: date, **options: object) -> None:
         raise AssertionError("the stand-in recovery never reaches the provider")
-    monkeypatch.setattr(archive_routes, "LOCK_DECISION_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(archive_routes, "LOCK_DECISION_TIMEOUT_S", 0.5)
     client, service = _recovery_client(tmp_path, monkeypatch, _SharedOwnership(held=set()), provider)
 
     async def recover_session(underlying: str, session_ms: int, *, retry_exhausted: bool,
                               lock_decision: Future[bool]) -> None:
         assert lock_decision.set_running_or_notify_cancel()
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(1.0)
         lock_decision.set_result(True)
     monkeypatch.setattr(service, "recover_session", recover_session)
     async with client:

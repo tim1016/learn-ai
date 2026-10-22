@@ -259,6 +259,7 @@ class OptionArchiveService:
             async with self.scheduler.ownership.hold(CAPTURE_JOB) as owned:
                 decided = True
                 if lock_decision is not None:
+                    # No await between these two calls: the route re-awaits a decision it could not cancel, unbounded.
                     if not lock_decision.set_running_or_notify_cancel():
                         return None
                     lock_decision.set_result(owned)

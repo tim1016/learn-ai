@@ -613,9 +613,10 @@ async def test_a_boot_releases_what_a_dead_generation_left_staged_and_nothing_el
 
 
 async def test_a_boot_that_cannot_read_the_staging_ledger_still_starts(
-    scratch_db, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    scratch_db, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Unreadable staging is logged, never fatal: the records still close and the runtime still starts (#3455)."""
+    import logging
     from urllib.parse import urlsplit, urlunsplit
 
     import app.jobs.progress as progress_module
@@ -637,10 +638,13 @@ async def test_a_boot_that_cannot_read_the_staging_ledger_still_starts(
         "VALUES ('job-crashed', 'options_backtest', 'run-1', 'dead-runtime', 1, 0)")
     fake.job("job-crashed", "running")
 
-    await _close_abandoned_generations(ownership.RuntimeAuthority("current", "research", 2, scratch_db))
+    with caplog.at_level(logging.ERROR, logger="app.research_runtime"):
+        await _close_abandoned_generations(ownership.RuntimeAuthority("current", "research", 2, scratch_db))
 
     assert fake.hget("job:job-crashed:state", "status") == "failed", "the dead generation's record still closed"
     assert (tmp_path / ".reservations.json").read_text() == "not a ledger", "an unreadable ledger is left for diagnosis"
+    [failure] = [record for record in caplog.records if getattr(record, "action", None) == "options_backtest_staging_cleanup_failed"]
+    assert failure.job_ids == ["job-crashed"]
 
 
 # ── The connection envelope (#3047, PRD #3034 slice 12) ────────────────────
