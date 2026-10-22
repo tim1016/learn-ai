@@ -79,11 +79,18 @@ class IbkrSource:
         epoch = self._epoch()
         identity = subscription.instrument
         contract = Contract(conId=identity.con_id, exchange=identity.exchange)
-        qualified = await asyncio.wait_for(self._client.ib.qualifyContractsAsync(contract), timeout=5)
-        if len(qualified) != 1 or qualified[0] is None:
-            raise FeedUnavailable("Shared source could not qualify the instrument")
+        try:
+            qualified = await asyncio.wait_for(self._client.ib.qualifyContractsAsync(contract), timeout=5)
+        except Exception as exc:
+            if not self._current(epoch) or isinstance(exc, (ConnectionError, NotConnectedError)):
+                raise FeedUnavailable(
+                    "Shared source interrupted during qualification", cause="generation_changed"
+                ) from exc
+            raise
         if not self._current(epoch):
             raise FeedUnavailable("Shared source changed while qualifying the instrument", cause="generation_changed")
+        if len(qualified) != 1 or qualified[0] is None:
+            raise FeedUnavailable("Shared source could not qualify the instrument")
         contract = qualified[0]
         if (contract.conId, contract.secType, contract.currency, contract.exchange) != (
             identity.con_id,
@@ -111,7 +118,16 @@ class IbkrSource:
 
     async def _bars(self, contract: Any) -> AsyncIterator[Frame]:
         client, epoch = self._client, self._epoch()
-        lease = await self._bar_registry.acquire(client, contract, bar_size=5, what_to_show="TRADES", use_rth=False)
+        try:
+            lease = await self._bar_registry.acquire(client, contract, bar_size=5, what_to_show="TRADES", use_rth=False)
+        except IBKRBarInterrupted as exc:
+            raise FeedUnavailable(str(exc), cause=exc.cause) from exc
+        except Exception as exc:
+            if not self._current(epoch) or isinstance(exc, (ConnectionError, NotConnectedError)):
+                raise FeedUnavailable(
+                    "Shared source interrupted during bar acquisition", cause="generation_changed"
+                ) from exc
+            raise
         if not self._current(epoch):
             lease.release()
             raise FeedUnavailable("Shared source changed while acquiring bars", cause="generation_changed")
