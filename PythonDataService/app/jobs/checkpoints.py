@@ -267,7 +267,7 @@ class GatedLease:
         self._lock = threading.Lock()
         self._cancel = CancellationCheck(job_id, renews_lease=False)
         self._external_deadline_ms: int | None = None
-        self._external_wait_ids: set[int] = set()
+        self._external_wait_ids: set[str | int] = set()
 
     def fenced_cancel(self) -> None:
         """Cancellation and the coordinator fence in one poll (#3065).
@@ -305,7 +305,7 @@ class GatedLease:
                 phase=str(message.get("phase", "search")),
             )
 
-    def bounded_external_wait(self, wait_id: int, deadline_ms: int) -> None:
+    def bounded_external_wait(self, wait_id: str | int, deadline_ms: int) -> None:
         """Accept one actual bounded I/O start, without resurrecting an expired owner.
 
         The acquisition code declares its own hard timeout before waiting.
