@@ -13,7 +13,7 @@ from app.options_backtest.run import run_sessions
 from app.options_bots.golden_proof import GoldenProofError
 from app.research.golden_search.proof import BlobStore, ProofMismatchError
 from tests.options_backtest._archived_data import archived_scene
-from tests.options_backtest._run_data import THU, WED, chain_scene
+from tests.options_backtest._run_data import HALF_DAY, THU, WED, chain_scene
 from tests.options_backtest.setup_fixtures import setup
 
 
@@ -79,3 +79,13 @@ def test_warm_inventory_cannot_reuse_a_decode_for_another_session(tmp_path: Path
             assert FrozenRunData(frozen, cache).listing(WED) is not None
         with pytest.raises(GoldenProofError):
             FrozenRunData(malformed, cache).listing(THU)
+
+
+def test_an_early_close_session_replays_from_its_frozen_originals_exactly_like_its_source(tmp_path: Path) -> None:
+    source = archived_scene(chain_scene(), tmp_path / "source")
+    sessions = (WED, HALF_DAY)
+    frozen = freeze_run_inputs(setup(), sessions, source, tmp_path / "frozen")
+    expected = run_sessions(setup(), sessions, source)
+    early = expected.sessions[-1]
+    assert early.session_close_ms - early.session_open_ms == 210 * 60_000 and early.pins.option_days
+    assert run_sessions(setup(), sessions, FrozenRunData(frozen, DecodedArtifactCache(max_bytes=64 * 1024**2))) == expected
