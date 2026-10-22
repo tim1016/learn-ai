@@ -230,9 +230,7 @@ async def test_real_http_boundary_keeps_one_fenced_exact_run_across_faults(
             if fault == "preparation_state_lost":
                 state.delete(f"job:{preparation_id}:state", f"job:{preparation_id}:lease")
             if fault == "lost_job_state":
-                held_state = state.hgetall(f"job:{job_id}:state")
-                held_lease = state.get(f"job:{job_id}:lease")
-                assert held_state["started_at"] and held_lease
+                # Loss stays lost: preparation must observe the absent parent authority (#3466).
                 state.delete(f"job:{job_id}:lease", f"job:{job_id}:state")
             if fault == "old_generation_redelivery":
                 await scratch_db.execute("UPDATE research_job_owners SET boot_generation=0 WHERE job_id=$1", job_id)
@@ -241,17 +239,12 @@ async def test_real_http_boundary_keeps_one_fenced_exact_run_across_faults(
                 assert duplicate.status_code == 409
                 if fault == "lost_job_state":
                     assert state.get(f"job:{job_id}:lease") is None
-                    assert state.hget(f"job:{job_id}:state", "status") is None
-                    assert state.hget(f"job:{job_id}:state", "started_at") is None
             else:
                 assert duplicate.status_code == 202 and duplicate.json()["run_id"] == run_id
             changed = req.model_dump(mode="json")
             changed["setup"]["starting_cash_usd"] = "99999"
             mismatch = await client.post(f"{api.base}/api/jobs-internal/options-backtest", json=changed)
             assert mismatch.status_code == 409
-            if fault == "lost_job_state":
-                state.hset(f"job:{job_id}:state", mapping=held_state)
-                state.set(f"job:{job_id}:lease", held_lease, ex=30)
             if fault == "old_generation_redelivery":
                 await scratch_db.execute("UPDATE research_job_owners SET boot_generation=1 WHERE job_id=$1", job_id)
             if fault == "api_restart":
@@ -276,7 +269,7 @@ async def test_real_http_boundary_keeps_one_fenced_exact_run_across_faults(
                 if time.monotonic() >= deadline:
                     pytest.fail(f"runtime job did not settle:\n{runtime.log.read_text()}\n{api.log.read_text()}")
                 await asyncio.sleep(0.1)
-            if fault in ("generation_fence", "preparation_state_lost", "cancel", "chain_loss"):
+            if fault in ("generation_fence", "preparation_state_lost", "cancel", "chain_loss", "lost_job_state"):
                 terminal = state.hget(f"job:{job_id}:state", "status")
                 if fault == "preparation_state_lost":
                     # Either the observer sees absent state, or the existing
@@ -284,7 +277,7 @@ async def test_real_http_boundary_keeps_one_fenced_exact_run_across_faults(
                     # Neither case authorizes another child or any result.
                     assert terminal in ("failed", "cancelled")
                 else:
-                    assert terminal == ("cancelled" if fault == "cancel" else "failed")
+                    assert terminal == ("cancelled" if fault in ("cancel", "lost_job_state") else "failed")
                 assert await saved_runs.read_result(scratch_db, run_id) is None
                 assert await scratch_db.fetchval("SELECT count(*) FROM research_options_backtest_run_sessions WHERE run_id=$1", run_id) == 0
                 if fault == "chain_loss":
@@ -336,8 +329,13 @@ async def test_real_http_boundary_keeps_one_fenced_exact_run_across_faults(
                 assert sum(event["type"] == "job.started" for event in child_events) == 1
             events = [json.loads(fields["event"]) for _, fields in state.xrange(f"job:{job_id}:events")]
             assert sum(event["type"] == "job.started" for event in events) == 1
-            if fault == "chain_loss":
+            if fault in ("chain_loss", "lost_job_state"):
                 assert not any(event["type"] == "job.completed" for event in events)
+            if fault == "lost_job_state":
+                assert state.get(f"job:{job_id}:lease") is None
+                refused = await client.post(f"{api.base}/api/jobs-internal/options-backtest", json=req.model_dump(mode="json"))
+                assert refused.status_code == 409
+                assert await scratch_db.fetchval("SELECT count(*) FROM research_options_backtest_runs WHERE job_id=$1", job_id) == 1
             assert len(first_checkpoint["sessions"]) == 1
             assert not (faults / "unexpected-provider-request").exists()
             await _wait_file(inputs / ".reservations.json")
