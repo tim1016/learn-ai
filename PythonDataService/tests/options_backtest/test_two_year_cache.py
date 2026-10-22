@@ -128,7 +128,7 @@ async def test_two_year_replay_is_exact_with_bounded_eviction_and_warm_reuse(
     misses = cache.metrics()["misses"]
     assert FrozenRunData(changed, cache).option_day(contract, day).value[-1].close == Decimal("1.50")
     assert cache.metrics()["misses"] == misses + 1
-    digest = changed.sessions[session_open_ms_utc(day)]
+    digest = next(iter(changed.sessions[session_open_ms_utc(day)].snapshot.manifest.values()))
     (Path(changed.root) / digest[:2] / digest).write_bytes(b"changed bytes")
     with pytest.raises(ProofMismatchError):
         FrozenRunData(changed, cache).listing(day)

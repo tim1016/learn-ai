@@ -177,6 +177,18 @@ class ArchivedRunData:
         digest = self.manifest[relative]
         return self.blobs.get(digest), digest
 
+    def read_artifact(self, relative: str, *, max_bytes: int) -> bytes:
+        """Read one bounded, hash-verified original from this immutable inventory."""
+        if relative not in self.manifest:
+            raise GoldenProofError("The replay requested an input outside the approved evidence.")
+        digest = self.manifest[relative]
+        if (self.blobs.root / digest[:2] / digest).stat().st_size > max_bytes:
+            raise ValueError("original artifact exceeds the frozen input byte bound")
+        payload, _ = self._read(relative)
+        if len(payload) > max_bytes:
+            raise ValueError("original artifact exceeds the frozen input byte bound")
+        return payload
+
     def underlying_day(self, trading_date: date) -> Captured[Sequence[MinuteBar]]:
         relative = str(LeanMinuteBarPath("usa", self.underlying, trading_date, "trade").relative_path())
         payload, digest = self._read(relative)

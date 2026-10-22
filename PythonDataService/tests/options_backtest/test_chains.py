@@ -19,6 +19,7 @@ from app.options_backtest.run_wire import result_from_wire, result_to_wire
 from app.options_backtest.timings import RunTimings
 from app.research.golden_search.shared_pool import SharedWorkerPool
 from app.research.golden_search.worker import WorkerDispatchContext
+from tests.options_backtest._archived_data import archived_scene
 from tests.options_backtest._golden_vendor import recorded_vendor
 from tests.options_backtest._lake import fake_catalog as fake_catalog
 from tests.options_backtest._lake import the_clock_is_fixed as the_clock_is_fixed
@@ -28,14 +29,14 @@ from tests.options_backtest.setup_fixtures import leg, setup
 
 
 @pytest.mark.parametrize("cash", ["200", "10000"])
-def test_shuffled_chain_completion_preserves_exact_carry_marks_refusals_fees_and_half_days(cash: str) -> None:
+def test_shuffled_chain_completion_preserves_exact_carry_marks_refusals_fees_and_half_days(cash: str, tmp_path: Path) -> None:
     given = setup(legs=[leg(expiry={"kind": "same_day"})], starting_cash_usd=cash,
         fees={"kind": "per_contract", "per_contract_usd": "0.65"}, slippage_percent="0.3")
     sessions = (WED, THU, HALF_DAY)
-    serial = run_sessions(given, sessions, chain_scene())
+    serial = run_sessions(given, sessions, archived_scene(chain_scene(), tmp_path / "source"))
     plan = list(plan_chains(given))
     random.Random(3412).shuffle(plan)
-    results = {chain.key: result_from_wire(result_to_wire(replay_chain(given, sessions, chain, chain_scene()))) for chain in plan}
+    results = {chain.key: result_from_wire(result_to_wire(replay_chain(given, sessions, chain, archived_scene(chain_scene(), tmp_path / "source")))) for chain in plan}
     assert merge_chains(given, sessions, results) == serial
     assert len(plan) == len(serial.slippage) + len(serial.summary.cash_ladder) - 1
     results.pop(plan[0].key)
@@ -45,8 +46,8 @@ def test_shuffled_chain_completion_preserves_exact_carry_marks_refusals_fees_and
 
 def test_same_inventory_reuses_decode_across_job_directories_but_new_root_identity_misses(tmp_path: Path) -> None:
     given = setup(legs=[leg(expiry={"kind": "same_day"})])
-    first = freeze_run_inputs(given, (WED,), chain_scene(), tmp_path / "first")
-    second = freeze_run_inputs(given, (WED,), chain_scene(), tmp_path / "second")
+    first = freeze_run_inputs(given, (WED,), archived_scene(chain_scene(), tmp_path / "source"), tmp_path / "first")
+    second = freeze_run_inputs(given, (WED,), archived_scene(chain_scene(), tmp_path / "source"), tmp_path / "second")
     assert first.digest == second.digest
     cache = DecodedArtifactCache(max_bytes=64 * 1024**2)
     assert FrozenRunData(first, cache).listing(WED) == FrozenRunData(second, cache).listing(WED)
@@ -58,8 +59,8 @@ def test_same_inventory_reuses_decode_across_job_directories_but_new_root_identi
 
 def test_worker_pool_preserves_exact_result_and_reuses_admitted_decode(tmp_path: Path) -> None:
     given = setup(legs=[leg(expiry={"kind": "same_day"})])
-    frozen = freeze_run_inputs(given, (WED, THU), chain_scene(), tmp_path)
-    expected = run_sessions(given, (WED, THU), chain_scene())
+    frozen = freeze_run_inputs(given, (WED, THU), archived_scene(chain_scene(), tmp_path / "source"), tmp_path)
+    expected = run_sessions(given, (WED, THU), archived_scene(chain_scene(), tmp_path / "source"))
     pool = SharedWorkerPool(workers=1, submission_bound=2, payload_bound_bytes=32 * 1024**2,
                             result_bound_bytes=32 * 1024**2)
     try:
@@ -141,10 +142,11 @@ async def test_generated_busy_scenario_stops_momentum_reentry_marks_half_day_are
     from tests.options_backtest._a_run import the_busy_data, the_busy_setup, what_the_busy_run_reaches
 
     given = the_busy_setup()
-    sessions, data = the_busy_data()
+    sessions, scene = the_busy_data()
+    data = archived_scene(scene, tmp_path / "source")
     expected = run_sessions(given, sessions, data)
     assert all(what_the_busy_run_reaches(expected).values())
-    frozen = freeze_run_inputs(given, sessions, the_busy_data()[1], tmp_path / "inputs")
+    frozen = freeze_run_inputs(given, sessions, archived_scene(the_busy_data()[1], tmp_path / "source"), tmp_path / "inputs")
     monkeypatch.setattr(settings, "RESEARCH_WORKER_COUNT", width)
     monkeypatch.setattr(settings, "OPTIONS_SEARCH_WORKER_COUNT", width)
     pool = SharedWorkerPool(workers=width, submission_bound=2 * width,
@@ -167,9 +169,10 @@ def test_killed_chain_is_retried_with_same_identity_and_persistent_loss_returns_
     from tests.options_backtest._a_run import the_busy_data, the_busy_setup
 
     given = the_busy_setup()
-    sessions, data = the_busy_data()
+    sessions, scene = the_busy_data()
+    data = archived_scene(scene, tmp_path / "source")
     expected = run_sessions(given, sessions, data)
-    frozen = freeze_run_inputs(given, sessions, the_busy_data()[1], tmp_path)
+    frozen = freeze_run_inputs(given, sessions, archived_scene(the_busy_data()[1], tmp_path / "source"), tmp_path)
     pool = SharedWorkerPool(workers=1, submission_bound=2, payload_bound_bytes=32 * 1024**2,
                             result_bound_bytes=32 * 1024**2)
     killed: list[tuple[str, int]] = []
@@ -204,7 +207,7 @@ def test_cancelling_one_backtest_releases_shared_capacity_for_the_next_owner(tmp
     from app.jobs.progress import JobCancelled
 
     given = setup(legs=[leg(expiry={"kind": "same_day"})])
-    frozen = freeze_run_inputs(given, (WED, THU), chain_scene(), tmp_path)
+    frozen = freeze_run_inputs(given, (WED, THU), archived_scene(chain_scene(), tmp_path / "source"), tmp_path)
     stopped = threading.Event()
     context = WorkerDispatchContext("options_backtest", {}, {}, {}, "cancel-one", 1,
         on_checkpoint=lambda message: stopped.set(), cancel_check=stopped.is_set)
@@ -215,7 +218,7 @@ def test_cancelling_one_backtest_releases_shared_capacity_for_the_next_owner(tmp
             replay_frozen_run(given, (WED, THU), frozen, context=context, pool=pool, timings=RunTimings())
         context = WorkerDispatchContext("options_backtest", {}, {}, {}, "healthy-next", 1)
         assert replay_frozen_run(given, (WED, THU), frozen, context=context, pool=pool,
-                                 timings=RunTimings()) == run_sessions(given, (WED, THU), chain_scene())
+                                 timings=RunTimings()) == run_sessions(given, (WED, THU), archived_scene(chain_scene(), tmp_path / "source"))
     finally:
         pool.close()
 

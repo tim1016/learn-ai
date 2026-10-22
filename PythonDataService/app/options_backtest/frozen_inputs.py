@@ -1,50 +1,61 @@
-"""Freeze admitted replay inputs; workers read only digest-bound local blobs (#3423).
+"""Retain admitted original artifacts for bounded local replay (#3440).
 
-The freeze records the canonical RunData answers, including original byte pins
-and optional day/member references. It therefore supports either lake layout
-without teaching workers a second lake parser or giving them a catalog client.
-One bounded session is decoded at a time. All times on disk are ms UTC.
+Setup discovery stays with the canonical run. A session keeps the existing
+Snapshot manifest and explicit absences; workers use SnapshotRunData's original
+ZIP readers. Temporary checkpoints from the former decoded codec are refused.
 """
 from __future__ import annotations
 
-import json
-import zlib
+import hashlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.config import active_root_id
-from app.data_lake.option_bars import SessionMemberRef
+from app.data_lake.path_policy import LeanMinuteBarPath, OptionListingPath, OptionMinuteBarPath, OptionSessionPath
 from app.engine.data.decoded_cache import DecodedArtifactCache
 from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.options.contract import OptionContract
 from app.options_backtest.data import Captured, RunData
 from app.options_backtest.limits import MAX_RANGE_SESSIONS
 from app.options_backtest.market import MinuteBar
-from app.options_backtest.picking import ListedContract, Listing
+from app.options_backtest.picking import Listing
 from app.options_backtest.run import RunStopped, load_session_market, validate_run_sessions
 from app.options_backtest.setup import OptionsBacktestSetup
 from app.options_backtest.timings import RunTimings
 from app.research.golden_search.proof import BlobStore
 from app.research.options_golden_search.protocol import point_hash
+from app.research.options_golden_search.snapshots import Snapshot, SnapshotRunData
 from app.research.runs.hashing import hash_payload
-from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
-DECODER_VERSION = "options-run-data/v1"
+DECODER_VERSION = "options-original-artifacts/v2"
+RECIPE = "admitted-options-originals/v2"
 MAX_SESSION_BYTES = 128 * 1024**2
 MAX_FROZEN_BYTES = 2 * 1024**3
 
-# Fixed figures for a decoded session's retained footprint in the worker's
-# decoded cache, so its accounting stays deterministic. Measured on CPython: a
-# MinuteBar with its four Decimals holds 620-840 bytes, a ListedContract with
-# its OptionContract 510-950; each is rounded up.
+# Deterministic conservative accounting for the existing decoded-cache bound.
 _MINUTE_BAR_ESTIMATED_BYTES = 850
 _LISTED_CONTRACT_ESTIMATED_BYTES = 1000
 _SESSION_OVERHEAD_BYTES = 64
+
+
+class OriginalRunData(RunData, Protocol):
+    def read_artifact(self, relative: str, *, max_bytes: int) -> bytes: ...
+
+
+class FrozenSession(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    snapshot: Snapshot
+    contracts: tuple[str, ...]
+
+    @property
+    def digest(self) -> str:
+        return hash_payload(self.model_dump(mode="json"))
 
 
 class FrozenRunInputs(BaseModel):
@@ -54,101 +65,171 @@ class FrozenRunInputs(BaseModel):
     underlying: str
     setup_digest: str = Field(pattern="^[a-f0-9]{64}$")
     source_root_id: str
-    recipe: str = "admitted-options-run/v1"
-    sessions: dict[int, str]
+    recipe: str = RECIPE
+    sessions: dict[int, FrozenSession]
     retained_bytes: int = Field(ge=0, le=MAX_FROZEN_BYTES)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _compatible_generation(cls, value: Any) -> Any:
+        if isinstance(value, Mapping) and (value.get("version", DECODER_VERSION) != DECODER_VERSION
+                or value.get("recipe", RECIPE) != RECIPE):
+            raise ValueError("unsupported frozen input recipe or decoder; restart preparation")
+        return value
 
     @model_validator(mode="after")
     def _known_decoder_and_bounded_inventory(self) -> Self:
-        if self.version != DECODER_VERSION or self.recipe != "admitted-options-run/v1":
-            raise ValueError("unsupported frozen input recipe or decoder")
+        if self.version != DECODER_VERSION or self.recipe != RECIPE:
+            raise ValueError("unsupported frozen input recipe or decoder; restart preparation")
         if len(self.sessions) > MAX_RANGE_SESSIONS:
             raise ValueError("frozen session inventory exceeds the range bound")
         if list(self.sessions) != sorted(self.sessions):
             raise ValueError("frozen sessions must be ordered")
         if any(type(anchor) is not int or not 0 <= anchor <= MAX_TIMESTAMP_MS for anchor in self.sessions):
             raise ValueError("frozen session anchors must be bounded int64 UTC milliseconds")
+        for session in self.sessions.values():
+            if not 0 <= session.snapshot.retained_bytes <= MAX_SESSION_BYTES:
+                raise ValueError("one frozen session exceeds the original input byte bound")
+            if session.snapshot.version not in (1, 2):
+                raise ValueError("unsupported retained original snapshot version")
+            if set(session.snapshot.manifest) & set(session.snapshot.absent):
+                raise ValueError("snapshot cannot contain and omit the same artifact")
         return self
+
+    @property
+    def blob_digests(self) -> frozenset[str]:
+        """The complete deduplicated inventory used by staging, resume and verification."""
+        return frozenset(digest for session in self.sessions.values() for digest in session.snapshot.manifest.values())
+
+    def verify_blobs(self) -> dict[str, int]:
+        sizes = _verified_sizes(BlobStore(Path(self.root)), self.blob_digests)
+        if sum(sizes.values()) != self.retained_bytes:
+            raise ValueError("frozen preparation checkpoint byte count differs")
+        for session in self.sessions.values():
+            if sum(sizes[digest] for digest in set(session.snapshot.manifest.values())) != session.snapshot.retained_bytes:
+                raise ValueError("frozen session checkpoint byte count differs")
+        return sizes
 
     @property
     def digest(self) -> str:
         return hash_payload(self.model_dump(mode="json", exclude={"root"}))
 
 
-def _bar_wire(bar: MinuteBar) -> list[int | str]:
-    return [bar.close_ms, str(bar.open), str(bar.high), str(bar.low), str(bar.close)]
-
-
-def _captured_wire(found: Captured[Any], value: Any) -> dict[str, Any]:
-    reference = getattr(found, "reference", None)
-    return {"sha256": found.sha256, "reference": None if reference is None else reference.to_json(), "value": value}
+def _verified_sizes(blobs: BlobStore, digests: Sequence[str] | frozenset[str]) -> dict[str, int]:
+    sizes = {}
+    for digest in digests:
+        path = blobs.root / digest[:2] / digest
+        if path.is_file() and path.stat().st_size > MAX_SESSION_BYTES:
+            raise ValueError("original artifact exceeds the frozen input byte bound")
+        payload = blobs.get(digest)
+        if len(payload) > MAX_SESSION_BYTES:
+            raise ValueError("original artifact exceeds the frozen input byte bound")
+        sizes[digest] = len(payload)
+    return sizes
 
 
 class _RecordingData:
-    def __init__(self, source: RunData, day: date) -> None:
-        self.source, self.day = source, day
-        self.rows: dict[str, Any] = {}
+    def __init__(self, source: OriginalRunData, underlying: str) -> None:
+        self.source, self.underlying = source, underlying
+        self.artifacts: dict[str, str | None] = {}
+        self.listed: Captured[Listing] | None = None
+        self.options: dict[str, Captured[Sequence[MinuteBar]] | None] = {}
+        self.container_recorded = False
 
-    def underlying_day(self, trading_date: date) -> Captured[Sequence[MinuteBar]] | None:
-        found = self.source.underlying_day(trading_date)
-        if found is not None:
-            self.rows["underlying"] = _captured_wire(found, [_bar_wire(bar) for bar in found.value])
+    def record(self, relative: str, expected: str | None) -> None:
+        if relative in self.artifacts and self.artifacts[relative] != expected:
+            raise ValueError("input artifact generation changed during input freeze")
+        self.artifacts[relative] = expected
+
+    def underlying_day(self, day: date) -> Captured[Sequence[MinuteBar]] | None:
+        found = self.source.underlying_day(day)
+        self.record(str(LeanMinuteBarPath("usa", self.underlying, day, "trade").relative_path()), None if found is None else found.sha256)
         return found
 
-    def listing(self, trading_date: date) -> Captured[Listing] | None:
-        found = self.source.listing(trading_date)
-        if found is not None:
-            listed = found.value
-            value = {"underlying": listed.underlying, "session_open_ms": session_window_for_date(listed.as_of).open_ms_utc,
-                     "complete": listed.complete,
-                     "contracts": [{"contract": row.contract.model_dump(mode="json"),
-                                    "multiplier": row.multiplier, "standard": row.standard} for row in listed.contracts]}
-            self.rows["listing"] = _captured_wire(found, value)
+    def listing(self, day: date) -> Captured[Listing] | None:
+        self.listed = self.source.listing(day)
+        self.record(str(OptionListingPath(self.underlying, day).relative_path()), None if self.listed is None else self.listed.sha256)
+        return self.listed
+
+    def option_day(self, contract: OptionContract, day: date) -> Captured[Sequence[MinuteBar]] | None:
+        found = self.source.option_day(contract, day)
+        self.options[contract.occ_symbol] = found
+        if found is not None and found.reference is not None:
+            self.record(str(OptionSessionPath(self.underlying, day).relative_path()), found.reference.container_sha256)
+            self.container_recorded = True
+        else:
+            self.record(str(OptionMinuteBarPath(contract.root, contract.occ_symbol, day).relative_path()), None if found is None else found.sha256)
         return found
 
-    def option_day(self, contract: OptionContract, trading_date: date) -> Captured[Sequence[MinuteBar]] | None:
-        found = self.source.option_day(contract, trading_date)
-        if found is not None:
-            self.rows.setdefault("options", {})[contract.occ_symbol] = _captured_wire(found, [_bar_wire(bar) for bar in found.value])
-        return found
 
-
-def _verify_session_generation(data: RunData, day: date, rows: Mapping[str, Any]) -> None:
-    if "listing" not in rows:
+def _verify_session_generation(data: RunData, day: date, recording: _RecordingData) -> None:
+    if recording.listed is None:
         return
-    original = rows["listing"]["sha256"]
-    options = rows.get("options", {})
-    container_keys = ("version", "layout", "data_root_id", "recipe", "listing_sha256", "container_sha256")
+    original = recording.listed.sha256
     generations = set()
     representative = None
-    for symbol, row in options.items():
-        reference = row.get("reference")
-        if reference is not None:
-            if reference.get("listing_sha256") != original:
+    for symbol, found in recording.options.items():
+        if found is not None and found.reference is not None:
+            reference = found.reference.to_json()
+            if reference["listing_sha256"] != original:
                 raise ValueError("a day-file listing generation changed during input freeze")
-            generations.add(tuple(reference.get(key) for key in container_keys))
+            generations.add(tuple(reference[key] for key in
+                ("version", "layout", "data_root_id", "recipe", "listing_sha256", "container_sha256")))
             representative = symbol
     if len(generations) > 1:
         raise ValueError("option container generation changed during input freeze; retry with one generation")
     if representative is not None:
-        # One container re-admission verifies its whole generation. A stable
-        # partial container may still use unchanged legacy fallback members.
-        for symbol, row in options.items():
-            if row.get("reference") is not None and symbol != representative:
+        for symbol, found in recording.options.items():
+            if found is not None and found.reference is not None and symbol != representative:
                 continue
             current = data.option_day(OptionContract.from_occ_symbol(symbol), day)
-            current_reference = None if current is None or current.reference is None else current.reference.to_json()
-            if current is None or current.sha256 != row["sha256"] or current_reference != row.get("reference"):
+            if (current is None) != (found is None) or (current is not None and found is not None
+                    and (current.sha256, current.reference) != (found.sha256, found.reference)):
                 raise ValueError("option source generation changed during input freeze; retry with one generation")
     current = data.listing(day)
     if current is None or current.sha256 != original:
-        raise ValueError("listing changed during input freeze; retry with one generation")
+        raise ValueError("listing generation changed during input freeze; retry with one generation")
 
+
+class _SessionRetention:
+    def __init__(self, data: OriginalRunData, blobs: BlobStore, sizes: dict[str, int],
+                 reserve_bytes: Callable[[int], None]) -> None:
+        self.data, self.blobs, self.sizes, self.reserve_bytes = data, blobs, sizes, reserve_bytes
+        self.manifest: dict[str, str] = {}
+        self.absent: set[str] = set()
+        self.session_sizes: dict[str, int] = {}
+
+    def record(self, relative: str, expected: str | None) -> None:
+        if relative in self.manifest or relative in self.absent:
+            if self.manifest.get(relative) != expected:
+                raise ValueError("input artifact generation changed during input freeze")
+            return
+        if expected is None:
+            self.absent.add(relative)
+            return
+        remaining = min(MAX_SESSION_BYTES - sum(self.session_sizes.values()),
+                        MAX_FROZEN_BYTES - sum(self.sizes.values()))
+        # A duplicate blob still needs admission but consumes no new space.
+        limit = MAX_SESSION_BYTES if expected in self.sizes else remaining
+        payload = self.data.read_artifact(relative, max_bytes=limit)
+        if hashlib.sha256(payload).hexdigest() != expected:
+            raise ValueError("input artifact generation changed during input freeze; retry with one generation")
+        session_size = sum(self.session_sizes.values()) + (0 if expected in self.session_sizes else len(payload))
+        retained = sum(self.sizes.values()) + (0 if expected in self.sizes else len(payload))
+        if session_size > MAX_SESSION_BYTES:
+            raise ValueError("one frozen session exceeds the original input byte bound")
+        if retained > MAX_FROZEN_BYTES:
+            raise ValueError("frozen run exceeds its retained original input byte bound")
+        self.reserve_bytes(retained)
+        if self.blobs.put(payload) != expected:
+            raise ValueError("frozen original blob identity mismatch")
+        self.sizes[expected] = self.session_sizes[expected] = len(payload)
+        self.manifest[relative] = expected
 
 def freeze_run_inputs(
     setup: OptionsBacktestSetup,
     sessions: Sequence[date],
-    data: RunData,
+    data: OriginalRunData,
     root: Path,
     *,
     should_stop: Callable[[], bool] = lambda: False,
@@ -157,15 +238,15 @@ def freeze_run_inputs(
     resume: FrozenRunInputs | None = None,
     on_checkpoint: Callable[[FrozenRunInputs], None] = lambda frozen: None,
 ) -> FrozenRunInputs:
-    """Admit, validate and retain each required answer once before dispatch.
+    """Retain exact admitted originals, refusing newly oversized sessions/runs.
 
-    Data acquisition stays with the API. A missing required answer or invalid
-    session fails the entire freeze, so no worker can silently download it.
+    The 128 MiB session and 2 GiB run bounds count unique original blob bytes.
+    Whole containers count even when discovery needs only one of their members.
     """
     validate_run_sessions(setup, sessions)
     blobs = BlobStore(root)
-    inventory: dict[int, str] = {}
-    retained = 0
+    inventory: dict[int, FrozenSession] = {}
+    sizes: dict[str, int] = {}
     setup_digest = point_hash(setup)
     if resume is not None:
         anchors = [session_window_for_date(day).open_ms_utc for day in sessions]
@@ -173,89 +254,58 @@ def freeze_run_inputs(
                 or resume.source_root_id != str(active_root_id()) or resume.underlying != setup.underlying
                 or list(resume.sessions) != anchors[:len(resume.sessions)]):
             raise ValueError("frozen preparation checkpoint belongs to another input identity")
-        for anchor, digest in resume.sessions.items():
-            payload = blobs.get(digest)
-            _decode(payload)
-            retained += len(payload)
-            inventory[anchor] = digest
-        if retained != resume.retained_bytes:
-            raise ValueError("frozen preparation checkpoint byte count differs")
+        sizes = resume.verify_blobs()
+        inventory.update(resume.sessions)
 
     def checkpoint() -> FrozenRunInputs:
         return FrozenRunInputs(root=str(root.resolve()), underlying=setup.underlying,
             source_root_id=str(active_root_id()), setup_digest=setup_digest,
-            sessions=dict(inventory), retained_bytes=retained)
+            sessions=dict(inventory), retained_bytes=sum(sizes.values()))
 
     for done, day in enumerate(sessions):
         if should_stop():
             raise RunStopped(done)
-        if session_window_for_date(day).open_ms_utc in inventory:
+        anchor = session_window_for_date(day).open_ms_utc
+        if anchor in inventory:
             on_session(done + 1, len(sessions), day)
             continue
-        recording = _RecordingData(data, day)
+        retention = _SessionRetention(data, blobs, sizes, reserve_bytes)
+        recording = _RecordingData(data, setup.underlying)
         load_session_market(setup, day, recording)
-        _verify_session_generation(data, day, recording.rows)
-        raw = json.dumps(recording.rows, sort_keys=True, separators=(",", ":")).encode()
-        if len(raw) > MAX_SESSION_BYTES:
-            raise ValueError("one frozen session exceeds the decoded input bound")
-        payload = zlib.compress(raw)
-        retained += len(payload)
-        if retained > MAX_FROZEN_BYTES:
-            raise ValueError("frozen run exceeds its retained input byte bound")
-        reserve_bytes(retained)
-        inventory[session_window_for_date(day).open_ms_utc] = blobs.put(payload)
+        _verify_session_generation(data, day, recording)
+        for relative, expected in recording.artifacts.items():
+            retention.record(relative, expected)
+        inventory[anchor] = FrozenSession(snapshot=Snapshot(version=2 if recording.container_recorded else 1,
+            manifest=retention.manifest, absent=tuple(sorted(retention.absent)),
+            retained_bytes=sum(retention.session_sizes.values())),
+            contracts=tuple(recording.options))
         on_checkpoint(checkpoint())
         on_session(done + 1, len(sessions), day)
     return checkpoint()
 
 
-def _decode_bars(row: Mapping[str, Any]) -> Captured[tuple[MinuteBar, ...]]:
-    from decimal import Decimal
-
-    bars = tuple(MinuteBar(int(values[0]), *(Decimal(value) for value in values[1:])) for values in row["value"])
-    if row.get("reference") is None:
-        return Captured(bars, str(row["sha256"]))
-    return Captured(bars, str(row["sha256"]), reference=SessionMemberRef.from_json(row["reference"]))
-
-
-def _decode(payload: bytes) -> dict[str, Any]:
-    decoder = zlib.decompressobj()
-    raw = decoder.decompress(payload, MAX_SESSION_BYTES + 1)
-    if len(raw) > MAX_SESSION_BYTES or not decoder.eof or decoder.unused_data:
-        raise ValueError("frozen session exceeds its decoded bound or has trailing/truncated bytes")
-    rows = json.loads(raw)
-    result: dict[str, Any] = {"options": {symbol: _decode_bars(row) for symbol, row in rows.get("options", {}).items()}}
-    if "underlying" in rows:
-        result["underlying"] = _decode_bars(rows["underlying"])
-    if "listing" in rows:
-        captured, value = rows["listing"], rows["listing"]["value"]
-        anchor = value["session_open_ms"]
-        if isinstance(anchor, bool) or not isinstance(anchor, int) or not 0 <= anchor <= MAX_TIMESTAMP_MS:
-            raise ValueError("invalid frozen listing session anchor")
-        listing = Listing(value["underlying"], et_date_at_ms(anchor),
-                          tuple(ListedContract(OptionContract.model_validate(row["contract"]), row["multiplier"], row["standard"])
-                                for row in value["contracts"]), value["complete"])
-        result["listing"] = Captured(listing, captured["sha256"])
-    return result
+def _decode(session: FrozenSession, underlying: str, day: date, blobs: BlobStore) -> dict[str, Any]:
+    data = SnapshotRunData(underlying, session.snapshot, blobs)
+    rows: dict[str, Any] = {"options": {}}
+    if session.snapshot.manifest or session.snapshot.absent:
+        rows["underlying"] = data.underlying_day(day)
+        rows["listing"] = data.listing(day)
+        rows["options"] = {symbol: data.option_day(OptionContract.from_occ_symbol(symbol), day)
+                           for symbol in session.contracts}
+    return rows
 
 
 def _estimated_bytes(session: Mapping[str, Any]) -> int:
-    bars = sum(len(found.value) for found in session["options"].values())
-    if "underlying" in session:
+    bars = sum(len(found.value) for found in session["options"].values() if found is not None)
+    if session.get("underlying") is not None:
         bars += len(session["underlying"].value)
-    contracts = len(session["listing"].value.contracts) if "listing" in session else 0
+    contracts = len(session["listing"].value.contracts) if session.get("listing") is not None else 0
     return _SESSION_OVERHEAD_BYTES + bars * _MINUTE_BAR_ESTIMATED_BYTES + contracts * _LISTED_CONTRACT_ESTIMATED_BYTES
 
 
 @dataclass(frozen=True)
 class FrozenSessionKey:
-    """One frozen session's decode in the worker's decoded cache.
-
-    The job directory is deliberately absent: the same admitted inventory
-    frozen for two jobs is one decode. ``relative_path`` is the blob's path
-    under its frozen root, the name the pool's warm hint reads.
-    """
-
+    """One admitted inventory's decode, reusable across temporary job directories."""
     content_digest: str
     source_root_id: str
     underlying: str
@@ -270,15 +320,15 @@ class FrozenRunData:
         self.timings, self.chain_key = timings, chain_key
         self._last: tuple[date, dict[str, Any]] | None = None
 
-    def _read(self, digest: str) -> dict[str, Any]:
-        # Even a warm read verifies the immutable admission identity. Corrupt
-        # replacement bytes never inherit the previous entry's admission.
+    def _read(self, session: FrozenSession, day: date) -> dict[str, Any]:
         blobs = BlobStore(Path(self.frozen.root))
-        if (blobs.root / digest[:2] / digest).stat().st_size > MAX_SESSION_BYTES:
-            raise ValueError("frozen session exceeds the compressed input bound")
-        payload = blobs.get(digest)
-        key = FrozenSessionKey(digest, self.frozen.source_root_id, self.frozen.underlying, f"{digest[:2]}/{digest}")
-        return self.cache.get_or_decode_value(key, lambda: _decode(payload), estimate=_estimated_bytes)
+        sizes = _verified_sizes(blobs, frozenset(session.snapshot.manifest.values()))
+        if sum(sizes.values()) != session.snapshot.retained_bytes:
+            raise ValueError("frozen session checkpoint byte count differs")
+        digest = session.digest
+        key = FrozenSessionKey(digest, self.frozen.source_root_id, self.frozen.underlying, f"sessions/{digest}")
+        return self.cache.get_or_decode_value(key, lambda: _decode(session, self.frozen.underlying, day, blobs),
+                                              estimate=_estimated_bytes)
 
     def _day(self, day: date) -> dict[str, Any]:
         if self._last is None or self._last[0] != day:
@@ -286,10 +336,10 @@ class FrozenRunData:
             if anchor not in self.frozen.sessions:
                 raise ValueError("session is outside the frozen run input inventory")
             if self.timings is None:
-                self._last = (day, self._read(self.frozen.sessions[anchor]))
+                self._last = (day, self._read(self.frozen.sessions[anchor], day))
             else:
                 with self.timings.measure("admit_decode", chain_key=self.chain_key):
-                    self._last = (day, self._read(self.frozen.sessions[anchor]))
+                    self._last = (day, self._read(self.frozen.sessions[anchor], day))
         return self._last[1]
 
     def underlying_day(self, trading_date: date) -> Captured[Sequence[MinuteBar]] | None:

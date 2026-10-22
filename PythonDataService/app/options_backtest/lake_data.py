@@ -226,6 +226,20 @@ class LakeRunData:
         self._underlying = underlying
         self._lake_root = lake_root
 
+    def read_artifact(self, relative: str, *, max_bytes: int) -> bytes:
+        """Admit an original artifact for bounded retention after setup discovery."""
+        _require_a_worker_thread()
+        root = option_read_root(self._lake_root).resolve()
+        path = (root / relative).resolve()
+        if not path.is_relative_to(root):
+            raise ValueError("retained artifact is outside the source root")
+        if path.stat().st_size > max_bytes:
+            raise ValueError("original artifact exceeds the frozen input byte bound")
+        payload = read_committed_bytes(path)
+        if len(payload) > max_bytes:
+            raise ValueError("original artifact exceeds the frozen input byte bound")
+        return payload
+
     def underlying_day(self, trading_date: date) -> Captured[tuple[MinuteBar, ...]] | None:
         """The underlying's raw minute bars of the regular session on ``trading_date``, or ``None`` when not held.
 
