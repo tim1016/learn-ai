@@ -58,7 +58,22 @@ DEFAULT_DEBOUNCE_S = 0.25
 
 
 def _resolve_market_price(update: QuoteUpdate | None) -> float | None:
-    return None if update is None else update.market_price
+    """Display mark over accepted receipts, retaining the vendor's selection rule.
+
+    Formula: last inside a valid book (or without a book), otherwise (bid + ask) * 0.5.
+    Reference: ib_async 2.1.0 Ticker.marketPrice/hasBidAsk/midpoint, pinned by IB-MARK-001.
+    Canonical implementation: this function.
+    Validated against: tests/marketdata/shared/test_mark_parity.py.
+    """
+    if update is None:
+        return None
+    values = update.values
+    bid, ask, last = (values.get(name) for name in ("bid", "ask", "last"))
+    bid_size, ask_size = values.get("bidSize"), values.get("askSize")
+    if (bid is not None and ask is not None and bid != -1 and ask != -1
+            and bid_size is not None and bid_size > 0 and ask_size is not None and ask_size > 0):
+        return last if last is not None and bid <= last <= ask else (bid + ask) * 0.5
+    return last
 
 
 def _quote_to_model(

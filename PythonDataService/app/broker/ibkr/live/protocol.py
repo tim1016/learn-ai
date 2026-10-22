@@ -70,7 +70,6 @@ class Tick(WireModel):
 
 class QuoteUpdate(WireModel):
     received_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
-    market_price: float | None = None
     data_type: int
     ticks: tuple[Tick, ...] = Field(max_length=512)
     values: dict[str, float | None]

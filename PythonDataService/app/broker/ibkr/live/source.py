@@ -4,12 +4,9 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Hashable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import Any, Protocol
 
 from app.broker.ibkr.live.quotes import QuoteLease
-
-if TYPE_CHECKING:
-    from app.broker.ibkr.client import IbkrClient
 
 
 @dataclass(frozen=True)
@@ -47,24 +44,3 @@ class LiveSource(Protocol):
     async def history_recovered(self, callback: Callable[[], Awaitable[None]]) -> None: ...
     def quote(self, contract: Any) -> QuoteLease: ...
     def raw_bars(self, symbol: str, request: BarRequest) -> AsyncIterator[RawBarReceipt | None]: ...
-
-
-def create_live_source(client: IbkrClient) -> LiveSource:
-    if client.settings.shared_feed_url is not None:
-        from app.broker.ibkr.contracts import qualify_underlying
-        from app.broker.ibkr.live.connection import SharedConnection
-        from app.broker.ibkr.live.protocol import Instrument
-
-        async def qualify(symbol: str) -> Instrument:
-            contract = await qualify_underlying(client, symbol)
-            return Instrument(
-                con_id=int(contract.conId),
-                exchange=contract.exchange,
-                currency=contract.currency,
-                sec_type=contract.secType,
-            )
-
-        return SharedConnection(client.settings, qualify=qualify)
-    from app.broker.ibkr.live.local import NativeLiveSource
-
-    return NativeLiveSource(client)

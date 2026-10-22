@@ -263,7 +263,7 @@ class IbkrClient:
         from ib_async import IB
 
         self._settings = settings or get_settings()
-        from app.broker.ibkr.live.source import create_live_source
+        from app.broker.ibkr.live.factory import create_live_source
 
         self.live_data = create_live_source(self)
         self._ib: IB = IB()

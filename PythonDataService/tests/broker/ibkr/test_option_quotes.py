@@ -1435,3 +1435,26 @@ async def test_a_clerk_that_watches_no_option_contract_has_no_option_feed(monkey
     assert (status.option_feed(), status.underlying_quote("SPY")) == (None, None)
     assert ibkr.asked == ["SPY"]
 
+
+
+async def test_greeks_changed_during_outage_cannot_gain_a_receipt_on_maintained_restore(monkeypatch: pytest.MonkeyPatch) -> None:
+    status, lines, ibkr, _ = _watching(monkeypatch, _bot())
+    await _settle(status)
+    name = _call(585).occ_symbol
+    ibkr.lines[name].modelGreeks = OptionComputation(0, delta=0.61)
+    ibkr.tick(name, bid=4.10, ask=4.14)
+    assert lines._lines[name].vendor_delta == 0.61
+    ibkr.client.connection_state = "soft_lost"
+    ibkr.client.ib.errorEvent.emit(-1, 1100, "lost", None)
+    ibkr.lines[name].modelGreeks = OptionComputation(0, delta=0.88)
+    ibkr.tick(name, sizes=True)
+    ibkr.client.connection_state = "connected"
+    ibkr.client.connectivity_lost_count += 1
+    ibkr.client.last_ibkr_code = 1102
+    ibkr.client.ib.errorEvent.emit(-1, 1102, "maintained", None)
+    await _settle(status, passes=1)
+    ibkr.tick(name, sizes=True)
+    assert lines._lines[name].vendor_delta is None
+    ibkr.lines[name].modelGreeks = OptionComputation(0, delta=0.58)
+    ibkr.tick(name, sizes=True)
+    assert lines._lines[name].vendor_delta == 0.58

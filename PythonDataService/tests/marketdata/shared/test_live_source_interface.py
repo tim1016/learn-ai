@@ -123,3 +123,61 @@ async def test_shared_bar_request_keeps_watermark_receipts_and_consumer_stall_bu
     finally:
         await stream.aclose()
         await delivery.close()
+
+
+async def test_native_resumed_consumers_keep_the_same_physical_ingress_receipt(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    from ib_async import Contract
+
+    from app.broker.ibkr.live.source import BarRequest
+    from tests.marketdata.shared.test_consumers import RTH
+    from tests.marketdata.shared.test_review_regressions import BarBroker
+
+    clock = [1000]
+    monkeypatch.setattr("app.broker.ibkr.bars.now_ms_utc", lambda: clock[0])
+    client = Client()
+    client.ib = BarBroker()
+
+    async def qualify(*args: Any) -> Contract:
+        return Contract(conId=22, secType="STK", symbol="IWM", exchange="SMART", currency="USD")
+
+    monkeypatch.setattr("app.broker.ibkr.bars.qualify_underlying", qualify)
+    request = BarRequest(
+        use_rth=False,
+        stall_timeout_s=60,
+        consumer_label="resumed bot",
+        no_bar_message="waiting",
+        first_bar_message="arrived",
+        last_source_ms=RTH - 5000,
+    )
+    one, two = client.live_data.raw_bars("IWM", request), client.live_data.raw_bars("IWM", request)
+
+    async def read_bar(stream):
+        async for receipt in stream:
+            if receipt is not None:
+                return receipt
+        raise AssertionError("No bar delivered")
+
+    pending = asyncio.create_task(read_bar(one))
+    try:
+        for _ in range(20):
+            if client.ib.raw_list is not None:
+                break
+            await asyncio.sleep(0)
+        bars = client.ib.raw_list
+        raw = SimpleNamespace(time=RTH, open=2, high=2, low=2, close=2, volume=1)
+        bars.append(raw)
+        bars.updateEvent.emit(bars, True)
+        clock[0] = 5000
+        first = await asyncio.wait_for(pending, 1)
+        clock[0] = 9000
+        second = await asyncio.wait_for(read_bar(two), 1)
+        assert first.raw is second.raw is raw
+        assert first.received_at_ms == second.received_at_ms == 1000
+    finally:
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+        await one.aclose()
+        await two.aclose()
+    assert client.ib.cancelled == 1

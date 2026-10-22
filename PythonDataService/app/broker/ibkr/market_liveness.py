@@ -164,10 +164,6 @@ class IbkrMarketStatusSource:
         lease.failures -= subscription.failure_callback
         lease.release()
 
-    @staticmethod
-    def _client_generation(client: IbkrClient) -> Hashable:
-        return client.live_data.status_generation
-
     async def __call__(self) -> MarketStatusSnapshot:
         await self._flush_halts()
         self._option_fault_this_pass = False
@@ -181,7 +177,7 @@ class IbkrMarketStatusSource:
             if client is None or not client.live_data.retains_requests():
                 await self.close()
             return self._snapshot(self._clock(), connected=False)
-        generation = self._client_generation(client)
+        generation = client.live_data.status_generation
         if client is not self._owner or generation != self._generation:
             maintained = (self._owner is client and self._generation is not None
                           and client.live_data.maintains(self._generation))
@@ -322,7 +318,7 @@ class IbkrMarketStatusSource:
         def receive(update: QuoteUpdate) -> None:
             if (
                 self._subscriptions.get(subscription.symbol) is not subscription
-                or self._generation != generation or self._client_generation(client) != generation
+                or self._generation != generation or client.live_data.status_generation != generation
                 or not client.live_data.is_connected()
             ):
                 return
@@ -351,7 +347,7 @@ class IbkrMarketStatusSource:
     def _connected(self) -> bool:
         return (
             self._owner is not None and self._owner.live_data.is_connected()
-            and self._generation == self._client_generation(self._owner)
+            and self._generation == self._owner.live_data.status_generation
         )
 
     def _snapshot(self, now: int, *, connected: bool) -> MarketStatusSnapshot:

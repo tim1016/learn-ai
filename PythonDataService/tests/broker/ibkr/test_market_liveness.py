@@ -683,3 +683,56 @@ async def test_a_new_halt_cannot_be_cleared_by_an_older_inflight_resume_write(
         halt_path=status._halt_path,
     )
     assert (await restarted()).symbol_statuses[0].state == "HALTED"
+
+
+@pytest.mark.parametrize("code,state", [(1100, "soft_lost"), (2103, "degraded_data_farm"), (1101, "subscriptions_stale")])
+async def test_native_connectivity_callback_immediately_withdraws_published_readiness(
+    source: SourceFixture, code: int, state: str
+) -> None:
+    status, client, ticker = source
+    ticker.bid, ticker.ask = 512.31, 512.36
+    published: list[MarketStatusSnapshot] = []
+    status._publish_snapshot = published.append
+    await poll(status)
+    assert fact(published[-1]).state == "TRADABLE"
+    previous = len(published)
+    client.connection_state = state
+    client.connection_lost = code == 1100
+    client.connectivity_lost_count += 1
+    client.last_event_ms += 1
+    client.ib.errorEvent.emit(-1, code, "data session changed", None)
+
+    assert len(published) > previous
+    assert not published[-1].connected
+    assert not published[-1].quotes
+    assert fact(published[-1]).state != "TRADABLE"
+    client.ib.cancelMktData.assert_not_called()
+    await status.close()
+
+
+async def test_native_maintained_restore_requires_fresh_receipts_before_next_poll(source: SourceFixture) -> None:
+    status, client, ticker = source
+    ticker.bid, ticker.ask = 512.31, 512.36
+    published: list[MarketStatusSnapshot] = []
+    status._publish_snapshot = published.append
+    await poll(status)
+    client.connection_state = "soft_lost"
+    client.connection_lost = True
+    client.connectivity_lost_count += 1
+    client.last_event_ms += 1
+    client.ib.errorEvent.emit(-1, 1100, "lost", None)
+    client.connection_state = "connected"
+    client.connection_lost = False
+    client.last_ibkr_code = 1102
+    client.last_event_ms += 1
+    client.ib.errorEvent.emit(-1, 1102, "maintained", None)
+
+    assert not published[-1].connected and not published[-1].quotes
+    assert fact(published[-1]).state != "TRADABLE"
+    await poll(status)
+    assert fact(published[-1]).state != "TRADABLE"
+    client.ib.reqMktData.assert_called_once()
+    client.ib.cancelMktData.assert_not_called()
+    emit(ticker)
+    assert fact(published[-1]).state == "TRADABLE"
+    await status.close()

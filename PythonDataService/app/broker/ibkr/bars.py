@@ -245,6 +245,37 @@ class _RealtimeBarSubscription:
     consumer_count: int = 1
     invalidated: bool = False
 
+    _receipts: dict[int, int] = field(default_factory=dict)
+    _captured_count: int = 0
+    _captured_tail: object | None = None
+
+    def __post_init__(self) -> None:
+        self._capture(self.bars, True)
+        event = getattr(self.bars, "updateEvent", None)
+        if event is not None:
+            event += self._capture
+
+    def _capture(self, bars: list[object], _new: bool) -> None:
+        # The installation owner drains its exclusive vendor list each callback.
+        if self._captured_count and (len(bars) < self._captured_count
+                                    or bars[self._captured_count - 1] is not self._captured_tail):
+            self._receipts.clear()
+            self._captured_count = 0
+        received = now_ms_utc()
+        for raw in bars[self._captured_count:]:
+            self._receipts[id(raw)] = received
+        self._captured_count = len(bars)
+        self._captured_tail = bars[-1] if bars else None
+
+    def received_at(self, raw: object) -> int:
+        # List-only replay clients have no callback; record their first observation once.
+        return self._receipts.setdefault(id(raw), now_ms_utc())
+
+    def detach(self) -> None:
+        event = getattr(self.bars, "updateEvent", None)
+        if event is not None:
+            event -= self._capture
+
     @property
     def data_lost(self) -> bool:
         """Whether an IBKR 1101 has dropped this line since it was requested."""
@@ -489,6 +520,7 @@ class _RealtimeBarSubscriptionRegistry:
         for key in stale:
             subscription = self._subscriptions.pop(key)
             subscription.invalidated = True
+            subscription.detach()
             logger.info(
                 "Evicted real-time-bar subscription from a previous connection generation",
                 extra={
@@ -527,6 +559,7 @@ class _RealtimeBarSubscriptionRegistry:
         generation's line first). A line IBKR dropped at 1101 is cancelled
         too: same socket, so its reqId is still its own.
         """
+        subscription.detach()
         try:
             subscription.client.ib.cancelRealTimeBars(subscription.bars)
         except Exception as exc:
@@ -546,6 +579,7 @@ class _RealtimeBarSubscriptionRegistry:
         if subscription.generation == _client_generation(subscription.client):
             return False
         self._subscriptions.pop(key, None)
+        subscription.detach()
         return True
 
     def _max_active_for_client(self, client: RealtimeBarClient) -> int:
@@ -939,13 +973,14 @@ async def _iter_native_raw_bars(
     def _observe(raw_bar) -> RawBarReceipt:
         nonlocal last_progress_at, last_source_ms
         source_ms = _bar_time_ms(raw_bar)
+        received = lease.subscription.received_at(raw_bar)
         if last_source_ms is None or source_ms > last_source_ms:
             delivery_logger.log_first_bar(bar_count=len(bars), message=first_bar_message)
             last_source_ms = source_ms
             last_progress_at = time.monotonic()
             if on_source_bar is not None:
-                on_source_bar(source_ms, now_ms_utc())
-        return RawBarReceipt(raw_bar, venue, lease.generation, now_ms_utc())
+                on_source_bar(source_ms, received)
+        return RawBarReceipt(raw_bar, venue, lease.generation, received)
 
     try:
         while True:
@@ -961,7 +996,7 @@ async def _iter_native_raw_bars(
                     lease=lease,
                     symbol=symbol,
                     use_rth=use_rth,
-                    stall_timeout_s=stall_timeout_s,
+                        stall_timeout_s=stall_timeout_s,
                     last_progress_at=last_progress_at,
                     last_source_ms=last_source_ms,
                     # A paused consumer can have fresh IBKR prints waiting in
@@ -1034,11 +1069,11 @@ async def stream_raw_5s_bars(
         client.live_data.raw_bars(
             symbol,
             BarRequest(
-            use_rth=use_rth,
-            stall_timeout_s=stall_timeout_s,
-            consumer_label="raw 5-second bar",
-            no_bar_message="IBKR reqRealTimeBars has not delivered raw 5-second bars",
-            first_bar_message="IBKR reqRealTimeBars delivered first raw 5-second bar",
+                use_rth=use_rth,
+                stall_timeout_s=stall_timeout_s,
+                consumer_label="raw 5-second bar",
+                no_bar_message="IBKR reqRealTimeBars has not delivered raw 5-second bars",
+                first_bar_message="IBKR reqRealTimeBars delivered first raw 5-second bar",
             ),
         )
     ) as leased_bars:
@@ -1100,14 +1135,14 @@ async def stream_minute_bars(
             client.live_data.raw_bars(
                 symbol,
                 BarRequest(
-                use_rth=use_rth,
-                stall_timeout_s=stall_timeout_s,
-                consumer_label="minute-bar",
-                no_bar_message="IBKR reqRealTimeBars has not delivered 5-second bars",
-                first_bar_message="IBKR reqRealTimeBars delivered first 5-second bar",
-                last_source_ms=assembler.last_source_ms,
-                request_deadline_ms=request_deadline_ms,
-                stall_deferred=assembler.awaits_clock_emit,
+                    use_rth=use_rth,
+                        stall_timeout_s=stall_timeout_s,
+                    consumer_label="minute-bar",
+                    no_bar_message="IBKR reqRealTimeBars has not delivered 5-second bars",
+                    first_bar_message="IBKR reqRealTimeBars delivered first 5-second bar",
+                    last_source_ms=assembler.last_source_ms,
+                    request_deadline_ms=request_deadline_ms,
+                    stall_deferred=assembler.awaits_clock_emit,
                 ),
             )
         ) as leased_bars:

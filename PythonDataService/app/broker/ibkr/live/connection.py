@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Hashable
 from contextlib import aclosing
 from typing import TYPE_CHECKING, Any
 
+from app.broker.ibkr.live.bars import shared_raw_bars
 from app.broker.ibkr.live.protocol import FeedUnavailable, Frame, Instrument, SourceEpoch, Subscription
 from app.broker.ibkr.live.quotes import QuoteFailure, QuoteLease
 from app.broker.ibkr.live.source import BarRequest, RawBarReceipt
@@ -78,12 +79,9 @@ class SharedConnection:
         """Worker history recovery has no authority over the shared live source."""
 
     def raw_bars(self, symbol: str, request: BarRequest) -> AsyncIterator[RawBarReceipt | None]:
-        from app.broker.ibkr.live.bars import shared_raw_bars
-
         return shared_raw_bars(self, symbol, **vars(request))
 
     async def underlying(self, symbol: str, timeout: float) -> Instrument:
-
         identity = self._underlyings.get(symbol)
         if identity is None:
             identity = await asyncio.wait_for(self._qualify(symbol), timeout=timeout)

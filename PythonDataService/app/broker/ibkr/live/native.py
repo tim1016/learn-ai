@@ -136,7 +136,7 @@ class IbkrSource:
                 if queue.full():
                     overflow = True
                     break
-                queue.put_nowait((raw, now_ms_utc()))
+                queue.put_nowait((raw, lease.subscription.received_at(raw)))
             # This source is the exclusive owner of its list. Keep no vendor
             # history: reconnect history belongs to each consumer's proof.
             raw_bars.clear()

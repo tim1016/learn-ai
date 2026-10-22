@@ -6,7 +6,14 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Hashable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from app.broker.ibkr.live.protocol import FeedUnavailable
+from app.broker.ibkr.bars import _iter_native_raw_bars
+from app.broker.ibkr.event_codes import (
+    CONNECTIVITY_LOST_CODES,
+    CONNECTIVITY_RESTORED_CODES,
+    DATA_FARM_DEGRADED_CODES,
+    DATA_FARM_OK_CODES,
+)
+from app.broker.ibkr.live.protocol import GREEK_BLOCKS, FeedUnavailable
 from app.broker.ibkr.live.quote_callbacks import (
     REQUEST_FAILURE_CODES,
     generic_ticks,
@@ -31,8 +38,9 @@ class NativeGeneration:
 @dataclass
 class _QuoteLine:
     ticker: Any
+    request_id: int | None
     receive: Callable[..., None]
-    failed: Callable[..., None]
+    previous_greeks: dict[str, Any]
     readers: set[QuoteLease] = field(default_factory=set)
 
 
@@ -83,8 +91,6 @@ class NativeLiveSource:
         await callback()
 
     def raw_bars(self, symbol: str, request: BarRequest) -> AsyncIterator[RawBarReceipt | None]:
-        from app.broker.ibkr.bars import _iter_native_raw_bars
-
         return _iter_native_raw_bars(self._client, symbol, **vars(request))
 
     def quote(self, contract: Any) -> QuoteLease:
@@ -113,24 +119,39 @@ class NativeLiveSource:
                 for reader in tuple(line.readers):
                     reader.publish(update)
 
-            def failed(request_id: int, code: int, reason: str, _contract: Any) -> None:
-                if request_id == req_id and code in REQUEST_FAILURE_CODES:
-                    for reader in tuple(line.readers):
-                        reader.fail(QuoteFailure(reason, code))
-
-            line = self._quotes[key] = _QuoteLine(ticker, receive, failed)
+            if not self._quotes:
+                client.ib.errorEvent += self._on_error
+            line = self._quotes[key] = _QuoteLine(ticker, req_id, receive, previous_greeks)
             ticker.updateEvent += receive
-            client.ib.errorEvent += failed
 
         def release() -> None:
             line.readers.discard(lease)
             if not line.readers:
                 self._quotes.pop(key, None)
                 line.ticker.updateEvent -= line.receive
-                client.ib.errorEvent -= line.failed
+                if not self._quotes:
+                    client.ib.errorEvent -= self._on_error
                 if (client.connection_generation, client.data_loss_epoch) == key[:2] and client.is_connected():
                     client.ib.cancelMktData(line.ticker.contract)
 
         lease = QuoteLease(release)
         line.readers.add(lease)
         return lease
+
+    def _on_error(self, request_id: int, code: int, reason: str, _contract: Any) -> None:
+        transition = code in (
+            CONNECTIVITY_LOST_CODES | CONNECTIVITY_RESTORED_CODES | DATA_FARM_DEGRADED_CODES | DATA_FARM_OK_CODES
+        )
+        for key, line in tuple(self._quotes.items()):
+            if transition:
+                # Recovery can retain vendor analytics changed during the outage.
+                # They become this source's only when a later computation arrives.
+                line.previous_greeks.update({block: getattr(line.ticker, block) for block in GREEK_BLOCKS})
+            refused = (
+                code in REQUEST_FAILURE_CODES
+                and request_id == line.request_id
+                and key[:2] == (self._client.connection_generation, self._client.data_loss_epoch)
+            )
+            if transition or refused:
+                for reader in tuple(line.readers):
+                    reader.fail(QuoteFailure(reason, code))

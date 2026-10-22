@@ -45,7 +45,6 @@ def quote_update(ticker: Any, previous_greeks: dict[str, Any]) -> QuoteUpdate:
     changed = tuple(block for block in GREEK_BLOCKS if getattr(ticker, block, None) is not previous_greeks.get(block))
     previous_greeks.update({block: getattr(ticker, block, None) for block in GREEK_BLOCKS})
     trade = getattr(ticker, "rtTime", None)
-    market_price = ticker.marketPrice()
     return QuoteUpdate(
         received_at_ms=now_ms_utc(),
         data_type=ticker.marketDataType,
@@ -58,7 +57,6 @@ def quote_update(ticker: Any, previous_greeks: dict[str, Any]) -> QuoteUpdate:
         },
         greeks_changed=changed,
         trade_ms=None if trade is None else int(trade.timestamp() * 1000),
-        market_price=number(market_price),
     )
 
 
