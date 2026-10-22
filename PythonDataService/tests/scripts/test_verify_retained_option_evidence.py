@@ -24,7 +24,7 @@ from app.research.options_golden_search.metrics import evidence_to_json
 from app.research.options_golden_search.planning import freeze_protocol
 from app.research.options_golden_search.projections import exact_data
 from app.research.options_golden_search.protocol import Knob, Window
-from app.research.options_golden_search.snapshots import Snapshot, SnapshotRunData
+from app.research.options_golden_search.snapshots import SnapshotRunData, capture_snapshot
 from app.research.options_golden_search.stages import StudyEvaluator, metric_summary
 from app.research.runs.hashing import hash_payload
 from app.utils.session_anchors import et_midnight_ms
@@ -46,11 +46,13 @@ async def retained_bundle(tmp_path: Path, *, container: bool) -> tuple[dict[str,
     source = await asyncio.to_thread(run_sessions, setup, [recording.TRADING_DATE], LakeRunData("SPY"),
                                     slippage_ladder=(), cash_ladder=())
     proof = await asyncio.to_thread(build_proof, source, blobs=blobs)
-    snapshot = Snapshot(version=2 if container else 1, manifest=proof["manifest"], absent=(),
-                        retained_bytes=sum(len(blobs.get(digest)) for digest in proof["manifest"].values()))
     protocol = freeze_protocol(setup, (Knob(path="legs.leg.stop_loss", values=(None, {"kind": "percent", "value": "10"})),),
         start_ms=et_midnight_ms(date(2025, 1, 1)), end_ms=et_midnight_ms(date(2025, 7, 1)),
-        train_months=1, test_months=1, final_months=1, snapshot_id=snapshot.snapshot_id)
+        train_months=1, test_months=1, final_months=1)
+    snapshot = await asyncio.to_thread(capture_snapshot, protocol, blobs)
+    assert snapshot.version == (2 if container else 1)
+    assert any("/session/" in path for path in snapshot.manifest) is container
+    protocol = protocol.model_copy(update={"snapshot_id": snapshot.snapshot_id})
     row = {"id": "retained-study", "protocol": protocol.model_dump(mode="json"),
            "protocol_hash": protocol.protocol_hash, "snapshot": snapshot.model_dump(mode="json")}
     window = Window(key="final", start_ms=source.sessions[0].session_open_ms,
