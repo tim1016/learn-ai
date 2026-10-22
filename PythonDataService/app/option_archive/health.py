@@ -109,7 +109,7 @@ def project_health(state: ArchiveStateDoc, *, now_ms: int, config: ArchiveSettin
         if state.snapshot_activation_ms is not None:
             for day in expected_sessions(et_date_at_ms(state.snapshot_activation_ms), today):
                 window = session_window_for_date(day)
-                if now_ms > window.close_ms_utc + config.SNAPSHOT_DELAY_MS + config.SNAPSHOT_WINDOW_MS and window.open_ms_utc not in observations:
+                if now_ms >= window.close_ms_utc + config.SNAPSHOT_DELAY_MS + config.SNAPSHOT_WINDOW_MS and window.open_ms_utc not in observations:
                     missed += 1
         incomplete = sum(not row.complete for row in observations.values())
         last_observation = max(observations, default=None)
