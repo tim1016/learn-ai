@@ -300,8 +300,9 @@ def _as_mounted_in_the_dev_topology(control_dir: Path) -> None:
 def write_fleet_env_files(repo_root: Path) -> None:
     env = repo_root / "deploy" / "fleet" / "env"
     env.mkdir(parents=True, exist_ok=True)
-    for name in ("coordinator.env", "live.env", "paper.env"):
-        (env / name).write_text("FLEET_WORKER_KEY=secret\n", encoding="utf-8")
+    for name in ("coordinator.env", "live.env", "market-data.env", "paper.env"):
+        key = "IBKR_SHARED_FEED_TOKEN" if name == "market-data.env" else "FLEET_WORKER_KEY"
+        (env / name).write_text(f"{key}=secret\n", encoding="utf-8")
 
 
 def write_host_env_files(repo_root: Path) -> None:

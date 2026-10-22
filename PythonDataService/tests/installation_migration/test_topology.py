@@ -90,8 +90,9 @@ def test_the_committed_topology_names_the_folder_writer_and_the_fleet_env_files(
     assert [path.name for path in required_fleet_env_files(_REPO, topology)] == [
         "coordinator.env",
         "live.env",
+        "market-data.env",
         "paper.env",
-    ], "the fleet env files are the three committed lane and coordinator files"
+    ], "the fleet requires coordinator, lane and shared-source credential files"
 
 
 def test_the_namespace_defaults_to_the_overlay_value(
