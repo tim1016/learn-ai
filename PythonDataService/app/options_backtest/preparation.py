@@ -100,12 +100,14 @@ class _Owner:
         self._checked = 0.0
         self.receipts: WorkReceipts
 
-    def check(self, *, force: bool = False) -> None:
-        self.cancel.raise_if_cancelled()
-        self.parent_cancel.raise_if_cancelled()
+    def check(self, *, force: bool = False, allow_cancelled: bool = False) -> None:
+        if not allow_cancelled:
+            self.cancel.raise_if_cancelled()
+            self.parent_cancel.raise_if_cancelled()
         if force or time.monotonic() - self._checked >= 0.5:
             request = self.request
-            if not get_redis().exists(lease_key(request.job_id)) or lifecycle.job_is_live(request.parent.job_id) is False:
+            if not allow_cancelled and (not get_redis().exists(lease_key(request.job_id))
+                                        or lifecycle.job_is_live(request.parent.job_id) is False):
                 raise JobCancelled("the preparation worker or parent lease expired")
             run_sync(with_connection(preparation_binding.require_binding, request.run_id, request.parent.job_id,
                                      request.generation, request.identity, request.job_id))
@@ -152,7 +154,14 @@ def _collect_preparation(request: OptionsBacktestPreparationRequest, emit: Progr
             resume = None if checkpoint is None else checkpoint.inputs
             stage.retain_verified(frozenset() if resume is None else resume.blob_digests)
             sessions = service.sessions_of_range(req.start_ms, req.end_ms)
-            hooks = service.RunHooks(receipts.phase, receipts.progress, lambda message: None, owner.stop)
+            def observations() -> dict[str, Any]:
+                return {"identity": request.identity, "phase_timings": ledger.wire()}
+
+            def phase(name: str) -> None:
+                receipts.observations(observations())
+                receipts.phase(name)
+
+            hooks = service.RunHooks(phase, receipts.progress, lambda message: None, owner.stop)
 
             def save(frozen: FrozenRunInputs, *, complete: bool = False) -> PreparationCheckpoint:
                 owner.check(force=True)
@@ -163,7 +172,7 @@ def _collect_preparation(request: OptionsBacktestPreparationRequest, emit: Progr
 
             with observe_work(receipts.work):
                 service.prepare_run_data(req.setup, sessions, hooks, now_ms_utc, timings=ledger)
-                receipts.phase("freezing_inputs")
+                phase("freezing_inputs")
                 with ledger.measure("input_freeze"):
                     frozen = freeze_run_inputs(req.setup, sessions, LakeRunData(req.setup.underlying), stage.root,
                         should_stop=owner.stop, reserve_bytes=stage.reserve, resume=resume,
@@ -175,10 +184,22 @@ def _collect_preparation(request: OptionsBacktestPreparationRequest, emit: Progr
         finally:
             # Background bounded I/O may finish after cancellation. Drain its
             # receipt callback before cleanup can release the reservation.
+            drain_failure: BaseException | None = None
             try:
                 receipts.deactivate()
-            except BaseException:
-                if failure is None:
-                    raise
-                logger.warning("receipt drain failed after preparation stopped", exc_info=True,
-                               extra={"job_id": request.job_id, "action": "preparation_receipt_drain_failed"})
+            except BaseException as exc:
+                drain_failure = exc
+                if failure is not None:
+                    logger.warning("receipt drain failed after preparation stopped", exc_info=True,
+                                   extra={"job_id": request.job_id, "action": "preparation_receipt_drain_failed"})
+            if ledger.rows:
+                try:
+                    # Cancellation still reports closed spans. A lost parent
+                    # binding or generation authorizes no further publication.
+                    owner.check(force=True, allow_cancelled=True)
+                    emit.emit_event("job.observations", {"identity": request.identity, "phase_timings": ledger.wire()})
+                except Exception:
+                    logger.warning("preparation observations could not be published", exc_info=True,
+                                   extra={"job_id": request.job_id, "action": "preparation_observations_failed"})
+            if failure is None and drain_failure is not None:
+                raise drain_failure

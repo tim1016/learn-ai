@@ -1,6 +1,7 @@
 """Real acquisition receipts on ordinary job events; observations never renew a lease."""
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 import time
@@ -11,6 +12,8 @@ from app.jobs import progress
 from app.jobs.checkpoints import GatedLease
 from app.jobs.progress import ProgressEmitter
 from app.utils.timestamps import now_ms_utc
+
+logger = logging.getLogger(__name__)
 
 MAX_EXTERNAL_WAIT_MS = 1_860_000
 WORK_PUBLICATION_INTERVAL_S = 0.5
@@ -61,6 +64,10 @@ class WorkReceipts:
     def phase(self, name: str) -> None:
         self._offer("phase", name)
 
+    def observations(self, payload: dict[str, Any]) -> None:
+        """Operational metadata carries no execution checkpoint or lease renewal."""
+        self._offer("observations", payload)
+
     def progress(self, done: int, total: int) -> None:
         self._offer("progress", (done, total))
 
@@ -77,6 +84,13 @@ class WorkReceipts:
             try:
                 if kind == "check":
                     self._check_owner()
+                elif kind == "observations":
+                    self._check_owner()
+                    try:
+                        self.emit.emit_event("job.observations", value)
+                    except Exception:
+                        logger.warning("job observations could not be published", exc_info=True,
+                                       extra={"job_id": self.emit.job_id})
                 elif kind == "phase":
                     if value != self._phase:
                         self._check_owner()

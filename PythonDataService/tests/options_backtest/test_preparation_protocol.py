@@ -206,3 +206,54 @@ async def test_completed_checkpoint_refuses_changed_input_binding_without_dispat
         await preparation_jobs.prepare_over_api(req, run_id=1, emit=ProgressEmitter(req.job_id, renews_lease=False),
                                                lease=lease, timings=RunTimings())
     assert fake.strings == {progress.lease_key(req.job_id): "owner"}
+
+
+@pytest.mark.parametrize("checkpointed", ["none", "stable", "late"])
+async def test_restart_then_cancel_keeps_each_attempts_closed_timings_once(
+    owner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, checkpointed: str,
+) -> None:
+    from app.options_backtest.timings import PhaseTiming
+
+    req, fake, _, lease, binding = owner
+    first = _child(fake, binding.job_id)
+    identity = preparation_identity(req)
+    before = PhaseTiming(phase="check", started_at_ms=1, finished_at_ms=1, duration_ms=0)
+    checked = before.model_copy(update={"started_at_ms": 2, "finished_at_ms": 2})
+    downloaded = checked.model_copy(update={"phase": "download"})
+    first.emit_event("job.observations", {"identity": identity, "phase_timings": [before.model_dump(mode="json")]})
+    first.failed(code="DATA_SERVICE_RESTARTED", message="the API worker stopped")
+    if checkpointed != "none":
+        frozen = freeze_run_inputs(req.setup, (WED,), archived_scene(chain_scene(), tmp_path / "source"), tmp_path / req.job_id)
+        checkpoint = PreparationCheckpoint(identity=identity, inputs=frozen, timings=(before,) if checkpointed == "stable" else ())
+        (tmp_path / req.job_id / "freeze-checkpoint.json").write_text(checkpoint.model_dump_json())
+
+    if checkpointed == "late":
+        read_state = facade.read_job_state
+        original_id = binding.job_id
+
+        async def after_first_checkpoint(job_id: str) -> dict[str, str]:
+            state = await read_state(job_id)
+            if job_id == original_id:
+                updated = checkpoint.model_copy(update={"timings": (before,)})
+                (tmp_path / req.job_id / "freeze-checkpoint.json").write_text(updated.model_dump_json())
+            return state
+
+        monkeypatch.setattr(facade, "read_job_state", after_first_checkpoint)
+
+    async def dispatch(request: httpx.Request) -> httpx.Response:
+        child_id = json.loads(request.content)["job_id"]
+        child = _child(fake, child_id)
+        base = (before,) if checkpointed != "none" else ()
+        for rows in ((*base, checked), (*base, checked, downloaded), (*base, checked, downloaded)):
+            child.emit_event("job.observations", {"identity": identity,
+                             "phase_timings": [row.model_dump(mode="json") for row in rows]})
+        child.cancelled("input preparation was cancelled")
+        return httpx.Response(202)
+
+    monkeypatch.setattr(preparation_jobs, "build_internal_client",
+                        lambda **kwargs: httpx.AsyncClient(transport=httpx.MockTransport(dispatch)))
+    timings = RunTimings()
+    with pytest.raises(JobCancelled):
+        await preparation_jobs.prepare_over_api(req, run_id=1, emit=ProgressEmitter(req.job_id, renews_lease=False),
+                                               lease=lease, timings=timings)
+    assert timings.rows == (before, checked, downloaded)
