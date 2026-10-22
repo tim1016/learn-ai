@@ -68,6 +68,7 @@ jobs:
       FLEET_LIVE_ENV_FILE: ./deploy/fleet/env/live.env.example
       FLEET_PAPER_ENV_FILE: ./deploy/fleet/env/paper.env.example
       FLEET_COORDINATOR_ENV_FILE: ./deploy/fleet/env/coordinator.env.example
+      FLEET_MARKET_DATA_ENV_FILE: ./deploy/fleet/env/market-data.env.example
     steps:
       - uses: actions/checkout@v4
         with:
@@ -95,7 +96,7 @@ jobs:
           docker compose --project-name learn-ai \
             --env-file deploy/fleet/ci-render.placeholders \
             -f compose.yaml -f compose.fleet.dev.yaml config --services | sort > /tmp/services.txt
-          printf '%s\n' alpaca-live-clerk alpaca-paper-clerk db frontend python-service redis \
+          printf '%s\n' alpaca-live-clerk alpaca-paper-clerk db frontend ibkr-market-data python-service redis \
             | sort | diff -u - /tmp/services.txt
 
   frontend-lint:
