@@ -68,6 +68,7 @@ async def test_the_supervisor_a_clerk_builds_watches_what_its_bots_ask_inside_th
     supervisor already counts QQQ's own quote among what it must watch, and says the option feed is not up."""
     ibkr_settings.setenv("IBKR_OPTION_LINE_BUDGET", "40")
     not_connected = Mock()
+    not_connected.shared_feed = None
     not_connected.is_connected.return_value = False
     ibkr_settings.setattr("app.broker.ibkr.client._client", not_connected)
     watch = OptionWatchList()
