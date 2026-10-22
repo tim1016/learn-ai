@@ -1,0 +1,28 @@
+{
+  "days": [
+    {
+      "trade_date_ms": 1791898200000,
+      "sold_contracts": 4,
+      "trades": 4,
+      "source": "tests/fixtures/alpaca/option_paper_recordings"
+    },
+    {
+      "trade_date_ms": 1791984600000,
+      "sold_contracts": 19,
+      "trades": 19,
+      "source": "tests/fixtures/alpaca/option_paper_recordings"
+    },
+    {
+      "trade_date_ms": 1792071000000,
+      "sold_contracts": 2,
+      "trades": 2,
+      "source": "tests/fixtures/alpaca/option_paper_recordings"
+    },
+    {
+      "trade_date_ms": 1792157400000,
+      "sold_contracts": 30,
+      "trades": 30,
+      "source": "docs/runbooks/qualify-option-orders-on-paper.md, run record 2026-10-21"
+    }
+  ]
+}

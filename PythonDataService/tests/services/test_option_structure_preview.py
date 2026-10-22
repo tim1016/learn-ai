@@ -245,9 +245,10 @@ async def test_a_bull_call_spread_previews_with_its_contracts_its_money_and_what
     assert (money.net_entry_premium_cents, money.net_entry_premium_per_structure_cents) == (19_400, 19_400)
     assert money.broker_requirement_cents == 0
     # On 2026-10-06: the SEC fee on the $218.00 sold, 0.45 of a cent, rounds up to 1; CAT on 200 shares to 1;
-    # ORF is 2 x 1.5 = 3; OCC is $0.025 up to 3 a leg, 6; FINRA's TAF is paused. Eleven cents.
-    assert (money.fee_estimate_cents, money.entry_commitment_cents) == (11, 19_411)
-    # Four cents a share on each leg, a hundred shares: $8.00, which is 4.12% of $194.11.
+    # ORF is 2 x 1.5 = 3; OCC is $0.025 up to 3 a leg, 6; the TAF on the one contract sold is 0.3 of a cent, 1.
+    # Twelve cents.
+    assert (money.fee_estimate_cents, money.entry_commitment_cents) == (12, 19_412)
+    # Four cents a share on each leg, a hundred shares: $8.00, which is 4.12% of $194.12.
     assert (money.round_trip_cost_cents, money.round_trip_cost_percent) == (800, Decimal("4.12"))
     assert (money.cost_limit_percent, money.over_cost_limit) == (Decimal(10), False)
 
@@ -265,7 +266,7 @@ async def test_a_bull_call_spread_previews_with_its_contracts_its_money_and_what
     assert "590" in at_expiry.gain_sentence and "above" in at_expiry.gain_sentence and "below" not in at_expiry.gain_sentence
     assert "586.94" in at_expiry.break_even_sentence
     # The cost is said as a part of what is set aside, which is not the premium, against the owner's limit.
-    assert all(said in money.cost_sentence for said in (usd(800), "4.12%", usd(19_411), "10%"))
+    assert all(said in money.cost_sentence for said in (usd(800), "4.12%", usd(19_412), "10%"))
     assert usd(19_400) not in money.cost_sentence
 
     ours = [_our_delta("call", 585, "4.08", "4.12", at_ms=NOW + 400), _our_delta("call", 590, "2.18", "2.22", at_ms=NOW + 400)]
@@ -295,7 +296,7 @@ async def test_a_bull_call_spread_previews_with_its_contracts_its_money_and_what
 
 async def test_the_fee_estimate_is_worked_out_on_the_price_each_leg_is_entered_at(monkeypatch: pytest.MonkeyPatch) -> None:
     """The 585 call is sold at its bid of 4.85. The SEC fee on $485.00 is 0.9991 of a cent, which rounds up to
-    1; on its ask of 4.89 it would be 1.0073, and round up to 2. With CAT 1, ORF 3 and OCC 6: eleven cents."""
+    1; on its ask of 4.89 it would be 1.0073, and round up to 2. With CAT 1, ORF 3, OCC 6 and the TAF on the one contract sold 1: twelve cents."""
     desk = Desk(monkeypatch)
     received = _asking(
         _leg("short_call", "short", "call", _AT_THE_MONEY),
@@ -305,8 +306,8 @@ async def test_the_fee_estimate_is_worked_out_on_the_price_each_leg_is_entered_a
 
     seen = await desk.quoted(received, c585=("4.85", "4.89"), c590=("1.89", "1.93"))
 
-    assert (seen.money.net_price, seen.money.fee_estimate_cents) == (Decimal("-2.92"), 11)
-    assert seen.money.entry_commitment_cents == 50_000 - 29_200 + 11
+    assert (seen.money.net_price, seen.money.fee_estimate_cents) == (Decimal("-2.92"), 12)
+    assert seen.money.entry_commitment_cents == 50_000 - 29_200 + 12
 
 
 async def test_a_structure_that_costs_most_of_itself_to_trade_is_shown_with_its_figures_and_said_to_be_over_the_limit(
@@ -587,9 +588,10 @@ async def test_more_than_one_structure_multiplies_the_money_the_lean_and_what_24
     ), "three structures multiply the net entry premium"
     assert seen.money.net_entry_premium_per_structure_cents == 19_400, "the premium per structure is what one costs"
     # Six contracts: the SEC fee on the $654.00 sold is 1.35 cents, 2 rounded up; CAT on 600 shares is 0.18
-    # of a cent, 1; ORF is 6 x 1.5 = 9; OCC is 3 x 2.5 = 7.5, 8 a leg, 16. Twenty-eight cents.
+    # of a cent, 1; the TAF on the three sold is 0.9 of a cent, 1; ORF is 6 x 1.5 = 9; OCC is 3 x 2.5 = 7.5, 8 a leg,
+    # 16. Twenty-nine cents.
     assert (seen.money.fee_estimate_cents, seen.money.entry_commitment_cents) == (
-        28, 58_228,
+        29, 58_229,
     ), "the fees of six contracts and the entry commitment"
     assert (seen.money.round_trip_cost_cents, seen.at_expiry.loss_cents, seen.at_expiry.gain_cents) == (
         2_400, 58_200, 91_800,
@@ -640,10 +642,11 @@ async def test_a_spread_that_pays_shows_the_requirement_and_what_is_set_aside_as
     assert (money.net_price, money.premium_is, money.net_entry_premium_cents) == (
         Decimal("-3.07"), "received", -30_700,
     ), "$3.07 is received on the spread"
-    # The SEC fee on the $500.00 sold is 1.03 cents, which rounds up to 2: twelve cents of fees (OCC 3 a leg).
+    # The SEC fee on the $500.00 sold is 1.03 cents, which rounds up to 2; the TAF on the one contract sold is 0.3 of
+    # a cent, 1; CAT 1, ORF 3 and OCC 3 a leg: thirteen cents of fees.
     assert (money.broker_requirement_cents, money.fee_estimate_cents, money.entry_commitment_cents) == (
-        50_000, 12, 19_312,
-    ), "the requirement is the $500.00, the fees twelve cents, and what is set aside $193.12"
+        50_000, 13, 19_313,
+    ), "the requirement is the $500.00, the fees thirteen cents, and what is set aside $193.13"
     assert (seen.at_expiry.loss_cents, seen.at_expiry.gain_cents) == (19_300, 30_700), "the loss and the gain at expiry"
     assert seen.at_expiry.break_even_prices == [Decimal("588.07")], "the break-even price"
     # The other way round from a spread that is bought: it keeps what it received at 585 or below.
@@ -659,9 +662,9 @@ async def test_a_spread_that_pays_shows_the_requirement_and_what_is_set_aside_as
     assert (
         "below" in seen.at_expiry.gain_sentence and "above" not in seen.at_expiry.gain_sentence
     ), "the gain holds below its strike, not above"
-    # What is set aside is the $193.12, and the sentence says the cost as a part of that.
+    # What is set aside is the $193.13, and the sentence says the cost as a part of that.
     assert (
-        usd(19_312) in money.cost_sentence and usd(30_700) not in money.cost_sentence
+        usd(19_313) in money.cost_sentence and usd(30_700) not in money.cost_sentence
     ), "the cost is said as a part of what is set aside, not of the premium"
     assert (seen.verdict.resolves_as_built, seen.verdict.red) == (True, False), "the verdict resolves as built and is not red"
     # It sells the call nearer the money, so it gains as SPY falls.
@@ -859,7 +862,7 @@ async def test_an_answer_says_back_what_was_asked_and_a_figured_one_says_its_mon
         usd(0), usd(money.fee_estimate_cents),
     ), "the broker requirement and the fee estimate are written out in dollars"
     assert (money.entry_commitment_usd, money.round_trip_cost_usd) == (
-        usd(19_411), usd(800),
+        usd(19_412), usd(800),
     ), "the entry commitment and the round-trip cost are written out in dollars"
     assert (seen.at_expiry.loss_usd, seen.at_expiry.gain_usd) == (
         usd(19_400), usd(30_600),
