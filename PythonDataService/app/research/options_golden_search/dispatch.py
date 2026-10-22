@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import Any
 
-from app.config import settings
+from app.config import OPTIONS_SUPPORTED_WIDTHS, settings
 from app.options_backtest.run_json import option_days_to_json, pins_from_json
 from app.options_backtest.session_result import SessionPins
 from app.options_backtest.setup import OptionsBacktestSetup
@@ -85,7 +85,9 @@ class OptionsDispatch(PooledOwnerDispatch):
                  pool: SharedWorkerPool | None = None) -> None:
         width = workers if workers is not None else settings.OPTIONS_SEARCH_WORKER_COUNT
         # A caller cannot grant itself capacity beyond the qualified operator profile.
-        if width not in (1, 2, 4, 8) or width > min(settings.OPTIONS_SEARCH_WORKER_COUNT, settings.RESEARCH_WORKER_COUNT):
+        if width not in OPTIONS_SUPPORTED_WIDTHS:
+            raise ValueError("Options worker width must be 1, 2, 4 or 8")
+        if width > min(settings.OPTIONS_SEARCH_WORKER_COUNT, settings.RESEARCH_WORKER_COUNT):
             raise ValueError("Options worker width exceeds the current operator profile")
         context.concurrency_group = "options_replay"
         context.group_limit = settings.OPTIONS_SEARCH_WORKER_COUNT

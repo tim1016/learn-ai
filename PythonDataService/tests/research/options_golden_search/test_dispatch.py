@@ -40,6 +40,20 @@ from tests.options_backtest._lake import tmp_lake as tmp_lake
 from tests.options_bots.test_golden_proof import _run
 
 
+@pytest.mark.parametrize(("width", "reason"), [(3, "must be 1, 2, 4 or 8"), (4, "exceeds the current operator profile")])
+def test_dispatch_distinguishes_unsupported_width_from_unqualified_capacity(
+    monkeypatch: pytest.MonkeyPatch, width: int, reason: str,
+) -> None:
+    from app.config import settings
+    from app.research.options_golden_search.dispatch import OptionsDispatch
+
+    monkeypatch.setattr(settings, "OPTIONS_SEARCH_WORKER_COUNT", 2)
+    monkeypatch.setattr(settings, "RESEARCH_WORKER_COUNT", 8)
+    context = WorkerDispatchContext(strategy_key="options", execution={}, manifest={}, identity={}, job_id="", generation=1)
+    with pytest.raises(ValueError, match=reason):
+        OptionsDispatch(context, workers=width)
+
+
 async def _eight_leg_run(fake_catalog: FakeCatalog, tmp_lake: Path) -> RunResult:
     from app.options.contract import OptionContract
     from app.options_backtest.lake_data import LakeRunData
