@@ -113,13 +113,20 @@ class OptionArchiveService:
         await self.scheduler.stop()
         await self._cancel_collectors()
 
-    def daily_due(self, name: ArchiveJobName, now: int, minute_et: int) -> bool:
+    def daily_due(self, name: ArchiveJobName, now: int, minute_et: int, *, pause_regular_hours: bool = True) -> bool:
         receipt = self.state.read().job(name)
         return next_daily_run_ms(now_ms=now, minute_et=minute_et, completed_day_ms=receipt.completed_day_ms,
-                                 retry_after_ms=receipt.retry_after_ms, margin_ms=self.config.REQUEST_OPEN_MARGIN_MS) <= now
+                                 retry_after_ms=receipt.retry_after_ms, margin_ms=self.config.REQUEST_OPEN_MARGIN_MS,
+                                 pause_regular_hours=pause_regular_hours) <= now
 
     def capture_due(self, now: int) -> bool:
-        return self.daily_due("capture", now, self.config.CAPTURE_START_MINUTE_ET) and not self.snapshot_due(now)
+        return (self.daily_due("capture", now, self.config.CAPTURE_START_MINUTE_ET,
+                               pause_regular_hours=not self.config.CAPTURE_DURING_REGULAR_HOURS)
+                and not self.snapshot_due(now))
+
+    def _capture_regular_hours_pause(self, now: int) -> bool:
+        """Whether regular hours stop capture now; the owner's opt-in lets capture run through them."""
+        return not self.config.CAPTURE_DURING_REGULAR_HOURS and regular_hours_pause(now, self.config.REQUEST_OPEN_MARGIN_MS)
 
     def _snapshot_window_due(self, now: int, receipt: JobReceipt) -> bool:
         today = et_date_at_ms(now)
@@ -157,11 +164,11 @@ class OptionArchiveService:
         """
         def pausing() -> bool:
             now = self.clock()
-            return regular_hours_pause(now, self.config.REQUEST_OPEN_MARGIN_MS) or self._snapshot_window_due(now, snapshot)
+            return self._capture_regular_hours_pause(now) or self._snapshot_window_due(now, snapshot)
         return pausing
 
     def _pause_phase(self) -> ArchivePhase:
-        return "rth_pause" if regular_hours_pause(self.clock(), self.config.REQUEST_OPEN_MARGIN_MS) else "snapshot_pause"
+        return "rth_pause" if self._capture_regular_hours_pause(self.clock()) else "snapshot_pause"
 
     async def _record_session(self, symbol: str, session_ms: int, **changes: Any) -> None:
         def update(state: ArchiveStateDoc) -> None:
@@ -294,7 +301,8 @@ class OptionArchiveService:
         plan = plan_archive(now_ms=started, baseline_ms=state.baseline_ms or archive_baseline_ms(today),
                             complete=frozenset((symbol, session_ms) for symbol, session_ms, row in rows if row.complete),
                             lost=frozenset((symbol, session_ms) for symbol, session_ms, row in rows if row.outcome is SessionOutcome.LOST),
-                            start_minute_et=self.config.CAPTURE_START_MINUTE_ET, margin_ms=self.config.REQUEST_OPEN_MARGIN_MS)
+                            start_minute_et=self.config.CAPTURE_START_MINUTE_ET, margin_ms=self.config.REQUEST_OPEN_MARGIN_MS,
+                            pause_regular_hours=not self.config.CAPTURE_DURING_REGULAR_HOURS)
         blocked = set(state.provider_blocks)
         pausing = self._pause_rule(state.job("snapshot"))
         phase: ArchivePhase = plan.phase if plan.phase in ("rth_pause", "waiting") else "complete"

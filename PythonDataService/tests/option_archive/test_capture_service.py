@@ -381,3 +381,26 @@ async def test_missed_night_catches_up_at_the_vendor_edge_and_restart_preserves_
     assert retained_complete
 
 
+
+
+@pytest.mark.parametrize("through_regular_hours", [False, True])
+@respx.mock
+async def test_capture_runs_through_regular_hours_only_when_the_owner_opts_in(
+    fake_catalog: FakeCatalog, tmp_lake: Path, through_regular_hours: bool,
+) -> None:
+    for symbol in UNDERLYINGS:
+        for contract in await seed(fake_catalog, tmp_lake, symbol):
+            url = f"https://api.polygon.io/v2/aggs/ticker/O:{contract.occ_symbol}/range/1/minute/{DAY}/{DAY}"
+            respx.get(url).mock(return_value=no_trades(contract.occ_symbol))
+    trading_hours = et_minute_of_day_ms(date(2026, 10, 12), 660)
+    state = with_baseline(ArchiveState(tmp_lake / "state.json"), session_open_ms_utc(DAY))
+    config = ArchiveSettings(ENABLED=True, CAPTURE_DURING_REGULAR_HOURS=through_regular_hours)
+    service = OptionArchiveService(config=config, state=state, clock=lambda: trading_hours)
+    assert service.capture_due(trading_hours) is through_regular_hours
+    await service.capture_pass()
+    for symbol in UNDERLYINGS:
+        _, complete = await asyncio.to_thread(read_session_completeness, symbol, DAY)
+        assert complete is through_regular_hours
+    bar_requests = [call for call in respx.calls if "/v2/aggs/ticker/O:" in str(call.request.url)]
+    assert bool(bar_requests) is through_regular_hours
+    assert (state.read().job("capture").phase == "rth_pause") is not through_regular_hours
