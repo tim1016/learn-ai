@@ -92,7 +92,7 @@ def test_large_batch_releases_replay_graphs_and_loads_selected_exact_evidence(
             if args[1] not in records:
                 raise LookupError("missing")
             return {"key": args[1], "identity": identities[args[1]], "result": records[args[1]]}
-        if func.__name__ == "report":
+        if func.__name__ == "commit":
             return asyncio.run(func(Connection()))
         raise AssertionError(f"unexpected all-history or persistence call: {func}")
 

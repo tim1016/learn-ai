@@ -9,12 +9,13 @@
 <details class="card"><summary>Locked plan receipt</summary><p>These exact settings were frozen before research. Fork a linked plan to change them.</p>
   @for (item of study().protocol_summary; track item.label) { <p><strong>{{ item.label }}</strong>: {{ item.value }}</p> }
 </details>
-@if (allowed('run_research') || allowed('cancel') || allowed('resume')) {
+@if (allowed('run_research') || allowed('cancel') || allowed('resume') || allowed('keep_original')) {
   <section class="card"><p>Cancel keeps committed evidence. Resume continues the same locked plan and frozen finalists.</p>
     <div class="actions">
       @if (allowed('run_research')) { <button type="button" class="primary" (click)="ask('run_research')">Run research</button> }
       @if (allowed('cancel')) { <button type="button" (click)="ask('cancel')">Cancel</button> }
       @if (allowed('resume')) { <button type="button" class="primary" (click)="ask('resume')">Resume</button> }
+      @if (allowed('keep_original')) { <button type="button" (click)="ask('keep_original')">Keep original</button> }
     </div>
   </section>
 }
@@ -39,7 +40,6 @@
     } @else { <p>The retained artifact reader is unavailable. Candidate summaries alone cannot provide inspectable traces.</p> }
     <p>Opening final test freezes these exact candidates and records these dates as exposed, even if computation fails. This comparison chooses after final test from several candidates; it is not an unbiased single-candidate confirmation.</p>
     <button type="button" class="primary" [disabled]="!allowed('open_final')" (click)="ask('open_final')">Freeze shortlist and open final test</button>
-    <button type="button" [disabled]="!allowed('keep_original')" (click)="ask('keep_original')">Keep original</button>
   </section>
 }
 @if (step() === 5) {
@@ -70,7 +70,7 @@
           </fieldset>
         } @else if (review.blocked_reason === null) { <p>All applicable approval rules meet the frozen limits.</p> }
       } @else { <p>Complete approval evidence is not available. Refresh the study before approving.</p> }
-      <div class="actions"><button type="button" [disabled]="!allowed('keep_original')" (click)="ask('keep_original')">Keep original</button><button type="button" class="primary" [disabled]="!canApprove()" (click)="ask('approve')">Approve exact golden version</button><button type="button" [disabled]="!canExcept()" (click)="ask('approve_exception')">Approve owner exception</button></div>
+      <div class="actions"><button type="button" class="primary" [disabled]="!canApprove()" (click)="ask('approve')">Approve exact golden version</button><button type="button" [disabled]="!canExcept()" (click)="ask('approve_exception')">Approve owner exception</button></div>
       <p>A nonblank comment and every listed acknowledgement are required for exceptions. Missing inputs and failed repeatability cannot be overridden.</p>
     }
     @if (study().qualification_id; as id) { <p>Golden version <code>{{ id }}</code> · {{ study().qualification_status | receiptLabel }}</p><p>Deploy is a separate action under the existing broker gates.</p> }

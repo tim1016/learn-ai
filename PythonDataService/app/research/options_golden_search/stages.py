@@ -84,6 +84,7 @@ class StudyEvaluator:
         self.started = time.monotonic()
         self.cache_hits = 0
         self.verify_only = False
+        self._projected_final_keys: set[str] = set()
         self.stage_limits = budget_plan(self.protocol)
 
     def check(self) -> bool:
@@ -158,13 +159,8 @@ class StudyEvaluator:
         computed: dict[str, dict[str, Any]] = {}
         requests_by_key = {entry[3]: entry[:3] for entry in planned}
 
-        def persist(key: str, result: EvaluationResult, actual_reads: list[str], task_gen: int) -> None:
-            payload = evidence_payload(result)
+        def report(key: str, result: EvaluationResult, record: dict[str, Any], *, newly_completed: bool, task_gen: int = 1) -> None:
             counts = run_sync(with_connection(repo.counters, self.row["id"]))
-            retained_bytes = counts["evidence_bytes"]
-            if retained_bytes + len(payload) > self.protocol.budget.max_artifact_bytes:
-                raise ValueError("The study evidence exceeds its retained-artifact byte limit.")
-            record = evaluation_record(result, self.blobs.put(payload), len(payload), actual_reads)
             setup, window, scenario = requests_by_key[key]
             partial = None
             scenario_view = None
@@ -180,10 +176,11 @@ class StudyEvaluator:
                     "reason": "This base run completed. The mandatory final batch has not finished."})
                 if partial["verdict"] == "meets_rules":
                     partial["verdict"] = "not_enough_evidence"
-            async def report(conn):
+            async def commit(conn):
                 async with conn.transaction():
                     current = await repo.fence(conn, self.row["id"], self.row["attempt"])
-                    await repo.complete(conn, self.row["id"], self.row["attempt"], key, record, task_gen=task_gen)
+                    if newly_completed:
+                        await repo.complete(conn, self.row["id"], self.row["attempt"], key, record, task_gen=task_gen)
                     if scenario_view is not None:
                         scenarios = {(item["candidate_hash"], item["scenario"]): item for item in current.get("final_scenarios", [])}
                         scenarios[scenario_view["candidate_hash"], scenario] = scenario_view
@@ -192,17 +189,32 @@ class StudyEvaluator:
                         exposed = {item["candidate_hash"]: item for item in current["final_results"]}
                         exposed[partial["candidate_hash"]] = partial
                         current["final_results"] = [exposed[digest] for digest in current["finalists"] if digest in exposed]
-                    current["progress"] = {"stage": self.row["phase"], "completed": counts["completed"] + 1,
-                        "queued": max(0, len(pending)-len(computed)-1), "running": 0,
+                    current["progress"] = {"stage": self.row["phase"], "completed": counts["completed"] + int(newly_completed),
+                        "queued": max(0, len(pending)-len(computed)-int(newly_completed)), "running": 0,
                         "cache_hits": self.cache_hits, "execution_attempts": counts["execution_attempts"],
                         "spent": counts["reserved"], "reserved": self.stage_limits.mandatory_downstream if self.row["phase"]=="research" else self.stage_limits.proof_and_materialization,
                         "capacity_message": "Bounded shared research capacity; width " + str(settings.OPTIONS_SEARCH_WORKER_COUNT)}
                     await repo.save(conn, current, bump=False)
-            run_sync(with_connection(report))
+            run_sync(with_connection(commit))
+            if scenario_view is not None:
+                self._projected_final_keys.add(key)
+
+        def persist(key: str, result: EvaluationResult, actual_reads: list[str], task_gen: int) -> None:
+            payload = evidence_payload(result)
+            counts = run_sync(with_connection(repo.counters, self.row["id"]))
+            if counts["evidence_bytes"] + len(payload) > self.protocol.budget.max_artifact_bytes:
+                raise ValueError("The study evidence exceeds its retained-artifact byte limit.")
+            record = evaluation_record(result, self.blobs.put(payload), len(payload), actual_reads)
+            report(key, result, record, newly_completed=True, task_gen=task_gen)
             computed[key] = record
             self.checkpoint(counts["reserved"], self.protocol.budget.evaluation_cap)
 
         pending = list({entry[3]: entry for entry in planned if entry[4] is None}.values())
+        if self.row["phase"] == "final" and not self.verify_only:
+            for _setup, window, _scenario, key, cached in planned:
+                if cached is not None and key not in self._projected_final_keys:
+                    self.check()
+                    report(key, self.load(cached, window), cached, newly_completed=False)
         from app.services.research_runtime_client import is_research_runtime
         if pending and is_research_runtime():
             context = WorkerDispatchContext(strategy_key="options", execution={}, manifest={}, identity=_child_identity(),

@@ -27,6 +27,8 @@ describe('Options search evidence and approval', () => {
     expect(screen.queryByRole('button', { name: 'Freeze shortlist and open final test' })).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: 'Resume' }));
     expect(action).toHaveBeenCalledWith({ command: 'resume' });
+    await userEvent.click(screen.getByRole('button', { name: 'Keep original' }));
+    expect(action).toHaveBeenCalledWith({ command: 'keep_original' });
     if (final_results.length) {
       expect(screen.getByRole('button', { name: 'Approve exact golden version' })).toHaveProperty('disabled', true);
       expect(screen.getByRole('button', { name: 'Approve owner exception' })).toHaveProperty('disabled', true);

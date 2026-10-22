@@ -210,6 +210,28 @@ async def test_saved_setup_to_retained_qualification_uses_real_transport_and_ato
         completed_before = {item["key"]: item for item in retained if item["result"] is not None}
         monkeypatch.setattr(stages, "evaluate_setup", real_evaluate)
         monkeypatch.setattr(stages.StudyEvaluator, "evaluate_batch", real_batch)
+        # A retained evaluation may predate its read projection. Backfill
+        # before unfinished work so another lost worker cannot hide it.
+        visible_before = record["final_scenarios"]
+        bases_before = record["final_results"]
+        legacy = await repo.get(conn, study_id)
+        legacy.pop("final_scenarios")
+        legacy["final_results"] = []
+        await repo.save(conn, legacy, bump=False)
+        final_calls = 1
+        monkeypatch.setattr(stages, "evaluate_setup", interrupted_final)
+        await command("resume", idempotency_key="resume-backfill-" + unique)
+        with pytest.raises(RuntimeError, match="worker stopped during final batch"):
+            await execute()
+        restored = await client.get(f"/options-search/studies/{study_id}")
+        assert restored.status_code == 200, restored.text
+        backfilled = restored.json()
+        assert backfilled["final_scenarios"] == visible_before
+        assert backfilled["final_results"] == bases_before
+        assert backfilled["status"] == "interrupted"
+        assert (await repo.get(conn, study_id))["finalists"] == frozen
+        record = backfilled
+        monkeypatch.setattr(stages, "evaluate_setup", real_evaluate)
         await command("resume", idempotency_key="resume-final-" + unique)
         await execute()
         after_resume = {item["key"]: item for item in await repo.evaluations(conn, study_id)}
