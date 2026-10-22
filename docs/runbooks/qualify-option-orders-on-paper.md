@@ -3,8 +3,9 @@
 This is the operator procedure for qualifying option orders this system sends to
 Alpaca. The run records below cover a bought call, a debit spread and the
 owner's dashboard credit-order sign check on Paper, plus flat and overlapping
-credit-spread and iron-condor bot passes. The isolated short-leg buy-back
-still needs its check. The overlapping credit and condor entries'
+credit-spread and iron-condor bot passes, and the isolated buy-back of a
+held credit spread's sold leg, which Alpaca accepted and funded. The
+overlapping credit and condor entries'
 buying-power comparisons remain unknown.
 This runbook sets one Paper
 account aside, turns one temporary setting
@@ -699,6 +700,8 @@ shown.
 | A bot's entry is refused `RECONCILIATION_IN_PROGRESS` ("Account reconciliation is proving fresh broker truth") two seconds after another bot's entry on the same bar | Two bots decided on the same signal in the same second; the second's decision reached the lane while the first's order was being proven. Under a lagging lane (event loop unserved 1 to 4 s) it happened 2 of 2 times on 2026-10-14 | Nothing was sent; the bot decides again on the next bar. For an overlapping pass, wait for a bar where one bot holds and the other enters (it came a minute later). Close the bot pages first. |
 | An entry's comparison reads *unknown, FIRST_READING_FAILED* (or *CASH_MOVEMENT_UNREAD*) although Alpaca answered in under 100 ms | The first reading's 1.5 s bound ran out while the lane's event loop was stalled: the account call began late and its answer was discarded | Not a discrepancy and never promoted. Close the bot pages and repeat the step; the lane's log has "the account's option buying power could not be read" at the same second. |
 | A stopped bot holds a two-leg structure and its warning says *Use Flatten to close this position* with no Flatten button; the bot page's Sell answers *Flatten is offered for a stopped bot holding one position* | The stranded-position warning offers Flatten only when the bot holds exactly one position, and a safe flatten sends one single-contract exit per leg, never one `mleg` order | Do not close the legs one by one at Alpaca. The Clerk closes the structure itself at its scheduled close, 10 minutes before the session's close for a held sold leg (page: *This system closes the position itself at ...*), as one order. Seen on 2026-10-14: sent 15:50:00 ET, filled 0.17 seconds later. |
+| The lane restarts (`podman inspect` shows `OOMKilled` true) within a minute of deploying an option bot, and the bot's run has ended | The lane's 768 MiB cap: on 2026-10-22 one option bot took the lane from about 480 MB to over 750 MB, and memory did not come back when the bot stopped (#3467) | Read Alpaca for any order the bot sent, then stop the bot flat. For the experiment only, give the Paper lane a larger limit in the gitignored `compose.override.yaml` (`deploy.resources.limits.memory` on `alpaca-paper-clerk`, marked temporary), recreate it, and remove the override with the setting at section 9. Never `podman exec` into the lane while a bot runs. |
+| Deploy says *Account hold ... Review the unexplained order in this account's Activity order records*, and Activity lists no order to review | The legs of an outside multi-leg order (a sign check) hold the account until each leg is reviewed, and the app has no control for it yet (#3468). It appears at the first lane restart after #3389, even when the parents were acknowledged before | Read Alpaca flat and match each leg to its recorded outside order. Then acknowledge each leg with `POST /api/accounts/<account>/transactions/external-orders/<leg order id>/acknowledge` on the lane, body `{"operator": "<who>"}`. The hold resolves on the next pass. |
 
 ## Repair record: 2026-10-13
 
@@ -1365,3 +1368,64 @@ OCC, ORF, CAT and OPT REG/SEC agree to the cent. Every execution this day was
 one contract, so how Alpaca rounds the OCC fee of a fill of several contracts
 (n × $0.025 or n × $0.03) is still unobserved. This record settles October 16's
 posted fees; it supplies no reading of when each row first became visible.
+
+## Run record: 2026-10-22, the isolated short-leg buy-back (#3225)
+
+The owner gave the go-ahead for one Paper bot holding a $1-wide SPY call
+credit spread, one contract per leg and $90 allocated, stopped once held; the
+sold call bought back alone, capped at $200 before fees; then the bot's
+**Flatten** and the teardown. The owner chose an order sent through Alpaca's
+Paper API over the dashboard. Alpaca and the Clerk see either one as an order
+from outside the Clerk.
+
+Before the pass, IB Gateway had been signed out overnight and the owner signed
+in again. The first lane restart after #3389 had held the account over the ten
+legs of the five sign-check orders of October 15 and 16; each leg was matched
+to its recorded order, Alpaca was read flat, and each was acknowledged
+(troubleshooting table, #3468). The several-leg setting was added and only the
+Paper lane recreated. Two bots ended without an order: the lane was
+OOM-killed 34 seconds after the first was deployed, and the second was stopped
+flat before its signal with the lane at 94% of its 768 MiB cap (#3467). The
+Paper lane then got a temporary 1536m limit for the pass.
+
+The structure sold the call nearest 0.20 delta (the 0.30-delta call's ask,
+$2.11, would have put the buy-back over the cap) and bought the call $1 above,
+both at least three days out. Order terms were 8% gap, 20-second entry wait,
+10% cost limit and 45-minute expiry-close lead; exit terms 25 bps, 2× and
+100 bps. Bot `spy-dv-20261022-1104` entered the October 26 $772/$773 call
+spread as one `mleg` limit at `-0.19`, filled at `-0.19` (sold the $772 call
+at $1.11, bought the $773 call at $0.92), and was stopped while holding it.
+Alpaca then read cash $99,839.17 and option buying power $99,739.17.
+
+**The buy-back was accepted and funded.** One order from outside the Clerk
+bought one `SPY261026C00772000`, limit $1.12 (the ask in the bot's exit
+estimate, from IBKR's saved minute quote), day, `buy_to_close`. Alpaca
+answered `pending_new` and filled it at $1.06, 0.34 seconds after it was sent.
+Cash fell $106.03 (the $106.00 premium and $0.03 more); option buying power
+fell only $6.03, because the spread's $100 requirement was released with the
+sold leg. The account then held the bought $773 call alone.
+
+The Clerk credited the outside fill to the bot's sold contract: the bot held
+one `SPY261026C00773000`, with no hold and a clean reconciliation, and the
+only attention item was the stopped bot still holding, with **Flatten**
+offered. No outside-order review was raised. The bot's **Flatten** sent one
+market sell to close, filled at $0.87. Alpaca read flat with no working order,
+cash and option buying power both $99,820.12: the four fills' premiums net to
+zero and $0.10 of cash went in charges.
+
+The entry's offline comparison is over-reserved by $0.07 ($81.12 committed
+against an $81.05 fall), the unused entry fee provision. The private bundle
+covers 1792681440000 through 1792682264744 ms UTC and leaves nothing unread.
+The recording
+`tests/fixtures/alpaca/option_paper_recordings/3225-C5-buyback-api-20261022`
+pins the three orders, the account's four readings and the positions in
+`test_paper_option_recordings.py`. Its activity feed also carries the
+account's posted fees through October 20, and every OCC and OPT TAF row in it
+is the fee model's figure.
+
+At teardown the setting line and the memory override were removed and only the
+Paper lane recreated. The container read several-leg orders, judgment, Live
+options and the window override absent; IBKR enabled and read-only with 84
+lines; 768 MiB. Deploy refused the two-leg plan again. Nothing was promoted.
+A refused buy-back was not seen, and the dashboard's own ticket for one was
+not used.
