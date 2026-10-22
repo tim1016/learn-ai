@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import subprocess
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -178,6 +179,20 @@ def test_an_environment_with_nothing_installed_refuses(tmp_path: Path) -> None:
 
 def test_the_real_environment_reports_the_numpy_that_imports() -> None:
     assert ("numpy", numpy.__version__) in installed_distributions()
+
+
+def test_a_directory_added_to_sys_path_after_import_does_not_move_the_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``pkg_resources`` appends setuptools' ``_vendor`` directory to ``sys.path`` the moment it is imported, and
+    ``app.main`` reaches it through ``polygon``. A spawned worker, which never imports it, must still compute the digest
+    the API sealed (#3071)."""
+    before = environment_digest()
+    vendored = tmp_path / "_vendor"
+    _install(vendored, "a-vendored-copy", "1.0")
+
+    monkeypatch.setattr(identity_module.sys, "path", [*sys.path, str(vendored)])
+
+    assert environment_digest() == before
+    assert ("a-vendored-copy", "1.0") not in installed_distributions()
 
 
 # ── The receipted identity ───────────────────────────────────────────────

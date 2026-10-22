@@ -562,9 +562,8 @@ class ResearchWorker:
             "RESEARCH_WORKER": "1",
             "POLYGON_API_KEY": "worker-has-no-provider-access",
             "POSTGRES_URL": "",
-            # Startup imports can extend the runtime's library search path.
-            # Preserve it so the child sees the same installed environment
-            # when it verifies the sealed identity (ADR 0077).
+            # The child imports from the search path this process has now. The
+            # sealed identity no longer reads it (#3071); only imports do.
             "PYTHONPATH": os.pathsep.join(sys.path),
             # The parent sizes the child's decoded cache (#3066 review): the
             # pool divides the shared budget, a lone child keeps the ceiling.

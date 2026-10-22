@@ -11,10 +11,15 @@ Formula:
     figure, so editing one must not strand an in-flight study (#2588).
   * ``environment_digest`` — sha256 over the interpreter (``sys.version``,
     ``sys.platform``, ``platform.machine()``) and the sorted set of
-    ``(PEP 503 name, version)`` of every distribution installed on
-    ``sys.path``. It reads what pip installed, not what a requirement file
+    ``(PEP 503 name, version)`` of every distribution installed in the
+    interpreter's own site directories (``sysconfig`` ``purelib`` and
+    ``platlib``). It reads what pip installed, not what a requirement file
     asked for: an unpinned or transitive upgrade on a rebuild moves it, a
-    comment edit does not (#2588). A distribution whose metadata cannot be
+    comment edit does not (#2588). It does not read the live ``sys.path``:
+    ``pkg_resources`` appends setuptools' ``_vendor`` directory to it the
+    moment it is imported, so the same environment digested differently in a
+    process that had imported ``polygon`` (the API) and one that had not (a
+    spawned research worker) (#3071). A distribution whose metadata cannot be
     read, or an environment with none, refuses rather than digesting around
     the gap.
   * ``digest_scheme`` — which formula produced the two digests. Digests of
@@ -33,7 +38,7 @@ and finishes every study: the same interpreter build on the same OS and CPU,
 with the same installed ``(name, version)`` set. Install paths are not part
 of it, so a rebuilt image with identical contents matches, while the host
 venv (macOS, developer tooling installed) never matches the container
-(Linux, runtime stage). The set is order-free: neither ``sys.path`` order
+(Linux, runtime stage). The set is order-free: neither search order
 nor directory listing order moves the digest, and a project installed twice
 contributes both copies, so an upgrade of whichever one imports moves it. An
 editable install contributes its metadata version only; its source is not
@@ -54,6 +59,7 @@ import platform
 import re
 import subprocess
 import sys
+import sysconfig
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from functools import cache
@@ -105,8 +111,10 @@ IDENTITY_SOURCE_PATHS: tuple[str, ...] = (
 TEST_DIRECTORY = "tests"
 
 # The current formula. Scheme 1 hashed the requirement files' bytes and the
-# test sources; its receipts predate the field and carry none (#2588).
-DIGEST_SCHEME = 2
+# test sources; its receipts predate the field and carry none (#2588). Scheme 2
+# searched the live ``sys.path``, so its environment digest depended on which
+# modules the process had imported (#3071) and is not comparable with this one.
+DIGEST_SCHEME = 3
 LEGACY_DIGEST_SCHEME = 1
 
 TreeState = Literal["clean", "dirty", "unknown"]
@@ -160,9 +168,14 @@ def source_digest(root: Path = SERVICE_ROOT, paths: Iterable[str] = IDENTITY_SOU
     return digest.hexdigest()
 
 
+def interpreter_site_directories() -> tuple[str, ...]:
+    """Where this interpreter's installer puts distributions, whatever ``sys.path`` has grown since startup."""
+    return tuple(sorted({sysconfig.get_path("purelib"), sysconfig.get_path("platlib")}))
+
+
 def installed_distributions(path: Sequence[str] | None = None) -> tuple[tuple[str, str], ...]:
-    """The sorted set of ``(PEP 503 name, version)`` installed on ``path`` (default ``sys.path``)."""
-    search = list(sys.path if path is None else path)
+    """The sorted set of ``(PEP 503 name, version)`` installed on ``path`` (default: the interpreter's site directories)."""
+    search = list(interpreter_site_directories() if path is None else path)
     installed: set[tuple[str, str]] = set()
     for distribution in importlib.metadata.distributions(path=search):
         name, version = distribution.metadata.get("Name"), distribution.metadata.get("Version")
