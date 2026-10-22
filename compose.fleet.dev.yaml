@@ -81,7 +81,8 @@ x-alpaca-clerk-agent: &alpaca-clerk-agent
     resources:
       limits:
         cpus: "1.0"
-        memory: 768m
+        # #3467: four option bots plus both search workers need measured headroom.
+        memory: 1536m
 
 services:
   ibkr-market-data:
