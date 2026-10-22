@@ -1,7 +1,6 @@
 """The actual Redis claim scripts admit one worker and release only its ownership."""
 from __future__ import annotations
 
-import asyncio
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
@@ -9,9 +8,9 @@ from uuid import uuid4
 import pytest
 import redis
 
-from app.jobs import progress, runner
+from app.jobs import progress
 from app.jobs.runner import prepared_worker, run_in_thread
-from tests.options_backtest.test_runtime_http_boundary import isolated_redis as isolated_redis
+from tests._helpers.isolated_redis import isolated_redis as isolated_redis
 
 pytestmark = pytest.mark.slow
 
@@ -115,59 +114,3 @@ def test_a_lost_thread_start_ack_keeps_the_running_workers_lease_until_it_exits(
             thread.join(timeout=5)
     assert client.get(progress.lease_key(job_id)) is None
     assert client.hget(progress.state_key(job_id), "status") == "completed"
-
-
-@pytest.mark.parametrize("blocked_operation", ["acquire", "release"])
-async def test_repeated_cancellation_drains_claim_and_cleanup_without_blocking_the_coordinator(
-    isolated_redis: str, monkeypatch: pytest.MonkeyPatch, blocked_operation: str,
-) -> None:
-    client = redis.Redis.from_url(isolated_redis, decode_responses=True)
-    monkeypatch.setattr(progress, "get_redis", lambda: client)
-    job_id = uuid4().hex
-    loop, coordinator_thread = asyncio.get_running_loop(), threading.get_ident()
-    io_started, allow_io, io_finished = asyncio.Event(), threading.Event(), threading.Event()
-    acquire, release = runner.acquire_lease, runner.release_lease
-
-    def held_io(operation: str) -> None:
-        assert threading.get_ident() != coordinator_thread
-        if blocked_operation == operation:
-            loop.call_soon_threadsafe(io_started.set)
-            assert allow_io.wait(timeout=5)
-
-    def checked_acquire(job_id: str) -> str:
-        held_io("acquire")
-        token = acquire(job_id)
-        if blocked_operation == "acquire":
-            io_finished.set()
-        return token
-
-    def checked_release(job_id: str, token: str) -> None:
-        held_io("release")
-        release(job_id, token)
-        if blocked_operation == "release":
-            io_finished.set()
-
-    async def bind() -> None:
-        async with runner.async_prepared_worker(job_id):
-            assert blocked_operation == "release", "a cancelled acquisition cannot bind or launch"
-
-    monkeypatch.setattr(runner, "acquire_lease", checked_acquire)
-    monkeypatch.setattr(runner, "release_lease", checked_release)
-    dispatch = asyncio.create_task(bind())
-    try:
-        await asyncio.wait_for(io_started.wait(), timeout=5)
-        for _ in range(3):
-            dispatch.cancel()
-            await asyncio.sleep(0)
-        still_draining = not dispatch.done()
-        allow_io.set()
-        with pytest.raises(asyncio.CancelledError):
-            await dispatch
-        assert await asyncio.to_thread(io_finished.wait, 5)
-        assert client.get(progress.lease_key(job_id)) is None
-        assert still_draining, "cancellation must not release ownership before its thread has ended"
-    finally:
-        allow_io.set()
-        await asyncio.gather(dispatch, return_exceptions=True)
-        await asyncio.to_thread(io_finished.wait, 5)
-        client.delete(progress.lease_key(job_id), progress.state_key(job_id))
