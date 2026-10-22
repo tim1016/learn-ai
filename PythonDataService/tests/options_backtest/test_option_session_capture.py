@@ -106,13 +106,19 @@ async def test_publication_capacity_does_not_hide_observed_terminal_provider_fai
     call = respx.get(url(CALL)).mock(return_value=no_trades(CALL.occ_symbol))
     refused = outside_plan() if reason == "outside_data_plan" else httpx.Response(
         401 if reason == "provider_auth_error" else 403, json={"status": "ERROR", "message": "access refused"})
-    put = respx.get(url(PUT)).mock(return_value=refused)
+    held = []
+    def refuse(request: httpx.Request) -> httpx.Response:
+        # Fill the budget while the refusal is in flight, so the partial publication that follows cannot fit.
+        held.append(budget.reserve(cap))
+        return refused
+    put = respx.get(url(PUT)).mock(side_effect=refuse)
     result = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS, max_staging_bytes=cap)
     assert result.failure.reason == reason
     assert "partial publication paused: Archive staging capacity" in result.failure.detail
     assert await asyncio.to_thread(read_option_session, "SPY", FRIDAY) is None
     [original] = list(budget.root.rglob(f"{CALL.occ_symbol}.zip"))
     exact_bytes = original.read_bytes()
+    held.pop().close()
     put.mock(return_value=no_trades(PUT.occ_symbol))
     recovered = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS, max_staging_bytes=cap + 65_536)
     assert recovered.failure is None and call.call_count == 1 and put.call_count == 2
@@ -428,3 +434,31 @@ async def test_capture_cleanup_refuses_a_parent_symlink_before_deleting_outside_
         await _clear_committed_staging(capture_root / "SPY" / "generation", captured, staging_root=staging_root,
                                        budget=OptionSessionStaging(staging_root))
     assert sentinel.read_bytes() == b"keep"
+
+
+@respx.mock
+async def test_a_capture_keeps_the_vendor_gate_full_and_still_publishes_every_ticker(fake_catalog, tmp_lake):
+    """Tickers are fetched up to the shared gate's limit at once, so a session takes a quarter of the time."""
+    from app.data_lake.option_lake import MAX_VENDOR_REQUESTS_IN_FLIGHT
+
+    contracts = [OptionContract.of(root="SPY", expiry_date=FRIDAY, right=right, strike=500 + step)
+                 for step in range(3) for right in ("call", "put")]
+    await prepare(fake_catalog, tmp_lake, *contracts)
+    in_flight = peak = 0
+
+    def answering(contract):
+        async def answer(request: httpx.Request) -> httpx.Response:
+            nonlocal in_flight, peak
+            in_flight += 1
+            peak = max(peak, in_flight)
+            await asyncio.sleep(0.02)
+            in_flight -= 1
+            return traded(contract.occ_symbol, [bar()]) if contract.right == "call" else no_trades(contract.occ_symbol)
+        return answer
+
+    for contract in contracts:
+        respx.get(url(contract)).mock(side_effect=answering(contract))
+    result = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS)
+    assert result.failure is None and peak == MAX_VENDOR_REQUESTS_IN_FLIGHT
+    session, complete = await asyncio.to_thread(read_session_completeness, "SPY", FRIDAY)
+    assert complete and len(session.captured) == len(session.confirmed_empty) == 3
