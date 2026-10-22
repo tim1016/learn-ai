@@ -18,6 +18,8 @@ from app.options.contract import OptionContract
 from app.options_backtest.frozen_inputs import FrozenRunData, freeze_run_inputs
 from app.options_backtest.lake_data import LakeRunData
 from app.options_backtest.run import run_sessions
+from app.research.golden_search.proof import BlobStore
+from app.research.options_golden_search.snapshots import SnapshotRunData
 from tests.options_backtest._lake import (
     FRIDAY,
     FRIDAY_OPEN_MS,
@@ -89,8 +91,10 @@ async def test_freeze_refuses_changed_session_sources_but_accepts_stable_partial
         await asyncio.to_thread(freeze_run_inputs, given, (FRIDAY,), ChangingData("SPY"), tmp_path / "mixed",
                                 on_checkpoint=checkpoints.append)
     assert checkpoints == []
-    assert len(reads) >= 2
-    if transition == "container_refresh":
+    if transition == "fallback_refresh":
+        # One leg, served by the legacy fallback: retention catches the container republished since.
+        assert reads == [None]
+    elif transition == "container_refresh":
         assert reads[0].listing_sha256 == reads[1].listing_sha256
         assert reads[0].container_sha256 != reads[1].container_sha256
     else:
@@ -107,15 +111,9 @@ async def test_freeze_refuses_changed_session_sources_but_accepts_stable_partial
         assert all(ref.container_sha256 == current.sha256 for ref in references)
 
 
-@pytest.mark.parametrize("reader_kind", ["frozen", "snapshot"])
-@respx.mock
-async def test_worker_container_decode_has_no_residency_outside_its_bounded_selected_cache(
-    fake_catalog: Any, tmp_lake: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reader_kind: str,
-) -> None:
-    import weakref
-
-    from app.data_lake import option_session
-
+async def _freeze_a_published_container(
+    fake_catalog: Any, tmp_lake: Path, tmp_path: Path, given: Any = None,
+) -> tuple[OptionContract, Any]:
     call = OptionContract.of(root="SPY", expiry_date=FRIDAY, right="call", strike=500)
     put = OptionContract.of(root="SPY", expiry_date=FRIDAY, right="put", strike=500)
     await store_listing([vendor_listing_row(call), vendor_listing_row(put)])
@@ -124,8 +122,15 @@ async def test_worker_container_decode_has_no_residency_outside_its_bounded_sele
     await store_option_day(call, [])
     await store_option_day(put, [])
     assert (await repack_option_session("SPY", FRIDAY)).failure is None
-    frozen = await asyncio.to_thread(freeze_run_inputs, setup(), (FRIDAY,), LakeRunData("SPY"), tmp_path / "frozen")
-    parsed = []
+    return call, await asyncio.to_thread(freeze_run_inputs, given or setup(), (FRIDAY,), LakeRunData("SPY"), tmp_path / "frozen")
+
+
+def _observe_container_decodes(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    import weakref
+
+    from app.data_lake import option_session
+
+    parsed: list[Any] = []
     original = option_session.parse_option_session
 
     def observe(*args: Any, **kwargs: Any) -> Any:
@@ -134,17 +139,53 @@ async def test_worker_container_decode_has_no_residency_outside_its_bounded_sele
         return session
 
     monkeypatch.setattr(option_session, "parse_option_session", observe)
-    cache = DecodedArtifactCache(max_bytes=1)
-    if reader_kind == "frozen":
-        assert FrozenRunData(frozen, cache).listing(FRIDAY) is not None
-    else:
-        from app.research.golden_search.proof import BlobStore
-        from app.research.options_golden_search.snapshots import SnapshotRunData
+    return parsed
 
-        reader = SnapshotRunData("SPY", next(iter(frozen.sessions.values())).snapshot, BlobStore(Path(frozen.root)))
-        assert reader.option_day(call, FRIDAY) is not None
-        assert parsed[0]() is not None
-        del reader
+
+@respx.mock
+async def test_worker_container_decode_has_no_residency_outside_its_bounded_selected_cache(
+    fake_catalog: Any, tmp_lake: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, frozen = await _freeze_a_published_container(fake_catalog, tmp_lake, tmp_path)
+    parsed = _observe_container_decodes(monkeypatch)
+    cache = DecodedArtifactCache(max_bytes=1)
+    assert FrozenRunData(frozen, cache).listing(FRIDAY) is not None
     assert cache.metrics()["resident_bytes"] == 0
     assert len(parsed) == 1
     assert parsed[0]() is None, "the full decoded container must die with the local read scope"
+
+
+@respx.mock
+async def test_snapshot_reader_releases_its_container_decode_with_the_reader(
+    fake_catalog: Any, tmp_lake: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    call, frozen = await _freeze_a_published_container(fake_catalog, tmp_lake, tmp_path)
+    parsed = _observe_container_decodes(monkeypatch)
+    reader = SnapshotRunData("SPY", next(iter(frozen.sessions.values())).snapshot, BlobStore(Path(frozen.root)))
+    assert reader.option_day(call, FRIDAY) is not None
+    assert parsed[0]() is not None
+    del reader
+    assert len(parsed) == 1
+    assert parsed[0]() is None, "the full decoded container must die with the reader"
+
+
+@respx.mock
+async def test_a_cold_worker_read_verifies_and_decodes_the_container_once_for_all_its_contracts(
+    fake_catalog: Any, tmp_lake: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    both_legs = setup(legs=[leg(expiry={"kind": "same_day"}), leg(leg_id="put", right="put", expiry={"kind": "same_day"})])
+    _, frozen = await _freeze_a_published_container(fake_catalog, tmp_lake, tmp_path, both_legs)
+    session = next(iter(frozen.sessions.values()))
+    assert len(session.contracts) == 2
+    container = session.snapshot.manifest[str(OptionSessionPath("SPY", FRIDAY).relative_path())]
+    reads: list[str] = []
+    real_get = BlobStore.get
+
+    def counting_get(self: BlobStore, digest: str, **kwargs: Any) -> bytes:
+        reads.append(digest)
+        return real_get(self, digest, **kwargs)
+
+    monkeypatch.setattr(BlobStore, "get", counting_get)
+    assert FrozenRunData(frozen, DecodedArtifactCache(max_bytes=1024**2)).listing(FRIDAY) is not None
+    # One hash of the whole inventory before the cache is asked, and one read of the container to decode it.
+    assert reads.count(container) == 2

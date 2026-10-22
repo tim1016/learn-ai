@@ -24,7 +24,12 @@ from app.data_lake.admission import read_committed_bytes
 from app.data_lake.option_bars import parse_option_day_zip
 from app.data_lake.option_lake import option_read_root
 from app.data_lake.option_listing import OptionListing, parse_option_listing_zip
-from app.data_lake.option_session import OptionSessionDecodeScope, parse_retained_option_session, read_option_session
+from app.data_lake.option_session import (
+    OptionSession,
+    OptionSessionDecodeScope,
+    parse_retained_option_session,
+    read_option_session,
+)
 from app.data_lake.path_policy import LeanMinuteBarPath, OptionListingPath, OptionMinuteBarPath, OptionSessionPath
 from app.engine.data.lean_format import LeanMinuteDataReader
 from app.lean_sidecar.trading_calendar import CALENDAR_IDENTITY, CALENDAR_PACKAGE_VERSION
@@ -178,18 +183,6 @@ class ArchivedRunData:
         digest = self.manifest[relative]
         return self.blobs.get(digest), digest
 
-    def read_artifact(self, relative: str, *, max_bytes: int) -> bytes | None:
-        """Read one bounded, hash-verified original from this immutable inventory."""
-        if relative not in self.manifest:
-            return None
-        digest = self.manifest[relative]
-        if (self.blobs.root / digest[:2] / digest).stat().st_size > max_bytes:
-            raise ValueError("original artifact exceeds the frozen input byte bound")
-        payload, _ = self._read(relative)
-        if len(payload) > max_bytes:
-            raise ValueError("original artifact exceeds the frozen input byte bound")
-        return payload
-
     def underlying_day(self, trading_date: date) -> Captured[Sequence[MinuteBar]]:
         relative = str(LeanMinuteBarPath("usa", self.underlying, trading_date, "trade").relative_path())
         payload, digest = self._read(relative)
@@ -213,13 +206,29 @@ class ArchivedRunData:
         )
 
     def option_day(self, contract: OptionContract, trading_date: date) -> Captured[Sequence[MinuteBar]] | None:
+        return self.option_days((contract,), trading_date)[contract.occ_symbol]
+
+    def option_days(
+        self, contracts: Sequence[OptionContract], trading_date: date,
+    ) -> dict[str, Captured[Sequence[MinuteBar]] | None]:
+        """Each contract's day. The session container and its listing are read, verified and decoded once for all."""
+        session = self._container(trading_date) if contracts else None
+        return {contract.occ_symbol: self._contract_day(contract, trading_date, session) for contract in contracts}
+
+    def _container(self, trading_date: date) -> OptionSession | None:
         session_path = str(OptionSessionPath(self.underlying, trading_date).relative_path())
-        if session_path in self.manifest:
-            payload, _ = self._read(session_path)
-            listing_raw, listing_digest = self._read(str(OptionListingPath(self.underlying, trading_date).relative_path()))
-            listing = OptionListing(self.underlying, trading_date,
-                parse_option_listing_zip(listing_raw, self.underlying, trading_date), listing_digest)
-            session = parse_retained_option_session(payload, listing, decode_scope=self._decode_scope)
+        if session_path not in self.manifest:
+            return None
+        payload, _ = self._read(session_path)
+        listing_raw, listing_digest = self._read(str(OptionListingPath(self.underlying, trading_date).relative_path()))
+        listing = OptionListing(self.underlying, trading_date,
+            parse_option_listing_zip(listing_raw, self.underlying, trading_date), listing_digest)
+        return parse_retained_option_session(payload, listing, decode_scope=self._decode_scope)
+
+    def _contract_day(
+        self, contract: OptionContract, trading_date: date, session: OptionSession | None,
+    ) -> Captured[Sequence[MinuteBar]] | None:
+        if session is not None:
             day = session.option_day(contract.occ_symbol)
             if day is not None:
                 return Captured(_named_by_close(day.bars, trading_date, subject="archived contract",
@@ -269,8 +278,9 @@ def build_proof(
     The retained-study path requires those exact blobs already to exist and
     never consults the lake. Both replay a second time from the source run's
     pins, reading and digest-checking the archived bytes on every ask, and
-    compare complete outcomes and input identities. A session container whose
-    admitted bytes equal the lake's shares the first replay's decode (#3435).
+    compare complete outcomes and input identities. The archived replay decodes
+    each retained container in a scope of its own, sharing nothing with the first
+    replay (#3440).
     """
     _require_not_stopped(should_stop)
     rules_digest = current_rules_digest()

@@ -130,6 +130,14 @@ def test_blob_store_get_refuses_a_missing_blob(blobs: BlobStore) -> None:
     assert excinfo.value.code == "BLOB_MISSING"
 
 
+def test_blob_store_get_serves_a_blob_at_its_bound_and_refuses_one_past_it(blobs: BlobStore) -> None:
+    digest = blobs.put(b"minute bars")
+
+    assert blobs.get(digest, max_bytes=len(b"minute bars")) == b"minute bars"
+    with pytest.raises(ValueError, match="byte bound"):
+        blobs.get(digest, max_bytes=len(b"minute bars") - 1)
+
+
 def test_blob_store_put_rewrites_a_corrupted_blob_from_the_verified_bytes(blobs: BlobStore) -> None:
     digest = blobs.put(b"minute bars")
     (blobs.root / digest[:2] / digest).write_bytes(b"torn")

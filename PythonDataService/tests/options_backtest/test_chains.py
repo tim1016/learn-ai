@@ -42,10 +42,11 @@ def test_shuffled_chain_completion_preserves_exact_carry_marks_refusals_fees_and
     given = setup(legs=[leg(expiry={"kind": "same_day"})], starting_cash_usd=cash,
         fees={"kind": "per_contract", "per_contract_usd": "0.65"}, slippage_percent="0.3")
     sessions = (WED, THU, HALF_DAY)
-    serial = run_sessions(given, sessions, archived_scene(chain_scene(), tmp_path / "source"))
+    data = archived_scene(chain_scene(), tmp_path / "source")
+    serial = run_sessions(given, sessions, data)
     plan = list(plan_chains(given))
     random.Random(3412).shuffle(plan)
-    results = {chain.key: result_from_wire(result_to_wire(replay_chain(given, sessions, chain, archived_scene(chain_scene(), tmp_path / "source")))) for chain in plan}
+    results = {chain.key: result_from_wire(result_to_wire(replay_chain(given, sessions, chain, data))) for chain in plan}
     assert merge_chains(given, sessions, results) == serial
     assert len(plan) == len(serial.slippage) + len(serial.summary.cash_ladder) - 1
     results.pop(plan[0].key)

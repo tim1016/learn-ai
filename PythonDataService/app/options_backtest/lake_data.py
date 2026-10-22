@@ -79,6 +79,10 @@ from app.options_backtest.setup import MS_PER_MINUTE
 from app.utils.session_anchors import et_date_at_ms
 
 
+class ArtifactBoundExceeded(ValueError):
+    """An original artifact, or a snapshot of them, is larger than the bound the caller set."""
+
+
 class UnderlyingDayUnreadable(ValueError):
     """The underlying's stored minute file is there and cannot be read as the lake wrote it.
 
@@ -236,10 +240,10 @@ class LakeRunData:
         if not path.is_file():
             return None
         if path.stat().st_size > max_bytes:
-            raise ValueError("original artifact exceeds the frozen input byte bound")
+            raise ArtifactBoundExceeded("original artifact exceeds its byte bound")
         payload = read_committed_bytes(path)
         if len(payload) > max_bytes:
-            raise ValueError("original artifact exceeds the frozen input byte bound")
+            raise ArtifactBoundExceeded("original artifact exceeds its byte bound")
         return payload
 
     def underlying_day(self, trading_date: date) -> Captured[tuple[MinuteBar, ...]] | None:
