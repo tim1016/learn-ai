@@ -183,18 +183,6 @@ class ArchivedRunData:
         digest = self.manifest[relative]
         return self.blobs.get(digest), digest
 
-    def read_artifact(self, relative: str, *, max_bytes: int) -> bytes | None:
-        """Read one bounded, hash-verified original from this immutable inventory."""
-        if relative not in self.manifest:
-            return None
-        digest = self.manifest[relative]
-        if (self.blobs.root / digest[:2] / digest).stat().st_size > max_bytes:
-            raise ValueError("original artifact exceeds the frozen input byte bound")
-        payload, _ = self._read(relative)
-        if len(payload) > max_bytes:
-            raise ValueError("original artifact exceeds the frozen input byte bound")
-        return payload
-
     def underlying_day(self, trading_date: date) -> Captured[Sequence[MinuteBar]]:
         relative = str(LeanMinuteBarPath("usa", self.underlying, trading_date, "trade").relative_path())
         payload, digest = self._read(relative)
@@ -290,8 +278,9 @@ def build_proof(
     The retained-study path requires those exact blobs already to exist and
     never consults the lake. Both replay a second time from the source run's
     pins, reading and digest-checking the archived bytes on every ask, and
-    compare complete outcomes and input identities. A session container whose
-    admitted bytes equal the lake's shares the first replay's decode (#3435).
+    compare complete outcomes and input identities. The archived replay decodes
+    each retained container in a scope of its own, sharing nothing with the first
+    replay (#3440).
     """
     _require_not_stopped(should_stop)
     rules_digest = current_rules_digest()

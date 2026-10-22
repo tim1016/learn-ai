@@ -18,15 +18,14 @@ from datetime import date
 from pathlib import Path
 
 from app.engine.data.decoded_cache import DecodedArtifactCache
-from app.options_backtest.data import RunData
-from app.options_backtest.frozen_inputs import FrozenRunData, freeze_run_inputs
+from app.options_backtest.frozen_inputs import FrozenRunData, OriginalRunData, freeze_run_inputs
 from app.options_backtest.lake_data import LakeRunData
 from app.options_backtest.run import RunResult, run_sessions
 from app.options_backtest.service import sessions_of_range
 from app.options_backtest.setup import OptionsBacktestSetup
 
 
-def profile_run(setup: OptionsBacktestSetup, sessions: Sequence[date], data: RunData,
+def profile_run(setup: OptionsBacktestSetup, sessions: Sequence[date], data: OriginalRunData,
                 input_root: Path, output: Path) -> RunResult:
     frozen = freeze_run_inputs(setup, sessions, data, input_root)
     profile = cProfile.Profile()

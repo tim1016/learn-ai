@@ -9,6 +9,7 @@ from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_byt
 from app.data_lake.option_listing import build_option_listing_zip_bytes
 from app.data_lake.path_policy import LeanMinuteBarPath, OptionListingPath, OptionMinuteBarPath
 from app.data_lake.polygon_option_contracts import PolygonOptionContract
+from app.options_backtest.lake_data import ArtifactBoundExceeded
 from app.options_backtest.market import MinuteBar
 from app.research.golden_search.proof import BlobStore
 from app.research.options_golden_search.snapshots import Snapshot, SnapshotRunData
@@ -16,7 +17,27 @@ from app.utils.timestamps import ny_datetime
 from tests.options_backtest._run_data import FakeRunData
 
 
-def archived_scene(scene: FakeRunData, root: Path) -> SnapshotRunData:
+class HeldArtifacts:
+    """A fixed set of original files, answering as the lake's bounded reader does."""
+
+    def __init__(self, files: dict[str, bytes]) -> None:
+        self.files = files
+
+    def read_artifact(self, relative: str, *, max_bytes: int) -> bytes | None:
+        payload = self.files.get(relative)
+        if payload is not None and len(payload) > max_bytes:
+            raise ArtifactBoundExceeded("original artifact exceeds its byte bound")
+        return payload
+
+
+class ArchivedScene(SnapshotRunData):
+    """An archived scene that can also be frozen: it serves the original bytes of any path it holds."""
+
+    def read_artifact(self, relative: str, *, max_bytes: int) -> bytes | None:
+        return self.blobs.get(self.manifest[relative], max_bytes=max_bytes) if relative in self.manifest else None
+
+
+def archived_scene(scene: FakeRunData, root: Path) -> ArchivedScene:
     blobs = BlobStore(root)
     manifest: dict[str, str] = {}
     absent: set[str] = set()
@@ -49,5 +70,5 @@ def archived_scene(scene: FakeRunData, root: Path) -> SnapshotRunData:
                 manifest[relative] = blobs.put(bars_zip(contract.occ_symbol, day, tuple(scene._options[(contract, day)])))
             else:
                 absent.add(relative)
-    return SnapshotRunData("SPY", Snapshot(manifest=manifest, absent=tuple(sorted(absent)),
+    return ArchivedScene("SPY", Snapshot(manifest=manifest, absent=tuple(sorted(absent)),
         retained_bytes=sum(len(blobs.get(digest)) for digest in set(manifest.values()))), blobs)

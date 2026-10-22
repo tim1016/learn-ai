@@ -91,8 +91,10 @@ async def test_freeze_refuses_changed_session_sources_but_accepts_stable_partial
         await asyncio.to_thread(freeze_run_inputs, given, (FRIDAY,), ChangingData("SPY"), tmp_path / "mixed",
                                 on_checkpoint=checkpoints.append)
     assert checkpoints == []
-    assert len(reads) >= 2
-    if transition == "container_refresh":
+    if transition == "fallback_refresh":
+        # One leg, served by the legacy fallback: retention catches the container republished since.
+        assert reads == [None]
+    elif transition == "container_refresh":
         assert reads[0].listing_sha256 == reads[1].listing_sha256
         assert reads[0].container_sha256 != reads[1].container_sha256
     else:

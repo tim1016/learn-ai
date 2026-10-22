@@ -12,7 +12,8 @@ from app.options_backtest.frozen_inputs import FrozenRunData, FrozenRunInputs, f
 from app.options_backtest.run import run_sessions
 from app.options_bots.golden_proof import GoldenProofError
 from app.research.golden_search.proof import BlobStore, ProofMismatchError
-from tests.options_backtest._archived_data import archived_scene
+from app.research.options_golden_search.snapshots import SnapshotRecorder
+from tests.options_backtest._archived_data import HeldArtifacts, archived_scene
 from tests.options_backtest._run_data import THU, WED, chain_scene
 from tests.options_backtest.setup_fixtures import setup
 
@@ -37,9 +38,10 @@ def test_originals_are_byte_identical_and_warm_replay_cannot_hide_tampering(tmp_
     assert all(source.blobs.get(digest) == payload for digest, payload in originals.items())
 
 
-@pytest.mark.parametrize("bound", ["session", "run"])
+@pytest.mark.parametrize(("bound", "refusal"), [("session", r"stored original .* exceeds its .*-byte bound"),
+                                                 ("run", "frozen run exceeds its retained original input byte bound")])
 def test_original_byte_caps_refuse_before_publishing_an_oversized_session(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bound: str,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bound: str, refusal: str,
 ) -> None:
     source = archived_scene(chain_scene(), tmp_path / "source")
     baseline = freeze_run_inputs(setup(), (WED, THU), source, tmp_path / "baseline")
@@ -47,11 +49,30 @@ def test_original_byte_caps_refuse_before_publishing_an_oversized_session(
     limit = first - 1 if bound == "session" else first
     monkeypatch.setattr(frozen_inputs, "MAX_SESSION_BYTES" if bound == "session" else "MAX_FROZEN_BYTES", limit)
     checkpoints, reservations = [], []
-    with pytest.raises(ValueError, match=r"original.*byte bound"):
+    with pytest.raises(ValueError, match=refusal):
         freeze_run_inputs(setup(), (WED, THU), source, tmp_path / "refused",
                           on_checkpoint=checkpoints.append, reserve_bytes=reservations.append)
     assert len(checkpoints) == (0 if bound == "session" else 1)
     assert max(reservations, default=0) <= limit
+
+
+def test_a_blob_shared_by_two_sessions_is_whole_in_each_and_counted_once_against_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shared, other, extra = b"shared by two sessions", b"only the second", b"x"
+    held = HeldArtifacts({"one/shared": shared, "two/shared": shared, "two/other": other, "two/extra": extra})
+    reservations: list[int] = []
+    run = frozen_inputs._RunBytes({}, reservations.append)
+    first, second = (SnapshotRecorder(held, BlobStore(tmp_path), max_bytes=1000, admit=run.admit) for _ in range(2))
+    first.record("one/shared", hashlib.sha256(shared).hexdigest())
+    second.record("two/shared", hashlib.sha256(shared).hexdigest())
+    second.record("two/other", hashlib.sha256(other).hexdigest())
+    assert (first.snapshot().retained_bytes, second.snapshot().retained_bytes) == (len(shared), len(shared) + len(other))
+    assert (run.retained, reservations) == (len(shared) + len(other), [len(shared), len(shared) + len(other)])
+    monkeypatch.setattr(frozen_inputs, "MAX_FROZEN_BYTES", run.retained)
+    with pytest.raises(ValueError, match="frozen run exceeds"):
+        second.record("two/extra", hashlib.sha256(extra).hexdigest())
+    assert reservations[-1] == run.retained
 
 
 def test_transitive_inventory_counts_each_original_blob_once_and_refuses_old_checkpoint(tmp_path: Path) -> None:
