@@ -125,6 +125,7 @@ class ExternalOrderResource:
     # not-yet-appended observation value used to plan a transition.
     observation_sequence: int | None = None
     acknowledgement_sequence: int | None = None
+    latest_observation_sequence: int | None = None
     observation_recorded_at_ms: int | None = None
     acknowledgement_recorded_at_ms: int | None = None
     broker_state: str | None = None

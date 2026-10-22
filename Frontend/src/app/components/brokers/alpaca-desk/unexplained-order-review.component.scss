@@ -1,0 +1,13 @@
+.outside-order {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid var(--surface-border);
+  border-radius: 0.5rem;
+  overflow-wrap: anywhere;
+
+  dl, p { margin: 0; }
+  dl { display: grid; gap: 0.35rem; }
+  dt { color: var(--text-color-secondary); }
+  dd { margin: 0; }
+}

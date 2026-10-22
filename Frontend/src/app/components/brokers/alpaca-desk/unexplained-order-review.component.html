@@ -1,0 +1,33 @@
+<section class="outside-order">
+  <strong>Outside broker order <code>{{ brokerOrderId() }}</code></strong>
+  @if (order.isLoading()) {
+    <p>Loading the recorded order…</p>
+  } @else if (order.error()) {
+    <p>The recorded order is unavailable. Refresh this page to retry before acknowledging it.</p>
+  } @else if (order.value(); as detail) {
+    @if (detail.order_instruction; as instruction) {
+      @if (instruction.symbol; as symbol) {
+        <app-asset-identity [symbol]="symbol" size="sm" />
+      }
+      <dl>
+        <div><dt>Order</dt><dd>{{ instruction.action | receiptLabel }} · {{ instruction.quantity ?? 'Not recorded' }} · {{ instruction.order_type | receiptLabel }}</dd></div>
+        @if (instruction.limit_price !== null && instruction.limit_price !== undefined) {
+          <div><dt>Limit price (USD)</dt><dd>{{ instruction.limit_price }}</dd></div>
+        }
+        @if (instruction.stop_price !== null && instruction.stop_price !== undefined) {
+          <div><dt>Stop price (USD)</dt><dd>{{ instruction.stop_price }}</dd></div>
+        }
+        <div><dt>Alpaca order status</dt><dd>@if (brokerState(); as state) { {{ state | receiptLabel }} } @else { Not recorded }</dd></div>
+        <div><dt>Filled quantity</dt><dd>{{ detail.receipt?.['filled_quantity'] ?? 'Not recorded' }}</dd></div>
+        <div><dt>Average fill price (USD)</dt><dd>{{ detail.execution_price ?? 'Not recorded' }}</dd></div>
+        <div><dt>First recorded (local)</dt><dd><app-timestamp-display [value]="detail.recorded_at_ms" mode="local" /></dd></div>
+      </dl>
+    }
+    <p>Acknowledgement records your review of this order only. Other unreviewed orders may still hold the account.</p>
+    <app-broker-order-review
+      [brokerOrderIds]="[brokerOrderId()]"
+      [busyOrderId]="busyOrderId()"
+      (acknowledge)="acknowledgeObserved($event)"
+    />
+  }
+</section>

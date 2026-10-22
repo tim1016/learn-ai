@@ -205,6 +205,26 @@ async def test_external_order_acknowledgement_reports_selected_clerk_startup_fai
 _ACCOUNT_NUMBER = "PA3KWXU1C4C3"
 
 
+async def test_outside_review_transports_the_displayed_observation_and_refuses_changed_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.routers.clerk_transactions as module
+    from app.broker.alpaca.clerk.sqlite.repository_external_order_api import ExternalOrderReviewChangedError
+
+    def refuse(*, account_id: str, external_order_id: str, operator: str, expected_observation_sequence: int) -> None:
+        assert (account_id, external_order_id, operator, expected_observation_sequence) == ("PA-TEST", "leg-1", "owner", 18)
+        raise ExternalOrderReviewChangedError("Refresh and review the changed outside order.")
+
+    monkeypatch.setattr(module, "sqlite_acknowledge_external_order", refuse)
+    app = FastAPI()
+    app.include_router(router)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/accounts/PA-TEST/transactions/external-orders/leg-1/acknowledge",
+            json={"operator": "owner", "expected_observation_sequence": 18})
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Refresh and review the changed outside order."
+
+
 async def test_external_order_acknowledgement_endpoint_delegates_only_to_active_sqlite(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -278,7 +298,7 @@ def _mleg_parent(*, side: str, status: str = "new") -> BrokerOrder:
 
 
 async def _acknowledge_through_route(
-    repo: ClerkSqliteRepository, broker_order_id: str, operator: str
+    repo: ClerkSqliteRepository, broker_order_id: str, operator: str, expected_observation_sequence: int | None = None,
 ) -> Response:
     broker = object()
     set_active_clerk_runtime(
@@ -294,7 +314,7 @@ async def _acknowledge_through_route(
             return await client.post(
                 f"/api/accounts/{_ACCOUNT_NUMBER}/transactions/external-orders/"
                 f"{broker_order_id}/acknowledge",
-                json={"operator": operator},
+                json={"operator": operator, "expected_observation_sequence": expected_observation_sequence},
             )
     finally:
         set_active_clerk_runtime(None)
@@ -333,6 +353,19 @@ async def test_acknowledgement_releases_an_unfoldable_fence_even_when_the_id_has
     assert first.json()["ack_operator"] == "operator-1"
     assert remaining == []
     assert row is not None and row.ack_operator == "operator-1"
+
+
+async def test_versioned_outside_review_does_not_acknowledge_a_later_unfoldable_update(tmp_path: Path) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id=_ACCOUNT_NUMBER, artifacts_root=tmp_path)
+    try:
+        observed = observe_external_order(repo, order=_mleg_parent(side="buy"))
+        record_unfoldable_broker_order(repo, order=_mleg_parent(side="None", status="partially_filled"),
+            reason="external order side must be buy or sell")
+        reply = await _acknowledge_through_route(repo, "mleg-parent-1", "owner", observed.latest_observation_sequence)
+        assert reply.status_code == 200, reply.text
+        assert {row["reason_code"] for row in repo.active_uncertainties()} == {"UNFOLDABLE_BROKER_ORDER"}
+    finally:
+        repo.close()
 
 
 async def test_external_order_acknowledgement_route_releases_an_unfoldable_order(

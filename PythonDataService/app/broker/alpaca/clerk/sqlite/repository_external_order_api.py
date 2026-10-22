@@ -23,6 +23,10 @@ class ExternalOrderNotFoundError(ValueError):
     """An operator acknowledgement named no durable external observation."""
 
 
+class ExternalOrderReviewChangedError(ValueError):
+    """The observation the operator reviewed is no longer the current one."""
+
+
 class ClerkSqliteRepositoryExternalOrderApi:
     """Focused atomic mutations mixed into ``ClerkSqliteRepository``."""
 

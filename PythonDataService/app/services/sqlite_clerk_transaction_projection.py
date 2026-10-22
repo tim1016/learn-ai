@@ -37,6 +37,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.repository_external_order_api import (
     ExternalOrderNotFoundError,
+    ExternalOrderReviewChangedError,
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.engine.live.order_identity import (
@@ -262,6 +263,7 @@ def sqlite_acknowledge_external_order(
     account_id: str,
     external_order_id: str,
     operator: str,
+    expected_observation_sequence: int | None = None,
 ) -> ExternalOrderResource | UnfoldableBrokerOrderAcknowledgement | None:
     """Acknowledge one foreign broker order in the active SQLite authority.
 
@@ -280,25 +282,34 @@ def sqlite_acknowledge_external_order(
         return None
     repo = clerk.repository
     try:
-        released = (
-            acknowledge_unfoldable_broker_order(
+        with repo.unfoldable_order_write_serialized():
+            if expected_observation_sequence is not None:
+                observed = repo.external_order(external_order_id)
+                if observed is None or observed.latest_observation_sequence != expected_observation_sequence:
+                    raise ExternalOrderReviewChangedError(
+                        "This outside order changed after it was displayed. Refresh and review its latest evidence."
+                    )
+                # A review of this readable observation cannot release a separate unfoldable update (#3468).
+                return acknowledge_external_order(repo, external_order_id=external_order_id, operator=operator)
+            released = (
+                acknowledge_unfoldable_broker_order(
+                    repo, broker_order_id=external_order_id, operator=operator
+                )
+                if unfoldable_broker_order_is_unreviewed(repo, broker_order_id=external_order_id)
+                else None
+            )
+            if repo.external_order(external_order_id) is not None:
+                acknowledged = acknowledge_external_order(
+                    repo, external_order_id=external_order_id, operator=operator
+                )
+                return released if released is not None else acknowledged
+            if released is not None:
+                return released
+            # Neither record is open: answer the order's latest unfoldable review,
+            # or 404 for an id no record ever named.
+            return acknowledge_unfoldable_broker_order(
                 repo, broker_order_id=external_order_id, operator=operator
             )
-            if unfoldable_broker_order_is_unreviewed(repo, broker_order_id=external_order_id)
-            else None
-        )
-        if repo.external_order(external_order_id) is not None:
-            acknowledged = acknowledge_external_order(
-                repo, external_order_id=external_order_id, operator=operator
-            )
-            return released if released is not None else acknowledged
-        if released is not None:
-            return released
-        # Neither record is open: answer the order's latest unfoldable review,
-        # or 404 for an id no record ever named.
-        return acknowledge_unfoldable_broker_order(
-            repo, broker_order_id=external_order_id, operator=operator
-        )
     except ExternalOrderNotFoundError as exc:
         raise ExternalOrderAcknowledgementNotFound(str(exc)) from exc
 
@@ -796,6 +807,9 @@ def _external_detail_row(
         **summary.model_dump(exclude={"event_count"}),
         receipt={
             "external_order_id": order.external_order_id,
+            "broker_state": order.broker_state,
+            "filled_quantity": order.filled_quantity,
+            "latest_observation_sequence": order.latest_observation_sequence,
             "evidence_refs": list(order.evidence_refs),
         },
         events=events,

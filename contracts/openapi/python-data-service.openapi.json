@@ -17569,6 +17569,18 @@
         "additionalProperties": false,
         "description": "Operator evidence for reviewing one externally observed broker order.",
         "properties": {
+          "expected_observation_sequence": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Observation Sequence"
+          },
           "operator": {
             "maxLength": 64,
             "minLength": 1,

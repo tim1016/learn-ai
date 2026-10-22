@@ -55,11 +55,22 @@
             <span>{{ uncertainty.explanation }}</span>
             <span>{{ uncertainty.operator_impact }} {{ uncertainty.next_step }}</span>
             <app-next-attempt [facts]="uncertainty" />
+            @if (uncertainty.reason_code === 'UNEXPLAINED_ORDER_HOLD') {
+              @for (orderId of uncertainty.evidence_refs; track orderId) {
+                <app-unexplained-order-review
+                  [accountId]="accountId()"
+                  [target]="target()"
+                  [brokerOrderId]="orderId"
+                  [busyOrderId]="acknowledgingOrderId()"
+                  (acknowledge)="acknowledgeBrokerOrder($event)"
+                />
+              }
+            }
             @if (uncertainty.reason_code === unfoldableReasonCode) {
-              <app-unfoldable-order-review
+              <app-broker-order-review
                 [brokerOrderIds]="uncertainty.evidence_refs"
                 [busyOrderId]="acknowledgingOrderId()"
-                (acknowledge)="acknowledgeUnfoldableOrder($event)"
+                (acknowledge)="acknowledgeBrokerOrder($event)"
               />
             }
           </li>

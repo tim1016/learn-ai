@@ -372,6 +372,37 @@ describe('AlpacaSqliteCustodyComponent', () => {
     };
   }
 
+  it('shows and reviews each outside leg holding the account, without claiming the other leg is cleared', async () => {
+    const held = unfoldableProjection();
+    held.uncertainties[0] = {
+      ...held.uncertainties[0], reason_code: 'UNEXPLAINED_ORDER_HOLD',
+      evidence_refs: ['outside-leg-1', 'outside-leg-2'],
+    };
+    const accountTransaction = vi.fn().mockImplementation((_clerk, account, id: string) => Promise.resolve({
+      transaction_id: id, account_id: account, external_order_id: id.replace('external-order:', ''),
+      transaction_origin: 'external', lifecycle_state: 'review_required',
+      order_instruction: { symbol: 'SPY', action: 'sell', quantity: 1, order_type: 'limit' },
+      execution_quantity: 1, execution_price: 0.6,
+      recorded_at_ms: NOW, receipt: { broker_state: 'filled', latest_observation_sequence: 18, filled_quantity: 1 }, events: [],
+    }));
+    const acknowledgeExternalOrder = vi.fn().mockResolvedValue({});
+    const getSqliteClerkProjection = vi.fn().mockResolvedValue(held);
+    await renderCustody({ getSqliteClerkProjection, accountTransaction, acknowledgeExternalOrder });
+
+    const first = await screen.findByRole('button', { name: 'Acknowledge broker order outside-leg-1' });
+    expect(accountTransaction).toHaveBeenCalledWith('clrk_spec', 'PA1', 'external-order:outside-leg-1');
+    expect(accountTransaction).toHaveBeenCalledWith('clrk_spec', 'PA1', 'external-order:outside-leg-2');
+    expect(screen.getAllByText('Filled').length).toBeGreaterThan(0);
+    fireEvent.input(screen.getAllByLabelText('Reviewed by')[0], { target: { value: 'owner' } });
+    fireEvent.click(first);
+    await waitFor(() => expect(acknowledgeExternalOrder).toHaveBeenCalledOnce());
+    expect(acknowledgeExternalOrder.mock.calls[0]).toEqual([expect.objectContaining({
+      clerkId: 'clrk_spec', accountId: 'PA1', bindingGeneration: 4, routingEpoch: 1,
+    }), 'outside-leg-1', 'owner', 18]);
+    expect(await screen.findByText('Broker order outside-leg-1 was reviewed.')).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Acknowledge broker order outside-leg-2' })).toBeTruthy();
+  });
+
   it('acknowledges an order the Clerk could not record on the external-order route', async () => {
     const getSqliteClerkProjection = vi.fn().mockResolvedValue(unfoldableProjection());
     const acknowledgeExternalOrder = vi.fn().mockResolvedValue({

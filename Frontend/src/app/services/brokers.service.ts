@@ -494,11 +494,15 @@ export class BrokersService {
     target: ResourceTarget,
     externalOrderId: string,
     operator: string,
+    expectedObservationSequence?: number,
   ): Promise<ExternalOrderAcknowledgement> {
     return firstValueFrom(
       this.http.post<ExternalOrderAcknowledgement>(
         operationUrl('custody_external_order_ack', { ...target, externalOrderId }),
-        this.commandBody(target, 'custody_command', { operator }),
+        this.commandBody(target, 'custody_command', {
+          operator,
+          ...(expectedObservationSequence === undefined ? {} : { expected_observation_sequence: expectedObservationSequence }),
+        }),
       ),
     );
   }

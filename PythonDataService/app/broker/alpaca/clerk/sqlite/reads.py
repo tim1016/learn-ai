@@ -128,6 +128,7 @@ _EXTERNAL_ORDER_PROVENANCE_SQL = (
 _EXTERNAL_ORDER_SELECT = (
     ", ".join(f"eo.{column}" for column in _EXTERNAL_ORDER_COLUMNS)
     + ", provenance.observation_sequence AS observation_sequence"
+    + ", provenance.latest_observation_sequence AS latest_observation_sequence"
     + ", provenance.acknowledgement_sequence AS acknowledgement_sequence"
     + ", observed.recorded_at_ms AS observation_recorded_at_ms"
     + ", acknowledged.recorded_at_ms AS acknowledgement_recorded_at_ms"
@@ -463,6 +464,7 @@ def _external_order_resource(row: sqlite3.Row) -> ExternalOrderResource:
         **values,
         evidence_refs=tuple(evidence_refs),
         observation_sequence=row["observation_sequence"],
+        latest_observation_sequence=row["latest_observation_sequence"],
         acknowledgement_sequence=row["acknowledgement_sequence"],
         observation_recorded_at_ms=row["observation_recorded_at_ms"],
         acknowledgement_recorded_at_ms=row["acknowledgement_recorded_at_ms"],
