@@ -84,15 +84,16 @@ def _native_quote(client: Any, contract: Any) -> QuoteLease:
     key = client.connection_generation, client.data_loss_epoch, int(contract.conId)
     cache = _NATIVE.setdefault(client, {})
     owned = cache.get(key)
+    if owned is not None and owned.ticker.contract.exchange != contract.exchange:
+        raise FeedUnavailable("Incompatible quote venue is already active for this contract")
     if owned is None:
         generic_ticks = "100,101,106" if contract.secType == "OPT" else "233"
         ticker = client.ib.reqMktData(contract, generic_ticks, False, False)
+        ticker.contract = contract
         for block in GREEK_BLOCKS:
             setattr(ticker, block, None)
         request_id = client.ib.wrapper.ticker2ReqId["mktData"].get(ticker)
         owned = cache[key] = QuoteLease(ticker=ticker, request_id=request_id, references=0)
-    if owned.ticker.contract.exchange != contract.exchange:
-        raise FeedUnavailable("Incompatible quote venue is already active for this contract")
     owned.references += 1
 
     def release() -> None:
@@ -141,7 +142,13 @@ async def _receive(client: Any, lease: QuoteLease, shared: Any, contract: Any, k
                         price_ticks = {t.kind for t in update.ticks}
                         required = {"bid": {1, 66}, "ask": {2, 67}, "last": {4, 68}}
                         for name, value in update.values.items():
-                            if name in required and not required[name] & price_ticks:
+                            # Empty-source sentinels always withdraw a side, even without a price tick.
+                            if (
+                                name in required
+                                and value is not None
+                                and value > 0
+                                and not required[name] & price_ticks
+                            ):
                                 continue
                             setattr(ticker, name, float("nan") if value is None else value)
                         for block, values in update.greeks.items():

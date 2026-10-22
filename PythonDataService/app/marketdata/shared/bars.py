@@ -16,7 +16,7 @@ from app.broker.ibkr.bars import (
     _LeasedBar,
 )
 from app.broker.ibkr.contracts import qualify_underlying
-from app.broker.ibkr.minute_assembler import IBKRBarStreamError, _session_phase_for_ms
+from app.broker.ibkr.minute_assembler import IBKRBarStreamError, IBKRImpossibleBarError, _session_phase_for_ms
 from app.marketdata.shared.protocol import FeedUnavailable, Instrument, Subscription
 from app.utils.timestamps import now_ms_utc
 
@@ -63,6 +63,8 @@ async def shared_raw_bars(
                     frame = await anext(frames)
                 first = False
                 if frame.kind == "error":
+                    if frame.cause == "impossible_bar":
+                        raise IBKRImpossibleBarError(frame.reason)
                     if frame.cause == "stalled":
                         # The shared watchdog retires the physical line. Each
                         # assembler still owes its own sparse-minute emit (#2376).

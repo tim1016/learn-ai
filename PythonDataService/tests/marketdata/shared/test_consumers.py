@@ -14,6 +14,7 @@ from ib_async import Option, Stock
 
 from app.broker.ibkr.bars import stream_minute_bars, stream_raw_5s_bars
 from app.broker.ibkr.market_data import _ticker_to_quote
+from app.broker.ibkr.market_subscription import MarketSubscription
 from app.broker.ibkr.minute_assembler import MinuteAssembler
 from app.broker.ibkr.option_quotes import OptionLine
 from app.marketdata.shared.protocol import (
@@ -131,6 +132,22 @@ async def test_data_mode_change_and_transport_loss_cannot_leave_a_live_option_qu
         await delivery.publish(Frame(kind="error", epoch=EPOCH, received_at_ms=4000, reason="disconnected"))
         assert line.bid is None and line.ask is None
         assert line.market_data_type == 0
+    finally:
+        lease.release()
+        await asyncio.gather(lease.task, return_exceptions=True)
+
+
+async def test_size_only_callbacks_cannot_seed_a_late_joiners_cached_book() -> None:
+    delivery = Delivery()
+    lease = request_quote(client_for(delivery), Stock("QQQ", "SMART", "USD", conId=10))
+    book = MarketSubscription(symbol="QQQ", started_at_ms=0, ticker=lease.ticker, lease=lease)
+    lease.ticker.updateEvent += lambda ticker: book.ingest(ticker, lease.received_at_ms)
+    try:
+        await asyncio.sleep(0)
+        await delivery.publish(quote_update((0, 2, 1), (3, 3, 1)))
+        assert book.quote(1000) is None
+        assert book.held(1) is None
+        assert book.evidence(1000).state != "READY"
     finally:
         lease.release()
         await asyncio.gather(lease.task, return_exceptions=True)

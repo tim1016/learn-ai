@@ -8,7 +8,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
-FailureCause = Literal["socket_down", "soft_loss_1100", "data_lost_1101", "generation_changed", "stalled"]
+FailureCause = Literal[
+    "socket_down", "soft_loss_1100", "data_lost_1101", "generation_changed", "stalled", "impossible_bar"
+]
 GREEK_BLOCKS = ("modelGreeks", "bidGreeks", "askGreeks", "lastGreeks")
 
 

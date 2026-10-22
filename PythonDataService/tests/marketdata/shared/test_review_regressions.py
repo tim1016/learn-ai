@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import aclosing
 from types import SimpleNamespace
 from typing import Any
 
@@ -10,10 +11,12 @@ import pytest
 from ib_async import IB, Contract
 from ib_async.objects import RealTimeBarList, TickData
 
+from app.broker.ibkr.market_subscription import MarketSubscription
 from app.broker.ibkr.option_quotes import OptionLine
 from app.marketdata.shared.hub import FeedHub
 from app.marketdata.shared.native import IbkrSource
 from app.marketdata.shared.protocol import Frame, SourceBar
+from app.marketdata.shared.quotes import request_quote
 from tests.marketdata.shared.test_hub import Source, quote, started, subscription
 from tests.marketdata.shared.test_native import Broker, Client
 
@@ -97,6 +100,89 @@ class RealWrapperBroker(Broker):
         self.opened.append((contract, ticks))
         self.ticker = self.wrapper.startTicker(len(self.opened), contract, "mktData")
         return self.ticker
+
+
+@pytest.mark.parametrize("size_kind", [0, 3])
+@pytest.mark.parametrize("empty_price", [0, float("nan")])
+async def test_shared_book_withdraws_a_side_cleared_by_the_native_size_callback(
+    size_kind: int, empty_price: float
+) -> None:
+    native = Client()
+    native.ib = RealWrapperBroker()
+    hub = FeedHub(IbkrSource(native))
+    shared = SimpleNamespace(stream=hub.stream, is_connected=lambda: True)
+    client = SimpleNamespace(shared_feed=shared, ib=native.ib)
+    contract = Contract(conId=2345, secType="OPT", exchange="SMART", currency="USD")
+    lease = request_quote(client, contract)
+    book = MarketSubscription(symbol="QQQ", started_at_ms=0, ticker=lease.ticker, lease=lease)
+    updates: asyncio.Queue[None] = asyncio.Queue()
+
+    def receive(ticker: Any) -> None:
+        book.ingest(ticker, lease.received_at_ms)
+        updates.put_nowait(None)
+
+    lease.ticker.updateEvent += receive
+
+    async def delivered() -> None:
+        await asyncio.wait_for(updates.get(), 1)
+        while not updates.empty():
+            updates.get_nowait()
+
+    try:
+        for _ in range(30):
+            if native.ib.ticker is not None:
+                break
+            await asyncio.sleep(0)
+        ticker = native.ib.ticker
+        assert ticker is not None
+        wrapper = native.ib.wrapper
+        wrapper.defaultEmptyPrice = empty_price
+        wrapper.marketDataType(1, 1)
+        wrapper.priceSizeTick(1, 1, 2, 1)
+        wrapper.priceSizeTick(1, 2, 3, 1)
+        ticker.updateEvent.emit(ticker)
+        await delivered()
+        assert book.held(1) is not None
+        assert book.evidence(lease.received_at_ms).state == "READY"
+
+        for size in (0, 1):
+            ticker.ticks.clear()
+            wrapper.tickSize(1, size_kind, size)
+            ticker.updateEvent.emit(ticker)
+            await delivered()
+            assert book.quote(lease.received_at_ms) is None
+            held = book.held(1)
+            assert held is None or getattr(held, "bid" if size_kind == 0 else "ask").price == 0
+            assert book.evidence(lease.received_at_ms).state != "READY"
+
+        ticker.ticks.clear()
+        wrapper.priceSizeTick(1, 1 if size_kind == 0 else 2, 2 if size_kind == 0 else 3, 1)
+        ticker.updateEvent.emit(ticker)
+        await delivered()
+        assert book.quote(lease.received_at_ms) is not None
+    finally:
+        lease.release()
+        await asyncio.gather(lease.task, return_exceptions=True)
+        await hub.close()
+
+
+async def test_native_quote_venue_can_change_after_the_final_lease_is_released() -> None:
+    from app.marketdata.shared.protocol import FeedUnavailable
+
+    client = Client()
+    client.ib = RealWrapperBroker()
+    first = Contract(conId=34, secType="OPT", exchange="SMART", currency="USD")
+    second = Contract(conId=34, secType="OPT", exchange="CBOE", currency="USD")
+    lease = request_quote(client, first)
+    with pytest.raises(FeedUnavailable, match="venue"):
+        request_quote(client, second)
+    assert len(client.ib.opened) == 1
+    lease.release()
+    replacement = request_quote(client, second)
+    assert replacement.ticker.contract.exchange == "CBOE"
+    assert len(client.ib.opened) == 2
+    replacement.release()
+    assert [contract.exchange for contract in client.ib.closed] == ["SMART", "CBOE"]
 
 
 async def test_incompatible_quote_venues_are_refused_before_ib_async_can_alias_the_ticker() -> None:
@@ -273,12 +359,51 @@ async def test_native_bar_stall_keeps_the_recoverable_failure_kind(monkeypatch: 
         await stream.aclose()
 
 
+async def test_impossible_source_bar_keeps_its_durable_refusal_across_shared_delivery() -> None:
+    from app.marketdata.feed import IMPOSSIBLE_SOURCE_BAR, MarketDataFeedError
+    from app.marketdata.ibkr_feed import IbkrMarketDataFeed
+    from tests.marketdata.shared.test_consumers import Delivery, client_for
+
+    native = Client()
+    native.ib = BarBroker()
+    hub = FeedHub(IbkrSource(native))
+    delivery = Delivery()
+    delivery.underlyings["QQQ"] = subscription(kind="bars").instrument
+
+    async def wire_frames(key: Any) -> Any:
+        async with aclosing(hub.stream(key)) as frames:
+            async for frame in frames:
+                yield Frame.model_validate_json(frame.model_dump_json())
+
+    delivery.stream = wire_frames
+    stream = IbkrMarketDataFeed(client_for(delivery)).stream_bars("QQQ")
+    pending = asyncio.create_task(anext(stream))
+    try:
+        for _ in range(30):
+            if native.ib.raw_list is not None:
+                break
+            await asyncio.sleep(0)
+        bars = native.ib.raw_list
+        assert bars is not None
+        bars.append(SimpleNamespace(time=1792503000000, open_=2, high=1, low=2, close=2, volume=1))
+        bars.updateEvent.emit(bars, True)
+        with pytest.raises(MarketDataFeedError) as error:
+            await asyncio.wait_for(pending, 1)
+        assert error.value.reason == IMPOSSIBLE_SOURCE_BAR
+        assert native.ib.cancelled == 1
+    finally:
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+        await stream.aclose()
+        await hub.close()
+
+
 async def test_new_source_cannot_publish_greeks_retained_in_ib_asyncs_contract_cache() -> None:
     client = Client()
     client.ib = RealWrapperBroker()
     key = subscription()
     retained = client.ib.wrapper.startTicker(70, Contract(conId=key.instrument.con_id), "mktData")
-    retained.modelGreeks = SimpleNamespace(impliedVol=.2, delta=.5)
+    retained.modelGreeks = SimpleNamespace(impliedVol=0.2, delta=0.5)
     stream = IbkrSource(client).stream(key)
     pending = asyncio.create_task(anext(stream))
     try:

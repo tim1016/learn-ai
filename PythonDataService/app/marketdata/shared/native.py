@@ -19,7 +19,7 @@ from app.broker.ibkr.bars import (
 )
 from app.broker.ibkr.client import IbkrClient, NotConnectedError
 from app.broker.ibkr.market_subscription import REQUEST_FAILURE_CODES, install_market_data_callbacks
-from app.broker.ibkr.minute_assembler import _bar_time_ms, _validated_contribution
+from app.broker.ibkr.minute_assembler import IBKRImpossibleBarError, _bar_time_ms, _validated_contribution
 from app.marketdata.shared.protocol import (
     GREEK_BLOCKS,
     FeedUnavailable,
@@ -206,6 +206,8 @@ class IbkrSource:
                 if overflow:
                     raise FeedUnavailable("IBKR bar ingress overflow; continuity is lost")
                 yield frame_of(raw, received)
+        except IBKRImpossibleBarError as exc:
+            yield Frame(kind="error", epoch=epoch, received_at_ms=now_ms_utc(), reason=str(exc), cause="impossible_bar")
         except IBKRBarInterrupted as exc:
             yield Frame(kind="error", epoch=epoch, received_at_ms=now_ms_utc(), reason=str(exc), cause=exc.cause)
         except IBKRBarSubscriptionStalled as exc:
