@@ -214,3 +214,43 @@ async def test_reconnect_during_bar_acquisition_never_labels_new_data_with_old_e
         assert client.ib.cancelled == 1
     finally:
         await stream.aclose()
+
+
+async def test_fast_1100_1102_recovery_terminates_the_old_bar_epoch() -> None:
+    client = Client()
+    client.ib = BarBroker()
+    source = IbkrSource(client)
+    stream = source.stream(subscription(kind="bars"))
+    first = await asyncio.wait_for(anext(stream), 1)
+    assert first.kind == "idle"
+    # The socket and generation remain unchanged, but a real soft-loss episode
+    # happened between observations. Subsequent callbacks cannot use that epoch.
+    client.connectivity_lost_count += 1
+    bars = client.ib.raw_list
+    bars.append(SimpleNamespace(time=1792503000000, open_=2, high=2, low=2, close=2, volume=1))
+    bars.updateEvent.emit(bars, True)
+    try:
+        frame = await asyncio.wait_for(anext(stream), 1)
+        assert frame.kind == "error" and frame.cause == "soft_loss_1100"
+    finally:
+        await stream.aclose()
+
+
+async def test_qualification_cannot_substitute_another_exchange() -> None:
+    client = Client()
+    original = client.ib.qualifyContractsAsync
+
+    async def qualify(contract: Any) -> Any:
+        result = await original(contract)
+        result[0].exchange = "CBOE"
+        return result
+
+    client.ib.qualifyContractsAsync = qualify
+    hub = FeedHub(IbkrSource(client))
+    stream = hub.stream(subscription())
+    try:
+        frame = await asyncio.wait_for(anext(stream), 0.3)
+        assert frame.kind == "error" and "identity differs" in frame.reason
+        assert not client.ib.opened
+    finally:
+        await stream.aclose()

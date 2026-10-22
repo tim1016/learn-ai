@@ -70,10 +70,11 @@ class IbkrSource:
         if not self._current(epoch):
             raise FeedUnavailable("Shared source changed while qualifying the instrument")
         contract = qualified[0]
-        if (contract.conId, contract.secType, contract.currency) != (
+        if (contract.conId, contract.secType, contract.currency, contract.exchange) != (
             identity.con_id,
             identity.sec_type,
             identity.currency,
+            identity.exchange,
         ):
             raise FeedUnavailable("Shared source instrument identity differs from the request")
         slot = (subscription.kind, identity.con_id)
@@ -107,6 +108,9 @@ class IbkrSource:
 
         def receive(raw_bars: Any, _new: bool) -> None:
             nonlocal overflow
+            if not self._current(epoch):
+                raw_bars.clear()
+                return
             for raw in raw_bars:
                 if queue.full():
                     overflow = True
@@ -153,6 +157,8 @@ class IbkrSource:
                         last_source_ms=last_source_ms,
                         stall_deferred=not queue.empty(),
                     )
+                    if not self._current(epoch):
+                        raise IBKRBarInterrupted("Shared bar source epoch changed", cause="soft_loss_1100")
                 except IBKRBarInterrupted:
                     # Pre-disconnect raw bars are real observations, never a
                     # claim that a quote still belongs to a live generation.
@@ -162,8 +168,9 @@ class IbkrSource:
                 try:
                     raw, received = await asyncio.wait_for(queue.get(), timeout=0.1)
                 except TimeoutError:
-                    if self._current(epoch):
-                        yield Frame(kind="idle", epoch=epoch, received_at_ms=now_ms_utc())
+                    if not self._current(epoch):
+                        continue
+                    yield Frame(kind="idle", epoch=epoch, received_at_ms=now_ms_utc())
                     continue
                 if overflow:
                     raise FeedUnavailable("IBKR bar ingress overflow; continuity is lost")
