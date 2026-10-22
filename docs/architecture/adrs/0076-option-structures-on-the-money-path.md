@@ -1047,14 +1047,14 @@ Simulation expiry applies decision 22's cash-only exercise-value rule to either 
 What the Paper account showed, 2026-10-13 to 2026-10-22:
 
 - **Several-leg entries.** A debit spread, a credit spread and an iron condor, each alone and then with two bots holding the same structure at once. Each entry was one `mleg` limit order whose net limit carried the plan's sign (decision 10), filled inside its wait, with each leg's execution attributed to its own contract (decision 27). A credit limit was read as a credit both when the owner placed one at Alpaca's dashboard and when one was sent through Alpaca's API.
-- **Several-leg closes.** Each structure closed as one market order and left every leg flat (decision 28), including the Clerk's own scheduled close after a restart with a spread held. A held credit spread's sold leg, bought back alone by an order from outside, was accepted and funded from the requirement it released: option buying power fell $6.03 for a $106.03 order. The bot's Flatten then closed the bought leg left.
-- **The comparison.** Every clean pair of an entry made alone was over-reserved by $0.05 to $0.08 when judged offline: the unused fee provision, which the owner accepts as the cause. None was under-reserved.
+- **Several-leg closes.** Every close of a whole structure was one market order that left every leg flat (decision 28), including the Clerk's own scheduled close after a restart with a spread held. A held credit spread's sold leg, bought back alone by an order from outside, was accepted and funded from the requirement it released: option buying power fell $6.03 for a $106.03 order. The bot's Flatten then closed the bought leg left.
+- **The comparison.** No pair judged offline was under-reserved, and each over-reserve has a classified cause that the owner accepts: a credit spread or condor entered alone, $0.05 to $0.08, the unused fee provision; a debit entry (a bought call, or a debit spread, two bots' overlapping ones included), its limit less its fill plus the unspent half of the fee provision; an entry after a sell to close, the amount by which Alpaca's figure had not yet moved.
 
 What stays unverified, and is turned on on the owner's word regardless:
 
-- An entry resting until its deadline's cancel, a part fill, a cancel that races a fill, and a restart with an entry resting. Paper filled every limit within half a second, so these paths of decisions 19 and 27 have run only in tests.
+- An entry resting until its deadline's cancel, a part fill, a cancel that races a fill, and a restart with an entry resting. Paper filled every bot entry's limit within about half a second, so these paths of decisions 19 and 27 have run only in tests.
 - A buy-back of a sold leg alone that Alpaca refuses.
-- The judgment of overlapping entries: every pair taken while two bots held the same structure was unknown (another order moved, or the first reading was not ready), so only entries made alone have been judged.
+- The judgment where Alpaca nets two bots' structures: the overlapping credit spreads' and condors' pairs were all unknown (another order moved, or the first reading was not ready). The overlapping debit spreads were judged, but a bought spread holds no requirement to net.
 - How Alpaca rounds the OCC fee of a fill of several contracts; assignment, exercise and expiry on an account; any of it on a Live account.
 
 With the judgment on, a judged, unexplained shortfall holds that one bot's new entries and tells the account (decision 26). An over-reserved result holds nothing.

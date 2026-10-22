@@ -942,4 +942,3 @@ def test_the_clerk_sent_only_the_entry_and_the_flatten_and_each_is_the_body_its_
     )
     assert to_alpaca_option_order_request(flatten_request, client_order_id=flatten["client_order_id"]) == flatten
     assert (flatten["symbol"], flatten["position_intent"], flatten["type"]) == (_BOUGHT_CALL, "sell_to_close", "market")
-
