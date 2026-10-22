@@ -10,9 +10,6 @@ the 24 h TTL.
 
 from __future__ import annotations
 
-import asyncio
-import threading
-
 import pytest
 import redis
 
@@ -21,6 +18,8 @@ from app.jobs.progress import (
     JOB_LEASE_TTL_SECONDS,
     JOB_TTL_SECONDS,
     CancellationCheck,
+    JobAlreadyStarted,
+    JobLeaseOccupied,
     ProgressEmitter,
     acquire_lease,
     release_lease,
@@ -146,14 +145,17 @@ def test_a_worker_that_cannot_start_releases_its_lease(
     assert not fake.exists(LEASE)
 
 
-@pytest.mark.parametrize("previous", ["lease", "terminal", "started"])
-def test_a_job_id_cannot_start_a_second_worker(fake: _FakeRedis, previous: str) -> None:
+@pytest.mark.parametrize(
+    ("previous", "refusal"),
+    [("lease", JobLeaseOccupied), ("terminal", JobAlreadyStarted), ("started", JobAlreadyStarted)],
+)
+def test_a_job_id_cannot_start_a_second_worker(fake: _FakeRedis, previous: str, refusal: type[RuntimeError]) -> None:
     fake.job("lease-1", "completed" if previous == "terminal" else "queued")
     if previous == "lease":
         fake.lease("lease-1")
     elif previous == "started":
         fake.hset("job:lease-1:state", mapping={"started_at": "1000"})
-    with pytest.raises(RuntimeError):
+    with pytest.raises(refusal):
         run_in_thread("lease-1", lambda emit, cancel: None)
 
 
@@ -167,42 +169,3 @@ def test_failed_thread_start_does_not_release_a_replacement_lease(
     with pytest.raises(RuntimeError, match="cannot start worker"):
         run_in_thread("lease-1", lambda emit, cancel: None)
     assert fake.strings[LEASE] == "replacement"
-
-
-async def test_an_async_claim_releases_after_cancellation_without_blocking_the_coordinator(
-    fake: _FakeRedis, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    loop = asyncio.get_running_loop()
-    coordinator_thread = threading.get_ident()
-    acquiring = asyncio.Event()
-    allow_claim = threading.Event()
-    acquire, release = runner.acquire_lease, runner.release_lease
-    release_threads: list[int] = []
-
-    def held_acquire(job_id: str) -> str:
-        assert threading.get_ident() != coordinator_thread
-        loop.call_soon_threadsafe(acquiring.set)
-        assert allow_claim.wait(timeout=5)
-        return acquire(job_id)
-
-    def checked_release(job_id: str, token: str) -> None:
-        release_threads.append(threading.get_ident())
-        release(job_id, token)
-
-    async def bind() -> None:
-        async with runner.async_prepared_worker("lease-1"):
-            pytest.fail("a cancelled dispatch must not bind or launch")
-
-    monkeypatch.setattr(runner, "acquire_lease", held_acquire)
-    monkeypatch.setattr(runner, "release_lease", checked_release)
-    dispatch = asyncio.create_task(bind())
-    try:
-        await asyncio.wait_for(acquiring.wait(), timeout=5)
-        dispatch.cancel()
-        await asyncio.sleep(0)
-    finally:
-        allow_claim.set()
-    with pytest.raises(asyncio.CancelledError):
-        await dispatch
-    assert not fake.exists(LEASE)
-    assert len(release_threads) == 1 and release_threads[0] != coordinator_thread

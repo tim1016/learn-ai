@@ -970,7 +970,7 @@ class DbRunStore:
             raise ValueError("runtime acceptance must bind and launch together")
         return await writer_loop_call(with_connection(create_run, new))
 
-    async def accept_runtime_run(self, new: NewRun, work_for_run: Callable[[int], JobWork]) -> int:
+    async def accept_runtime_run(self, new: NewRun, work_for_run: Callable[[int], JobWork]) -> tuple[int, bool]:
         if self.generation is None:
             raise ValueError("runtime acceptance requires a generation")
         return await writer_loop_call(_accept_runtime_run(new, self.generation, work_for_run))
@@ -1020,12 +1020,16 @@ async def _bind_runtime_run(authority: ownership.RuntimeAuthority, new: NewRun) 
         async with authority.connection.transaction():
             await _lock_runtime_generation(authority.connection, run_id, authority.boot_generation)
         logger.warning("Options Backtest binding acknowledgement reconciled",
-                       extra={"action": "options_backtest_bind_reconciled", "job_id": new.job_id, "run_id": run_id})
+                       extra={"action": "options_backtest_bind_reconciled", "job_id": new.job_id, "run_id": run_id},
+                       exc_info=True)
     return run_id
 
 
-async def _accept_runtime_run(new: NewRun, generation: int, work_for_run: Callable[[int], JobWork]) -> int:
-    """One authority operation owns first binding through launch, even after a caller stops waiting."""
+async def _accept_runtime_run(new: NewRun, generation: int, work_for_run: Callable[[int], JobWork]) -> tuple[int, bool]:
+    """One authority operation owns first binding through launch, even after a caller stops waiting.
+
+    Returns ``(run_id, joined)``; ``joined`` is a redelivery of the run this job id already has, and nothing started.
+    """
     from app.jobs.runner import async_prepared_worker
     from app.utils.timestamps import now_ms_utc
 
@@ -1050,7 +1054,7 @@ async def _accept_runtime_run(new: NewRun, generation: int, work_for_run: Callab
                 raise RunNotRunning("That job belongs to an earlier research generation; start a new job instead.") from exc
             # Never reserve a fresh lease for a durable redelivery. Only the
             # first execution's pre-existing liveness can make it joinable.
-            raise DuplicateJob(f"job {new.job_id} already has a run")
+            return existing, True
         async with async_prepared_worker(new.job_id, thread_name=f"options-backtest-{new.job_id[:8]}",
                                          emit_renews_lease=False) as launch:
             run_id = await _bind_runtime_run(authority, new)
@@ -1062,7 +1066,7 @@ async def _accept_runtime_run(new: NewRun, generation: int, work_for_run: Callab
                         RunFailure("JOB_NOT_STARTED", "The run could not be started. Nothing was fetched or run."),
                         finished_at_ms=now_ms_utc(), generation=generation)
                 raise
-            return run_id
+            return run_id, False
 
 
 async def record_timings(conn: asyncpg.Connection, run_id: int, timings: list[dict[str, Any]], metadata: dict[str, Any],

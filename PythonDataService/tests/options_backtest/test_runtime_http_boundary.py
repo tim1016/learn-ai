@@ -4,13 +4,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import shutil
 import socket
 import subprocess
 import sys
 import time
 import uuid
-from collections.abc import Iterator
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -32,6 +30,7 @@ from app.research.runs.hashing import hash_payload
 from app.schemas.options_backtest_runs import OptionsBacktestJobRequest
 from app.security.data_plane_control import CONTROL_SECRET_HEADER
 from app.utils.session_anchors import et_midnight_ms
+from tests._helpers.isolated_redis import isolated_redis as isolated_redis
 from tests.options_backtest import test_golden_spy_2025_06_10 as golden
 from tests.options_backtest._golden_vendor import recorded_vendor
 from tests.options_backtest._lake import fake_catalog as fake_catalog
@@ -44,33 +43,6 @@ pytestmark = pytest.mark.slow
 
 _SOURCE = Path(__file__).resolve().parents[2]
 _AUTH = {CONTROL_SECRET_HEADER: "http-boundary-test-secret"}
-
-
-@pytest.fixture(scope="module")
-def isolated_redis() -> Iterator[str]:
-    """A dedicated disposable service, never the developer's shared job store."""
-    if shutil.which("podman") is None:
-        pytest.skip("real socket boundary tests need Podman for a disposable Redis")
-    name = f"options-http-{uuid.uuid4().hex[:12]}"
-    subprocess.run(["podman", "run", "--rm", "-d", "--name", name, "-p", "127.0.0.1::6379",
-                    "docker.io/library/redis:7-alpine", "redis-server", "--save", "", "--appendonly", "no"],
-                   check=True, capture_output=True, text=True)
-    try:
-        address = subprocess.run(["podman", "port", name, "6379"], check=True, capture_output=True, text=True).stdout.strip()
-        url = f"redis://{address}/0"
-        client = redis.Redis.from_url(url, socket_connect_timeout=1, socket_timeout=1)
-        deadline = time.monotonic() + 10
-        while True:
-            try:
-                client.ping()
-                break
-            except redis.ConnectionError:
-                if time.monotonic() >= deadline:
-                    raise
-                time.sleep(0.1)
-        yield url
-    finally:
-        subprocess.run(["podman", "rm", "-f", name], check=True, capture_output=True, text=True)
 
 
 def _free_port() -> int:
@@ -333,7 +305,7 @@ async def test_real_http_boundary_keeps_one_fenced_exact_run_across_faults(
                 assert await scratch_db.fetchval("SELECT count(*) FROM research_options_backtest_run_sessions WHERE run_id=$1", run_id) == 1
                 closed = await client.post(f"{api.base}/api/jobs-internal/options-backtest", json=req.model_dump(mode="json"))
                 assert closed.status_code == (502 if fault == "dispatch_ack" else 409)
-                if fault != "dispatch_ack":
+                if fault == "api_restart":
                     state.delete(f"job:{job_id}:lease", f"job:{job_id}:state")
                     await scratch_db.execute("UPDATE research_job_owners SET boot_generation=0 WHERE job_id=$1", job_id)
                     expired = await client.post(f"{api.base}/api/jobs-internal/options-backtest", json=req.model_dump(mode="json"))

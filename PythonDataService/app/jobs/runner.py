@@ -81,6 +81,21 @@ class PreparedWorker:
         finally:
             release_lease(self.job_id, self.lease_token)
 
+    def release(self) -> None:
+        """Drop the claim unless the thread started: from then on the worker releases it. Safe to repeat."""
+        if not self.started:
+            release_lease(self.job_id, self.lease_token)
+
+
+def reserve_worker(
+    job_id: str, *, cancel_check_every_n: int = 1, thread_name: str | None = None,
+    emit_renews_lease: bool = True, progress_min_interval_s: float = 0.0,
+) -> PreparedWorker:
+    """Claim a job's first worker lease and return its unstarted worker; the caller must start or release it."""
+    emitter = ProgressEmitter(job_id, renews_lease=emit_renews_lease, progress_min_interval_s=progress_min_interval_s)
+    cancel = CancellationCheck(job_id, check_every_n=cancel_check_every_n)
+    return PreparedWorker(job_id, emitter, cancel, acquire_lease(job_id), thread_name or f"job-{job_id[:8]}")
+
 
 @contextmanager
 def prepared_worker(
@@ -93,25 +108,12 @@ def prepared_worker(
     loses that acknowledgement. A closed or previously started job cannot be
     reserved again; the caller may join a live redelivery through its record.
     """
-    emitter = ProgressEmitter(job_id, renews_lease=emit_renews_lease, progress_min_interval_s=progress_min_interval_s)
-    cancel = CancellationCheck(job_id, check_every_n=cancel_check_every_n)
-    launch = PreparedWorker(job_id, emitter, cancel, acquire_lease(job_id), thread_name or f"job-{job_id[:8]}")
+    launch = reserve_worker(job_id, cancel_check_every_n=cancel_check_every_n, thread_name=thread_name,
+                            emit_renews_lease=emit_renews_lease, progress_min_interval_s=progress_min_interval_s)
     try:
         yield launch
     finally:
-        if not launch.started:
-            release_lease(job_id, launch.lease_token)
-
-
-async def _drain_worker_io(task: asyncio.Task[Any]) -> asyncio.CancelledError | None:
-    """Remember cancellation while a lease operation finishes on its own thread."""
-    cancelled = None
-    while not task.done():
-        try:
-            await asyncio.wait([task])
-        except asyncio.CancelledError as exc:
-            cancelled = cancelled or exc
-    return cancelled
+        launch.release()
 
 
 @asynccontextmanager
@@ -119,26 +121,17 @@ async def async_prepared_worker(
     job_id: str, *, cancel_check_every_n: int = 1, thread_name: str | None = None,
     emit_renews_lease: bool = True, progress_min_interval_s: float = 0.0,
 ) -> AsyncIterator[PreparedWorker]:
-    """The same reservation for an async coordinator; Redis never blocks its writer loop."""
-    reservation = prepared_worker(job_id, cancel_check_every_n=cancel_check_every_n, thread_name=thread_name,
-                                  emit_renews_lease=emit_renews_lease, progress_min_interval_s=progress_min_interval_s)
-    acquiring = asyncio.create_task(asyncio.to_thread(reservation.__enter__))
-    cancelled = await _drain_worker_io(acquiring)
-    launch = acquiring.result()
+    """The same reservation for an async coordinator; Redis never blocks its writer loop.
+
+    A caller cancelled mid-claim leaves the lease to expire after ``JOB_LEASE_TTL_SECONDS``.
+    """
+    launch = await asyncio.to_thread(
+        reserve_worker, job_id, cancel_check_every_n=cancel_check_every_n, thread_name=thread_name,
+        emit_renews_lease=emit_renews_lease, progress_min_interval_s=progress_min_interval_s)
     try:
-        if cancelled is not None:
-            raise cancelled
         yield launch
-    except asyncio.CancelledError as exc:
-        cancelled = cancelled or exc
     finally:
-        # Repeated cancellation cannot release the authority's stamp lock
-        # before an eventual claim is acquired and its own lease is released.
-        releasing = asyncio.create_task(asyncio.to_thread(reservation.__exit__, None, None, None))
-        cleanup_cancelled = await _drain_worker_io(releasing)
-        releasing.result()
-        if (cancelled := cancelled or cleanup_cancelled) is not None:
-            raise cancelled
+        await asyncio.to_thread(launch.release)
 
 
 def run_in_thread(

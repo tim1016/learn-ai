@@ -16,8 +16,8 @@ from app.options_backtest.timings import RunTimings
 from app.research.persistence.ownership import COORDINATOR_LOCK_CLASSID, COORDINATOR_LOCK_OBJID, GenerationFencedError
 from app.research.persistence.schema import ensure_schema
 from app.utils.background_loop import CallerStoppedWaitingError
+from tests._helpers.isolated_redis import isolated_redis as isolated_redis
 from tests.options_backtest._a_run import a_busy_run
-from tests.options_backtest.test_runtime_http_boundary import isolated_redis as isolated_redis
 from tests.research.conftest import _ephemeral_url
 from tests.research.conftest import scratch_db as scratch_db
 
@@ -132,7 +132,8 @@ async def test_runtime_create_and_owner_stamp_roll_back_together_and_retry_is_no
     def after_commit(run_id: int) -> JobWork:
         assert not scratch_db.is_in_transaction()
         return lambda emit, cancel: None
-    run_id = await saved_runs._accept_runtime_run(new, 2, after_commit)
+    run_id, joined = await saved_runs._accept_runtime_run(new, 2, after_commit)
+    assert not joined
     assert await saved_runs.run_for_job(scratch_db, new.job_id) == run_id
     owner = await scratch_db.fetchrow("SELECT * FROM research_job_owners WHERE job_id=$1", new.job_id)
     assert owner["record_id"] == str(run_id)
@@ -140,8 +141,7 @@ async def test_runtime_create_and_owner_stamp_roll_back_together_and_retry_is_no
     assert await scratch_db.fetchval("SELECT status FROM research_options_backtest_runs WHERE id=$1", run_id) == "running"
     with pytest.raises(GenerationFencedError):
         await saved_runs._accept_runtime_run(new, 1, after_commit)
-    with pytest.raises(saved_runs.DuplicateJob):
-        await saved_runs._accept_runtime_run(new, 2, after_commit)
+    assert await saved_runs._accept_runtime_run(new, 2, after_commit) == (run_id, True)
 
 
 @pytest.mark.parametrize("replace_lease", [False, True])
@@ -235,8 +235,12 @@ async def test_a_durable_redelivery_does_not_create_new_liveness_after_redis_exp
     result = a_busy_run()
     new = NewRun("runtime-test", 1791800000000, result.setup, None,
                  result.sessions[0].session_open_ms, result.sessions[-1].session_open_ms, len(result.sessions))
-    with pytest.raises(saved_runs.DuplicateJob if status == "running" else saved_runs.RunNotRunning):
-        await saved_runs._accept_runtime_run(new, 2, lambda run_id: pytest.fail("redelivery cannot create a worker"))
+    redelivery = saved_runs._accept_runtime_run(new, 2, lambda run_id: pytest.fail("redelivery cannot create a worker"))
+    if status == "running":
+        assert await redelivery == (run_id, True)
+    else:
+        with pytest.raises(saved_runs.RunNotRunning):
+            await redelivery
     assert client.get(progress.lease_key(new.job_id)) is None
     assert client.hgetall(progress.state_key(new.job_id)) == {}
 
