@@ -12,6 +12,7 @@ from app.options_bots.golden_proof import build_proof, proof_sha256, setup_sha25
 from app.options_bots.golden_repository import GoldenRecord
 from app.research.options_golden_search import repository as repo
 from app.research.options_golden_search.policy import validate_exception
+from app.research.options_golden_search.projections import FINAL_BATCH_GATE
 from app.research.options_golden_search.protocol import OptionsSearchProtocol, materialize
 from app.research.options_golden_search.snapshots import SnapshotRunData
 from app.research.persistence.db import run_sync, with_connection
@@ -34,7 +35,8 @@ def final_shortlist(candidates: list[dict[str, Any]], protocol: OptionsSearchPro
 def approval_failures(row: dict[str, Any], digest: str) -> list[dict[str, Any]]:
     expected = row["finalists"]
     actual = [candidate["candidate_hash"] for candidate in row["final_results"]]
-    if len(set(actual)) != len(actual) or set(actual) != set(expected):
+    pending = any(gate["gate_id"] == FINAL_BATCH_GATE for candidate in row["final_results"] for gate in candidate["gate_outcomes"])
+    if pending or len(set(actual)) != len(actual) or set(actual) != set(expected):
         raise ValueError("Every frozen finalist must finish its mandatory final evidence before approval.")
     if any(candidate["verdict"] == "could_not_evaluate" for candidate in row["final_results"]):
         raise ValueError("The mandatory final batch contains technically unverifiable evidence.")

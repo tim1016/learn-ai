@@ -96,6 +96,19 @@ def test_an_unfinished_or_duplicated_frozen_finalist_blocks_both_approval_paths(
         validate_approval(row, _command("approve_exception", "Accept risk"))
 
 
+def test_a_pending_final_batch_reads_as_unfinished_evidence_not_technical_invalidity() -> None:
+    from app.research.options_golden_search.projections import FINAL_BATCH_GATE, approval_reviews
+
+    row = _row()
+    for result in row["final_results"]:
+        result["gate_outcomes"].append({**_gate("final"), "gate_id": FINAL_BATCH_GATE, "status": "not_enough_evidence", "overridable": False})
+    for kind in ("approve", "approve_exception"):
+        with pytest.raises(ValueError, match="Every frozen finalist"):
+            validate_approval(row, _command(kind, "Accept risk"))
+    review = approval_reviews(row)[POINT]
+    assert review["failures"] == [] and review["blocked_reason"].startswith("Every frozen finalist")
+
+
 @pytest.mark.parametrize("scope", ["procedure", "development", "final"])
 def test_missing_input_or_proof_is_never_a_performance_exception(scope: str) -> None:
     row = _row()
