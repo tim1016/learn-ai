@@ -81,6 +81,9 @@ PHASE_SILENCE_LIMIT_S: dict[str, float] = {
 # reports; the runtime's dispatch path is sized against this target.
 SIMULATION_CHECKPOINT_TARGET_S = 1.0
 
+# The longest bounded external I/O wait a worker may declare, with its lease.
+MAX_EXTERNAL_WAIT_MS = 1_860_000
+
 
 @dataclass(frozen=True)
 class ExecutionCheckpoint:
@@ -267,7 +270,7 @@ class GatedLease:
         self._lock = threading.Lock()
         self._cancel = CancellationCheck(job_id, renews_lease=False)
         self._external_deadline_ms: int | None = None
-        self._external_wait_ids: set[str | int] = set()
+        self._external_wait_ids: set[str] = set()
 
     def fenced_cancel(self) -> None:
         """Cancellation and the coordinator fence in one poll (#3065).
@@ -305,7 +308,7 @@ class GatedLease:
                 phase=str(message.get("phase", "search")),
             )
 
-    def bounded_external_wait(self, wait_id: str | int, deadline_ms: int) -> None:
+    def bounded_external_wait(self, wait_id: str, deadline_ms: int) -> None:
         """Accept one actual bounded I/O start, without resurrecting an expired owner.
 
         The acquisition code declares its own hard timeout before waiting.
@@ -319,7 +322,7 @@ class GatedLease:
             if wait_id in self._external_wait_ids:
                 return
             remaining_ms = deadline_ms - now_ms_utc()
-            if not 0 < remaining_ms <= 1_860_000:
+            if not 0 < remaining_ms <= MAX_EXTERNAL_WAIT_MS:
                 raise ValueError("external acquisition wait exceeds its declared bound")
             ttl = max(JOB_LEASE_TTL_SECONDS, (remaining_ms + 999) // 1000 + 5)
             if not progress.get_redis().expire(lease_key(self._gate.job_id), ttl):
