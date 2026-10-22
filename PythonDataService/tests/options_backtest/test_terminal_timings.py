@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 from dataclasses import dataclass, field
 from datetime import date
@@ -11,21 +12,23 @@ from typing import Any
 import pytest
 import respx
 
+from app.jobs import facade, progress
 from app.jobs.progress import JobCancelled, ProgressEmitter
 from app.options_backtest import runtime, service
 from app.options_backtest.dispatch import replay_frozen_run
 from app.options_backtest.frozen_inputs import freeze_run_inputs
+from app.options_backtest.preparation import PREPARATION_JOB_TYPE, PreparationCheckpoint, preparation_identity
 from app.options_backtest.timings import PhaseTiming, RunTimings
 from app.research.golden_search.shared_pool import SharedWorkerPool
 from app.research.golden_search.worker import WorkerDispatchContext
 from app.research.persistence import ownership
+from app.utils.atomic_file import atomic_write_bytes
 from app.utils.background_loop import CallerStoppedWaitingError
 from tests._helpers.fake_lake_catalog import FakeCatalog
 from tests.options_backtest._a_run import a_busy_run
 from tests.options_backtest._lake import fake_catalog as fake_catalog
 from tests.options_backtest._lake import tmp_lake as tmp_lake
-from tests.options_backtest._preparation_peer import owner as owner
-from tests.options_backtest._preparation_peer import send, socket_peer
+from tests.options_backtest._preparation_jobs_fixture import owner as owner
 from tests.options_backtest._run_data import THU, WED, chain_scene
 from tests.options_backtest._run_lake import Vendor
 from tests.options_backtest.test_service import FakeStore, Job, _execute, the_scene
@@ -197,21 +200,46 @@ async def test_runtime_terminal_preparation_keeps_partial_timings_without_maskin
     owner: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
     cancel: bool, unavailable: bool,
 ) -> None:
-    req, _, authority, _, state = owner
+    req, fake, authority, _, binding = owner
     monkeypatch.setattr(ownership, "process_authority", lambda: authority)
     store = ObservationStore(unavailable=unavailable)
-    checked = PhaseTiming(phase="check", started_at_ms=1, finished_at_ms=1, duration_ms=0).model_dump(mode="json")
-    downloaded = {**checked, "phase": "download"}
+    checked = PhaseTiming(phase="check", started_at_ms=1, finished_at_ms=1, duration_ms=0)
+    downloaded = checked.model_copy(update={"phase": "download"})
+    root = Path(runtime.settings.OPTIONS_BACKTEST_INPUT_ROOT) / req.job_id
+    frozen = freeze_run_inputs(req.setup, (WED,), chain_scene(), root)
 
-    async def peer(writer: Any) -> None:
-        await send(writer, {**state, "timings": [checked]})
-        await send(writer, {**state, "sequence": 2, "status": "cancelled" if cancel else "failed",
-            "timings": [checked, downloaded], "code": service.DOWNLOAD_FAILED, "reason": "The download failed."})
+    def checkpoint(rows: tuple[PhaseTiming, ...]) -> None:
+        partial = PreparationCheckpoint(identity=preparation_identity(req), inputs=frozen, timings=rows)
+        atomic_write_bytes(root / "freeze-checkpoint.json", partial.model_dump_json().encode())
 
-    async with socket_peer(peer, monkeypatch):
+    checkpoint((checked,))
+    facade._record_queued(binding.job_id, PREPARATION_JOB_TYPE, {}, internal=True)
+    fake.set(progress.lease_key(binding.job_id), "preparation-owner")
+    child = ProgressEmitter(binding.job_id, renews_lease=False)
+    child.started()
+    child.phase("checking_data")
+    executing = asyncio.create_task(asyncio.to_thread(runtime.execute_runtime_run,
+        run_id=7, req=req, sessions=(), store=store, emit=ProgressEmitter(req.job_id, renews_lease=False)))
+    try:
+        # The ordinary phase relays only after the parent read the first
+        # partial checkpoint. Its later terminal must adopt the latest closed
+        # spans once, including the phase that ended while it was observing.
+        async with asyncio.timeout(5):
+            while not any(json.loads(fields["event"]).get("phase") == "checking_data"
+                          for _, fields in fake.streams.get(progress.events_key(req.job_id), [])):
+                await asyncio.sleep(0)
+        checkpoint((checked, downloaded))
+        if cancel:
+            child.cancelled("input preparation was cancelled")
+        else:
+            child.failed(code=service.DOWNLOAD_FAILED, message="The download failed.")
         with pytest.raises(JobCancelled if cancel else service.RunFailedError) as caught:
-            await asyncio.to_thread(runtime.execute_runtime_run, run_id=7, req=req, sessions=(),
-                store=store, emit=ProgressEmitter(req.job_id, renews_lease=False))
+            await executing
+    finally:
+        if not executing.done():
+            child.cancelled("test observation stopped")
+            with pytest.raises(JobCancelled):
+                await executing
 
     assert store.completed == [] and store.endings == 1
     if not cancel:
