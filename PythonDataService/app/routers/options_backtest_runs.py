@@ -240,18 +240,10 @@ async def start_options_backtest_job(req: OptionsBacktestJobRequest) -> OptionsB
     if runtime:
         from app.options_backtest.runtime import runtime_worker
         try:
-            run_id = await store.accept_runtime_run(new, lambda run_id: runtime_worker(run_id, req, sessions, store, _job_result))
-        except DuplicateJob:
-            run_id = await with_connection(saved_runs.run_for_job, req.job_id)
-            existing = await with_connection(saved_runs.get_run_header, run_id)
-            if not saved_runs.request_matches_header(existing, req.setup,
-                first_session_open_ms=session_window_for_date(sessions[0]).open_ms_utc,
-                last_session_open_ms=session_window_for_date(sessions[-1]).open_ms_utc,
-                sessions_requested=len(sessions)):
-                raise HTTPException(409, "That job id is bound to another Options Backtest request.")
-            if existing.record.status != "running":
-                raise HTTPException(409, "That Options Backtest already ended; start a new job instead.")
-            await asyncio.to_thread(research_records.require_live_redelivery, req.job_id, noun="Options Backtest")
+            run_id, joined = await store.accept_runtime_run(
+                new, lambda run_id: runtime_worker(run_id, req, sessions, store, _job_result))
+            if joined:
+                await asyncio.to_thread(research_records.require_live_redelivery, req.job_id, noun="Options Backtest")
         except JobLeaseOccupied as exc:
             raise HTTPException(503, str(exc)) from exc
         except JobAlreadyStarted as exc:
