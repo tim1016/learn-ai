@@ -41,26 +41,26 @@
       "multiplier": 100
     },
     {
-      "case": "sell_2_at_2_10_last_day_before_taf_pause",
+      "case": "sell_1_at_2_10_last_day_before_taf_pause",
       "trade_date_ms": 1790775000000,
       "side": "sell",
-      "contracts": "2",
+      "contracts": "1",
       "premium": "2.10",
       "multiplier": 100
     },
     {
-      "case": "sell_2_at_2_10_first_day_of_taf_pause",
+      "case": "sell_1_at_2_10_first_day_of_taf_pause",
       "trade_date_ms": 1790861400000,
       "side": "sell",
-      "contracts": "2",
+      "contracts": "1",
       "premium": "2.10",
       "multiplier": 100
     },
     {
-      "case": "sell_2_at_2_10_taf_resumed",
+      "case": "sell_1_at_2_10_taf_resumed",
       "trade_date_ms": 1799073000000,
       "side": "sell",
-      "contracts": "2",
+      "contracts": "1",
       "premium": "2.10",
       "multiplier": 100
     },
@@ -119,11 +119,68 @@
       "sell_2_at_2_10",
       "sell_10_of_a_ten_share_contract"
     ],
-    "one_sale_last_day_before_taf_pause": [
-      "sell_2_at_2_10_last_day_before_taf_pause"
+    "nineteen_sales_last_day_before_taf_pause": [
+      "sell_1_at_2_10_last_day_before_taf_pause",
+      "sell_1_at_2_10_last_day_before_taf_pause",
+      "sell_1_at_2_10_last_day_before_taf_pause",
+      "sell_1_at_2_10_last_day_before_taf_pause",
+      "sell_1_at_2_10_last_day_before_taf_pause",
+      "sell_1_at_2_10_last_day_before_taf_pause",
+      "sell_1_at_2_10_last_day_before_taf_pause",
+      "sell_1_at_2_10_last_day_before_taf_pause",
+      "sell_1_at_2_10_last_day_before_taf_pause",
+      "sell_1_at_2_10_last_day_before_taf_pause",
+      "sell_1_at_2_10_last_day_before_taf_pause",
+      "sell_1_at_2_10_last_day_before_taf_pause",
+      "sell_1_at_2_10_last_day_before_taf_pause",
+      "sell_1_at_2_10_last_day_before_taf_pause",
+      "sell_1_at_2_10_last_day_before_taf_pause",
+      "sell_1_at_2_10_last_day_before_taf_pause",
+      "sell_1_at_2_10_last_day_before_taf_pause",
+      "sell_1_at_2_10_last_day_before_taf_pause",
+      "sell_1_at_2_10_last_day_before_taf_pause"
     ],
-    "one_sale_first_day_of_taf_pause": [
-      "sell_2_at_2_10_first_day_of_taf_pause"
+    "nineteen_sales_first_day_of_taf_pause": [
+      "sell_1_at_2_10_first_day_of_taf_pause",
+      "sell_1_at_2_10_first_day_of_taf_pause",
+      "sell_1_at_2_10_first_day_of_taf_pause",
+      "sell_1_at_2_10_first_day_of_taf_pause",
+      "sell_1_at_2_10_first_day_of_taf_pause",
+      "sell_1_at_2_10_first_day_of_taf_pause",
+      "sell_1_at_2_10_first_day_of_taf_pause",
+      "sell_1_at_2_10_first_day_of_taf_pause",
+      "sell_1_at_2_10_first_day_of_taf_pause",
+      "sell_1_at_2_10_first_day_of_taf_pause",
+      "sell_1_at_2_10_first_day_of_taf_pause",
+      "sell_1_at_2_10_first_day_of_taf_pause",
+      "sell_1_at_2_10_first_day_of_taf_pause",
+      "sell_1_at_2_10_first_day_of_taf_pause",
+      "sell_1_at_2_10_first_day_of_taf_pause",
+      "sell_1_at_2_10_first_day_of_taf_pause",
+      "sell_1_at_2_10_first_day_of_taf_pause",
+      "sell_1_at_2_10_first_day_of_taf_pause",
+      "sell_1_at_2_10_first_day_of_taf_pause"
+    ],
+    "nineteen_sales_taf_resumed": [
+      "sell_1_at_2_10_taf_resumed",
+      "sell_1_at_2_10_taf_resumed",
+      "sell_1_at_2_10_taf_resumed",
+      "sell_1_at_2_10_taf_resumed",
+      "sell_1_at_2_10_taf_resumed",
+      "sell_1_at_2_10_taf_resumed",
+      "sell_1_at_2_10_taf_resumed",
+      "sell_1_at_2_10_taf_resumed",
+      "sell_1_at_2_10_taf_resumed",
+      "sell_1_at_2_10_taf_resumed",
+      "sell_1_at_2_10_taf_resumed",
+      "sell_1_at_2_10_taf_resumed",
+      "sell_1_at_2_10_taf_resumed",
+      "sell_1_at_2_10_taf_resumed",
+      "sell_1_at_2_10_taf_resumed",
+      "sell_1_at_2_10_taf_resumed",
+      "sell_1_at_2_10_taf_resumed",
+      "sell_1_at_2_10_taf_resumed",
+      "sell_1_at_2_10_taf_resumed"
     ]
   },
   "provisions": {

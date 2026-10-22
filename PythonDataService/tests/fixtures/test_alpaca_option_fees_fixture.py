@@ -62,12 +62,23 @@ def test_fee_002_day_settlements_match_oracle_exactly() -> None:
         assert settled.total == Decimal(expected["total"]), name
 
 
-def test_fee_002_the_same_sale_costs_a_cent_less_once_the_taf_is_paused() -> None:
-    """The dated-rate case: 2026-09-30 against 2026-10-01, the first day FINRA's TAF is paused."""
+def test_fee_002_the_taf_steps_down_when_finras_pause_begins_and_back_up_when_it_ends() -> None:
+    """The dated-rate case: nineteen one-contract sales a day, on 2026-09-30, 2026-10-01 and 2027-01-04.
+
+    Only the TAF moves, and by a visible cent: 19 x 0.00329 = 0.06251 rounds up to 0.07, 19 x 0.003 = 0.057 to 0.06.
+    The other four types come to 0.09 + 0.01 + 0.29 + 0.57 = 0.96 on all three days.
+    """
     _, fixture_output = _load()
-    before = Decimal(fixture_output["sessions"]["one_sale_last_day_before_taf_pause"]["total"])
-    after = Decimal(fixture_output["sessions"]["one_sale_first_day_of_taf_pause"]["total"])
-    assert (before, after) == (Decimal("0.11"), Decimal("0.10"))
+    sessions = fixture_output["sessions"]
+    totals = tuple(
+        Decimal(sessions[name]["total"])
+        for name in (
+            "nineteen_sales_last_day_before_taf_pause",
+            "nineteen_sales_first_day_of_taf_pause",
+            "nineteen_sales_taf_resumed",
+        )
+    )
+    assert totals == (Decimal("1.03"), Decimal("1.02"), Decimal("1.03"))
 
 
 def test_fee_002_entry_provisions_match_oracle_in_whole_cents() -> None:

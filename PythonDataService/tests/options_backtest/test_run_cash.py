@@ -151,10 +151,10 @@ def test_cash_after_is_cash_before_plus_the_profit_with_the_marks_in_it_on_every
             id="a fee per contract comes out of each sessions profit and cash",
         ),
         # On 2026-10-07: a buy of 1 owes CAT 0.0003 up to 0.01, ORF 0.015 up to 0.02, OCC 0.025 up to 0.03: 0.06.
-        # The sale of 1 at 3.00 owes SEC 1 x 3.00 x 100 x 0.0000206 = 0.00618 up to 0.01, TAF 0 (paused), CAT 0.01,
-        # ORF 0.02, OCC 0.03: 0.07. Profit (3.00 - 2.00) x 100 - 0.06 - 0.07 = 99.87.
+        # The sale of 1 at 3.00 owes SEC 1 x 3.00 x 100 x 0.0000206 = 0.00618 up to 0.01, TAF 0.003 up to 0.01, CAT
+        # 0.01, ORF 0.02, OCC 0.03: 0.08. Profit (3.00 - 2.00) x 100 - 0.06 - 0.08 = 99.86.
         pytest.param(
-            "estimated", None, D("0.06"), D("0.07"), D("99.87"), D("10099.87"),
+            "estimated", None, D("0.06"), D("0.08"), D("99.86"), D("10099.86"),
             id="estimated fees are priced by the fee model on the date of each fill",
         ),
     ],

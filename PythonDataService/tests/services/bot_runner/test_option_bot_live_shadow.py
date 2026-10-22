@@ -581,9 +581,10 @@ async def test_an_expired_shadow_option_settles_and_the_account_admits_a_stock_e
     assert await shadow.runtime.envelope_sync.tick() == "observed", shadow.clerk.live_envelope.unavailable_reason  # type: ignore[union-attr]
     observation = shadow.clerk.live_envelope.fresh_observation(shadow.clock.value)
     assert observation is not None
-    # $412.00 premium plus $0.06 entry fees; $0.08 sale fees accrue now and settle next day.
-    # The October TAF rate is zero, unlike the September Dry Run scene (ADR 0076 D13).
-    expected_cash = Decimal("100112.86") if close_price == "590.25" else Decimal("99587.94")
+    # $412.00 premium plus $0.06 entry fees; $0.09 sale fees accrue now and settle next day: SEC on the $525.00
+    # sold 0.010815 up to 0.02, TAF 0.003 up to 0.01, CAT 0.01, ORF 0.02, OCC 0.03.
+    # The October TAF rate is Alpaca Paper's $0.003, not the September Dry Run scene's $0.00329 (ADR 0076 D13).
+    expected_cash = Decimal("100112.85") if close_price == "590.25" else Decimal("99587.94")
     assert observation.equity_usd == expected_cash
     assert observation.cash_available_usd == (
         Decimal("100112.94") if close_price == "590.25" else expected_cash

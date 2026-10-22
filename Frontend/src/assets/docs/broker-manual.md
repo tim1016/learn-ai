@@ -80,7 +80,7 @@ The following is a **published-rate snapshot checked October 16, 2026**, using A
 
 Each fee type aggregates per account/day, then rounds upward to cents. Accrual affects balances intraday; posting occurs at day-end. Index options and professional pricing require their own applicable schedule. [Alpaca fee schedule](https://files.alpaca.markets/disclosures/library/BrokFeeSched.pdf).
 
-The TAF pause runs through December 2026. Its current zero is not permanent. [FINRA filing](https://public-inspection.federalregister.gov/2026-19392.pdf).
+The TAF pause runs through December 2026. Its current zero is not permanent. [FINRA filing](https://public-inspection.federalregister.gov/2026-19392.pdf). Alpaca Paper kept charging a TAF through the pause, about \$0.003 per contract sold, rounded up for the day, and the app's estimate follows what Paper posted. A Paper day can therefore post a few cents of TAF that the published rate above does not predict.
 
 ### Read a round trip correctly
 
