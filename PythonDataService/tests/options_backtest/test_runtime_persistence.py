@@ -239,3 +239,38 @@ async def test_a_durable_redelivery_does_not_create_new_liveness_after_redis_exp
         await saved_runs._accept_runtime_run(new, 2, lambda run_id: pytest.fail("redelivery cannot create a worker"))
     assert client.get(progress.lease_key(new.job_id)) is None
     assert client.hgetall(progress.state_key(new.job_id)) == {}
+
+
+async def test_preparation_binding_reconciles_current_child_and_fences_replacement_and_terminal_parent(
+    scratch_db: asyncpg.Connection,
+) -> None:
+    from app.options_backtest import preparation_binding
+
+    run_id, _ = await new_run(scratch_db)
+    await scratch_db.execute("INSERT INTO research_runtime_owners VALUES('coordinator','current','research',2,1)")
+    await scratch_db.execute("INSERT INTO research_job_owners VALUES('runtime-test','options_backtest',$1,NULL,'current',2,1)", str(run_id))
+    await scratch_db.execute("SELECT pg_advisory_lock($1,$2)", COORDINATOR_LOCK_CLASSID, COORDINATOR_LOCK_OBJID)
+    identity = "a" * 64
+    assert await preparation_binding.current_binding(scratch_db, run_id, "runtime-test", 2, identity) is None
+    assert await preparation_binding.bind_preparation(scratch_db, run_id, "runtime-test", 2, identity,
+                                                     "first-child", previous=None) == "first-child"
+    # Lost commit acknowledgement joins the same binding; it does not need
+    # another Redis lease or a second activation record.
+    assert await preparation_binding.bind_preparation(scratch_db, run_id, "runtime-test", 2, identity,
+                                                     "first-child", previous=None) == "first-child"
+    await preparation_binding.require_binding(scratch_db, run_id, "runtime-test", 2, identity, "first-child")
+    with pytest.raises(ValueError, match="another request"):
+        await preparation_binding.current_binding(scratch_db, run_id, "runtime-test", 2, "b" * 64)
+    with pytest.raises(ValueError, match="changed"):
+        await preparation_binding.bind_preparation(scratch_db, run_id, "runtime-test", 2, identity,
+                                                  "unbound-child", previous=None)
+    with pytest.raises(GenerationFencedError):
+        await preparation_binding.bind_preparation(scratch_db, run_id, "runtime-test", 1, identity,
+                                                  "stale-child", previous="first-child")
+    assert await preparation_binding.bind_preparation(scratch_db, run_id, "runtime-test", 2, identity,
+                                                     "replacement-child", previous="first-child") == "replacement-child"
+    with pytest.raises(GenerationFencedError):
+        await preparation_binding.require_binding(scratch_db, run_id, "runtime-test", 2, identity, "first-child")
+    await saved_runs.cancel_run(scratch_db, run_id, finished_at_ms=1791828000000, generation=2)
+    with pytest.raises(GenerationFencedError):
+        await preparation_binding.require_binding(scratch_db, run_id, "runtime-test", 2, identity, "replacement-child")

@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +45,44 @@ def _pause_after_durable_checkpoint() -> None:
 
 if _RUNTIME:
     from app.research_runtime import app
+
+    if (_FAULTS / "kill-chain").exists():
+        from app.config import settings
+        from app.jobs.checkpoints import GatedLease
+        from app.research.golden_search.shared_pool import shared_worker_pool
+
+        actual_checkpoint = GatedLease.child_checkpoint
+        killed_chains: list[dict[str, Any]] = []
+
+        def kill_same_chain(self: Any, message: Any) -> None:
+            actual_checkpoint(self, message)
+            if message.get("phase") != "preparation":
+                return
+            pool = shared_worker_pool(workers=settings.RESEARCH_WORKER_COUNT,
+                submission_bound=2 * settings.RESEARCH_WORKER_COUNT,
+                payload_bound_bytes=settings.RESEARCH_POOL_PAYLOAD_BOUND_BYTES,
+                result_bound_bytes=settings.RESEARCH_POOL_RESULT_BOUND_BYTES)
+            for lane in pool._lanes:
+                if lane.current is None or lane.worker is None:
+                    continue
+                item = lane.current.item
+                if killed_chains and item.key != killed_chains[0]["key"]:
+                    continue
+                killed_chains.append({"key": item.key, "task_gen": item.task_gen})
+                (_FAULTS / "killed-chains.json").write_text(json.dumps(killed_chains))
+                lane.worker._child.kill()
+                return
+
+        GatedLease.child_checkpoint = kill_same_chain
+
+    if (_FAULTS / "lose-preparation-ack").exists():
+        from app.broker.fleet.internal_http import build_internal_client
+        from app.options_backtest import preparation_jobs
+
+        def short_preparation_client(**kwargs: Any) -> Any:
+            return build_internal_client(timeout_s=5, read_timeout_s=0.5)
+
+        preparation_jobs.build_internal_client = short_preparation_client
 
     if (_FAULTS / "lose-launch-ack").exists():
         actual_accept = saved_runs.DbRunStore.accept_runtime_run
@@ -146,10 +186,29 @@ else:
                 raise
 
         research_runtime_client._post_runtime_dispatch = observe_dispatch_timeout
-    app = FastAPI()
+    @asynccontextmanager
+    async def api_lifespan(app: FastAPI):
+        from app.config import settings
+        from app.jobs.progress import fail_jobs_without_a_worker
+        from app.research.persistence.ownership import startup_protection_only
+
+        protection = await startup_protection_only(dsn=settings.POSTGRES_URL)
+        protected = await protection() if protection is not None else set()
+        await asyncio.to_thread(fail_jobs_without_a_worker, protected=lambda: protected)
+        yield
+
+    app = FastAPI(lifespan=api_lifespan)
     app.include_router(options_backtest_runs.jobs_router, prefix="/api/jobs-internal",
                        dependencies=[Depends(require_data_plane_control_secret)])
     app.include_router(options_backtest_runs.router, prefix="/api/options-backtest")
+
+    @app.middleware("http")
+    async def delayed_preparation_ack(request: Request, call_next: Any) -> Any:
+        response = await call_next(request)
+        if request.url.path.endswith("/prepare") and (_FAULTS / "lose-preparation-ack").exists():
+            (_FAULTS / "preparation-ack-delayed").touch()
+            await asyncio.sleep(1.5)
+        return response
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

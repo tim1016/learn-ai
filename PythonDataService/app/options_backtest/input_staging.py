@@ -144,9 +144,6 @@ def cleanup_job_inputs(base: Path, job_id: str, *, wait_seconds: float = 75.0) -
 def release_job_inputs(base: Path, job_id: str) -> None:
     """Cleanup failures stay visible without reversing a committed run."""
     try:
-        root = job_root(base, job_id)
-        if root.exists():
-            (root / "stop-requested").touch()
         cleanup_job_inputs(base, job_id)
     except (OSError, ValueError):
         logger.error("frozen input cleanup failed; its byte reservation remains held",

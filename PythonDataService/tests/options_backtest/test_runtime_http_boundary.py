@@ -153,7 +153,7 @@ async def _seed_catalog(conn: asyncpg.Connection, catalog: Any) -> None:
 
 
 @pytest.mark.parametrize("fault", ["api_restart", "dispatch_ack", "save_ack", "create_ack", "activation_ack",
-    "bind_rollback", "occupied_lease", "lost_job_state", "old_generation_redelivery", "generation_fence"])
+    "bind_rollback", "occupied_lease", "lost_job_state", "old_generation_redelivery", "generation_fence", "preparation_ack", "preparation_state_lost", "cancel", "chain_loss"])
 async def test_real_http_boundary_keeps_one_fenced_exact_run_across_faults(
     scratch_db: asyncpg.Connection, isolated_redis: str, fake_catalog: Any, tmp_lake: Path,
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str,
@@ -183,6 +183,10 @@ async def test_real_http_boundary_keeps_one_fenced_exact_run_across_faults(
     faults.mkdir()
     if fault == "dispatch_ack":
         (faults / "lose-dispatch-ack").touch()
+    if fault == "preparation_ack":
+        (faults / "lose-preparation-ack").touch()
+    if fault == "chain_loss":
+        (faults / "kill-chain").touch()
     if fault == "save_ack":
         (faults / "lose-save-ack").touch()
     if fault in ("create_ack", "bind_rollback"):
@@ -247,6 +251,12 @@ async def test_real_http_boundary_keeps_one_fenced_exact_run_across_faults(
             assert await scratch_db.fetchval("SELECT status FROM research_options_backtest_runs WHERE id=$1", run_id) == "running"
             assert await scratch_db.fetchval("SELECT count(*) FROM research_options_backtest_run_sessions WHERE run_id=$1", run_id) == 0
             first_checkpoint = json.loads((faults / "checkpoint").read_text())
+            preparation_id = await scratch_db.fetchval(
+                "SELECT preparation_job_id FROM research_options_backtest_runs WHERE id=$1", run_id)
+            assert preparation_id and preparation_id != job_id
+            assert state.hget(f"job:{preparation_id}:state", "internal") == "1"
+            if fault == "preparation_state_lost":
+                state.delete(f"job:{preparation_id}:state", f"job:{preparation_id}:lease")
             if fault == "lost_job_state":
                 held_state = state.hgetall(f"job:{job_id}:state")
                 held_lease = state.get(f"job:{job_id}:lease")
@@ -283,6 +293,8 @@ async def test_real_http_boundary_keeps_one_fenced_exact_run_across_faults(
                 api = _Server("api", api_port, environment, tmp_path)
                 await api.ready()
                 assert runtime.process.pid == runtime_pid
+            elif fault == "cancel":
+                state.hset(f"job:{job_id}:state", "cancel_requested", "1")
             elif fault == "generation_fence":
                 released = await client.post(f"{runtime.base}/test/release-authority")
                 assert released.status_code == 200
@@ -292,10 +304,27 @@ async def test_real_http_boundary_keeps_one_fenced_exact_run_across_faults(
                 if time.monotonic() >= deadline:
                     pytest.fail(f"runtime job did not settle:\n{runtime.log.read_text()}\n{api.log.read_text()}")
                 await asyncio.sleep(0.1)
-            if fault == "generation_fence":
-                assert state.hget(f"job:{job_id}:state", "status") == "failed"
+            if fault in ("generation_fence", "preparation_state_lost", "cancel", "chain_loss"):
+                terminal = state.hget(f"job:{job_id}:state", "status")
+                if fault == "preparation_state_lost":
+                    # Either the observer sees absent state, or the existing
+                    # collector first acknowledges its expired worker lease.
+                    # Neither case authorizes another child or any result.
+                    assert terminal in ("failed", "cancelled")
+                else:
+                    assert terminal == ("cancelled" if fault == "cancel" else "failed")
                 assert await saved_runs.read_result(scratch_db, run_id) is None
                 assert await scratch_db.fetchval("SELECT count(*) FROM research_options_backtest_run_sessions WHERE run_id=$1", run_id) == 0
+                if fault == "chain_loss":
+                    killed = json.loads((faults / "killed-chains.json").read_text())
+                    assert len(killed) >= 2
+                    assert len({item["key"] for item in killed}) == 1
+                    assert len({item["task_gen"] for item in killed}) == len(killed)
+                    record = await scratch_db.fetchrow(
+                        "SELECT status,summary_json,slippage_json FROM research_options_backtest_runs WHERE id=$1", run_id)
+                    assert record["status"] == "failed" and record["summary_json"] is None and record["slippage_json"] is None
+                    assert await scratch_db.fetchval("SELECT count(*) FROM research_options_backtest_run_trades WHERE run_id=$1", run_id) == 0
+                    assert await scratch_db.fetchval("SELECT count(*) FROM research_options_backtest_runs WHERE job_id=$1", job_id) == 1
             else:
                 assert state.hget(f"job:{job_id}:state", "status") == "completed", runtime.log.read_text()
                 stored = await saved_runs.read_result(scratch_db, run_id)
@@ -316,6 +345,8 @@ async def test_real_http_boundary_keeps_one_fenced_exact_run_across_faults(
                     assert (faults / "dispatch-ack-lost").exists()
                 if fault == "save_ack":
                     assert (faults / "save-ack-lost").exists()
+                if fault == "preparation_ack":
+                    assert (faults / "preparation-ack-delayed").exists()
                 metadata = json.loads(await scratch_db.fetchval(
                     "SELECT execution_metadata_json::text FROM research_options_backtest_runs WHERE id=$1", run_id))
                 assert metadata["frozen_input_digest"] == FrozenRunInputs.model_validate(first_checkpoint).digest
@@ -325,8 +356,16 @@ async def test_real_http_boundary_keeps_one_fenced_exact_run_across_faults(
                 (tmp_path / "evidence.json").write_text(json.dumps({"fault": fault, "job_id": job_id, "run_id": run_id,
                     "expected_result_digest": expected_digest, "saved_result_digest": stored_digest,
                     "execution_metadata": metadata}, indent=2))
+            current_preparation_id = await scratch_db.fetchval(
+                "SELECT preparation_job_id FROM research_options_backtest_runs WHERE id=$1", run_id)
+            assert (current_preparation_id != preparation_id) == (fault == "api_restart")
+            for child_id in {preparation_id, current_preparation_id}:
+                child_events = [json.loads(fields["event"]) for _, fields in state.xrange(f"job:{child_id}:events")]
+                assert sum(event["type"] == "job.started" for event in child_events) == 1
             events = [json.loads(fields["event"]) for _, fields in state.xrange(f"job:{job_id}:events")]
             assert sum(event["type"] == "job.started" for event in events) == 1
+            if fault == "chain_loss":
+                assert not any(event["type"] == "job.completed" for event in events)
             assert len(first_checkpoint["sessions"]) == 1
             assert not (faults / "unexpected-provider-request").exists()
             await _wait_file(inputs / ".reservations.json")
