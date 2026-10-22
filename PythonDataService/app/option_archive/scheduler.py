@@ -11,6 +11,7 @@ import contextlib
 import hashlib
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
+from concurrent.futures import Future
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Protocol
@@ -80,6 +81,8 @@ class ArchiveScheduler:
         self.record, self.retry_backoff_ms = record, retry_backoff_ms
         self._task: asyncio.Task[None] | None = None
         self._running: dict[str, asyncio.Task[None]] = {}
+        # Each running pass's ownership answer, so a trigger that joins it learns it too.
+        self._owned_answers: dict[str, asyncio.Future[bool]] = {}
 
     def start(self) -> None:
         if self._task is None or self._task.done():
@@ -98,16 +101,42 @@ class ArchiveScheduler:
 
     def _spawn(self, job: ArchiveJob) -> asyncio.Task[None]:
         if self._idle(job.name):
-            task = asyncio.create_task(self._owned(job), name=f"option-archive-{job.name}")
+            answer: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+            task = asyncio.create_task(self._owned(job, answer), name=f"option-archive-{job.name}")
             task.add_done_callback(self._finished)
-            self._running[job.name] = task
+            self._running[job.name], self._owned_answers[job.name] = task, answer
         return self._running[job.name]
 
-    async def trigger(self, name: ArchiveJobName) -> None:
-        await asyncio.shield(self._spawn(next(job for job in self.jobs if job.name == name)))
+    async def trigger(self, name: ArchiveJobName, lock_decision: Future[bool] | None = None) -> None:
+        """Runs the job now, or joins its running pass, until that pass ends.
 
-    async def _owned(self, job: ArchiveJob) -> None:
+        A caller that will not wait for the pass learns from ``lock_decision``
+        whether it holds the job's ownership (a joined pass answers for itself),
+        or why ownership could not be asked for. A caller that stopped waiting
+        has cancelled it; the pass itself goes on, exactly as a due job would.
+        """
+        task = self._spawn(next(job for job in self.jobs if job.name == name))
+        if lock_decision is not None:
+            answer = self._owned_answers[name]
+
+            def decide(_: object) -> None:
+                # Both callbacks run on this loop; the caller's thread can only cancel a pending decision.
+                if lock_decision.done() or not (answer.done() or task.done()):
+                    return
+                if not lock_decision.set_running_or_notify_cancel():
+                    return
+                if answer.done():
+                    lock_decision.set_result(answer.result())
+                else:
+                    failure = None if task.cancelled() else task.exception()
+                    lock_decision.set_exception(failure or RuntimeError(f"the {name} pass ended before its ownership was decided"))
+            answer.add_done_callback(decide)
+            task.add_done_callback(decide)
+        await asyncio.shield(task)
+
+    async def _owned(self, job: ArchiveJob, answer: asyncio.Future[bool]) -> None:
         async with self.ownership.hold(job.name) as owned:
+            answer.set_result(owned)
             if not owned:
                 return
             await self.record(job.name, started_ms=self.clock(), ended_ms=None, failure=None)

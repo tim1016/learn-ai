@@ -268,7 +268,7 @@
         "PythonDataService/tests/fixtures/golden/manifest.json->/app/tests/fixtures/golden/manifest.json:bind",
         "alpaca-fleet-control->/app/artifacts/fleet:volume",
         "data-lake-volume->/lean-data-writer:bind",
-        "docs/runbooks/restore-data-lake.md->/app/restore-data-lake.md:bind",
+        "docs/runbooks->/app/docs/runbooks:bind",
         "learn-ai-lake-backup->/lake-backup:bind"
       ]
     },

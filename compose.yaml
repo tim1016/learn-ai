@@ -134,7 +134,7 @@ services:
       # from this path.
       - ./PythonDataService/artifacts/alpaca_clerk:/app/alpaca_clerk_legacy:ro,z
       - ./PythonDataService/scripts:/app/scripts:ro,z
-      - ./docs/runbooks/restore-data-lake.md:/app/restore-data-lake.md:ro,z
+      - ./docs/runbooks:/app/docs/runbooks:ro,z
       # Data lake writer mount (Slice 1b). Default host path is ./data-lake-volume
       # (gitignored); override LEAN_DATA_VOLUME_HOST_PATH in .env for a different root.
       # Layout inside this mount: lake/ (canonical artifacts) + staging/ (writer scratch),

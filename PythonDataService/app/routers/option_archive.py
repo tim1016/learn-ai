@@ -41,16 +41,35 @@ async def archive_status(service: OptionArchiveService = Depends(get_archive_ser
         raise HTTPException(status_code=503, detail="Option archive receipts cannot be read; inspect the data lake.") from exc
 
 
+async def _lock_granted(lock_decision: Future[bool], unchecked: str) -> bool:
+    """Waits, bounded, for the background loop's answer to whether the job's lock was granted."""
+    try:
+        return await asyncio.wait_for(asyncio.wrap_future(lock_decision), LOCK_DECISION_TIMEOUT_S)
+    except Exception as exc:
+        # The service can take the decision just as the wait gives up. Once it has, cancelling fails and its
+        # answer stands: a granted lock means the job started.
+        if lock_decision.cancel():
+            raise HTTPException(status_code=503, detail=unchecked) from exc
+        try:
+            return await asyncio.wrap_future(lock_decision)
+        except Exception:
+            raise HTTPException(status_code=503, detail=unchecked) from exc
+
+
 @router.post("/trigger/{job}", response_model=ArchiveTriggerReceipt, status_code=202,
              dependencies=[Depends(require_data_plane_control_secret)])
 async def trigger_archive_job(job: ArchiveJobName,
                               service: OptionArchiveService = Depends(get_archive_service)) -> ArchiveTriggerReceipt:
     if not service.config.ENABLED:
         raise HTTPException(status_code=409, detail="Option archive is disabled; review the runbook before enabling it.")
-    # Keep the request bounded. Job ownership and the scheduler's running map
-    # make a repeated trigger join the same physical pass; the scheduler logs
-    # and records a failed run.
-    asyncio.run_coroutine_threadsafe(service.scheduler.trigger(job), background_loop())
+    # The request waits for the job lock's answer only. A repeated trigger joins
+    # the running pass and gets its answer; the scheduler logs and records a failed run.
+    lock_decision: Future[bool] = Future()
+    asyncio.run_coroutine_threadsafe(service.scheduler.trigger(job, lock_decision), background_loop())
+    unchecked = (f"Option archive could not confirm the {job} lock, so it cannot say whether the job started; "
+                 "inspect the catalog database and the archive status before retrying.")
+    if not await _lock_granted(lock_decision, unchecked):
+        raise HTTPException(status_code=409, detail=f"Another holder has the {job} lock; retry the trigger when it ends.")
     return ArchiveTriggerReceipt(accepted=True, job=job)
 
 
@@ -76,17 +95,6 @@ async def capture_archive_session(body: ArchiveSessionCaptureRequest,
     future.add_done_callback(report)
     unchecked = ("Option archive could not check the capture lock, so the recovery did not start; "
                  "inspect the catalog database and retry.")
-    try:
-        granted = await asyncio.wait_for(asyncio.wrap_future(lock_decision), LOCK_DECISION_TIMEOUT_S)
-    except Exception as exc:
-        # The service can take the decision just as the wait gives up. Once it has, cancelling fails and its
-        # answer stands: a granted lock means the recovery started.
-        if lock_decision.cancel():
-            raise HTTPException(status_code=503, detail=unchecked) from exc
-        try:
-            granted = await asyncio.wrap_future(lock_decision)
-        except Exception:
-            raise HTTPException(status_code=503, detail=unchecked) from exc
-    if not granted:
+    if not await _lock_granted(lock_decision, unchecked):
         raise HTTPException(status_code=409, detail="Another archive job holds the capture lock; retry the recovery when it ends.")
     return ArchiveTriggerReceipt(accepted=True, job="capture")

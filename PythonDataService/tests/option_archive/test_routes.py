@@ -14,7 +14,7 @@ from fastapi import FastAPI
 
 from app.config import settings
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
-from app.option_archive.scheduler import JobOwnership
+from app.option_archive.scheduler import ArchiveJob, JobOwnership
 from app.option_archive.service import OptionArchiveService
 from app.option_archive.settings import ArchiveSettings
 from app.option_archive.state import ArchiveState
@@ -217,3 +217,63 @@ async def test_a_lock_granted_as_the_wait_gives_up_still_answers_that_the_recove
     async with client:
         response = await client.post("/api/option-archive/capture-session", json=REQUEST, headers=HEADERS)
     assert response.status_code == 202 and response.json()["job"] == "capture"
+
+
+TRIGGER = "/api/option-archive/trigger/capture"
+
+
+async def _no_provider(underlying: str, day: date, **options: object) -> None:
+    raise AssertionError("a trigger test runs a stand-in job, never the provider")
+
+
+async def test_a_trigger_refused_by_another_holder_answers_409_and_starts_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The route answered 202 before the job's ownership had decided anything (#3457)."""
+    runs: list[str] = []
+
+    async def run() -> None:
+        runs.append("capture")
+    client, service = _recovery_client(tmp_path, monkeypatch, _SharedOwnership(held={"capture"}), _no_provider)
+    service.scheduler.jobs = (ArchiveJob("capture", lambda now: False, run),)
+    async with client:
+        response = await client.post(TRIGGER, headers=HEADERS)
+    assert response.status_code == 409 and "capture lock" in response.json()["detail"]
+    assert runs == [] and not service.state.path.exists()
+
+
+async def test_a_trigger_that_joins_the_running_pass_is_accepted_without_a_second_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ownership = _SharedOwnership(held=set())
+    entered, finish = threading.Event(), threading.Event()
+    runs: list[str] = []
+
+    async def run() -> None:
+        runs.append("capture")
+        entered.set()
+        await asyncio.to_thread(finish.wait, 5)
+    client, service = _recovery_client(tmp_path, monkeypatch, ownership, _no_provider)
+    service.scheduler.jobs = (ArchiveJob("capture", lambda now: False, run),)
+    async with client:
+        first = await client.post(TRIGGER, headers=HEADERS)
+        assert await asyncio.to_thread(entered.wait, 5)
+        joined = await client.post(TRIGGER, headers=HEADERS)
+        finish.set()
+        assert await asyncio.to_thread(ownership.released.wait, 5)
+    assert (first.status_code, joined.status_code) == (202, 202) and runs == ["capture"]
+
+
+async def test_a_trigger_that_cannot_ask_for_the_lock_is_reported_not_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runs: list[str] = []
+
+    async def run() -> None:
+        runs.append("capture")
+    client, service = _recovery_client(tmp_path, monkeypatch, _UnreachableOwnership(), _no_provider)
+    service.scheduler.jobs = (ArchiveJob("capture", lambda now: False, run),)
+    async with client:
+        response = await client.post(TRIGGER, headers=HEADERS)
+    assert response.status_code == 503 and "capture lock" in response.json()["detail"]
+    assert runs == [] and not service.state.path.exists()
