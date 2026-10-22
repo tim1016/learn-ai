@@ -243,6 +243,10 @@ class IbkrSource:
         # and bots reuse the same quote. None requests a delayed entitlement.
         ticks = "100,101,106" if contract.secType == "OPT" else "233"
         ticker = client.ib.reqMktData(contract, ticks, False, False)
+        # ib_async retains tickers by conId even after cancellation. A new
+        # source cannot give retained analytics a current receipt (#3388).
+        for block in GREEK_BLOCKS:
+            setattr(ticker, block, None)
         req_id = client.ib.wrapper.ticker2ReqId["mktData"][ticker]
         ticker.updateEvent += receive
         client.ib.errorEvent += failed

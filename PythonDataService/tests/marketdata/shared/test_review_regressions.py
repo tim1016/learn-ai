@@ -271,3 +271,28 @@ async def test_native_bar_stall_keeps_the_recoverable_failure_kind(monkeypatch: 
         assert error.kind == "error" and error.cause == "stalled"
     finally:
         await stream.aclose()
+
+
+async def test_new_source_cannot_publish_greeks_retained_in_ib_asyncs_contract_cache() -> None:
+    client = Client()
+    client.ib = RealWrapperBroker()
+    key = subscription()
+    retained = client.ib.wrapper.startTicker(70, Contract(conId=key.instrument.con_id), "mktData")
+    retained.modelGreeks = SimpleNamespace(impliedVol=.2, delta=.5)
+    stream = IbkrSource(client).stream(key)
+    pending = asyncio.create_task(anext(stream))
+    try:
+        for _ in range(30):
+            if client.ib.opened:
+                break
+            await asyncio.sleep(0)
+        ticker = client.ib.ticker
+        assert ticker is retained
+        ticker.ticks = [TickData(None, 1, 2, 1)]
+        ticker.updateEvent.emit(ticker)
+        frame = await asyncio.wait_for(pending, 1)
+        assert not frame.quote.greeks
+    finally:
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+        await stream.aclose()

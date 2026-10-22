@@ -87,6 +87,8 @@ def _native_quote(client: Any, contract: Any) -> QuoteLease:
     if owned is None:
         generic_ticks = "100,101,106" if contract.secType == "OPT" else "233"
         ticker = client.ib.reqMktData(contract, generic_ticks, False, False)
+        for block in GREEK_BLOCKS:
+            setattr(ticker, block, None)
         request_id = client.ib.wrapper.ticker2ReqId["mktData"].get(ticker)
         owned = cache[key] = QuoteLease(ticker=ticker, request_id=request_id, references=0)
     if owned.ticker.contract.exchange != contract.exchange:
