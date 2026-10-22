@@ -9,6 +9,7 @@ import {
   resource,
   signal,
   untracked,
+  viewChild,
 } from '@angular/core';
 import { ButtonModule } from 'primeng/button';
 import { InputText } from 'primeng/inputtext';
@@ -143,6 +144,7 @@ export class AccountDeskTransactionHistoryComponent {
   readonly showScopeControl = input(true);
   readonly pageSize = input(8);
 
+  private readonly evidenceDrawer = viewChild(ClerkTransactionEvidenceDrawerComponent);
   private activeReceiptContext: string | null = null;
   protected readonly scope = signal<HistoryScope>('today');
   protected readonly scopeOptions = SCOPE_OPTIONS;
@@ -154,6 +156,15 @@ export class AccountDeskTransactionHistoryComponent {
   protected readonly acknowledgementOperator = signal('');
   protected readonly acknowledgingExternalOrderId = signal<string | null>(null);
   protected readonly acknowledgementError = signal<string | null>(null);
+  protected readonly selectedObservationSequence = computed(() => {
+    const selected = this.selectedTransaction();
+    const detail = this.evidenceDrawer()?.detail();
+    if (!selected || !detail || detail.transaction_id !== selected.transaction_id
+      || detail.account_id !== this.store.accountId() || detail.transaction_origin !== 'external'
+      || detail.external_order_id !== selected.external_order_id) return null;
+    const sequence = detail.receipt?.['latest_observation_sequence'];
+    return typeof sequence === 'number' && Number.isSafeInteger(sequence) && sequence > 0 ? sequence : null;
+  });
   /** Set when `openReceipt` refuses to mint a command because the lane's
    * fence had no known binding at desk-render time (#2106). Separate from
    * `acknowledgementError`, which only renders once a receipt is open. */
@@ -297,18 +308,20 @@ export class AccountDeskTransactionHistoryComponent {
     const externalOrderId = transaction?.external_order_id;
     const operator = this.acknowledgementOperator().trim();
     const target = this.selectedTarget();
+    const observationSequence = this.selectedObservationSequence();
     if (
       !accountId
       || !externalOrderId
       || !operator
       || target === null
+      || observationSequence === null
       || this.acknowledgingExternalOrderId() !== null
     ) return;
 
     this.acknowledgingExternalOrderId.set(externalOrderId);
     this.acknowledgementError.set(null);
     try {
-      await this.brokers.acknowledgeExternalOrder(target, externalOrderId, operator);
+      await this.brokers.acknowledgeExternalOrder(target, externalOrderId, operator, observationSequence);
       if (!this.isCurrent(target, accountId)) return;
       await this.store.load(accountId);
       if (!this.isCurrent(target, accountId)) return;

@@ -271,11 +271,10 @@ def sqlite_acknowledge_external_order(
     to retain its established no-fallback behavior.  The external-order fold
     owns both the durable acknowledgement and narrowly scoped hold release.
     An order the Clerk could not record is reviewed on the same route by
-    broker order id, releasing only its entry fence (#2363). One broker id can
-    carry both records -- it folded once, then a later observation of it
-    could not -- so an active unfoldable fence is released first and an
-    external row is acknowledged as well; neither record can shadow the
-    other. The answer names the unfoldable review when one was released.
+    broker order id, releasing only its entry fence (#2363). A readable
+    outside observation requires the exact sequence displayed to the operator.
+    An unversioned unfoldable review never acknowledges an outside row that
+    happens to share its broker id (#3468).
     """
     clerk = _active_clerk(account_id)
     if clerk is None:
@@ -291,25 +290,13 @@ def sqlite_acknowledge_external_order(
                     )
                 # A review of this readable observation cannot release a separate unfoldable update (#3468).
                 return acknowledge_external_order(repo, external_order_id=external_order_id, operator=operator)
-            released = (
-                acknowledge_unfoldable_broker_order(
-                    repo, broker_order_id=external_order_id, operator=operator
-                )
-                if unfoldable_broker_order_is_unreviewed(repo, broker_order_id=external_order_id)
-                else None
-            )
+            if unfoldable_broker_order_is_unreviewed(repo, broker_order_id=external_order_id):
+                return acknowledge_unfoldable_broker_order(repo, broker_order_id=external_order_id, operator=operator)
             if repo.external_order(external_order_id) is not None:
-                acknowledged = acknowledge_external_order(
-                    repo, external_order_id=external_order_id, operator=operator
+                raise ExternalOrderReviewChangedError(
+                    "Review this outside order's current evidence before acknowledging it."
                 )
-                return released if released is not None else acknowledged
-            if released is not None:
-                return released
-            # Neither record is open: answer the order's latest unfoldable review,
-            # or 404 for an id no record ever named.
-            return acknowledge_unfoldable_broker_order(
-                repo, broker_order_id=external_order_id, operator=operator
-            )
+            return acknowledge_unfoldable_broker_order(repo, broker_order_id=external_order_id, operator=operator)
     except ExternalOrderNotFoundError as exc:
         raise ExternalOrderAcknowledgementNotFound(str(exc)) from exc
 

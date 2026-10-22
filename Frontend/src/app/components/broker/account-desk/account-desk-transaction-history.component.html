@@ -212,7 +212,7 @@
       pButton
       type="button"
       severity="warn"
-      [disabled]="!acknowledgementOperator().trim() || acknowledgingExternalOrderId() !== null"
+      [disabled]="!acknowledgementOperator().trim() || selectedObservationSequence() === null || acknowledgingExternalOrderId() !== null"
       (click)="acknowledgeSelectedExternalOrder()"
     >Acknowledge external order</button>
   </section>

@@ -320,7 +320,7 @@ async def _acknowledge_through_route(
         set_active_clerk_runtime(None)
 
 
-async def test_acknowledgement_releases_an_unfoldable_fence_even_when_the_id_has_an_external_row(
+async def test_unfoldable_review_preserves_an_outside_observation_sharing_its_broker_id(
     tmp_path: Path,
 ) -> None:
     """#2363 review: one broker id can carry both records.
@@ -328,7 +328,8 @@ async def test_acknowledgement_releases_an_unfoldable_fence_even_when_the_id_has
     It folded once as an external row, then a later observation of it could
     not be folded. Before the fix the route saw the row and only ever
     acknowledged it, so the unfoldable entry pause for that id could never
-    be released. Now one review releases the fence and acknowledges the row.
+    be released. An unfoldable review releases that fence only; reviewing
+    the separately readable outside observation requires its version.
     """
     repo = ClerkSqliteRepository.initialize(account_id=_ACCOUNT_NUMBER, artifacts_root=tmp_path)
     try:
@@ -351,8 +352,8 @@ async def test_acknowledgement_releases_an_unfoldable_fence_even_when_the_id_has
 
     assert first.status_code == 200, first.text
     assert first.json()["ack_operator"] == "operator-1"
-    assert remaining == []
-    assert row is not None and row.ack_operator == "operator-1"
+    assert {item["reason_code"] for item in remaining} == {"UNEXPLAINED_ORDER_HOLD"}
+    assert row is not None and row.acknowledged_at_ms is None
 
 
 async def test_versioned_outside_review_does_not_acknowledge_a_later_unfoldable_update(tmp_path: Path) -> None:
@@ -441,8 +442,9 @@ async def test_external_order_acknowledgement_rejects_blank_operator(
     assert "non-whitespace" in response.text
 
 
+@pytest.mark.parametrize("reviewed", [False, True])
 async def test_external_order_acknowledgement_endpoint_durably_releases_only_external_cause(
-    tmp_path: Path,
+    tmp_path: Path, reviewed: bool,
 ) -> None:
     class _NoBroker:
         pass
@@ -491,12 +493,17 @@ async def test_external_order_acknowledgement_endpoint_durably_releases_only_ext
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post(
                 "/api/accounts/PA-TEST/transactions/external-orders/external-1/acknowledge",
-                json={"operator": "operator-1"},
+                json={"operator": "operator-1", **({"expected_observation_sequence": observed.latest_observation_sequence} if reviewed else {})},
             )
     finally:
         set_active_clerk_runtime(None)
 
     try:
+        if not reviewed:
+            assert response.status_code == 409
+            assert repo.external_order("external-1").acknowledged_at_ms is None
+            assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD") is not None
+            return
         assert response.status_code == 200
         assert response.json()["external_order_id"] == observed.external_order_id
         assert repo.external_order("external-1").acknowledged_at_ms is not None  # type: ignore[union-attr]
