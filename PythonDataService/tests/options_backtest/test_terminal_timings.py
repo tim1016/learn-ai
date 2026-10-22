@@ -26,6 +26,7 @@ from app.utils.atomic_file import atomic_write_bytes
 from app.utils.background_loop import CallerStoppedWaitingError
 from tests._helpers.fake_lake_catalog import FakeCatalog
 from tests.options_backtest._a_run import a_busy_run
+from tests.options_backtest._archived_data import archived_scene
 from tests.options_backtest._lake import fake_catalog as fake_catalog
 from tests.options_backtest._lake import tmp_lake as tmp_lake
 from tests.options_backtest._preparation_jobs_fixture import owner as owner
@@ -138,9 +139,9 @@ def test_interrupted_shared_pool_retains_elapsed_queue_and_replay(
     from tests.options_backtest.setup_fixtures import leg, setup
 
     given = setup(legs=[leg(expiry={"kind": "same_day"})])
-    frozen = freeze_run_inputs(given, (WED, THU), chain_scene(), tmp_path)
+    frozen = freeze_run_inputs(given, (WED, THU), archived_scene(chain_scene(), tmp_path / "source"), tmp_path)
     if stop_at == "failed_replay":
-        digest = next(iter(frozen.sessions.values()))
+        digest = next(iter(frozen.blob_digests))
         (tmp_path / digest[:2] / digest).write_bytes(b"corrupt admitted input")
     cancelled = threading.Event()
     if stop_at == "queue":
@@ -168,7 +169,7 @@ def test_queue_to_replay_uses_one_boundary_without_dropping_observations(tmp_pat
     from tests.options_backtest.setup_fixtures import leg, setup
 
     given = setup(legs=[leg(expiry={"kind": "same_day"})])
-    frozen = freeze_run_inputs(given, (WED,), chain_scene(), tmp_path)
+    frozen = freeze_run_inputs(given, (WED,), archived_scene(chain_scene(), tmp_path / "source"), tmp_path)
     # Delay between adjacent samples exposes double-counted time. Only the
     # ledger's clocks are replaced; the actual pool runs normally. Samples:
     # start, queue opens, the first chain begins, replay closes, aggregation
@@ -206,7 +207,7 @@ async def test_runtime_terminal_preparation_keeps_partial_timings_without_maskin
     checked = PhaseTiming(phase="check", started_at_ms=1, finished_at_ms=1, duration_ms=0)
     downloaded = checked.model_copy(update={"phase": "download"})
     root = Path(runtime.settings.OPTIONS_BACKTEST_INPUT_ROOT) / req.job_id
-    frozen = freeze_run_inputs(req.setup, (WED,), chain_scene(), root)
+    frozen = freeze_run_inputs(req.setup, (WED,), archived_scene(chain_scene(), root.parent / "source"), root)
 
     def checkpoint(rows: tuple[PhaseTiming, ...]) -> None:
         partial = PreparationCheckpoint(identity=preparation_identity(req), inputs=frozen, timings=rows)
