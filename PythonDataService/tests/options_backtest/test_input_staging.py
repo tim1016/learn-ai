@@ -139,6 +139,7 @@ def test_terminal_owner_drains_before_cleanup_and_late_receipts_cannot_publish(
 ) -> None:
     from app.config import settings
     from app.jobs import facade, progress
+    from app.jobs.progress import JobCancelled
     from app.jobs.runner import prepared_worker
     from app.options_backtest import preparation
     from app.schemas.options_backtest_preparation import OptionsBacktestPreparationRequest
@@ -161,7 +162,7 @@ def test_terminal_owner_drains_before_cleanup_and_late_receipts_cannot_publish(
 
     def stop(*args, **kwargs) -> None:
         if terminal_status == "cancelled":
-            raise preparation.service.RunCancelled()
+            raise JobCancelled("the preparation worker or parent lease expired")
         raise OSError("preparation input is unavailable")
 
     monkeypatch.setattr(preparation.service, "prepare_run_data", stop)

@@ -17,15 +17,12 @@ async def current_binding(conn: asyncpg.Connection, run_id: int, parent_job_id: 
 
 async def bind_preparation(conn: asyncpg.Connection, run_id: int, parent_job_id: str, generation: int,
                            identity: str, job_id: str, *, previous: str | None) -> str:
-    """Bind a fresh queued id, or reconcile the same committed binding after lost acknowledgement."""
+    """Replace ``previous`` with a fresh queued id; a lost acknowledgement is read back with ``current_binding``."""
     async with conn.transaction():
         row = await _lock_parent(conn, run_id, parent_job_id, generation)
         if row["preparation_identity"] not in (None, identity):
             raise ValueError("preparation binds another request, root, or execution generation")
-        current = row["preparation_job_id"]
-        if current == job_id:
-            return current
-        if current != previous:
+        if row["preparation_job_id"] != previous:
             raise ValueError("the current preparation job changed before replacement")
         await conn.execute("UPDATE research_options_backtest_runs SET preparation_job_id=$2, preparation_identity=$3 WHERE id=$1",
                            run_id, job_id, identity)

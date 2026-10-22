@@ -132,8 +132,6 @@ async def test_delayed_real_provider_collection_publishes_off_loop_and_drains_be
         checkpoint = await collecting
         assert sum(call.request.url.path == golden.CALL_600_PATH for call in router.calls) == 1
     assert checkpoint.complete and checkpoint.inputs.retained_bytes > 0
-    result = preparation.PreparationCheckpoint.model_validate_json(fake.get(progress.result_key(request.job_id)))
-    assert result.timings == checkpoint.timings
     assert any(row.phase == "input_freeze" for row in checkpoint.timings)
     assert not on_loop
     assert any(thread.startswith("job-receipts-") for thread in checks)

@@ -202,13 +202,15 @@ async def test_runtime_terminal_preparation_keeps_partial_timings_without_maskin
 ) -> None:
     cancel = terminal != "failed"
     req, fake, authority, _, binding = owner
+    child_id = "api-preparation"
+    binding.queue_as.append(child_id)
     monkeypatch.setattr(ownership, "process_authority", lambda: authority)
     store = ObservationStore(unavailable=unavailable)
     checked = PhaseTiming(phase="check", started_at_ms=1, finished_at_ms=1, duration_ms=0)
     downloaded = checked.model_copy(update={"phase": "download"})
-    facade._record_queued(binding.job_id, PREPARATION_JOB_TYPE, {}, internal=True)
-    fake.set(progress.lease_key(binding.job_id), "preparation-owner")
-    child = ProgressEmitter(binding.job_id, renews_lease=False)
+    facade._record_queued(child_id, PREPARATION_JOB_TYPE, {}, internal=True)
+    fake.set(progress.lease_key(child_id), "preparation-owner")
+    child = ProgressEmitter(child_id, renews_lease=False)
     child.started()
     identity = preparation_identity(req)
     child.emit_event("job.observations", {"identity": identity, "phase_timings": [checked.model_dump(mode="json")]})
@@ -299,10 +301,12 @@ async def test_actual_provider_failure_before_freeze_preserves_closed_preparatio
     from tests.options_backtest._golden_vendor import recorded_vendor
 
     req, fake, authority, _, binding = owner
+    child_id = "api-preparation"
+    binding.queue_as.append(child_id)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_lake))
     req = req.model_copy(update={"setup": golden.a_setup(), "start_ms": et_midnight_ms(golden.TRADING_DATE),
                                 "end_ms": et_midnight_ms(golden.TRADING_DATE + timedelta(days=1))})
-    request = OptionsBacktestPreparationRequest(job_id=binding.job_id, run_id=7, generation=authority.boot_generation,
+    request = OptionsBacktestPreparationRequest(job_id=child_id, run_id=7, generation=authority.boot_generation,
                                                identity=preparation_identity(req), parent=req)
     monkeypatch.setattr(ownership, "process_authority", lambda: authority)
     monkeypatch.setattr(preparation, "get_redis", lambda: fake)
@@ -326,11 +330,11 @@ async def test_actual_provider_failure_before_freeze_preserves_closed_preparatio
 
     facade._record_queued(req.job_id, "options_backtest", {})
     ProgressEmitter(req.job_id, renews_lease=False).started()
-    facade._record_queued(binding.job_id, PREPARATION_JOB_TYPE, {}, internal=True)
+    facade._record_queued(child_id, PREPARATION_JOB_TYPE, {}, internal=True)
     store = ObservationStore()
     with recorded_vendor(golden.RECORDING, golden.RECORDED_FILES, golden.STOCK_PATH) as router:
         router.get(host="api.polygon.io", path=golden.CALL_600_PATH).mock(side_effect=denied)
-        with prepared_worker(binding.job_id, emit_renews_lease=False) as worker:
+        with prepared_worker(child_id, emit_renews_lease=False) as worker:
             worker.cancel.renews_lease = False
             collector = worker.start(lambda emit, cancel: preparation.collect_preparation(request, emit, cancel))
         executing = asyncio.create_task(asyncio.to_thread(runtime.execute_runtime_run, run_id=7, req=req,
@@ -350,7 +354,7 @@ async def test_actual_provider_failure_before_freeze_preserves_closed_preparatio
     assert run_id == 7
     assert [row["phase"] for row in rows] == ["check", "download", "coordination"]
     assert sum(row["duration_ms"] for row in rows if row["scope"] == "run") == metadata["wall_duration_ms"]
-    events = [json.loads(fields["event"]) for _, fields in fake.streams[progress.events_key(binding.job_id)]]
+    events = [json.loads(fields["event"]) for _, fields in fake.streams[progress.events_key(child_id)]]
     assert [row["phase"] for event in events if event["type"] == "job.observations"
             for row in event["phase_timings"]][-2:] == ["check", "download"]
     assert events[-1]["type"] == "job.failed"

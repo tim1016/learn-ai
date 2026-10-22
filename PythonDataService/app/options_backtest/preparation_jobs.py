@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from pathlib import Path
 
 import httpx
 
@@ -12,13 +13,12 @@ from app.config import settings
 from app.jobs import facade
 from app.jobs.checkpoints import GatedLease
 from app.jobs.external_work import ExternalJobObserver
-from app.jobs.progress import MAX_STREAM_LENGTH, JobCancelled, ProgressEmitter
+from app.jobs.progress import MAX_STREAM_LENGTH, ORPHANED_JOB_CODE, JobCancelled, ProgressEmitter
 from app.options_backtest import preparation_binding, service
 from app.options_backtest.frozen_inputs import FrozenRunInputs
 from app.options_backtest.input_staging import job_root
 from app.options_backtest.preparation import (
     PREPARATION_JOB_TYPE,
-    PreparationCheckpoint,
     read_checkpoint,
     runtime_preparation_identity,
     verify_completed,
@@ -37,16 +37,15 @@ CANCEL_POLL_SECONDS = 0.2
 
 
 class _ClosedTimings:
-    """Keep each child's latest cumulative spans, excluding its adopted checkpoint prefix."""
+    """Keep each child's latest cumulative spans; a restart keeps those of the children before it."""
 
     def __init__(self) -> None:
         self._past: tuple[PhaseTiming, ...] = ()
-        self._base: tuple[PhaseTiming, ...] = ()
         self._current: tuple[PhaseTiming, ...] = ()
 
     @property
     def rows(self) -> tuple[PhaseTiming, ...]:
-        return self._past + self._current[len(self._base):]
+        return self._past + self._current
 
     def accept(self, rows: tuple[PhaseTiming, ...]) -> None:
         shared = min(len(rows), len(self._current))
@@ -55,10 +54,8 @@ class _ClosedTimings:
         elif len(rows) > len(self._current):
             self._current = rows
 
-    def restarted(self, checkpoint: PreparationCheckpoint | None) -> None:
-        self._past = self.rows
-        self._base = () if checkpoint is None else checkpoint.timings
-        self._current = self._base
+    def restarted(self) -> None:
+        self._past, self._current = self.rows, ()
 
     def event(self, event: dict, identity: str) -> None:
         if event.get("type") == "job.observations" and event.get("identity") == identity:
@@ -81,6 +78,16 @@ async def _drain_observations(job_id: str, after: str, closed: _ClosedTimings, i
         remaining -= min(len(batch), remaining)
     logger.warning("preparation observation drain reached the retained stream bound", extra={"job_id": job_id})
     return after
+
+
+async def _completed_inputs(req: OptionsBacktestJobRequest, root: Path, identity: str,
+                            closed: _ClosedTimings) -> FrozenRunInputs | None:
+    """The verified inputs of a complete checkpoint file, which also carries its writer's closed spans."""
+    checkpoint = await asyncio.to_thread(read_checkpoint, root, identity)
+    if checkpoint is None or not checkpoint.complete:
+        return None
+    closed.accept(checkpoint.timings)
+    return await asyncio.to_thread(verify_completed, req, checkpoint)
 
 
 async def _close_unbound_job(job_id: str) -> None:
@@ -130,18 +137,14 @@ async def prepare_over_api(req: OptionsBacktestJobRequest, *, run_id: int, emit:
     root = job_root(settings.OPTIONS_BACKTEST_INPUT_ROOT, req.job_id)
     closed = _ClosedTimings()
     observer = ExternalJobObserver(emit, lease)
-    job_id = await writer_loop_call(with_connection(preparation_binding.current_binding, run_id, req.job_id,
-                                                    lease.generation, identity))
+    job_id: str | None = None
     after = "0-0"
     try:
         async with build_internal_client(timeout_s=5) as client:
             while True:
                 lease.fenced_cancel()
-                checkpoint = await asyncio.to_thread(read_checkpoint, root, identity)
-                if checkpoint is not None:
-                    closed.accept(checkpoint.timings)
-                    if checkpoint.complete:
-                        return await asyncio.to_thread(verify_completed, req, checkpoint)
+                if (frozen := await _completed_inputs(req, root, identity, closed)) is not None:
+                    return frozen
                 if time.monotonic() > observer.deadline:
                     raise TimeoutError("preparation stopped advancing beyond its bounded work deadline")
                 if job_id is None:
@@ -155,17 +158,14 @@ async def prepare_over_api(req: OptionsBacktestJobRequest, *, run_id: int, emit:
                 status = state.get("status")
                 if status in facade.TERMINAL_STATUSES:
                     after = await _drain_observations(job_id, after, closed, identity)
-                if status == "failed" and state.get("error_code") == "DATA_SERVICE_RESTARTED":
+                if status == "failed" and state.get("error_code") == ORPHANED_JOB_CODE:
                     # Only the API startup sweep authorizes a fresh child.
                     # Missing Redis state alone never admits a second fetch.
-                    checkpoint = await asyncio.to_thread(read_checkpoint, root, identity)
-                    if checkpoint is not None:
-                        closed.accept(checkpoint.timings)
-                        if checkpoint.complete:
-                            return await asyncio.to_thread(verify_completed, req, checkpoint)
+                    if (frozen := await _completed_inputs(req, root, identity, closed)) is not None:
+                        return frozen
                     lease.external_wait_finished()
                     job_id = await _bind_fresh(run_id, req, lease, identity, job_id)
-                    closed.restarted(checkpoint)
+                    closed.restarted()
                     after = "0-0"
                     observer = ExternalJobObserver(emit, lease)
                     continue
@@ -175,18 +175,10 @@ async def prepare_over_api(req: OptionsBacktestJobRequest, *, run_id: int, emit:
                     raise service.RunFailedError(RunFailure(state.get("error_code", "PREPARATION_FAILED"),
                                                             state.get("error_message", "Input preparation failed.")))
                 if status == "completed":
-                    try:
-                        result = PreparationCheckpoint.model_validate_json(await facade.read_result(job_id))
-                    except facade.JobRecordNotFoundError:
-                        # Result retention can expire between reading status
-                        # and result. The verified complete checkpoint persists.
-                        result = await asyncio.to_thread(read_checkpoint, root, identity)
-                        if result is None or not result.complete:
-                            raise
-                    if result.identity != identity:
-                        raise ValueError("preparation result binds another request, root or execution generation")
-                    closed.accept(result.timings)
-                    return await asyncio.to_thread(verify_completed, req, result)
+                    # The child writes its complete checkpoint before it completes.
+                    if (frozen := await _completed_inputs(req, root, identity, closed)) is None:
+                        raise RuntimeError("the preparation job completed without a complete freeze checkpoint")
+                    return frozen
                 if status not in ("queued", "running"):
                     raise RuntimeError("the preparation job is absent or expired; its old id cannot execute again")
                 if status == "queued" and not state.get("started_at"):
@@ -202,6 +194,9 @@ async def prepare_over_api(req: OptionsBacktestJobRequest, *, run_id: int, emit:
                             latest = await facade.read_job_state(job_id)
                             if latest.get("status") not in facade.TERMINAL_STATUSES:
                                 response.raise_for_status()
+                        else:
+                            logger.debug("preparation dispatch not accepted yet",
+                                         extra={"job_id": job_id, "status_code": response.status_code})
                     except httpx.TransportError as exc:
                         # A lost dispatch reply observes the same canonical
                         # child id; neither the retry nor a poll renews parent.
