@@ -103,6 +103,17 @@ def prepared_worker(
             release_lease(job_id, launch.lease_token)
 
 
+async def _drain_worker_io(task: asyncio.Task[Any]) -> asyncio.CancelledError | None:
+    """Remember cancellation while a lease operation finishes on its own thread."""
+    cancelled = None
+    while not task.done():
+        try:
+            await asyncio.wait([task])
+        except asyncio.CancelledError as exc:
+            cancelled = cancelled or exc
+    return cancelled
+
+
 @asynccontextmanager
 async def async_prepared_worker(
     job_id: str, *, cancel_check_every_n: int = 1, thread_name: str | None = None,
@@ -112,17 +123,22 @@ async def async_prepared_worker(
     reservation = prepared_worker(job_id, cancel_check_every_n=cancel_check_every_n, thread_name=thread_name,
                                   emit_renews_lease=emit_renews_lease, progress_min_interval_s=progress_min_interval_s)
     acquiring = asyncio.create_task(asyncio.to_thread(reservation.__enter__))
+    cancelled = await _drain_worker_io(acquiring)
+    launch = acquiring.result()
     try:
-        launch = await asyncio.shield(acquiring)
-    except asyncio.CancelledError:
-        # A cancelled wait cannot leave an acquisition thread holding an orphan lease.
-        await acquiring
-        await asyncio.to_thread(reservation.__exit__, None, None, None)
-        raise
-    try:
+        if cancelled is not None:
+            raise cancelled
         yield launch
+    except asyncio.CancelledError as exc:
+        cancelled = cancelled or exc
     finally:
-        await asyncio.to_thread(reservation.__exit__, None, None, None)
+        # Repeated cancellation cannot release the authority's stamp lock
+        # before an eventual claim is acquired and its own lease is released.
+        releasing = asyncio.create_task(asyncio.to_thread(reservation.__exit__, None, None, None))
+        cleanup_cancelled = await _drain_worker_io(releasing)
+        releasing.result()
+        if (cancelled := cancelled or cleanup_cancelled) is not None:
+            raise cancelled
 
 
 def run_in_thread(
