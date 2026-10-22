@@ -8,6 +8,23 @@ from pydantic import ValidationError
 from app.config import FleetSettings, Settings
 
 
+@pytest.mark.parametrize("width", [0, 3, 5, 6, 7, 9])
+def test_options_capacity_refuses_unsupported_widths(width: int) -> None:
+    with pytest.raises(ValidationError, match="OPTIONS_SEARCH_WORKER_COUNT"):
+        Settings(RESEARCH_WORKER_COUNT=8, OPTIONS_SEARCH_WORKER_COUNT=width)
+
+
+@pytest.mark.parametrize("width", [1, 2, 4, 8])
+def test_options_capacity_accepts_supported_width_inside_shared_pool(width: int) -> None:
+    configured = Settings(RESEARCH_WORKER_COUNT=8, OPTIONS_SEARCH_WORKER_COUNT=width)
+    assert width == configured.OPTIONS_SEARCH_WORKER_COUNT
+
+
+def test_options_capacity_cannot_exceed_shared_pool() -> None:
+    with pytest.raises(ValidationError, match="cannot exceed"):
+        Settings(RESEARCH_WORKER_COUNT=2, OPTIONS_SEARCH_WORKER_COUNT=4)
+
+
 def test_settings_allowed_origins_parses_comma_separated(monkeypatch):
     monkeypatch.setenv("POLYGON_API_KEY", "pk-unit-test")
     monkeypatch.setenv("ALLOWED_ORIGINS", "http://a.test,http://b.test , http://c.test ")

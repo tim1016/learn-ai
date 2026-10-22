@@ -371,6 +371,8 @@ class Settings(BaseSettings):
     @field_validator("OPTIONS_SEARCH_WORKER_COUNT")
     @classmethod
     def _options_width_fits_pool(cls, value: int, info: ValidationInfo) -> int:
+        if value not in (1, 2, 4, 8):
+            raise ValueError("Options worker width must be 1, 2, 4 or 8")
         if value > info.data.get("RESEARCH_WORKER_COUNT", 1):
             raise ValueError("Options search width cannot exceed the shared research worker profile")
         return value

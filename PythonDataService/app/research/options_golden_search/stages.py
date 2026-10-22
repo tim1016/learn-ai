@@ -156,6 +156,7 @@ class StudyEvaluator:
             planned.append((setup, window, scenario, key, cached))
 
         computed: dict[str, dict[str, Any]] = {}
+        requests_by_key = {entry[3]: entry[:3] for entry in planned}
 
         def persist(key: str, result: EvaluationResult, actual_reads: list[str], task_gen: int) -> None:
             payload = evidence_payload(result)
@@ -164,18 +165,41 @@ class StudyEvaluator:
             if retained_bytes + len(payload) > self.protocol.budget.max_artifact_bytes:
                 raise ValueError("The study evidence exceeds its retained-artifact byte limit.")
             record = evaluation_record(result, self.blobs.put(payload), len(payload), actual_reads)
-            run_sync(with_connection(repo.complete, self.row["id"], self.row["attempt"], key, record, task_gen=task_gen))
-            computed[key] = record
+            setup, window, scenario = requests_by_key[key]
+            partial = None
+            scenario_view = None
+            if self.row["phase"] == "final":
+                digest = setup_sha256(setup)
+                verdict = classify(result.metrics, self.protocol.policy, window, "final" if scenario == "base" else "stress", complete=result.complete)
+                scenario_view = {"candidate_hash": digest, "scenario": scenario, "verdict": verdict.status,
+                    "net_profit_usd": str(result.metrics.net_profit_usd), "gate_outcomes": gates(verdict, "final:" + scenario)}
+            if scenario_view is not None and scenario == "base":
+                partial = candidate(result, verdict, digest, original=digest == setup_sha256(self.protocol.setup))
+                partial["gate_outcomes"].append({"gate_id": "final:batch", "status": "not_enough_evidence",
+                    "actual": None, "required": "every frozen final candidate and cost scenario", "overridable": False,
+                    "reason": "This base run completed. The mandatory final batch has not finished."})
+                if partial["verdict"] == "meets_rules":
+                    partial["verdict"] = "not_enough_evidence"
             async def report(conn):
                 async with conn.transaction():
                     current = await repo.fence(conn, self.row["id"], self.row["attempt"])
+                    await repo.complete(conn, self.row["id"], self.row["attempt"], key, record, task_gen=task_gen)
+                    if scenario_view is not None:
+                        scenarios = {(item["candidate_hash"], item["scenario"]): item for item in current.get("final_scenarios", [])}
+                        scenarios[scenario_view["candidate_hash"], scenario] = scenario_view
+                        current["final_scenarios"] = [scenarios[key] for key in sorted(scenarios)]
+                    if partial is not None:
+                        exposed = {item["candidate_hash"]: item for item in current["final_results"]}
+                        exposed[partial["candidate_hash"]] = partial
+                        current["final_results"] = [exposed[digest] for digest in current["finalists"] if digest in exposed]
                     current["progress"] = {"stage": self.row["phase"], "completed": counts["completed"] + 1,
-                        "queued": max(0, len(pending)-len(computed)), "running": 0,
+                        "queued": max(0, len(pending)-len(computed)-1), "running": 0,
                         "cache_hits": self.cache_hits, "execution_attempts": counts["execution_attempts"],
                         "spent": counts["reserved"], "reserved": self.stage_limits.mandatory_downstream if self.row["phase"]=="research" else self.stage_limits.proof_and_materialization,
                         "capacity_message": "Bounded shared research capacity; width " + str(settings.OPTIONS_SEARCH_WORKER_COUNT)}
                     await repo.save(conn, current, bump=False)
             run_sync(with_connection(report))
+            computed[key] = record
             self.checkpoint(counts["reserved"], self.protocol.budget.evaluation_cap)
 
         pending = list({entry[3]: entry for entry in planned if entry[4] is None}.values())
@@ -410,7 +434,9 @@ def run(study_id: str, token: str, job_id: str, *, cancel: Callable[[], object],
             raise ValueError("The executable identity changed during the stage; no stage transition was published.")
         async def finish(conn):
             async with conn.transaction():
-                await repo.fence(conn,study_id,row["attempt"])
+                current = await repo.fence(conn,study_id,row["attempt"])
+                if row["phase"] == "approval":
+                    row["final_scenarios"] = current.get("final_scenarios", [])
                 return await repo.save(conn,row)
         return run_sync(with_connection(finish))
     except BaseException as exc:

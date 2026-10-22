@@ -49,6 +49,15 @@ async function preparePlan(fake = service()) {
 }
 
 describe('Options Golden Search workbench', () => {
+  it('reopens a frozen final batch on the final step before its first result', async () => {
+    const fake = service();
+    fake.get.mockResolvedValue(study({ phase: 'final', status: 'interrupted', final_results: [], allowed_commands: ['resume', 'keep_original'] }));
+    await page(fake, { studyId: 'study-1' });
+    expect(await screen.findByRole('heading', { name: 'Final outcomes and approval' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Freeze shortlist and open final test' })).toBeNull();
+  });
+
   it('restores default-compatible automatic dates when reloading a setup after changing forward months', async () => {
     const fake = service();
     fake.historyGuidance.mockImplementation(async (request) => request.test_months === 3 ? { ...historyGuidance(), start_ms: etMidnightMs('2024-03-05'), end_ms: etMidnightMs('2026-09-05') } : historyGuidance());

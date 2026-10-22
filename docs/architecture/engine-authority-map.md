@@ -159,6 +159,9 @@ snapshot reader admits only recorded bytes or explicit absence. The existing Gol
 Options authority publishes the exact setup with ordinary replay proof and a retained
 study manifest. Neither study workers nor approval acquire broker or Clerk authority.
 The API/Angular workbench transports and renders server-authored outcomes.
+The operator alone enables a deployment-qualified Options width (1/2/4/8),
+bounded by the shared pool; the workbench cannot raise it. Qualification and
+drain/rollback follow `docs/runbooks/research-runtime-capacity.md`.
 
 ## Retirement register and remaining deprecated paths
 

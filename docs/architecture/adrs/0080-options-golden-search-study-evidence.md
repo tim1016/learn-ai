@@ -16,6 +16,15 @@ The frozen elapsed-time bound applies separately to each executable stage (resea
 
 Final opening commits shortlist, prior exposure classification, permanent exposure reservation and dispatch intent together. Ordinary Options backtests reserve same-underlying interval exposure before execution; older uninstrumented history is unknown. Command receipts make retry return the original outcome. Cancellation preserves exposure. Worker completion cannot overwrite a newer attempt or a completed result.
 
+Completed final scenario evidence and its summary commit atomically; base evidence
+also commits its pending-batch candidate projection,
+so a later failed worker cannot hide an already exposed result. Pending final
+outcomes remain inspectable but cannot authorize approval before every mandatory
+candidate and scenario finishes. Explicit Resume reuses committed evaluations
+and the frozen shortlist. Operational capacity is separately qualified at
+supported widths 1/2/4/8; support alone grants no deployment capacity, and the
+Options default remains one worker.
+
 The existing immutable Golden Options registry remains the approval authority. A selected complete ordinary run receives its existing input/replay proof. A separate retained study manifest binds the selection history, traces, policy, final comparison and exceptions. Recomputing metrics verifies that manifest before atomic publication. An execution re-proof never silently recertifies an earlier statistical verdict under changed metrics. Approved evidence is not deletable. Approval starts no bot; all existing Deploy, custody and provider decisions remain in force.
 
 ## Alternatives

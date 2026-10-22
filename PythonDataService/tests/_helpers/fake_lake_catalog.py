@@ -18,6 +18,7 @@ import hashlib
 import json
 import re
 import time
+from collections.abc import Sequence
 from contextvars import ContextVar
 from pathlib import Path
 from uuid import UUID
@@ -139,7 +140,11 @@ class FakeCatalog:
                    and row.get("file_size_bytes") == file_size_bytes
                    for row in self.rows.values())
 
-    async def init_pool(self) -> None:
+    async def has_committed_file_receipts(self, requests: Sequence[tuple[UUID, str, str, str, int]]) -> frozenset[int]:
+        return frozenset([index for index, request in enumerate(requests)
+                          if await self.has_committed_file_receipt(*request)])
+
+    async def init_pool(self, *, max_size: int = catalog_client.POOL_MAX_SIZE) -> None:
         # Same contract as seeded_lake_catalog's init_pool: the catalog rows
         # are faked, but the asyncpg pool must stay real when a database is
         # configured, because app.research.persistence.db shares
@@ -148,7 +153,7 @@ class FakeCatalog:
         # attribute - importing it lazily here would re-fetch the patched
         # fake and recurse.
         if settings.POSTGRES_URL:
-            await _REAL_INIT_POOL()
+            await _REAL_INIT_POOL(max_size=max_size)
 
     async def scope_verified_legacy_metadata(
         self, artifact_id: int, data_root_id: UUID, price_adjustment_mode: str,
@@ -614,6 +619,7 @@ def mock_launcher(*, latency_s: float = 0.0):
 #: Every ``catalog_client`` function :class:`FakeCatalog` stands in for.
 FAKE_CATALOG_FUNCTIONS: tuple[str, ...] = (
     "has_committed_file_receipt",
+    "has_committed_file_receipts",
     "scope_verified_legacy_metadata",
     "init_pool",
     "claim_metadata_artifact",

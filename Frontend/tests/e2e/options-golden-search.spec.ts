@@ -1,6 +1,37 @@
 import { expect, test } from '@playwright/test';
 
-import { exceptionOptionsStudy, installOptionsSearchWorld, OPTIONS_CANDIDATE_HASH, OPTIONS_SEARCH_ID, SAVED_OPTION_SETUP } from './support/options-search-world';
+import { exceptionOptionsStudy, installOptionsSearchWorld, lockedOptionsStudy, OPTIONS_CANDIDATE_HASH, OPTIONS_SEARCH_ID, SAVED_OPTION_SETUP } from './support/options-search-world';
+
+test('retains the original when no candidate qualifies', async ({ page }) => {
+  const world = await installOptionsSearchWorld(page, lockedOptionsStudy({ phase: 'compare', status: 'completed', allowed_commands: ['keep_original'] }));
+  await page.goto(`/options-golden-search/${OPTIONS_SEARCH_ID}`);
+  const workbench = page.locator('app-options-golden-search-page');
+  await expect(workbench.getByRole('heading', { name: 'Development and forward evidence' })).toBeVisible();
+  await expect(workbench.getByRole('button', { name: 'Freeze shortlist and open final test' })).toBeDisabled();
+  await workbench.getByRole('button', { name: 'Keep original' }).click();
+  expect(world.commands[0]).toMatchObject({ command: 'keep_original', expected_revision: 1 });
+  expect(world.jobStages).toEqual([]);
+  expect(world.unexpected).toEqual([]);
+});
+
+test('cancels a partial final batch, reloads it, then explicitly resumes the frozen batch', async ({ page }) => {
+  const initial = exceptionOptionsStudy();
+  const world = await installOptionsSearchWorld(page, { ...initial, phase: 'final', status: 'running', allowed_commands: ['cancel'], approval_reviews: {} });
+  await page.goto(`/options-golden-search/${OPTIONS_SEARCH_ID}`);
+  const workbench = page.locator('app-options-golden-search-page');
+  await expect(workbench.getByRole('heading', { name: 'Final outcomes and approval' })).toBeVisible();
+  await expect(workbench.getByRole('button', { name: 'Approve exact golden version' })).toBeDisabled();
+  await workbench.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await page.reload();
+  await expect(workbench.getByRole('button', { name: 'Resume', exact: true })).toBeVisible();
+  expect(world.commands).toHaveLength(1);
+  expect(world.jobStages).toEqual([]);
+  await workbench.getByRole('button', { name: 'Resume', exact: true }).click();
+  await expect.poll(() => world.jobStages).toContain('final-stage');
+  expect(world.commands[1]).toMatchObject({ command: 'resume', expected_revision: 8 });
+  expect(world.commands[1].candidate_hashes).toBeUndefined();
+  expect(world.unexpected).toEqual([]);
+});
 
 test('locks a saved setup, resumes retained research, freezes final candidates and reviews exact approval', async ({ page }) => {
   const world = await installOptionsSearchWorld(page);

@@ -78,12 +78,29 @@ qualify Options: minute risk traces and contract inventories have different
 memory and storage costs. The owner UI cannot change either limit. A study's
 scientific identity excludes worker width, so an interrupted study resumes
 at a lower qualified width without changing its frozen selection procedure.
+Only widths **1/2/4/8** are supported; other Options widths refuse startup
+and dispatch. A supported width still needs deployment qualification before
+an operator enables it. No benchmark or owner-facing control changes either
+production default.
 
 Before increasing the Options limit:
 
-1. Run `tests/research/options_golden_search/test_dispatch.py` with slow tests
-   included. The real worker matrix compares every retained session, minute
-   observation, exact cash amount and derived metric at widths 1/2/4/8.
+1. From `PythonDataService`, run the existing slow matrix and preserve its
+   measurement receipts outside the repository:
+
+   ```sh
+   DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest \
+     tests/research/options_golden_search/test_dispatch.py -k matrix \
+     -o junit_family=legacy --junitxml=/tmp/options-capacity.xml
+   ```
+
+   The real worker matrix compares every retained session, minute
+   observation, exact cash amount and derived metric at widths 1/2/4/8,
+   with eight distinct legs, stop re-entries, independent fee/slippage stress,
+   simultaneous Signal work and complete ordinary-source replay proof.
+   Each `capacity_observation` property records cold/warm pool elapsed time,
+   retained snapshot/evidence bytes and sampled pool/memory/PID peaks. Warm
+   pool means reused processes; it makes no claim about the OS page cache.
    A synthetic matrix establishes repeatability; it does not qualify host
    capacity.
 2. On the target research profile, use a retained representative Options
@@ -108,3 +125,24 @@ Before increasing the Options limit:
    explicitly qualified larger Options limit. Roll back by draining and
    setting `OPTIONS_SEARCH_WORKER_COUNT=1`; retain the study and exposure
    evidence.
+
+If the representative archive is incomplete, or a required retained input,
+held-minute mark, source ladder or proof cannot be reproduced, record that
+width as **unqualified**. Do not shrink the history or omit failed work to
+produce a passing benchmark. Keep the exact case, inventory and refusal in
+the qualification issue; capture missing history through the ordinary archive
+workflow before repeating the same case.
+
+## Recovering a partial Options final batch
+
+A completed run is committed together with its scenario summary; base runs also
+commit their inspectable final outcome. **Completed final scenarios** shows
+cost-stress outcomes even when a worker finishes stress before the base run.
+Until every frozen candidate and cost scenario finishes, its result carries a
+pending final-batch rule; no normal or exception approval is available during
+interruption. Cancel retains committed results and the original final exposure
+reservation. Reopen the study and use **Resume** on the final-results screen.
+Resume keeps the locked plan and shortlist, reuses completed evaluations and
+spends physical attempts only on unfinished work. It never opens a new final
+comparison or removes an exposure receipt. Approval remains a separate command
+and never deploys a bot.

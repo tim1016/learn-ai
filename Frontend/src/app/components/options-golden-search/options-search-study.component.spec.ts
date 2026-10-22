@@ -9,6 +9,30 @@ import { candidate, retainedCandidate, study } from './testing';
 function original() { return candidate({ candidate_hash: 'e'.repeat(64), label: 'Original setup', is_original: true }); }
 
 describe('Options search evidence and approval', () => {
+  it('shows a completed stress run even when its base run has not completed', async () => {
+    await render(OptionsSearchStudyComponent, { inputs: { study: study({ phase: 'final', status: 'interrupted', final_results: [],
+      final_scenarios: [{ candidate_hash: 'c'.repeat(64), scenario: 'fees', verdict: 'could_not_evaluate', net_profit_usd: '12.34',
+        gate_outcomes: [{ gate_id: 'final:fees:marks', status: 'could_not_evaluate', actual: null, required: 'complete', reason: 'A held-minute mark was missing.' }] }],
+      allowed_commands: ['resume', 'keep_original'] }), step: 5 }, providers: [provideRouter([])] });
+    await userEvent.click(screen.getByText('Completed final scenarios'));
+    expect(screen.getByText('Fees · Could Not Evaluate · 12.34 USD')).toBeTruthy();
+    expect(screen.getByText(/A held-minute mark was missing/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Approve exact golden version' })).toBeNull();
+  });
+
+  it.each([{ final_results: [] }, { final_results: [candidate({ verdict: 'not_enough_evidence' })] }])('resumes an interrupted final batch with its completed outcomes visible', async ({ final_results }) => {
+    const action = vi.fn();
+    await render(OptionsSearchStudyComponent, { inputs: { study: study({ phase: 'final', status: 'interrupted', final_results, allowed_commands: ['resume', 'keep_original'] }), step: 5 }, on: { action }, providers: [provideRouter([])] });
+    expect(screen.getByRole('heading', { name: 'Final outcomes and approval' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Freeze shortlist and open final test' })).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    expect(action).toHaveBeenCalledWith({ command: 'resume' });
+    if (final_results.length) {
+      expect(screen.getByRole('button', { name: 'Approve exact golden version' })).toHaveProperty('disabled', true);
+      expect(screen.getByRole('button', { name: 'Approve owner exception' })).toHaveProperty('disabled', true);
+    }
+  });
+
   it('freezes only the reduced tested shortlist while preserving original independently', async () => {
     const action = vi.fn();
     const second = candidate({ candidate_hash: 'f'.repeat(64), label: 'Candidate two' });
