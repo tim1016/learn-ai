@@ -14873,6 +14873,8 @@ export interface components {
          * @description Operator evidence for reviewing one externally observed broker order.
          */
         ExternalOrderAcknowledgementRequest: {
+            /** Expected Observation Sequence */
+            expected_observation_sequence?: number | null;
             /** Operator */
             operator: string;
         };

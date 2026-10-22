@@ -113,7 +113,7 @@ describe('AccountDeskTransactionHistoryComponent', () => {
           external_order_id: 'alpaca-external-1',
           lifecycle_state: 'review_required',
         }),
-        receipt: {},
+        receipt: { latest_observation_sequence: 18 },
         events: [],
         custody_timeline: null,
       }),
@@ -124,6 +124,7 @@ describe('AccountDeskTransactionHistoryComponent', () => {
     fireEvent.input(screen.getByRole('textbox', { name: 'Operator' }), {
       target: { value: '  operator@example.test  ' },
     });
+    await vi.waitFor(() => expect((screen.getByRole('button', { name: 'Acknowledge external order' }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByRole('button', { name: 'Acknowledge external order' }));
 
     await vi.waitFor(() => expect(acknowledgeExternalOrder).toHaveBeenCalledWith(
@@ -135,8 +136,31 @@ describe('AccountDeskTransactionHistoryComponent', () => {
       }),
       'alpaca-external-1',
       'operator@example.test',
+      18,
     ));
     expect(load).toHaveBeenCalledWith('PA1');
+  });
+
+  it.each(['unversioned', 'different order'])('refuses review of %s drawer evidence', async (failure) => {
+    const selected = transaction({ transaction_origin: 'external', order_ref: null,
+      external_order_id: 'alpaca-external-1', lifecycle_state: 'review_required' });
+    const acknowledgeExternalOrder = vi.fn();
+    await renderHistory({ rows: signal([selected]) }, {
+      accountTransaction: vi.fn().mockResolvedValue({
+        ...selected,
+        external_order_id: failure === 'different order' ? 'other-order' : selected.external_order_id,
+        receipt: failure === 'unversioned' ? {} : { latest_observation_sequence: 18 },
+        events: [], custody_timeline: null,
+      }),
+      acknowledgeExternalOrder,
+    });
+    fireEvent.click(screen.getByRole('button', { name: /view evidence for alpaca-external-1/i }));
+    fireEvent.input(screen.getByRole('textbox', { name: 'Operator' }), { target: { value: 'owner' } });
+    await screen.findByRole('heading', { name: 'Receipt facts', hidden: true });
+    const acknowledge = screen.getByRole('button', { name: 'Acknowledge external order' });
+    expect((acknowledge as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(acknowledge);
+    expect(acknowledgeExternalOrder).not.toHaveBeenCalled();
   });
 
   /** #2106: `target` arrives as an `input()` sourced from the live fleet
@@ -162,7 +186,7 @@ describe('AccountDeskTransactionHistoryComponent', () => {
           external_order_id: 'alpaca-external-1',
           lifecycle_state: 'review_required',
         }),
-        receipt: {},
+        receipt: { latest_observation_sequence: 18 },
         events: [],
         custody_timeline: null,
       }),
@@ -181,12 +205,14 @@ describe('AccountDeskTransactionHistoryComponent', () => {
     fireEvent.input(screen.getByRole('textbox', { name: 'Operator' }), {
       target: { value: 'operator@example.test' },
     });
+    await vi.waitFor(() => expect((screen.getByRole('button', { name: 'Acknowledge external order' }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByRole('button', { name: 'Acknowledge external order' }));
 
     await vi.waitFor(() => expect(acknowledgeExternalOrder).toHaveBeenCalledWith(
       expect.objectContaining({ bindingGeneration: 7, routingEpoch: 4 }),
       'alpaca-external-1',
       'operator@example.test',
+      18,
     ));
   });
 
@@ -234,7 +260,7 @@ describe('AccountDeskTransactionHistoryComponent', () => {
           external_order_id: 'alpaca-external-1',
           lifecycle_state: 'review_required',
         }),
-        receipt: {},
+        receipt: { latest_observation_sequence: 18 },
         events: [],
         custody_timeline: null,
       }),
@@ -280,7 +306,7 @@ describe('AccountDeskTransactionHistoryComponent', () => {
           external_order_id: 'alpaca-external-1',
           lifecycle_state: 'review_required',
         }),
-        receipt: {},
+        receipt: { latest_observation_sequence: 18 },
         events: [],
         custody_timeline: null,
       }),
@@ -288,6 +314,7 @@ describe('AccountDeskTransactionHistoryComponent', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /view evidence for alpaca-external-1/i }));
     fireEvent.input(screen.getByRole('textbox', { name: 'Operator' }), { target: { value: 'operator@example.test' } });
+    await vi.waitFor(() => expect((screen.getByRole('button', { name: 'Acknowledge external order' }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByRole('button', { name: 'Acknowledge external order' }));
 
     expect(await screen.findByText('This external order is no longer waiting for review.')).toBeTruthy();
@@ -311,7 +338,7 @@ describe('AccountDeskTransactionHistoryComponent', () => {
           external_order_id: 'alpaca-external-1',
           lifecycle_state: 'review_required',
         }),
-        receipt: {},
+        receipt: { latest_observation_sequence: 18 },
         events: [],
         custody_timeline: null,
       }),
@@ -319,6 +346,7 @@ describe('AccountDeskTransactionHistoryComponent', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /view evidence for alpaca-external-1/i }));
     fireEvent.input(screen.getByRole('textbox', { name: 'Operator' }), { target: { value: 'operator@example.test' } });
+    await vi.waitFor(() => expect((screen.getByRole('button', { name: 'Acknowledge external order' }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByRole('button', { name: 'Acknowledge external order' }));
 
     expect(await screen.findByText(/Could not acknowledge this external order\. Retry after reviewing the evidence\./)).toBeTruthy();
@@ -346,7 +374,7 @@ describe('AccountDeskTransactionHistoryComponent', () => {
           external_order_id: 'alpaca-external-1',
           lifecycle_state: 'review_required',
         }),
-        receipt: {},
+        receipt: { latest_observation_sequence: 18 },
         events: [],
         custody_timeline: null,
       }),
@@ -356,6 +384,7 @@ describe('AccountDeskTransactionHistoryComponent', () => {
     fireEvent.input(screen.getByRole('textbox', { name: 'Operator' }), {
       target: { value: 'operator@example.test' },
     });
+    await vi.waitFor(() => expect((screen.getByRole('button', { name: 'Acknowledge external order' }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByRole('button', { name: 'Acknowledge external order' }));
     await vi.waitFor(() => expect(acknowledgeExternalOrder).toHaveBeenCalledTimes(1));
 

@@ -3,23 +3,25 @@ import { ChangeDetectionStrategy, Component, input, output, signal } from '@angu
 /** The Clerk's reason code for a broker order it could not record (#2363). */
 export const UNFOLDABLE_BROKER_ORDER_REASON_CODE = 'UNFOLDABLE_BROKER_ORDER';
 
-export interface UnfoldableOrderAcknowledgementRequest {
+export interface BrokerOrderAcknowledgementRequest {
   readonly brokerOrderId: string;
   readonly operator: string;
+  readonly expectedObservationSequence?: number;
 }
 
 /**
- * Operator review of each broker order the Clerk could not record.
+ * Operator acknowledgement of each named broker order.
  *
  * The episode's evidence refs are exactly the broker order ids the external-order
  * acknowledgement route accepts; each is an opaque audit token and renders verbatim.
  * Acknowledging one releases only that order from the account's entry pause.
  */
 @Component({
-  selector: 'app-unfoldable-order-review',
+  selector: 'app-broker-order-review',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  styleUrl: './broker-order-review.component.scss',
   template: `
-    <div class="unfoldable-review">
+    <div class="broker-order-review">
       <label>
         Reviewed by
         <input
@@ -46,10 +48,10 @@ export interface UnfoldableOrderAcknowledgementRequest {
     </div>
   `,
 })
-export class UnfoldableOrderReviewComponent {
+export class BrokerOrderReviewComponent {
   readonly brokerOrderIds = input.required<readonly string[]>();
   readonly busyOrderId = input<string | null>(null);
-  readonly acknowledge = output<UnfoldableOrderAcknowledgementRequest>();
+  readonly acknowledge = output<BrokerOrderAcknowledgementRequest>();
   protected readonly operator = signal('');
 
   protected updateOperator(event: Event): void {

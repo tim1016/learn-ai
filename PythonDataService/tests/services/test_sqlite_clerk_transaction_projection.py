@@ -46,6 +46,7 @@ from app.services.sqlite_clerk_transaction_projection import (
     _origin_filtered_operation_page,
     _summary_row,
     classify_transaction_origin,
+    sqlite_acknowledge_external_order,
     sqlite_transaction_detail,
     sqlite_transaction_history,
 )
@@ -1000,8 +1001,25 @@ def test_an_outside_legs_history_row_shows_its_execution_and_a_reopened_review_c
 
     try:
         reviewed = row()
+        previous = repo.external_order(leg_id)
+        assert previous is not None
         observe_or_record_unfoldable(repo, order=filled)
         reopened = row()
+        active, detail = sqlite_transaction_detail(
+            account_id="PA-ACCOUNT-DESK", transaction_id=f"external-order:{leg_id}",
+        )
+        from app.broker.alpaca.clerk.sqlite.repository_external_order_api import ExternalOrderReviewChangedError
+
+        with pytest.raises(ExternalOrderReviewChangedError, match="changed after it was displayed"):
+            sqlite_acknowledge_external_order(account_id="PA-ACCOUNT-DESK", external_order_id=leg_id,
+                operator="owner", expected_observation_sequence=previous.latest_observation_sequence)
+        current = repo.external_order(leg_id)
+        assert current is not None and current.acknowledged_at_ms is None
+        assert current.observation_sequence == previous.observation_sequence
+        assert current.latest_observation_sequence != previous.latest_observation_sequence
+        acknowledged = sqlite_acknowledge_external_order(account_id="PA-ACCOUNT-DESK", external_order_id=leg_id,
+            operator="owner", expected_observation_sequence=current.latest_observation_sequence)
+        assert acknowledged is not None and acknowledged.acknowledged_at_ms is not None
     finally:
         set_active_clerk_runtime(None)
         repo.close()
@@ -1010,6 +1028,9 @@ def test_an_outside_legs_history_row_shows_its_execution_and_a_reopened_review_c
     assert (reviewed.lifecycle_state, reviewed.event_count) == ("reviewed", 2)
     assert (reopened.execution_quantity, reopened.execution_price) == (1.0, 0.6)
     assert (reopened.lifecycle_state, reopened.event_count) == ("review_required", 1)
+    assert active and detail is not None
+    assert detail.receipt["broker_state"] == "filled"
+    assert detail.receipt["filled_quantity"] == 1.0
 
 
 def test_external_history_applies_window_before_keyset_limit(tmp_path: Path) -> None:

@@ -33,6 +33,7 @@ class ExternalOrderAcknowledgementRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     operator: str = Field(min_length=1, max_length=64)
+    expected_observation_sequence: int | None = Field(default=None, ge=1)
 
     @field_validator("operator")
     @classmethod

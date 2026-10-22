@@ -43,9 +43,11 @@ import {
 } from '../../broker/v2-panel/panel-shell/panel-action-receipt.component';
 import {
   UNFOLDABLE_BROKER_ORDER_REASON_CODE,
-  type UnfoldableOrderAcknowledgementRequest,
-  UnfoldableOrderReviewComponent,
-} from './unfoldable-order-review.component';
+  type BrokerOrderAcknowledgementRequest,
+  BrokerOrderReviewComponent,
+} from './broker-order-review.component';
+
+import { UnexplainedOrderReviewComponent } from './unexplained-order-review.component';
 
 interface ActionProblem {
   readonly reason: string | null;
@@ -101,7 +103,8 @@ function actionProblem(error: unknown, fallback: string): ActionProblem {
     SafeFlattenPlanComponent,
     TimestampDisplayComponent,
     TypedHaltConfirmComponent,
-    UnfoldableOrderReviewComponent,
+    BrokerOrderReviewComponent,
+    UnexplainedOrderReviewComponent,
   ],
   templateUrl: './alpaca-sqlite-custody.component.html',
   styleUrl: './alpaca-sqlite-custody.component.scss',
@@ -251,9 +254,9 @@ export class AlpacaSqliteCustodyComponent {
     if (action !== null && target !== null) void this.executeAction(action, target);
   }
 
-  /** Reviews one order the Clerk could not record, on the external-order route (#2363). */
-  protected async acknowledgeUnfoldableOrder(
-    request: UnfoldableOrderAcknowledgementRequest,
+  /** Reviews one named broker order on the existing external-order route (#3468). */
+  protected async acknowledgeBrokerOrder(
+    request: BrokerOrderAcknowledgementRequest,
   ): Promise<void> {
     if (this.acknowledgingOrderId() !== null || this.busyActionId() !== null) return;
     if (this.refuseIfLaneUnenforceable()) return;
@@ -266,6 +269,7 @@ export class AlpacaSqliteCustodyComponent {
         this.newCommandTarget(),
         request.brokerOrderId,
         request.operator,
+        request.expectedObservationSequence,
       );
       // Only this order's review is claimed: other unreviewed orders keep the
       // entry pause, which the refreshed custody snapshot below reports.
