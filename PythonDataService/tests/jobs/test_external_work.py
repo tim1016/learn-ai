@@ -64,3 +64,28 @@ def test_receipt_overflow_fails_explicitly_and_close_stops_admission(job_store, 
     sink.progress(3, 3)
     assert job_store.streams[progress.events_key("bounded")] == published
     assert not any(thread.name.startswith("job-receipts-") for thread in threading.enumerate())
+
+
+def test_observation_metadata_never_renews_execution_lease(job_store) -> None:
+    sink = WorkReceipts(progress.ProgressEmitter("observed", renews_lease=False), lambda: None)
+    sink.observations({"phase_timings": []})
+    sink.deactivate()
+    assert progress.lease_key("observed") not in [key for key, _ in job_store.expires]
+    events = [json.loads(fields["event"]) for _, fields in job_store.streams[progress.events_key("observed")]]
+    assert events == [{"type": "job.observations", "phase_timings": []}]
+
+
+def test_observation_publication_failure_keeps_work_progress(job_store, caplog: pytest.LogCaptureFixture) -> None:
+    emit = progress.ProgressEmitter("observed", renews_lease=False)
+
+    def unavailable(*args, **kwargs) -> str:
+        raise OSError("observation transport unavailable")
+
+    emit.emit_event = unavailable
+    sink = WorkReceipts(emit, lambda: None)
+    sink.observations({"phase_timings": []})
+    sink.progress(1, 1)
+    sink.deactivate()
+    events = [json.loads(fields["event"]) for _, fields in job_store.streams[progress.events_key("observed")]]
+    assert [event["type"] for event in events] == ["job.progress"]
+    assert "job observations could not be published" in caplog.text
