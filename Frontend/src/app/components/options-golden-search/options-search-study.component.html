@@ -9,6 +9,16 @@
 <details class="card"><summary>Locked plan receipt</summary><p>These exact settings were frozen before research. Fork a linked plan to change them.</p>
   @for (item of study().protocol_summary; track item.label) { <p><strong>{{ item.label }}</strong>: {{ item.value }}</p> }
 </details>
+@if (allowed('run_research') || allowed('cancel') || allowed('resume') || allowed('keep_original')) {
+  <section class="card"><p>Cancel keeps committed evidence. Resume continues the same locked plan and frozen finalists.</p>
+    <div class="actions">
+      @if (allowed('run_research')) { <button type="button" class="primary" (click)="ask('run_research')">Run research</button> }
+      @if (allowed('cancel')) { <button type="button" (click)="ask('cancel')">Cancel</button> }
+      @if (allowed('resume')) { <button type="button" class="primary" (click)="ask('resume')">Resume</button> }
+      @if (allowed('keep_original')) { <button type="button" (click)="ask('keep_original')">Keep original</button> }
+    </div>
+  </section>
+}
 @if (step() === 3) {
   <section class="card"><h3>Research</h3><p>The locked plan survives closing this browser. Resume explicitly after interruption. Cancel keeps evidence already committed.</p>
     <p>Stage: {{ study().progress.stage | receiptLabel }}</p>
@@ -17,7 +27,6 @@
       <div><dt>Execution attempts / cache hits</dt><dd>{{ study().progress.execution_attempts }} / {{ study().progress.cache_hits }}</dd></div>
       <div><dt>Spent / reserved evaluations</dt><dd>{{ study().progress.spent }} / {{ study().progress.reserved }}</dd></div>
     </dl><p>{{ study().progress.capacity_message }}</p>
-    <div class="actions"><button type="button" class="primary" [disabled]="!allowed('run_research')" (click)="ask('run_research')">Run research</button><button type="button" [disabled]="!allowed('cancel')" (click)="ask('cancel')">Cancel</button><button type="button" [disabled]="!allowed('resume')" (click)="ask('resume')">Resume</button></div>
     @for (gate of study().gate_outcomes; track gate.gate_id) { <p><strong>{{ gate.gate_id | receiptLabel }} · {{ gate.status | receiptLabel }}</strong>: {{ gate.reason }}</p> }
   </section>
 }
@@ -35,6 +44,15 @@
 }
 @if (step() === 5) {
   <section class="card"><h3>Final outcomes and approval</h3><p>These are final results. Development and forward totals remain separate. Approval publishes one exact immutable version and starts no bot.</p>
+    @if (study().final_scenarios?.length) {
+      <details><summary>Completed final scenarios</summary><p>Each completed run stays visible during interruption. A base run and all frozen cost scenarios must finish before approval.</p>
+        @for (outcome of study().final_scenarios; track outcome.candidate_hash + ':' + outcome.scenario) {
+          <section><code>{{ outcome.candidate_hash }}</code><p>{{ outcome.scenario | receiptLabel }} · {{ outcome.verdict | receiptLabel }} · {{ outcome.net_profit_usd }} USD</p>
+            @for (gate of outcome.gate_outcomes; track gate.gate_id) { <p>{{ gate.gate_id | receiptLabel }} · {{ gate.status | receiptLabel }}: {{ gate.reason }}</p> }
+          </section>
+        }
+      </details>
+    }
     <div class="table-scroll"><table><thead><tr><th>Frozen finalist</th><th>Verdict</th><th>Net profit (USD)</th></tr></thead><tbody>@for (candidate of study().final_results; track candidate.candidate_hash) { <tr><td>{{ candidate.label }}</td><td>{{ candidate.verdict | receiptLabel }}</td><td>{{ candidate.net_profit_usd ?? 'Unavailable' }}</td></tr> }</tbody></table></div>
     @if (approvalCandidate(); as selected) { <p>Selected candidate net profit: <strong>{{ selected.net_profit_usd ?? 'Unavailable' }} USD</strong></p>@if (candidateLoader(); as loader) { <app-options-candidate-evidence [studyId]="study().id" [digest]="selected.candidate_hash" window="final" [loader]="loader" [sessionLoader]="sessionLoader()" /> } }
     @if (study().final_results.length > 0) {
@@ -52,7 +70,7 @@
           </fieldset>
         } @else if (review.blocked_reason === null) { <p>All applicable approval rules meet the frozen limits.</p> }
       } @else { <p>Complete approval evidence is not available. Refresh the study before approving.</p> }
-      <div class="actions"><button type="button" [disabled]="!allowed('keep_original')" (click)="ask('keep_original')">Keep original</button><button type="button" class="primary" [disabled]="!canApprove()" (click)="ask('approve')">Approve exact golden version</button><button type="button" [disabled]="!canExcept()" (click)="ask('approve_exception')">Approve owner exception</button></div>
+      <div class="actions"><button type="button" class="primary" [disabled]="!canApprove()" (click)="ask('approve')">Approve exact golden version</button><button type="button" [disabled]="!canExcept()" (click)="ask('approve_exception')">Approve owner exception</button></div>
       <p>A nonblank comment and every listed acknowledgement are required for exceptions. Missing inputs and failed repeatability cannot be overridden.</p>
     }
     @if (study().qualification_id; as id) { <p>Golden version <code>{{ id }}</code> · {{ study().qualification_status | receiptLabel }}</p><p>Deploy is a separate action under the existing broker gates.</p> }

@@ -24,7 +24,14 @@ from app.research.options_golden_search.metrics import (
 )
 from app.research.options_golden_search.planning import budget_plan, pooled_window
 from app.research.options_golden_search.policy import Metrics, classify
-from app.research.options_golden_search.projections import candidate, exact_data, gates, rejected_candidate
+from app.research.options_golden_search.projections import (
+    candidate,
+    exact_data,
+    final_scenario,
+    gates,
+    pending_final_candidate,
+    rejected_candidate,
+)
 from app.research.options_golden_search.protocol import (
     OptionsSearchProtocol,
     Window,
@@ -40,6 +47,9 @@ from app.research.runs.hashing import hash_payload
 logger = logging.getLogger(__name__)
 
 REJECTED_DIAGNOSTIC_LIMIT = 50
+
+# Builds one committed run's views outside the writer transaction; the returned step applies them under its fence.
+type Projection = Callable[[Any, Window, str, EvaluationResult], Callable[[dict[str, Any]], None]]
 
 
 _SCALAR_METRICS = ("net_profit_usd", "max_drawdown_fraction", "sharpe", "sharpe_unavailable_reason",
@@ -84,6 +94,8 @@ class StudyEvaluator:
         self.started = time.monotonic()
         self.cache_hits = 0
         self.verify_only = False
+        self.projection: Projection | None = None
+        self._projected_keys: set[str] = set()
         self.stage_limits = budget_plan(self.protocol)
 
     def check(self) -> bool:
@@ -156,29 +168,45 @@ class StudyEvaluator:
             planned.append((setup, window, scenario, key, cached))
 
         computed: dict[str, dict[str, Any]] = {}
+        requests_by_key = {entry[3]: entry[:3] for entry in planned}
 
-        def persist(key: str, result: EvaluationResult, actual_reads: list[str], task_gen: int) -> None:
-            payload = evidence_payload(result)
+        def report(key: str, result: EvaluationResult, record: dict[str, Any], *, newly_completed: bool, task_gen: int = 1) -> None:
             counts = run_sync(with_connection(repo.counters, self.row["id"]))
-            retained_bytes = counts["evidence_bytes"]
-            if retained_bytes + len(payload) > self.protocol.budget.max_artifact_bytes:
-                raise ValueError("The study evidence exceeds its retained-artifact byte limit.")
-            record = evaluation_record(result, self.blobs.put(payload), len(payload), actual_reads)
-            run_sync(with_connection(repo.complete, self.row["id"], self.row["attempt"], key, record, task_gen=task_gen))
-            computed[key] = record
-            async def report(conn):
+            apply = self.projection(*requests_by_key[key], result) if self.projection is not None else None
+            async def commit(conn):
                 async with conn.transaction():
                     current = await repo.fence(conn, self.row["id"], self.row["attempt"])
-                    current["progress"] = {"stage": self.row["phase"], "completed": counts["completed"] + 1,
-                        "queued": max(0, len(pending)-len(computed)), "running": 0,
+                    if newly_completed:
+                        await repo.complete(conn, self.row["id"], self.row["attempt"], key, record, task_gen=task_gen)
+                    if apply is not None:
+                        apply(current)
+                    current["progress"] = {"stage": self.row["phase"], "completed": counts["completed"] + int(newly_completed),
+                        "queued": max(0, len(pending)-len(computed)-int(newly_completed)), "running": 0,
                         "cache_hits": self.cache_hits, "execution_attempts": counts["execution_attempts"],
                         "spent": counts["reserved"], "reserved": self.stage_limits.mandatory_downstream if self.row["phase"]=="research" else self.stage_limits.proof_and_materialization,
                         "capacity_message": "Bounded shared research capacity; width " + str(settings.OPTIONS_SEARCH_WORKER_COUNT)}
                     await repo.save(conn, current, bump=False)
-            run_sync(with_connection(report))
+            run_sync(with_connection(commit))
+            if apply is not None:
+                self._projected_keys.add(key)
+
+        def persist(key: str, result: EvaluationResult, actual_reads: list[str], task_gen: int) -> None:
+            payload = evidence_payload(result)
+            counts = run_sync(with_connection(repo.counters, self.row["id"]))
+            if counts["evidence_bytes"] + len(payload) > self.protocol.budget.max_artifact_bytes:
+                raise ValueError("The study evidence exceeds its retained-artifact byte limit.")
+            record = evaluation_record(result, self.blobs.put(payload), len(payload), actual_reads)
+            report(key, result, record, newly_completed=True, task_gen=task_gen)
+            computed[key] = record
             self.checkpoint(counts["reserved"], self.protocol.budget.evaluation_cap)
 
         pending = list({entry[3]: entry for entry in planned if entry[4] is None}.values())
+        if self.projection is not None:
+            # Evidence an earlier worker retained may predate its views; expose it before unfinished work can be lost again.
+            for _setup, window, _scenario, key, cached in planned:
+                if cached is not None and key not in self._projected_keys:
+                    self.check()
+                    report(key, self.load(cached, window), cached, newly_completed=False)
         from app.services.research_runtime_client import is_research_runtime
         if pending and is_research_runtime():
             context = WorkerDispatchContext(strategy_key="options", execution={}, manifest={}, identity=_child_identity(),
@@ -333,7 +361,30 @@ def research(row: dict[str, Any], evaluator: StudyEvaluator) -> dict[str, Any]:
     return row
 
 
-def final(row: dict[str, Any], evaluator: StudyEvaluator, *, on_result: Callable[[list[dict[str, Any]]], None] = lambda results: None) -> dict[str, Any]:
+def final_projection(protocol: OptionsSearchProtocol) -> Projection:
+    """Keep every committed final run visible while the mandatory batch is unfinished (#3340)."""
+    original = setup_sha256(protocol.setup)
+
+    def project(setup: Any, window: Window, scenario: str, result: EvaluationResult) -> Callable[[dict[str, Any]], None]:
+        digest = setup_sha256(setup)
+        verdict = classify(result.metrics, protocol.policy, window, "final" if scenario == "base" else "stress", complete=result.complete)
+        outcome = final_scenario(result, verdict, digest, scenario)
+        # Stress evidence never stands in for a candidate's base performance.
+        pending = pending_final_candidate(result, verdict, digest, original=digest == original) if scenario == "base" else None
+
+        def apply(current: dict[str, Any]) -> None:
+            outcomes = {(item["candidate_hash"], item["scenario"]): item for item in current.get("final_scenarios", [])}
+            outcomes[digest, scenario] = outcome
+            current["final_scenarios"] = [outcomes[pair] for pair in sorted(outcomes)]
+            if pending is not None:
+                exposed = {item["candidate_hash"]: item for item in current["final_results"]}
+                exposed[digest] = pending
+                current["final_results"] = [exposed[finalist] for finalist in current["finalists"] if finalist in exposed]
+        return apply
+    return project
+
+
+def final(row: dict[str, Any], evaluator: StudyEvaluator) -> dict[str, Any]:
     protocol = evaluator.protocol
     points = row["research"]["selection"]["points"]
     outcomes = []
@@ -373,7 +424,6 @@ def final(row: dict[str, Any], evaluator: StudyEvaluator, *, on_result: Callable
                 view["verdict"] = status
                 break
         outcomes.append(view)
-        on_result(list(outcomes))
     row.update(phase="approval",status="completed",final_results=outcomes,dispatch=None,stage_token=None)
     return row
 
@@ -388,14 +438,9 @@ def run(study_id: str, token: str, job_id: str, *, cancel: Callable[[], object],
         if row["phase"]=="research":
             row = research(row,evaluator)
         elif row["phase"]=="final":
-            def retain_partial(outcomes: list[dict[str, Any]]) -> None:
-                async def persist_partial(conn):
-                    async with conn.transaction():
-                        current = await repo.fence(conn,row["id"],row["attempt"])
-                        current["final_results"] = outcomes
-                        await repo.save(conn,current,bump=False)
-                run_sync(with_connection(persist_partial))
-            row = final(row,evaluator,on_result=retain_partial)
+            # Each completed run commits its views with its evidence, so an interrupted batch never hides one.
+            evaluator.projection = final_projection(protocol)
+            row = final(row,evaluator)
         elif row["phase"]=="approval":
             from app.engine.run_gate import one_backtest_in_flight
             from app.research.options_golden_search.approval import approve
@@ -410,7 +455,9 @@ def run(study_id: str, token: str, job_id: str, *, cancel: Callable[[], object],
             raise ValueError("The executable identity changed during the stage; no stage transition was published.")
         async def finish(conn):
             async with conn.transaction():
-                await repo.fence(conn,study_id,row["attempt"])
+                current = await repo.fence(conn,study_id,row["attempt"])
+                if row["phase"] == "approval":
+                    row["final_scenarios"] = current.get("final_scenarios", [])
                 return await repo.save(conn,row)
         return run_sync(with_connection(finish))
     except BaseException as exc:

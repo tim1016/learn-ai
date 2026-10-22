@@ -1,4 +1,7 @@
-"""Server-authored Options study evidence views; display projections never decide gates (#3332)."""
+"""Server-authored Options study evidence views; display projections never decide gates (#3332).
+
+The one gate written here, ``FINAL_BATCH_GATE``, only marks a final batch as unfinished (#3340).
+"""
 from __future__ import annotations
 
 from dataclasses import asdict
@@ -63,6 +66,25 @@ def candidate(result: EvaluationResult, verdict: Verdict, digest: str, *, origin
         "gate_outcomes":gates(verdict),"evidence":[{"label":"Display curve","value":f"{len(equity)} of {raw_points} minute observations; full retained trace determines every metric."}, *[{"label":name.replace("_"," "),"value":str(value)} for name,value in exact_data(m).items() if not isinstance(value,list | dict)]],
         "monthly":[{"month_ms":month.first_session_open_ms,"net_profit_usd":str(month.net_profit_usd),"completed_sessions":month.completed_sessions} for month in m.monthly],
         "equity":equity,"sessions":[session_summary(session) for session in result.sessions]}
+
+
+FINAL_BATCH_GATE = "final:batch"
+
+
+def final_scenario(result: EvaluationResult, verdict: Verdict, digest: str, scenario: str) -> dict[str, Any]:
+    return {"candidate_hash": digest, "scenario": scenario, "verdict": verdict.status,
+        "net_profit_usd": str(result.metrics.net_profit_usd), "gate_outcomes": gates(verdict, "final:" + scenario)}
+
+
+def pending_final_candidate(result: EvaluationResult, verdict: Verdict, digest: str, *, original: bool) -> dict[str, Any]:
+    """A committed final base run shown before its mandatory batch finishes; it never meets the rules."""
+    view = candidate(result, verdict, digest, original=original)
+    view["gate_outcomes"].append({"gate_id": FINAL_BATCH_GATE, "status": "not_enough_evidence",
+        "actual": None, "required": "every frozen final candidate and cost scenario", "overridable": False,
+        "reason": "This base run completed. The mandatory final batch has not finished."})
+    if view["verdict"] == "meets_rules":
+        view["verdict"] = "not_enough_evidence"
+    return view
 
 
 def _drawdown_percent(fraction: Decimal) -> str:

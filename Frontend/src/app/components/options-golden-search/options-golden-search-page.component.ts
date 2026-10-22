@@ -252,7 +252,7 @@ export class OptionsGoldenSearchPageComponent {
       if (generation !== this.generation) return;
       if (this.study()?.id === study.id && (this.study()?.revision ?? 0) > study.revision) return;
       this.acceptStudy(study);
-      this.step.set(study.final_results.length > 0 ? 5 : study.candidates.length > 0 ? 4 : 3);
+      this.step.set(['final', 'approval', 'approved'].includes(study.phase) || study.final_results.length > 0 ? 5 : study.phase === 'compare' || study.candidates.length > 0 ? 4 : 3);
     } catch (error) {
       if (generation === this.generation) this.error.set(optionsSearchErrorMessage(error, 'The study could not be loaded.'));
     } finally {

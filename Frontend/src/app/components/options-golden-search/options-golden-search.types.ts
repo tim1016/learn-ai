@@ -143,6 +143,7 @@ export interface ApprovalReview {
   readonly blocked_reason: string | null;
 }
 export interface OptionsStudy {
+  readonly final_scenarios?: readonly components['schemas']['FinalScenarioOutcome'][];
   readonly rejected_candidate_count?: number;
   readonly id: string;
   readonly revision: number;

@@ -25,6 +25,7 @@ _COMPOSE_FILE_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}\.ya?ml$")
 # mounts at ``/app/artifacts``. Anchored to this file so the default is the
 # same directory whatever the process's working directory.
 _SERVICE_ARTIFACTS_ROOT = Path(__file__).resolve().parents[1] / "artifacts"
+OPTIONS_SUPPORTED_WIDTHS = (1, 2, 4, 8)
 
 
 def _split_compose_files(value: str) -> tuple[str, ...]:
@@ -371,6 +372,8 @@ class Settings(BaseSettings):
     @field_validator("OPTIONS_SEARCH_WORKER_COUNT")
     @classmethod
     def _options_width_fits_pool(cls, value: int, info: ValidationInfo) -> int:
+        if value not in OPTIONS_SUPPORTED_WIDTHS:
+            raise ValueError("Options worker width must be 1, 2, 4 or 8")
         if value > info.data.get("RESEARCH_WORKER_COUNT", 1):
             raise ValueError("Options search width cannot exceed the shared research worker profile")
         return value

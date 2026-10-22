@@ -97,6 +97,9 @@ export async function installOptionsSearchWorld(page: Page, initial: OptionsStud
       if (body.expected_revision !== current.revision) { await fulfill({ detail: 'Stale revision' }, 409); return; }
       if (body.command === 'run_research') current = { ...current, revision: 2, phase: 'research', status: 'running', allowed_commands: ['cancel'], dispatch: { study_id: current.id, stage_token: 'research-stage' }, progress: { ...current.progress, stage: 'research', running: 1 } };
       else if (body.command === 'open_final') current = { ...current, revision: 4, phase: 'final', status: 'running', allowed_commands: ['cancel'], dispatch: { study_id: current.id, stage_token: 'final-stage' }, progress: { ...current.progress, stage: 'final', running: 1 } };
+      else if (body.command === 'cancel') current = { ...current, revision: current.revision + 1, status: 'cancelled', allowed_commands: ['resume', 'keep_original'], dispatch: null };
+      else if (body.command === 'resume') current = { ...current, revision: current.revision + 1, status: 'running', allowed_commands: ['cancel'], dispatch: { study_id: current.id, stage_token: 'final-stage' } };
+      else if (body.command === 'keep_original') current = { ...current, revision: current.revision + 1, phase: 'retained', status: 'completed', allowed_commands: [], dispatch: null };
       else if (body.command === 'approve' || body.command === 'approve_exception') current = { ...current, revision: current.revision + 1, phase: 'approved', status: 'ready', allowed_commands: [], dispatch: null, qualification_id: 'ogs_browser_approved', qualification_status: 'ready' };
       await fulfill(publicStudy());
     } else if (path === '/api/jobs/options_golden_search' && current !== null) {

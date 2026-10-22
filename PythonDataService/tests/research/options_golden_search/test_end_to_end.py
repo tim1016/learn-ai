@@ -51,9 +51,10 @@ pytestmark = [pytest.mark.slow, pytest.mark.asyncio]
 
 
 @respx.mock
+@pytest.mark.parametrize("owner_exception", [False, True])
 async def test_saved_setup_to_retained_qualification_uses_real_transport_and_atomic_publication(
     conn: asyncpg.Connection, unique: str, fake_catalog: FakeCatalog, tmp_lake: Path,
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, owner_exception: bool,
 ) -> None:
     # The shared research fixture attests this database as disposable before any connection below.
     @asynccontextmanager
@@ -111,6 +112,7 @@ async def test_saved_setup_to_retained_qualification_uses_real_transport_and_ato
         "policy": {"min_sharpe": 0, "min_activity_per_year": 1, "min_daily_observations": 2,
                    "min_forward_sessions": 2, "min_final_sessions": 2},
         "finalist_count": 1,
+        "stress": [{"key": "fees", "fee_per_contract_usd": "0.65"}],
     }
     app = FastAPI()
     app.include_router(router, prefix="/options-search")
@@ -147,7 +149,14 @@ async def test_saved_setup_to_retained_qualification_uses_real_transport_and_ato
             record = response.json()
 
         await command("run_research")
+        # Cancellation before dispatch cannot consume work or erase the locked plan.
+        locked_hash = record["protocol_hash"]
+        await command("cancel")
+        assert record["status"] == "cancelled" and record["dispatch"] is None
+        assert not await repo.evaluations(conn, study_id)
+        await command("resume")
         await execute()
+        assert record["protocol_hash"] == locked_hash
         assert record["phase"] == "compare" and record["status"] == "completed"
         winner = next(candidate for candidate in record["candidates"] if not candidate["is_original"])
         assert winner["verdict"] == "meets_rules"
@@ -156,15 +165,88 @@ async def test_saved_setup_to_retained_qualification_uses_real_transport_and_ato
         final_open = session_window_for_date(final_day).open_ms_utc
         unseen = await client.get(f"/options-search/studies/{study_id}/candidates/{winner['candidate_hash']}/sessions/{final_open}?window=final")
         assert unseen.status_code == 404 and "net_profit_usd" not in unseen.text
+        if owner_exception:
+            async with conn.transaction():
+                final_window = (await repo.get(conn, study_id))["protocol"]["final"]
+                await repo.reserve_exposure(conn, symbol, final_window["start_ms"], final_window["end_ms"], "other-" + unique)
         await command("open_final", candidate_hashes=[winner["candidate_hash"]])
+        frozen = (await repo.get(conn, study_id))["finalists"]
+        real_evaluate = stages.evaluate_setup
+        real_batch = stages.StudyEvaluator.evaluate_batch
+        final_calls = 0
+
+        def stress_first(self: stages.StudyEvaluator, requests: list[tuple[Any, Any, str]]):
+            if self.row["phase"] == "final":
+                requests = sorted(requests, key=lambda request: request[2] == "base")
+            return real_batch(self, requests)
+
+        def interrupted_final(*args: Any, **kwargs: Any):
+            nonlocal final_calls
+            final_calls += 1
+            if final_calls == 2:
+                raise RuntimeError("capacity exercise: worker stopped during final batch")
+            return real_evaluate(*args, **kwargs)
+
+        monkeypatch.setattr(stages, "evaluate_setup", interrupted_final)
+        if owner_exception:
+            monkeypatch.setattr(stages.StudyEvaluator, "evaluate_batch", stress_first)
+        with pytest.raises(RuntimeError, match="worker stopped during final batch"):
+            await execute()
+        failed = await client.get(f"/options-search/studies/{study_id}")
+        assert failed.status_code == 200, failed.text
+        record = failed.json()
+        assert record["phase"] == "final" and record["status"] == "interrupted"
+        assert record["allowed_commands"] == ["resume", "keep_original"]
+        assert len(record["final_scenarios"]) == 1
+        assert record["final_scenarios"][0]["scenario"] == ("fees" if owner_exception else "base")
+        if owner_exception:
+            assert record["final_results"] == [], "Stress evidence must never masquerade as base performance."
+        else:
+            assert len(record["final_results"]) == 1
+            partial = record["final_results"][0]
+            assert any(gate["gate_id"] == "final:batch" for gate in partial["gate_outcomes"])
+            assert partial["verdict"] != "meets_rules"
+        retained = await repo.evaluations(conn, study_id)
+        completed_before = {item["key"]: item for item in retained if item["result"] is not None}
+        monkeypatch.setattr(stages, "evaluate_setup", real_evaluate)
+        monkeypatch.setattr(stages.StudyEvaluator, "evaluate_batch", real_batch)
+        # A retained evaluation may predate its read projection. Backfill
+        # before unfinished work so another lost worker cannot hide it.
+        visible_before = record["final_scenarios"]
+        bases_before = record["final_results"]
+        legacy = await repo.get(conn, study_id)
+        legacy.pop("final_scenarios")
+        legacy["final_results"] = []
+        await repo.save(conn, legacy, bump=False)
+        final_calls = 1
+        monkeypatch.setattr(stages, "evaluate_setup", interrupted_final)
+        await command("resume", idempotency_key="resume-backfill-" + unique)
+        with pytest.raises(RuntimeError, match="worker stopped during final batch"):
+            await execute()
+        restored = await client.get(f"/options-search/studies/{study_id}")
+        assert restored.status_code == 200, restored.text
+        backfilled = restored.json()
+        assert backfilled["final_scenarios"] == visible_before
+        assert backfilled["final_results"] == bases_before
+        assert backfilled["status"] == "interrupted"
+        assert (await repo.get(conn, study_id))["finalists"] == frozen
+        record = backfilled
+        monkeypatch.setattr(stages, "evaluate_setup", real_evaluate)
+        await command("resume", idempotency_key="resume-final-" + unique)
         await execute()
+        after_resume = {item["key"]: item for item in await repo.evaluations(conn, study_id)}
+        assert all(after_resume[key] == value for key, value in completed_before.items())
+        assert (await repo.get(conn, study_id))["finalists"] == frozen
         assert record["phase"] == "approval" and len(record["final_results"]) == 2
+        assert len(record["final_scenarios"]) == 4
         selected = next(candidate for candidate in record["final_results"] if candidate["candidate_hash"] == winner["candidate_hash"])
         assert selected["verdict"] == "meets_rules"
         observed = await client.get(f"/options-search/studies/{study_id}/candidates/{winner['candidate_hash']}/sessions/{final_open}?window=final")
         assert observed.status_code == 200, observed.text
         assert observed.json()["attempts"][0]["contract"].startswith(symbol)
-        await command("approve", candidate_hash=winner["candidate_hash"], comment="Reviewed the frozen whole-setup evidence.")
+        await command("approve_exception" if owner_exception else "approve", candidate_hash=winner["candidate_hash"],
+            comment="Reviewed the frozen whole-setup evidence and recorded exposure.",
+            **({"waived_gate_ids": ["final:exposure"]} if owner_exception else {}))
         await execute()
 
     assert record["phase"] == "approved" and record["qualification_status"] == "ready"
@@ -180,8 +262,9 @@ async def test_saved_setup_to_retained_qualification_uses_real_transport_and_ato
     golden = await golden_repository.get_record(conn, linked["qualification_id"])
     manifest = json.loads(linked["manifest"])
     assert golden.setup_sha256 == winner["candidate_hash"] == setup_sha256(source.setup)
-    assert golden.evidence["verdict"] == "meets_rules" and not manifest["exception"]
-    assert manifest["failed_rules"] == []
+    assert golden.evidence["verdict"] == ("owner_exception" if owner_exception else "meets_rules")
+    assert manifest["exception"] == owner_exception
+    assert [rule["gate_id"] for rule in manifest["failed_rules"]] == (["final:exposure"] if owner_exception else [])
     assert manifest["selection_count"] == 2
     assert str(source.summary.net_profit_usd) == golden.evidence["net_profit_usd"]
     assert len(source.slippage) > 1 and len(source.summary.cash_ladder) > 1
@@ -189,3 +272,7 @@ async def test_saved_setup_to_retained_qualification_uses_real_transport_and_ato
     assert golden.proof["manifest"]
     assert all(blobs.get(digest) for digest in manifest["snapshot"]["manifest"].values())
     assert all(blob.get("bot_id") is None for blob in (golden.evidence, manifest))
+    with pytest.raises(asyncpg.PostgresError, match="append-only"):
+        await conn.execute("DELETE FROM research_options_search_approvals WHERE study_id=$1", study_id)
+    with pytest.raises(asyncpg.ForeignKeyViolationError):
+        await conn.execute("DELETE FROM research_options_backtest_runs WHERE id=$1", linked["source_run_id"])

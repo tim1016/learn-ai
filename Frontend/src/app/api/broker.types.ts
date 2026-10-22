@@ -15097,6 +15097,22 @@ export interface components {
              */
             terms?: components["schemas"]["FigureTermView"][];
         };
+        /** FinalScenarioOutcome */
+        FinalScenarioOutcome: {
+            /** Candidate Hash */
+            candidate_hash: string;
+            /** Gate Outcomes */
+            gate_outcomes: components["schemas"]["GateOutcome"][];
+            /** Net Profit Usd */
+            net_profit_usd: string;
+            /** Scenario */
+            scenario: string;
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "meets_rules" | "does_not_meet_rules" | "not_enough_evidence" | "could_not_evaluate";
+        };
         /** FixedContracts */
         FixedContracts: {
             /**
@@ -32926,6 +32942,8 @@ export interface components {
             failure_reason: string | null;
             /** Final Results */
             final_results: components["schemas"]["Candidate"][];
+            /** Final Scenarios */
+            final_scenarios?: components["schemas"]["FinalScenarioOutcome"][];
             /** Gate Outcomes */
             gate_outcomes: components["schemas"]["GateOutcome"][];
             /** Id */

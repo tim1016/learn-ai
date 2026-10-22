@@ -278,6 +278,14 @@ class ApprovalReview(Model):
     blocked_reason: str | None
 
 
+class FinalScenarioOutcome(Model):
+    candidate_hash: str
+    scenario: str
+    verdict: Literal["meets_rules", "does_not_meet_rules", "not_enough_evidence", "could_not_evaluate"]
+    net_profit_usd: str
+    gate_outcomes: list[GateOutcome]
+
+
 class StudyDetail(Model):
     rejected_candidate_count: int = 0
     id: str
@@ -290,6 +298,7 @@ class StudyDetail(Model):
     progress: Progress
     candidates: list[Candidate]
     final_results: list[Candidate]
+    final_scenarios: list[FinalScenarioOutcome] = Field(default_factory=list)
     gate_outcomes: list[GateOutcome]
     exposure: Exposure
     allowed_commands: list[str]
@@ -304,7 +313,7 @@ class StudyDetail(Model):
     def from_record(cls, record: dict[str, Any]) -> StudyDetail:
         from app.research.options_golden_search.projections import approval_reviews
 
-        fields = {name: record.get(name, [] if name == "protocol_summary" else 0 if name == "rejected_candidate_count" else None) for name in cls.model_fields if name != "approval_reviews"}
+        fields = {name: record.get(name, [] if name in {"protocol_summary", "final_scenarios"} else 0 if name == "rejected_candidate_count" else None) for name in cls.model_fields if name != "approval_reviews"}
         fields["approval_reviews"] = approval_reviews(record)
         # Summary polling carries outcomes, not every candidate's display trace.
         for collection in ("candidates", "final_results"):

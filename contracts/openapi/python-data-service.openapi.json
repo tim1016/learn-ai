@@ -18174,6 +18174,49 @@
         "title": "FigureView",
         "type": "object"
       },
+      "FinalScenarioOutcome": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_hash": {
+            "title": "Candidate Hash",
+            "type": "string"
+          },
+          "gate_outcomes": {
+            "items": {
+              "$ref": "#/components/schemas/GateOutcome"
+            },
+            "title": "Gate Outcomes",
+            "type": "array"
+          },
+          "net_profit_usd": {
+            "title": "Net Profit Usd",
+            "type": "string"
+          },
+          "scenario": {
+            "title": "Scenario",
+            "type": "string"
+          },
+          "verdict": {
+            "enum": [
+              "meets_rules",
+              "does_not_meet_rules",
+              "not_enough_evidence",
+              "could_not_evaluate"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "candidate_hash",
+          "scenario",
+          "verdict",
+          "net_profit_usd",
+          "gate_outcomes"
+        ],
+        "title": "FinalScenarioOutcome",
+        "type": "object"
+      },
       "FixedContracts": {
         "additionalProperties": false,
         "properties": {
@@ -63718,6 +63761,13 @@
               "$ref": "#/components/schemas/Candidate"
             },
             "title": "Final Results",
+            "type": "array"
+          },
+          "final_scenarios": {
+            "items": {
+              "$ref": "#/components/schemas/FinalScenarioOutcome"
+            },
+            "title": "Final Scenarios",
             "type": "array"
           },
           "gate_outcomes": {

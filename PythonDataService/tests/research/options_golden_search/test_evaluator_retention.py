@@ -1,8 +1,10 @@
 """A complete candidate batch retains bounded replay graphs and restores details from blobs."""
 from __future__ import annotations
 
+import asyncio
 import gc
 import weakref
+from contextlib import nullcontext
 from decimal import Decimal
 
 import pytest
@@ -57,6 +59,19 @@ def test_large_batch_releases_replay_graphs_and_loads_selected_exact_evidence(
     def operation(func, *args, **kwargs):
         return func, args, kwargs
 
+    class Connection:
+        def transaction(self):
+            return nullcontext()
+
+    async def complete(_conn, _study_id, _attempt, key, result, **_kwargs):
+        records[key] = result
+
+    async def fence(_conn, _study_id, _attempt):
+        return row
+
+    async def save(_conn, _row, **_kwargs):
+        return None
+
     def run(operation):
         nonlocal reservations
         func, args, _kwargs = operation
@@ -65,9 +80,6 @@ def test_large_batch_releases_replay_graphs_and_loads_selected_exact_evidence(
             reservations += 1
             identities[key] = args[3]
             return records.setdefault(key, None)
-        if func is repo.complete:
-            records[args[2]] = args[3]
-            return None
         if func is repo.begin_execution:
             return None
         if func is repo.counters:
@@ -80,11 +92,14 @@ def test_large_batch_releases_replay_graphs_and_loads_selected_exact_evidence(
             if args[1] not in records:
                 raise LookupError("missing")
             return {"key": args[1], "identity": identities[args[1]], "result": records[args[1]]}
-        if func.__name__ == "report":
-            return None
+        if func.__name__ == "commit":
+            return asyncio.run(func(Connection()))
         raise AssertionError(f"unexpected all-history or persistence call: {func}")
 
     monkeypatch.setattr(stages, "evaluate_setup", replay)
+    monkeypatch.setattr(repo, "complete", complete)
+    monkeypatch.setattr(repo, "fence", fence)
+    monkeypatch.setattr(repo, "save", save)
     monkeypatch.setattr(stages, "with_connection", operation)
     monkeypatch.setattr(stages, "run_sync", run)
     monkeypatch.setattr(research_runtime_client, "is_research_runtime", lambda: False)
