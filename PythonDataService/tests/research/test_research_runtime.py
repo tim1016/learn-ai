@@ -612,6 +612,37 @@ async def test_a_boot_releases_what_a_dead_generation_left_staged_and_nothing_el
         assert json.loads((inputs / ".reservations.json").read_text()) == {job_id: 6}
 
 
+async def test_a_boot_that_cannot_read_the_staging_ledger_still_starts(
+    scratch_db, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unreadable staging is logged, never fatal: the records still close and the runtime still starts (#3455)."""
+    from urllib.parse import urlsplit, urlunsplit
+
+    import app.jobs.progress as progress_module
+    from app.research.persistence import ownership
+    from app.research.persistence.schema import ensure_schema
+    from app.research_runtime import _close_abandoned_generations
+    from tests.jobs.conftest import _FakeRedis
+    from tests.research.conftest import _ephemeral_url
+
+    await ensure_schema(scratch_db)
+    database = await scratch_db.fetchval("SELECT current_database()")
+    monkeypatch.setattr(settings, "POSTGRES_URL", urlunsplit(urlsplit(_ephemeral_url())._replace(path=f"/{database}")))
+    monkeypatch.setattr(settings, "OPTIONS_BACKTEST_INPUT_ROOT", tmp_path)
+    (tmp_path / ".reservations.json").write_text("not a ledger")
+    fake = _FakeRedis()
+    monkeypatch.setattr(progress_module, "get_redis", lambda: fake)
+    await scratch_db.execute(
+        "INSERT INTO research_job_owners (job_id, kind, record_id, owner_instance_id, boot_generation, dispatched_at_ms) "
+        "VALUES ('job-crashed', 'options_backtest', 'run-1', 'dead-runtime', 1, 0)")
+    fake.job("job-crashed", "running")
+
+    await _close_abandoned_generations(ownership.RuntimeAuthority("current", "research", 2, scratch_db))
+
+    assert fake.hget("job:job-crashed:state", "status") == "failed", "the dead generation's record still closed"
+    assert (tmp_path / ".reservations.json").read_text() == "not a ledger", "an unreadable ledger is left for diagnosis"
+
+
 # ── The connection envelope (#3047, PRD #3034 slice 12) ────────────────────
 
 

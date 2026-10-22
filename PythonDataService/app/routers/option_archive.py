@@ -74,11 +74,19 @@ async def capture_archive_session(body: ArchiveSessionCaptureRequest,
             logger.exception("Manual session recovery failed", extra={
                 "action": "manual_archive_session_failed", "underlying": body.underlying, "session_ms": body.session_ms})
     future.add_done_callback(report)
+    unchecked = ("Option archive could not check the capture lock, so the recovery did not start; "
+                 "inspect the catalog database and retry.")
     try:
         granted = await asyncio.wait_for(asyncio.wrap_future(lock_decision), LOCK_DECISION_TIMEOUT_S)
     except Exception as exc:
-        raise HTTPException(status_code=503, detail="Option archive could not check the capture lock, so the recovery did not start; "
-                            "inspect the catalog database and retry.") from exc
+        # The service can take the decision just as the wait gives up. Once it has, cancelling fails and its
+        # answer stands: a granted lock means the recovery started.
+        if lock_decision.cancel():
+            raise HTTPException(status_code=503, detail=unchecked) from exc
+        try:
+            granted = await asyncio.wrap_future(lock_decision)
+        except Exception:
+            raise HTTPException(status_code=503, detail=unchecked) from exc
     if not granted:
         raise HTTPException(status_code=409, detail="Another archive job holds the capture lock; retry the recovery when it ends.")
     return ArchiveTriggerReceipt(accepted=True, job="capture")

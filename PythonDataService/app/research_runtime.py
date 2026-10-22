@@ -152,7 +152,13 @@ async def _close_abandoned_generations(authority: ownership.RuntimeAuthority) ->
                                extra={"job_id": row["preparation_job_id"]})
     # A run can commit its row and die before releasing, a release can fail, and a run row can be deleted once its
     # job is gone, while a job that left nothing staged needs nothing: boot cost follows what is staged (#3455).
-    staged = await asyncio.to_thread(staged_job_ids, settings.OPTIONS_BACKTEST_INPUT_ROOT)
+    try:
+        staged = await asyncio.to_thread(staged_job_ids, settings.OPTIONS_BACKTEST_INPUT_ROOT)
+    except (OSError, ValueError):
+        # As with a failed release, staging that cannot be read must not stop the runtime starting; the next boot retries.
+        logger.error("abandoned options inputs could not be listed; their byte reservations remain held",
+                     extra={"action": "options_backtest_staging_cleanup_failed"}, exc_info=True)
+        return
     for job_id in sorted({row["job_id"] for row in older_options_jobs} & staged):
         await asyncio.to_thread(release_job_inputs, settings.OPTIONS_BACKTEST_INPUT_ROOT, job_id)
 

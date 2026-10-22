@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from collections.abc import AsyncIterator, Awaitable, Callable
+from concurrent.futures import Future
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
@@ -196,3 +197,23 @@ async def test_manual_recovery_that_waits_too_long_for_the_lock_never_starts(
         assert await asyncio.to_thread(ownership.released.wait, 5)
     assert response.status_code == 503 and "capture lock" in response.json()["detail"]
     assert provider_calls == [] and not service.state.path.exists()
+
+
+async def test_a_lock_granted_as_the_wait_gives_up_still_answers_that_the_recovery_started(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Once the service has taken the decision the request cannot cancel it, so its answer stands (#3455)."""
+    async def provider(underlying: str, day: date, **options: object) -> None:
+        raise AssertionError("the stand-in recovery never reaches the provider")
+    monkeypatch.setattr(archive_routes, "LOCK_DECISION_TIMEOUT_S", 0.05)
+    client, service = _recovery_client(tmp_path, monkeypatch, _SharedOwnership(held=set()), provider)
+
+    async def recover_session(underlying: str, session_ms: int, *, retry_exhausted: bool,
+                              lock_decision: Future[bool]) -> None:
+        assert lock_decision.set_running_or_notify_cancel()
+        await asyncio.sleep(0.2)
+        lock_decision.set_result(True)
+    monkeypatch.setattr(service, "recover_session", recover_session)
+    async with client:
+        response = await client.post("/api/option-archive/capture-session", json=REQUEST, headers=HEADERS)
+    assert response.status_code == 202 and response.json()["job"] == "capture"
