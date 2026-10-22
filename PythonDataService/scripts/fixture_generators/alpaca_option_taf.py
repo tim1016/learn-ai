@@ -16,10 +16,11 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from tests.fixtures.golden_support.hashing import compute_hashes
@@ -36,9 +37,12 @@ _ROW_TEXT = re.compile(r"OPT TAF fee for proceed of (\d+) contracts \((\d+) trad
 _RECORDINGS_SOURCE = "tests/fixtures/alpaca/option_paper_recordings"
 _RUNBOOK_SOURCE = "docs/runbooks/qualify-option-orders-on-paper.md, run record 2026-10-21"
 
-# (sold contracts, trades, posted dollars) of a day that is in no committed recording: the runbook's record of
-# 2026-10-16 states "$0.09 (one row) ... the day's 30 sold contracts", and its 60 fills are single contracts.
-_RUNBOOK_DAYS: dict[date, tuple[int, int, Decimal]] = {date(2026, 10, 16): (30, 30, Decimal("0.09"))}
+# A day whose posted row is in no committed recording: the runbook's record of 2026-10-16 states "$0.09 (one row)"
+# for the day's sold contracts. Its sells are in this capture, whose feed ends that day.
+_RUNBOOK_DAYS: dict[date, tuple[str, Decimal]] = {
+    date(2026, 10, 16): ("3225-C4-buyback-retry-window-missed-20261016", Decimal("0.09"))
+}
+_NEW_YORK = ZoneInfo("America/New_York")
 
 
 def _recorded_days() -> dict[date, tuple[int, int, Decimal]]:
@@ -61,6 +65,23 @@ def _recorded_days() -> dict[date, tuple[int, int, Decimal]]:
     return {day: next(iter(rows)) for day, rows in sorted(seen.items())}
 
 
+def _sells_in_capture(step: str, day: date) -> int:
+    """The executions of ``day`` that sold (a sale or a short sale), one contract each, in the capture's own fills."""
+    sold: set[str] = set()
+    for line in (RECORDINGS / step / "activities.jsonl").read_text(encoding="utf-8").splitlines():
+        body = json.loads(json.loads(line)["raw_body"])
+        if not isinstance(body, list):
+            continue
+        for row in body:
+            if row["activity_type"] != "FILL" or row["side"] not in ("sell", "sell_short"):
+                continue
+            if datetime.fromisoformat(row["transaction_time"]).astimezone(_NEW_YORK).date() != day:
+                continue
+            assert Decimal(row["qty"]) == 1, f"{step}: only one-contract executions are expected"
+            sold.add(row["id"])
+    return len(sold)
+
+
 def _write_json(path: Path, value: dict[str, Any]) -> None:
     path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
@@ -70,7 +91,10 @@ def main() -> None:
     assert not recorded.keys() & _RUNBOOK_DAYS.keys(), "a day is in the recordings: read it from there"
     days = sorted(
         [(day, row, _RECORDINGS_SOURCE) for day, row in recorded.items()]
-        + [(day, row, _RUNBOOK_SOURCE) for day, row in _RUNBOOK_DAYS.items()]
+        + [
+            (day, (_sells_in_capture(step, day),) * 2 + (posted,), _RUNBOOK_SOURCE)
+            for day, (step, posted) in _RUNBOOK_DAYS.items()
+        ]
     )
 
     FIXTURE_DIR.mkdir(parents=True, exist_ok=True)

@@ -407,8 +407,8 @@ current budget, risk-edit and mode behavior is recorded in ADRs 0059 and 0060.
   `PythonDataService/app/broker/alpaca/option_fees.py` charges what it posts:
   $0.003 a sold contract from 2026-10-01 through 2026-12-31, summed over the day
   and rounded up (owner decision, 2026-10-22). The four recorded days
-  (2026-10-13 to 10-16, golden FEE-003) fit any rate above $0.0026667 and up to
-  $0.003; the pin is the top of that range. Not observed: pause days before
+  (2026-10-13 to 10-16, golden FEE-003) bound the rate without fixing it; the
+  pin is the top of its range. Not observed: pause days before
   2026-10-13, what Alpaca charges after 2026-12-31 (the model keeps FINRA's
   resumed $0.00329), a day that also traded stock, and a Live account. OCC is
   rounded up per execution, as Paper posts it (every recorded row, 50 distinct,

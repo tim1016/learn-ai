@@ -644,7 +644,8 @@ proof of them.
   Alpaca's OCC and OPT TAF charges exceed this model's estimates (#3306); see
   the run record below. The model now rounds OCC per execution and charges OPT
   TAF at $0.003 a sold contract, as Paper posts them (#3306), so both
-  differences are closed for the four days recorded (golden FEE-003). Check the
+  differences are closed for the days recorded (the recordings' tests for OCC,
+  golden FEE-003 for TAF). Check the
   posted rows before qualifying fee accounting.
 - **Assignment, exercise and expiry.** No event for them arrives on the trade
   stream, and a later activity row arrives a day after. Nothing in a same-day

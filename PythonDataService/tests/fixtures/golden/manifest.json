@@ -1686,7 +1686,7 @@
       "canonical_callable": "fees_for_option_fill",
       "reference": {
         "kind": "hand_computed",
-        "oracle": "exact decimal arithmetic over the published SEC/TAF/CAT/ORF/OCC option rates without importing canonical code",
+        "oracle": "exact decimal arithmetic over the published SEC/TAF/CAT/ORF/OCC option rates (the TAF through FINRA's pause: Alpaca Paper's posted rate) without importing canonical code",
         "citation": "Alpaca Brokerage Fee Schedule, Options table and How fees are charged (revised 2026-10-01, read 2026-10-06; revisions of 2026-02-12, 2026-04-09, 2026-07-01, 2026-09-01 from the Internet Archive); SEC fee-rate advisories 2025-2/2026-2 and 17 CFR 240.31; FINRA SR-FINRA-2026-020 and SR-FINRA-2026-021; SEC Release 34-105449. From published documents, except the TAF through FINRA's pause, which is Alpaca Paper's posted rate (FEE-003); see the fixture attribution."
       },
       "market_input": {
@@ -1713,7 +1713,7 @@
           "file_sha256": {
             "input.json": "655cbba95b6ed6cef87f30401bb8a195b37b51d322ded27f39ad6553f320f334",
             "output.json": "0773549a92240bf987c4a99acb5828e3b1a676f7f0efc3e9abd50f7c9a3a1e01",
-            "attribution.md": "ab0d73ffba63e601f163f3e0caa8dbb7dfb02b6fc10fc28443cba94e2a00cac9"
+            "attribution.md": "28522b6ebc698262873ac5dd013d512acc06da63beaf4e8cef31fe1eedc21ae2"
           }
         }
       },
@@ -1757,7 +1757,7 @@
           "file_sha256": {
             "input.json": "67a34210e75cfa85ef15a68657912d3998c40e1c443f4759d627dcbecea07802",
             "output.json": "5414160cba006f87b2393a238555e53bbd841e537421a21c8016f8b259e290c7",
-            "attribution.md": "009db3b52161e16da48088a2baed9524a58e55e20a5e4f518516f86e1c45418d"
+            "attribution.md": "783c78ccab522c23ad1d3680a333eed1abbe123a4a1f5caaceffe4e4190ec514"
           }
         }
       },

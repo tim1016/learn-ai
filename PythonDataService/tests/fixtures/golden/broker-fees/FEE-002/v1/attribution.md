@@ -2,7 +2,7 @@
 
 ## Source
 
-Read on 2026-10-06. No account, order or broker API call was used: every rate is from a published document.
+Read on 2026-10-06. No account, order or broker API call was used: every rate is from a published document, except the TAF through FINRA's pause, which is Alpaca Paper's posted rate (golden FEE-003, #3306).
 
 | Fee type | Unit, side | Rate, and the date it is in force from here | Where it is stated |
 |---|---|---|---|

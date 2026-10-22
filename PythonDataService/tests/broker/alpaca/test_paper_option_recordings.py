@@ -367,22 +367,22 @@ def test_every_recorded_opt_taf_row_is_the_models_taf_for_the_contracts_its_day_
             stated = re.fullmatch(r"OPT TAF fee for proceed of (\d+) contracts \((\d+) trades\) on [\d-]+ by \S+", row["description"])
             assert stated is not None, f"{step}: {row['description']}"
             sold = [
-                activity
+                (activity, executed_at_ms)
                 for activity in activities
                 if activity.activity_type == "FILL" and activity.side in ("sell", "sell_short")
-                and activity.occurred_at_ms is not None and et_date_at_ms(activity.occurred_at_ms) == day
+                and (executed_at_ms := activity.occurred_at_ms) is not None and et_date_at_ms(executed_at_ms) == day
             ]
-            assert all(activity.quantity == 1 for activity in sold), f"{step}: only one-contract executions are recorded"
+            assert all(activity.quantity == 1 for activity, _ in sold), f"{step}: only one-contract executions are recorded"
             assert (len(sold), len(sold)) == (int(stated[1]), int(stated[2])), f"{step}: {day}"
             accrued = [
                 fees_for_option_fill(
-                    trade_date_ms=activity.occurred_at_ms,  # type: ignore[arg-type]  # filtered above
+                    trade_date_ms=executed_at_ms,
                     side=OrderSide.SELL,
                     contracts=Decimal(str(activity.quantity)),
                     premium=Decimal(str(activity.price)),
                     multiplier=100,
                 )
-                for activity in sold
+                for activity, executed_at_ms in sold
             ]
             assert settle_option_session(accrued).taf == -Decimal(row["net_amount"]), f"{step}: {day}"
             days.add(day)

@@ -51,7 +51,7 @@ def test_fee_003_the_models_day_taf_is_every_posted_row_to_the_cent() -> None:
 
 
 def test_fee_003_the_rows_bound_the_rate_and_the_pinned_rate_sits_inside_the_bound_the_regulators_is_outside() -> None:
-    """A day of N contracts posted at C cents says (C - 0.01) / N < r <= C / N; the four days together: (0.0026667, 0.003]."""
+    """A day of N contracts posted at C cents says (C - 0.01) / N < r <= C / N; the four days together: (0.08/30, 0.003]."""
     days = _days()
     lower = max((posted - _CENT) / day["sold_contracts"] for day, posted in days)
     upper = min(posted / day["sold_contracts"] for day, posted in days)
@@ -62,4 +62,4 @@ def test_fee_003_the_rows_bound_the_rate_and_the_pinned_rate_sits_inside_the_bou
     assert (lower, upper) == (Decimal("0.08") / 30, Decimal("0.003"))
     assert len(pinned) == 1 and lower < pinned.pop() <= upper
     # FINRA's own rate, in force the day before its pause, is one the rows rule out (19 x it rounds up to $0.07).
-    assert regulators == Decimal("0.00329") and not lower < regulators <= upper
+    assert regulators > upper

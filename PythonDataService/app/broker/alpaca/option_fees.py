@@ -48,10 +48,9 @@ gives is an estimate until Alpaca posts the day's fees:
 - Alpaca Paper posts OPT TAF inside FINRA's pause (SR-FINRA-2026-021), so the pause is not a zero here
   (#3306; the owner's decision of 2026-10-22 is that the estimate follows what Alpaca charges). Its four
   recorded days, 2026-10-13 to 2026-10-16, sold 4, 19, 2 and 30 contracts and were charged $0.02, $0.06,
-  $0.01 and $0.09: each is the day's sold contracts × $0.003, rounded up to the cent. The four bound the
-  rate without fixing it: every rate above $0.0026667 and up to $0.003 reproduces all of them, and $0.003
-  is the top of that range and the figure the owner named. FINRA's own $0.00329 does not reproduce the
-  days of 19 and 30 contracts (19 × 0.00329 rounds up to $0.07, 30 × 0.00329 to $0.10). Days of the
+  $0.01 and $0.09: each is the day's sold contracts × $0.003, rounded up to the cent. The rows bound the
+  rate without fixing it; $0.003 is the top of the range they allow and the figure the owner named, and
+  FINRA's own $0.00329 is outside it (golden FEE-003 holds the rows and the bounds). Days of the
   pause other than those four, and the rate Alpaca charges once the pause ends, are not observed: the
   table keeps $0.003 through 2026-12-31 and FINRA's resumed $0.00329 from 2027-01-01. Every observed
   day held option fills alone, one contract a trade; a day that also traded stock is unverified.

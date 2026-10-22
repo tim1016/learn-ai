@@ -588,9 +588,10 @@ async def test_more_than_one_structure_multiplies_the_money_the_lean_and_what_24
     ), "three structures multiply the net entry premium"
     assert seen.money.net_entry_premium_per_structure_cents == 19_400, "the premium per structure is what one costs"
     # Six contracts: the SEC fee on the $654.00 sold is 1.35 cents, 2 rounded up; CAT on 600 shares is 0.18
-    # of a cent, 1; ORF is 6 x 1.5 = 9; OCC is 3 x 2.5 = 7.5, 8 a leg, 16. Twenty-eight cents.
+    # of a cent, 1; the TAF on the three sold is 0.9 of a cent, 1; ORF is 6 x 1.5 = 9; OCC is 3 x 2.5 = 7.5, 8 a leg,
+    # 16. Twenty-nine cents.
     assert (seen.money.fee_estimate_cents, seen.money.entry_commitment_cents) == (
-        28, 58_228,
+        29, 58_229,
     ), "the fees of six contracts and the entry commitment"
     assert (seen.money.round_trip_cost_cents, seen.at_expiry.loss_cents, seen.at_expiry.gain_cents) == (
         2_400, 58_200, 91_800,
@@ -641,10 +642,11 @@ async def test_a_spread_that_pays_shows_the_requirement_and_what_is_set_aside_as
     assert (money.net_price, money.premium_is, money.net_entry_premium_cents) == (
         Decimal("-3.07"), "received", -30_700,
     ), "$3.07 is received on the spread"
-    # The SEC fee on the $500.00 sold is 1.03 cents, which rounds up to 2: twelve cents of fees (OCC 3 a leg).
+    # The SEC fee on the $500.00 sold is 1.03 cents, which rounds up to 2; the TAF on the one contract sold is 0.3 of
+    # a cent, 1; CAT 1, ORF 3 and OCC 3 a leg: thirteen cents of fees.
     assert (money.broker_requirement_cents, money.fee_estimate_cents, money.entry_commitment_cents) == (
-        50_000, 12, 19_312,
-    ), "the requirement is the $500.00, the fees twelve cents, and what is set aside $193.12"
+        50_000, 13, 19_313,
+    ), "the requirement is the $500.00, the fees thirteen cents, and what is set aside $193.13"
     assert (seen.at_expiry.loss_cents, seen.at_expiry.gain_cents) == (19_300, 30_700), "the loss and the gain at expiry"
     assert seen.at_expiry.break_even_prices == [Decimal("588.07")], "the break-even price"
     # The other way round from a spread that is bought: it keeps what it received at 585 or below.
@@ -660,9 +662,9 @@ async def test_a_spread_that_pays_shows_the_requirement_and_what_is_set_aside_as
     assert (
         "below" in seen.at_expiry.gain_sentence and "above" not in seen.at_expiry.gain_sentence
     ), "the gain holds below its strike, not above"
-    # What is set aside is the $193.12, and the sentence says the cost as a part of that.
+    # What is set aside is the $193.13, and the sentence says the cost as a part of that.
     assert (
-        usd(19_312) in money.cost_sentence and usd(30_700) not in money.cost_sentence
+        usd(19_313) in money.cost_sentence and usd(30_700) not in money.cost_sentence
     ), "the cost is said as a part of what is set aside, not of the premium"
     assert (seen.verdict.resolves_as_built, seen.verdict.red) == (True, False), "the verdict resolves as built and is not red"
     # It sells the call nearer the money, so it gains as SPY falls.
