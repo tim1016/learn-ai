@@ -3,16 +3,25 @@ from __future__ import annotations
 
 import asyncio
 import random
+import shutil
+import socket
+import threading
+from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, NoReturn
 
+import asyncpg
 import httpx
 import pytest
 from fastapi import FastAPI
 
 from app.config import settings
+from app.data_lake import catalog_client, polygon_fetcher, polygon_option_bars, polygon_option_contracts
 from app.engine.data.decoded_cache import DecodedArtifactCache
 from app.options_backtest.chains import merge_chains, plan_chains, replay_chain
-from app.options_backtest.dispatch import replay_frozen_run
+from app.options_backtest.dispatch import ReadyChain, replay_frozen_run, run_backtest_chain_task
+from app.options_backtest.execution_identity import backtest_execution_identity
 from app.options_backtest.frozen_inputs import FrozenRunData, freeze_run_inputs
 from app.options_backtest.run import run_sessions
 from app.options_backtest.run_wire import result_from_wire, result_to_wire
@@ -76,6 +85,61 @@ def test_worker_pool_preserves_exact_result_and_reuses_admitted_decode(tmp_path:
         assert {row.phase for row in observed.phase_timings} >= {"queue", "replay", "admit_decode", "aggregation"}
     finally:
         pool.close()
+
+
+async def test_options_worker_replays_recorded_frozen_inputs_without_database_provider_or_network_calls(
+    fake_catalog: Any, tmp_lake: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.options_backtest.lake_data import LakeRunData
+    from tests.options_backtest import test_golden_spy_2025_06_10 as golden
+    from tests.options_backtest._lake import raw_root
+
+    given = golden.a_setup()
+    sessions = (golden.TRADING_DATE,)
+    with recorded_vendor(golden.RECORDING, golden.RECORDED_FILES, golden.STOCK_PATH):
+        await golden.capture_the_recording()
+    expected = await asyncio.to_thread(run_sessions, given, sessions, LakeRunData("SPY"))
+    frozen = await asyncio.to_thread(freeze_run_inputs, given, sessions, LakeRunData("SPY"), tmp_path / "frozen")
+    shutil.rmtree(raw_root(tmp_lake))
+    forbidden_calls: list[str] = []
+
+    def forbidden(label: str) -> Callable[..., NoReturn]:
+        def reject(*args: Any, **kwargs: Any) -> NoReturn:
+            forbidden_calls.append(label)
+            raise AssertionError(f"Options worker attempted {label}")
+        return reject
+
+    state = {"decoded_cache": DecodedArtifactCache(max_bytes=32 * 1024**2)}
+    results = {}
+    with monkeypatch.context() as guarded:
+        for boundary, name in (
+            (asyncpg, "connect"), (asyncpg, "create_pool"),
+            (catalog_client, "init_pool"), (catalog_client, "connection"),
+            (catalog_client, "has_committed_file_receipt"), (catalog_client, "has_committed_file_receipts"),
+            (polygon_fetcher, "fetch_minute_trade_aggregates"),
+            (polygon_option_bars, "fetch_option_minute_bars"),
+            (polygon_option_bars, "fetch_listed_option_minute_bars"),
+            (polygon_option_contracts, "fetch_option_contracts"),
+            (httpx.AsyncClient, "request"), (httpx.Client, "request"),
+            (socket, "create_connection"), (socket, "getaddrinfo"),
+            (socket.socket, "connect"), (socket.socket, "connect_ex"),
+        ):
+            guarded.setattr(boundary, name, forbidden(f"{boundary.__name__}.{name}"))
+        for chain in plan_chains(given):
+            item = ReadyChain(key=f"isolation:{chain.key}", payload={
+                "setup": given.model_dump(mode="json"), "frozen": frozen.model_dump(mode="json"),
+                "identity": backtest_execution_identity(), "chain": {
+                    "kind": chain.kind, "slippage_percent": str(chain.slippage_percent),
+                    "starting_cash_usd": str(chain.starting_cash_usd), "multiple": str(chain.multiple)},
+            })
+            messages: list[dict[str, Any]] = []
+            run_backtest_chain_task(item.as_wire(), out=SimpleNamespace(write=messages.append),
+                ask_admission=forbidden("parent lake admission"), cancel_flag=threading.Event(), state=state)
+            terminal = [message for message in messages if message["type"] != "checkpoint"]
+            assert len(terminal) == 1 and terminal[0]["type"] == "result", terminal
+            results[chain.key] = item.outcome_of(terminal[0]).result
+        assert merge_chains(given, sessions, results) == expected
+        assert forbidden_calls == []
 
 
 @pytest.mark.slow
