@@ -9,18 +9,15 @@ import {
 
 import { DataLakeService } from '../data-lake';
 import {
-  BackfillJobRunner,
-  BackfillSubmissionError,
   type BackfillJobRun,
 } from '../data-lake/backfill-job-runner';
 import {
-  rootFailureOf,
-  toBackfillDayEvent,
-  tradeBackfillSpec,
   tradingDateToMs,
   tradingRangeRejection,
 } from '../data-lake';
-import type { BackfillFailure, PriceAdjustmentMode } from '../data-lake';
+import { TradeBackfillRunner, type TradeBackfillEnd } from '../data-lake/trade-backfill-runner';
+import type { TradeBackfillWindow } from '../data-lake/trade-backfill-spec';
+import type { BackfillDefaults, BackfillFailure, PriceAdjustmentMode } from '../data-lake';
 import { isRunnableSpan } from '../ticker-catalog';
 import { TickerCatalogService } from '../ticker-catalog';
 import { etIsoDate } from '../date/et-midnight';
@@ -141,7 +138,7 @@ export interface CoverageGateSession {
 export class EnsureCoverageService {
   private readonly lake = inject(TickerCatalogService);
   private readonly dataLake = inject(DataLakeService);
-  private readonly runner = inject(BackfillJobRunner);
+  private readonly runner = inject(TradeBackfillRunner);
 
   private readonly runs = new Map<string, ActiveRun>();
 
@@ -297,29 +294,35 @@ export class EnsureCoverageService {
     mode: BackfillableMode,
     entry: ActiveRun,
   ): Promise<boolean> {
-    const defaults = await this.dataLake.backfillDefaults();
+    const end = await this.runner.run(
+      (defaults) => this.live(entry) ? this.window(symbol, mode, defaults) : null,
+      async (job) => {
+        if (!this.live(entry)) {
+          await job.cancel();
+          return false;
+        }
+        entry.jobRun = job;
+        return true;
+      },
+    );
     if (!this.live(entry)) return false;
-    if (defaults.kind !== 'ok') {
-      return this.fail(entry, 'backfill_defaults_unavailable', defaults.message);
+    switch (end.kind) {
+      case 'failed': return this.fail(entry, end.code, end.message);
+      case 'detached': return false;
+      case 'completed': return this.settle(symbol, mode, entry, end.failure);
     }
-    const digest = defaults.value.lean_image_digest;
-    if (digest === null) {
-      return this.fail(
-        entry,
-        'backfill_digest_missing',
-        'The data plane has no pinned LEAN image digest, so a backfill spec cannot be composed.',
-      );
-    }
+  }
+
+  private window(
+    symbol: string, mode: BackfillableMode, defaults: BackfillDefaults,
+  ): TradeBackfillWindow | Extract<TradeBackfillEnd, { kind: 'failed' }> {
     // A data plane too old to publish the provider's history floor cannot be
     // composed against: guessing the floor is what #2241 was. The read is
     // typed but unvalidated at the HTTP seam, so this is the boundary check.
-    const historyStartMs = defaults.value.provider_history_start_ms;
+    const historyStartMs = defaults.provider_history_start_ms;
     if (typeof historyStartMs !== 'number' || !Number.isFinite(historyStartMs)) {
-      return this.fail(
-        entry,
-        'backfill_history_floor_missing',
-        'The data plane did not report how far back the market-data provider serves, so a backfill window cannot be composed. It is likely running an older build than this page.',
-      );
+      return { kind: 'failed', code: 'backfill_history_floor_missing', message:
+        'The data plane did not report how far back the market-data provider serves, so a backfill window cannot be composed. It is likely running an older build than this page.' };
     }
 
     // Full allowed history, ending at the most recent trading day: the
@@ -328,57 +331,18 @@ export class EnsureCoverageService {
     const todayIso = etIsoDate(Date.now());
     const { start, end } = fitBackfillWindow(
       todayIso,
-      defaults.value.max_trading_range_days,
+      defaults.max_trading_range_days,
       etIsoDate(historyStartMs),
     );
-    const rejection = tradingRangeRejection(start, end, defaults.value.max_trading_range_days);
+    const rejection = tradingRangeRejection(start, end, defaults.max_trading_range_days);
     const startMs = tradingDateToMs(start);
     const endMs = tradingDateToMs(end);
     if (rejection !== null || startMs === null || endMs === null) {
-      return this.fail(
-        entry,
-        'backfill_window_invalid',
-        rejection ?? 'The backfill window could not be composed from the trading calendar.',
-      );
+      return { kind: 'failed', code: 'backfill_window_invalid', message:
+        rejection ?? 'The backfill window could not be composed from the trading calendar.' };
     }
 
-    const spec = tradeBackfillSpec(
-      { symbol, price_adjustment_mode: mode, start_trading_date_ms: startMs, end_trading_date_ms: endMs },
-      digest,
-    );
-
-    let jobRun: BackfillJobRun;
-    try {
-      // The per-day frames are the only place the run says *why* it wrote
-      // nothing; without them a run the provider refused outright is
-      // indistinguishable from a symbol that genuinely has no bars.
-      jobRun = await this.runner.start(spec, {
-        onDomainEvent: (event) => entry.observeFailures(toBackfillDayEvent(event)?.failures),
-      });
-    } catch (error) {
-      if (!(error instanceof BackfillSubmissionError)) throw error;
-      return this.fail(entry, 'backfill_submission_failed', error.message);
-    }
-    // The operator cancelled while submission was in flight: the job handle
-    // only exists now, so stop the just-accepted job here.
-    if (!this.live(entry)) {
-      await jobRun.cancel();
-      return false;
-    }
-    entry.jobRun = jobRun;
-
-    const terminal = await jobRun.terminal;
-    if (!this.live(entry)) return false;
-    switch (terminal.kind) {
-      case 'failed':
-        return this.fail(entry, terminal.code, terminal.message);
-      case 'cancelled':
-        return this.fail(entry, 'backfill_cancelled', 'The backfill was cancelled.');
-      case 'detached':
-        return false;
-      case 'completed':
-        return await this.settle(symbol, mode, entry);
-    }
+    return { symbol, price_adjustment_mode: mode, start_trading_date_ms: startMs, end_trading_date_ms: endMs };
   }
 
   /**
@@ -394,7 +358,7 @@ export class EnsureCoverageService {
    * own failures are consulted only once the lake has said no, and then to
    * name the reason rather than to reach the verdict.
    */
-  private async settle(symbol: string, mode: BackfillableMode, entry: ActiveRun): Promise<boolean> {
+  private async settle(symbol: string, mode: BackfillableMode, entry: ActiveRun, failure: BackfillFailure | null): Promise<boolean> {
     this.lake.viewFor(mode).reload();
     const read = await this.dataLake.storageSummary('usa', mode, 'trade');
     if (!this.live(entry)) return false;
@@ -409,7 +373,6 @@ export class EnsureCoverageService {
     // — the *job* ran; the *backfill* did not — so a gate that only watched
     // the lifecycle could say nothing beyond "empty". The typed reason was
     // on the wire all along (#2241).
-    const failure = entry.rootFailure;
     if (failure !== null) {
       return this.fail(
         entry,
@@ -456,26 +419,6 @@ class ActiveRun {
   readonly finished: Promise<boolean>;
   jobRun: BackfillJobRun | null = null;
   settled = false;
-  /**
-   * The failure that explains an empty run, taken from the **last** day that
-   * reported one.
-   *
-   * The worker walks oldest session first and breaks immediately after
-   * emitting the frame whose failure was globally fatal, so the last frame
-   * carrying failures is the one that ended the run. Earlier frames can
-   * carry per-day failures that stopped nothing — `provider_no_data` for a
-   * session before the symbol listed, say — and latching the first would
-   * hand the operator a benign reason for a run a refusal killed.
-   */
-  rootFailure: BackfillFailure | null = null;
-
-  /** Fold one day's failures; the latest real cause replaces the last. */
-  observeFailures(failures: readonly BackfillFailure[] | undefined): void {
-    if (failures === undefined || failures.length === 0) return;
-    const candidate = rootFailureOf(failures);
-    if (candidate !== null) this.rootFailure = candidate;
-  }
-
   constructor(
     readonly key: string,
     readonly symbol: string,
