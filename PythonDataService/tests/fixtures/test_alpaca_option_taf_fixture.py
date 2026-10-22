@@ -43,7 +43,7 @@ def _sells(day: dict) -> list[OptionFillFees]:
 
 def test_fee_003_the_models_day_taf_is_every_posted_row_to_the_cent() -> None:
     days = _days()
-    assert len(days) == 4
+    assert len(days) == 6
 
     for day, posted in days:
         # Exact Decimal equality: atol=0, rtol=0 (manifest FEE-003).
@@ -51,7 +51,7 @@ def test_fee_003_the_models_day_taf_is_every_posted_row_to_the_cent() -> None:
 
 
 def test_fee_003_the_rows_bound_the_rate_and_the_pinned_rate_sits_inside_the_bound_the_regulators_is_outside() -> None:
-    """A day of N contracts posted at C cents says (C - 0.01) / N < r <= C / N; the four days together: (0.08/30, 0.003]."""
+    """A day of N contracts posted at C cents says (C - 0.01) / N < r <= C / N; the six days together: (0.08/30, 0.003]."""
     days = _days()
     lower = max((posted - _CENT) / day["sold_contracts"] for day, posted in days)
     upper = min(posted / day["sold_contracts"] for day, posted in days)

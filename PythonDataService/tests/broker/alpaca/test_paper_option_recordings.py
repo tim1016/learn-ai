@@ -2,7 +2,7 @@
 
 The recordings (``tests/fixtures/alpaca/option_paper_recordings``) are the
 capture journal of the first option orders ever sent from this system, made on
-2026-10-13 through 2026-10-16 under the qualification runbook and sanitised by the
+2026-10-13 through 2026-10-22 under the qualification runbook and sanitised by the
 kit. They sit beside the documented examples and replace none of them: each
 shows one account on one day, for **one bought contract, or one bull call
 spread bought and closed (alone, and twice at once by two bots), every order
@@ -13,6 +13,8 @@ exercise the bot's entry deadline. Part fills and exercise are not in them. Regu
 are: the 2026-10-14 steps' activity feed carries 2026-10-13's fees. The
 2026-10-16 recording carries the outside credit spread's four leg fills and
 eight fee rows. The capture proves their presence then, not their first posting time.
+The 2026-10-22 recording adds the sold leg of a held credit spread bought back alone
+by one order from outside the Clerk, and the account's posted fees through 2026-10-20.
 
 What these tests prove is that what Alpaca really answered is read whole by
 the readers the Clerk uses, and that the body the Clerk sent is the body the
@@ -26,7 +28,7 @@ import json
 import re
 from datetime import date
 from decimal import Decimal
-from itertools import pairwise
+from itertools import groupby, pairwise
 from pathlib import Path
 from typing import Any
 
@@ -304,7 +306,7 @@ def test_credit_spread_clearing_fees_link_to_each_leg_execution() -> None:
 def test_every_recorded_occ_row_is_the_models_occ_for_the_one_contract_fill_it_names() -> None:
     """#3306: Paper posts OCC per execution, linked to its fill by execution ID.
 
-    Every OCC row in the recordings (50 distinct ones, on 2026-10-13, -14 and -15, repeated across the
+    Every OCC row in the recordings (118 distinct ones, on 2026-10-13 through 2026-10-20, repeated across the
     captures) names a fill of exactly one contract, and is that fill's OCC rounded up to the cent
     (1 x $0.025 -> $0.03). Fills of several contracts are not recorded, so this does not say how Alpaca
     rounds one: the model reads it as contracts x $0.025 rounded up.
@@ -345,10 +347,11 @@ def test_every_recorded_occ_row_is_the_models_occ_for_the_one_contract_fill_it_n
 def test_every_recorded_opt_taf_row_is_the_models_taf_for_the_contracts_its_day_sold() -> None:
     """#3306: Paper posts one OPT TAF row a day, inside FINRA's pause, and its text names the contracts charged.
 
-    Every row in the recordings (2026-10-13, -14 and -15, repeated across the captures) names as many
+    Every row in the recordings (2026-10-13 through 2026-10-20, repeated across the captures) names as many
     contracts, and as many trades, as the sells in that capture's own fills of the day (one contract a trade), and is
-    the model's TAF for those sells rounded up to the cent: 4 x $0.003 -> $0.02, 19 x $0.003 -> $0.06 and
-    2 x $0.003 -> $0.01. The posted amount is exact cents, so the comparison is Decimal equality.
+    the model's TAF for those sells rounded up to the cent: 4 x $0.003 -> $0.02, 19 x $0.003 -> $0.06,
+    2 x $0.003 -> $0.01, 30 x $0.003 -> $0.09, 3 x $0.003 -> $0.01 and 1 x $0.003 -> $0.01. The posted amount is
+    exact cents, so the comparison is Decimal equality.
     """
     days: set[date] = set()
     for path in sorted(_RECORDINGS.glob("*/activities.jsonl")):
@@ -386,7 +389,9 @@ def test_every_recorded_opt_taf_row_is_the_models_taf_for_the_contracts_its_day_
             ]
             assert settle_option_session(accrued).taf == -Decimal(row["net_amount"]), f"{step}: {day}"
             days.add(day)
-    assert days == {date(2026, 10, 13), date(2026, 10, 14), date(2026, 10, 15)}
+    assert days == {
+        date(2026, 10, 13), date(2026, 10, 14), date(2026, 10, 15), date(2026, 10, 16), date(2026, 10, 19), date(2026, 10, 20),
+    }
 
 
 def test_credit_spread_recorded_fills_model_every_posted_cent() -> None:
@@ -566,6 +571,14 @@ def _fill_frames(step: str) -> list[dict[str, Any]]:
     return [data for data in _frames(step) if data["event"] == "fill"]
 
 
+def _held_over_time(step: str) -> list[dict[str, float]]:
+    """The account's positions, contract to signed quantity, as each recorded poll stated them."""
+    return [
+        {position.symbol: position.quantity for position in map(from_alpaca_position, _body(line))}
+        for line in _lines(step, "positions")
+    ]
+
+
 @_STRUCTURE_PASS
 def test_each_structure_order_sent_is_the_body_the_writer_produces_a_signed_limit_in_and_a_market_order_out(step: str) -> None:
     long_legs, short_legs, limits, _ = _STRUCTURE_PASSES[step]
@@ -677,10 +690,7 @@ def test_two_bots_structures_held_at_once_are_one_account_position_of_two_of_eac
     step: str, observed_quantities: tuple[float, ...],
 ) -> None:
     long_legs, short_legs, _, _ = _STRUCTURE_PASSES[step]
-    held_over_time = [
-        {position.symbol: position.quantity for position in map(from_alpaca_position, _body(line))}
-        for line in _lines(step, "positions")
-    ]
+    held_over_time = _held_over_time(step)
 
     assert held_over_time[0] == {} and held_over_time[-1] == {}
     # The condor polls captured both held together, without an intermediate one-structure account reading.
@@ -712,10 +722,7 @@ def test_a_credit_structure_adds_premium_to_cash_and_holds_its_width_until_the_w
     assert held == (before[0] + Decimal(cash_credit), before[1] - Decimal(buying_power_fall))
     assert held[0] - held[1] == Decimal("100.00")
     assert closed == (before[0] - Decimal(round_trip_cost), before[1] - Decimal(round_trip_cost))
-    positions = [
-        {position.symbol: position.quantity for position in map(from_alpaca_position, _body(line))}
-        for line in _lines(step, "positions")
-    ]
+    positions = _held_over_time(step)
     assert positions[0] == positions[-1] == {}
     long_legs, short_legs, _, _ = _STRUCTURE_PASSES[step]
     assert {**dict.fromkeys(long_legs, 1.0), **dict.fromkeys(short_legs, -1.0)} in positions
@@ -859,3 +866,79 @@ def test_dashboard_credit_round_trip_cash_change_is_recorded_separately_from_net
     assert premium_cost == Decimal("3.00")
     assert cash_cost == Decimal("3.10")
     assert cash_cost - premium_cost == Decimal("0.10")
+
+
+_SOLD_LEG_BOUGHT_BACK = "3225-C5-buyback-api-20261022"
+_SOLD_CALL, _BOUGHT_CALL = "SPY261026C00772000", "SPY261026C00773000"
+
+
+def test_a_sold_leg_bought_back_alone_is_one_buy_to_close_that_fills_and_leaves_the_bought_leg_held() -> None:
+    """#3225: the bot held a credit spread and was stopped; one order from outside bought back the sold call alone."""
+    frames = _frames(_SOLD_LEG_BOUGHT_BACK)
+    assert [frame["event"] for frame in frames] == ["pending_new", "new", "fill"] * 3
+    entry, buy_back, flatten = _fill_frames(_SOLD_LEG_BOUGHT_BACK)
+
+    assert (entry["order"]["order_class"], entry["order"]["limit_price"], entry["price"]) == ("mleg", "-0.19", "-0.19")
+    assert entry["position_qtys"] == {_SOLD_CALL: "-1", _BOUGHT_CALL: "1"}
+    for frame, contract, side, limit, price in (
+        (buy_back, _SOLD_CALL, OrderSide.BUY, Decimal("1.12"), Decimal("1.06")),
+        (flatten, _BOUGHT_CALL, OrderSide.SELL, None, Decimal("0.87")),
+    ):
+        order = from_alpaca_option_order(frame["order"])
+        assert order.legs == () and order.contract is not None and order.contract.occ_symbol == contract
+        assert (order.side, order.intent, order.quantity, order.filled_quantity) == (side, OptionPositionIntent.CLOSE, 1, 1)
+        assert (order.limit_price, order.filled_avg_price, order.status) == (limit, price, "filled")
+        update = from_alpaca_trade_update(frame)
+        assert update.event_type == "fill" and update.execution_id is not None
+        assert frame["position_qty"] == "0"
+
+    assert [state for state, _ in groupby(_held_over_time(_SOLD_LEG_BOUGHT_BACK))] == [
+        {}, {_SOLD_CALL: -1.0, _BOUGHT_CALL: 1.0}, {_BOUGHT_CALL: 1.0}, {},
+    ]
+
+
+def test_alpaca_funds_a_sold_legs_buy_back_from_the_requirement_the_spread_releases() -> None:
+    """#3225: option buying power fell by the buy-back's cost less the $1-wide spread's $100 requirement."""
+    before, held, bought_back, flat = _account_figures(_SOLD_LEG_BOUGHT_BACK)
+    multiplier = {
+        contract.symbol: contract.multiplier
+        for contract in (from_alpaca_option_contract(_body(line)) for line in _lines(_SOLD_LEG_BOUGHT_BACK, "option_contracts"))
+    }
+
+    assert multiplier == {_SOLD_CALL: Decimal("100"), _BOUGHT_CALL: Decimal("100")}
+    assert before == (Decimal("99820.22"), Decimal("99820.22"))
+    assert held == (Decimal("99839.17"), Decimal("99739.17"))
+    assert held[0] - held[1] == Decimal("100.00")
+    # $1.06 a share for one contract, and three cents more that the account took with it.
+    assert held[0] - bought_back[0] == Decimal("1.06") * multiplier[_SOLD_CALL] + Decimal("0.03")
+    assert held[1] - bought_back[1] == (held[0] - bought_back[0]) - Decimal("100.00")
+    assert bought_back[0] == bought_back[1]
+    assert flat == (Decimal("99820.12"), Decimal("99820.12"))
+
+
+def test_the_clerk_sent_only_the_entry_and_the_flatten_and_each_is_the_body_its_writer_produces() -> None:
+    """#3225: the buy-back came from outside the Clerk; the bot's Flatten closed the bought leg it left."""
+    posts = [line for line in _lines(_SOLD_LEG_BOUGHT_BACK, "orders") if line["method"] == "POST"]
+    assert len(posts) == 2
+    entry, flatten = (json.loads(post["request_body"]) for post in posts)
+
+    entry_request = MultiLegOptionOrderRequest(
+        legs=tuple(_leg_request(leg) for leg in entry["legs"]),
+        quantity=int(entry["qty"]),
+        order_type=OrderType(entry["type"]),
+        net_limit_price=Decimal(entry["limit_price"]),
+    )
+    assert to_alpaca_option_order_request(entry_request, client_order_id=entry["client_order_id"]) == entry
+    assert sorted((leg["symbol"], leg["side"], leg["position_intent"]) for leg in entry["legs"]) == [
+        (_SOLD_CALL, "sell", "sell_to_open"), (_BOUGHT_CALL, "buy", "buy_to_open"),
+    ]
+    flatten_request = SingleOptionOrderRequest(
+        contract=OptionContract.from_occ_symbol(flatten["symbol"]),
+        side=OrderSide(flatten["side"]),
+        intent=OptionPositionIntent.CLOSE,
+        quantity=int(flatten["qty"]),
+        order_type=OrderType(flatten["type"]),
+        limit_price=None,
+    )
+    assert to_alpaca_option_order_request(flatten_request, client_order_id=flatten["client_order_id"]) == flatten
+    assert (flatten["symbol"], flatten["position_intent"], flatten["type"]) == (_BOUGHT_CALL, "sell_to_close", "market")
