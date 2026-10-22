@@ -263,6 +263,9 @@ class IbkrClient:
         from ib_async import IB
 
         self._settings = settings or get_settings()
+        from app.marketdata.shared.connection import SharedConnection
+
+        self.shared_feed = SharedConnection(self._settings) if self._settings.shared_feed_url is not None else None
         self._ib: IB = IB()
         self._ib.client.MaxRequests = _API_MAX_REQUESTS_PER_SECOND
         self._ib.client.RequestsInterval = _API_REQUEST_INTERVAL_SECONDS

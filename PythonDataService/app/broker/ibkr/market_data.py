@@ -48,6 +48,7 @@ from app.broker.ibkr.models import (
     _coerce_quote,
     _coerce_size,
 )
+from app.marketdata.shared.quotes import QuoteLease, request_quote
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -133,7 +134,9 @@ def _ticker_to_quote(
     # and inconsistent with bars._to_utc_ms which rejects naive outright).
     # Convert tz-aware → UTC ms; otherwise fall back to wall clock.
     t = getattr(ticker, "time", None)
-    if isinstance(t, datetime) and t.tzinfo is not None:
+    if (received_at_ms := getattr(ticker, "source_received_at_ms", None)) is not None:
+        ts_ms = received_at_ms
+    elif isinstance(t, datetime) and t.tzinfo is not None:
         ts_ms = int(t.astimezone(UTC).timestamp() * 1000)
     else:
         if isinstance(t, datetime):
@@ -214,11 +217,16 @@ async def stream_option_chain(
     by_conid: dict[int, tuple[float, OptionRight]] = {}
     tickers: list = []
     stock_ticker = None
+    leases: list[QuoteLease] = []
     try:
-        stock_ticker = client.ib.reqMktData(stock, "", False, False)
+        stock_lease = request_quote(client, stock)
+        leases.append(stock_lease)
+        stock_ticker = stock_lease.ticker
         for c in contracts:
             by_conid[int(c.conId)] = (float(c.strike), c.right)
-            ticker = client.ib.reqMktData(c, GENERIC_TICK_LIST, False, False)
+            lease = request_quote(client, c, GENERIC_TICK_LIST)
+            leases.append(lease)
+            ticker = lease.ticker
             tickers.append(ticker)
 
         logger.info(
@@ -251,13 +259,5 @@ async def stream_option_chain(
                 as_of_ms=now_ms_utc(),
             )
     finally:
-        # Cancel every subscription so we don't leak market-data lines.
-        for c in contracts:
-            try:
-                client.ib.cancelMktData(c)
-            except Exception as exc:
-                logger.debug("cancelMktData(%s) raised on shutdown: %s", c, exc)
-        try:
-            client.ib.cancelMktData(stock)
-        except Exception as exc:
-            logger.debug("cancelMktData(underlying) raised on shutdown: %s", exc)
+        for lease in leases:
+            lease.release()

@@ -21,7 +21,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import AnyHttpUrl, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Port → semantic mapping per IBKR docs. Authoritative reference:
@@ -73,6 +73,19 @@ class IbkrSettings(BaseSettings):
     # a non-negative subset for predictable config/schema behavior. Reserve 1
     # for the FastAPI lifespan client; later phases get higher IDs.
     client_id: int = Field(default=1, ge=0, le=2**31 - 1)
+
+    # Fleet live observations use one installation owner. History/discovery
+    # keep this lane's separate read-only Gateway connection (ADR 0082).
+    shared_feed_url: AnyHttpUrl | None = None
+    shared_feed_token: SecretStr | None = None
+
+    @model_validator(mode="after")
+    def _shared_feed_auth(self) -> IbkrSettings:
+        if self.shared_feed_url is not None and (
+            self.shared_feed_token is None or not self.shared_feed_token.get_secret_value()
+        ):
+            raise ValueError("IBKR_SHARED_FEED_TOKEN is required with IBKR_SHARED_FEED_URL")
+        return self
 
     # Component-local admission cap for active reqRealTimeBars lines on this
     # client. IBKR grants 100 user-level market-data lines by default, shared

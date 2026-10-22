@@ -62,7 +62,7 @@ def source(monkeypatch: pytest.MonkeyPatch) -> SourceFixture:
         rtTime=datetime.fromtimestamp(NOW / 1000, tz=UTC), contract=Stock("SPY", "SMART", "USD"),
     )
     client = Mock(
-        connection_generation=1, connectivity_lost_count=0,
+        shared_feed=None, connection_generation=1, connectivity_lost_count=0,
         connection_lost=False, connection_state="connected", last_event_ms=NOW,
         last_ibkr_code=None,
     )

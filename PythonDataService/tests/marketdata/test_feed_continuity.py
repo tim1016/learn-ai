@@ -114,6 +114,7 @@ def _extended_policy(sink: _RecordingSink) -> ContinuityPolicy:
 
 def _client(*, generation: int = 1) -> MagicMock:
     client = MagicMock()
+    client.shared_feed = None
     client.is_connected.return_value = True
     client.connection_lost = False
     client.connection_generation = generation

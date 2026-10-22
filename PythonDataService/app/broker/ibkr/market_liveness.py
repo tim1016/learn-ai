@@ -29,6 +29,7 @@ from app.broker.ibkr.market_subscription import (
     install_market_data_callbacks,
     retry_delay_ms,
 )
+from app.marketdata.shared.quotes import quotes_connected, request_quote
 from app.options.quotes import HeldQuote, quote_fault
 from app.schemas.market_liveness import MarketStatusSnapshot, SymbolTradingStatusEvidence
 from app.utils.atomic_file import atomic_write_bytes
@@ -163,11 +164,14 @@ class IbkrMarketStatusSource:
         if ticker is None:
             return
         ticker.updateEvent -= subscription.callback
-        if self._owner is not None and self._owner.is_connected():
-            self._owner.ib.cancelMktData(ticker.contract)
+        if subscription.lease is not None:
+            subscription.lease.release()
 
     @staticmethod
     def _client_generation(client: IbkrClient) -> tuple[int, int, int, int]:
+        shared = getattr(client, "shared_feed", None)
+        if shared is not None:
+            return id(client), shared.connection_generation, 0, 0
         return id(client), client.connection_generation, client.connectivity_lost_count, client.last_event_ms
 
     async def __call__(self) -> MarketStatusSnapshot:
@@ -179,10 +183,12 @@ class IbkrMarketStatusSource:
         symbols = (*symbols, *self._option_side(lambda lines: lines.underlyings(), ()))
         self._demand = tuple(dict.fromkeys(symbol.upper() for symbol in symbols))
         client, now = self._client(), self._clock()
-        if client is None or not client.is_connected():
+        shared = None if client is None else getattr(client, "shared_feed", None)
+        connected = client is not None and (client.is_connected() if shared is None else shared.is_connected())
+        if not connected:
             await self.close()
             return self._snapshot(self._clock(), connected=False)
-        if client.connection_state != "connected":
+        if getattr(client, "shared_feed", None) is None and client.connection_state != "connected":
             # 1100 may recover as 1102 (data maintained). Keep ownership while
             # refusing all data; the restore transition fences prior receipts.
             if client.connection_state != "soft_lost":
@@ -198,7 +204,7 @@ class IbkrMarketStatusSource:
                 for symbol, previous in tuple(self._subscriptions.items()):
                     if previous.ticker is not None:
                         previous.ticker.updateEvent -= previous.callback
-                        self._subscriptions[symbol] = MarketSubscription(symbol, now, ticker=previous.ticker)
+                        self._subscriptions[symbol] = MarketSubscription(symbol, now, ticker=previous.ticker, lease=previous.lease)
             else:
                 await self.close()
                 self._owner = client
@@ -314,11 +320,12 @@ class IbkrMarketStatusSource:
         try:
             async with self._qualifications:
                 contract = await asyncio.wait_for(qualify_underlying(client, symbol), timeout=3)
-                if self._generation != generation or client.connection_state != "connected":
+                if self._generation != generation or not quotes_connected(client):
                     return
                 # ib_async keys market-data requests by contract object identity.
                 # A dedicated object prevents another consumer cancelling ours.
-                subscription.ticker = client.ib.reqMktData(copy(contract), "233", False, False)
+                subscription.lease = request_quote(client, copy(contract))
+                subscription.ticker = subscription.lease.ticker
                 self._attach(subscription, client, generation)
         except asyncio.CancelledError:
             raise
@@ -335,15 +342,16 @@ class IbkrMarketStatusSource:
             if (
                 self._subscriptions.get(subscription.symbol) is not subscription
                 or self._generation != generation or self._client_generation(client) != generation
-                or client.connection_state != "connected"
+                or not quotes_connected(client)
             ):
                 return
-            for transition in subscription.ingest(ticker, self._clock()):
+            received = subscription.lease.received_at_ms if subscription.lease is not None else None
+            for transition in subscription.ingest(ticker, self._clock() if received is None else received):
                 self._retain_halt(transition)
             self._publish()
         subscription.callback = receive
         subscription.ticker.updateEvent += receive
-        request_id = client.ib.wrapper.ticker2ReqId["mktData"].get(subscription.ticker)
+        request_id = None if subscription.lease is None else subscription.lease.request_id
         subscription.request_id = request_id if isinstance(request_id, int) else None
 
     def _on_error(self, req_id: int, code: int, _message: str, _contract: Any) -> None:
@@ -362,7 +370,7 @@ class IbkrMarketStatusSource:
 
     def _connected(self) -> bool:
         return (
-            self._owner is not None and self._owner.connection_state == "connected"
+            self._owner is not None and quotes_connected(self._owner)
             and self._generation == self._client_generation(self._owner)
         )
 

@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from app.broker.ibkr.bars import (
     IBKRBarInterrupted,
+    IBKRBarSubscriptionStalled,
     _check_realtime_subscription_liveness,
     _contract_venue,
     _RealtimeBarSubscriptionRegistry,
@@ -19,7 +20,15 @@ from app.broker.ibkr.bars import (
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.market_subscription import REQUEST_FAILURE_CODES, install_market_data_callbacks
 from app.broker.ibkr.minute_assembler import _bar_time_ms, _validated_contribution
-from app.marketdata.shared.protocol import FeedUnavailable, Frame, QuoteUpdate, SourceBar, Subscription, Tick
+from app.marketdata.shared.protocol import (
+    FeedUnavailable,
+    Frame,
+    QuoteUpdate,
+    SourceBar,
+    SourceHealth,
+    Subscription,
+    Tick,
+)
 from app.utils.timestamps import now_ms_utc
 
 QUOTE_FIELDS = (
@@ -49,13 +58,16 @@ class IbkrSource:
         if not client.settings.readonly:
             raise ValueError("Shared IBKR source must be read-only")
         self._client = client
-        self._boot = uuid4().hex
+        self._boot = f"{now_ms_utc()}-{uuid4().hex}"
         self._active: set[tuple[str, int]] = set()
         self._bar_registry = _RealtimeBarSubscriptionRegistry()
 
     def _epoch(self) -> str:
         client = self._client
         return f"{self._boot}:{client.connection_generation}:{client.data_loss_epoch}:{client.connectivity_lost_count}"
+
+    def health(self) -> SourceHealth:
+        return SourceHealth(connected=self._current(self._epoch()), epoch=self._epoch(), observed_at_ms=now_ms_utc())
 
     async def stream(self, subscription: Subscription) -> AsyncIterator[Frame]:
         from ib_async import Contract
@@ -177,6 +189,8 @@ class IbkrSource:
                 yield frame_of(raw, received)
         except IBKRBarInterrupted as exc:
             yield Frame(kind="error", epoch=epoch, received_at_ms=now_ms_utc(), reason=str(exc), cause=exc.cause)
+        except IBKRBarSubscriptionStalled as exc:
+            yield Frame(kind="error", epoch=epoch, received_at_ms=now_ms_utc(), reason=str(exc), cause="stalled")
         finally:
             bars.updateEvent -= receive
             lease.release()

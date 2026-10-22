@@ -591,7 +591,10 @@ class IbkrMarketDataFeed:
 
     def health(self, symbol: str | None = None) -> FeedHealth:
         """Return aggregate or symbol-scoped point-in-time feed health."""
-        connected = self._client.is_connected() and not self._client.connection_lost
+        shared = getattr(self._client, "shared_feed", None)
+        connected = shared.is_connected() if shared is not None else (
+            self._client.is_connected() and not self._client.connection_lost
+        )
         now = now_ms_utc()
         stale = False
         reason = ""
@@ -665,7 +668,8 @@ class IbkrMarketDataFeed:
         """Advance the raw-source liveness watermark at the ingestion edge."""
         state = self._state_for(symbol)
         state.last_source_ms = source_ms
-        state.last_source_wall_ms = now_ms_utc()
+        shared = getattr(self._client, "shared_feed", None)
+        state.last_source_wall_ms = now_ms_utc() if shared is None else shared.bar_receipts.get(symbol.upper())
 
     @staticmethod
     def _translate(ibkr_bar: IbkrMinuteBar) -> MarketDataBar:

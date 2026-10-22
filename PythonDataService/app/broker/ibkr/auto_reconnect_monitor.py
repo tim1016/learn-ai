@@ -750,6 +750,9 @@ def realtime_feed_healthy(
     real-time-bar pacer ahead of the bots' post-restore resubscribe. The
     monitor is a parameter so each caller keeps its own lookup seam.
     """
+    shared = getattr(client, "shared_feed", None)
+    if shared is not None:
+        return shared.is_connected()
     if not client.is_connected() or client.connection_lost:
         return False
     return monitor is None or monitor.recovery_state == "HEALTHY"

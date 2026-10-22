@@ -50,6 +50,7 @@ from app.broker.ibkr.models import (
     IbkrSurfaceSnapshot,
     OptionRight,
 )
+from app.marketdata.shared.quotes import QuoteLease, request_quote
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -141,16 +142,21 @@ async def stream_option_surface(
     by_expiry_conid: dict[int, dict[int, tuple[float, OptionRight]]] = {}
     tickers_by_expiry: dict[int, list] = {}
     stock_ticker = None
+    leases: list[QuoteLease] = []
     all_contracts: list = []
 
     try:
-        stock_ticker = client.ib.reqMktData(stock, "", False, False)
+        stock_lease = request_quote(client, stock)
+        leases.append(stock_lease)
+        stock_ticker = stock_lease.ticker
         for exp, contracts in qualified_by_expiry.items():
             conid_map: dict[int, tuple[float, OptionRight]] = {}
             tlist: list = []
             for c in contracts:
                 conid_map[int(c.conId)] = (float(c.strike), c.right)
-                ticker = client.ib.reqMktData(c, GENERIC_TICK_LIST, False, False)
+                lease = request_quote(client, c, GENERIC_TICK_LIST)
+                leases.append(lease)
+                ticker = lease.ticker
                 tlist.append(ticker)
                 all_contracts.append(c)
             by_expiry_conid[exp] = conid_map
@@ -192,13 +198,5 @@ async def stream_option_surface(
                 as_of_ms=now_ms_utc(),
             )
     finally:
-        # Cancel every subscription so we don't leak market-data lines.
-        for c in all_contracts:
-            try:
-                client.ib.cancelMktData(c)
-            except Exception as exc:
-                logger.debug("cancelMktData(%s) raised on shutdown: %s", c, exc)
-        try:
-            client.ib.cancelMktData(stock)
-        except Exception as exc:
-            logger.debug("cancelMktData(underlying) raised on shutdown: %s", exc)
+        for lease in leases:
+            lease.release()

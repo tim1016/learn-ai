@@ -65,7 +65,7 @@ class Gateway:
         self._requests_made = 0
         self._con_ids: dict[str, int] = {}
         self.client = Mock(
-            connection_generation=1, connectivity_lost_count=0, connection_lost=False,
+            shared_feed=None, connection_generation=1, connectivity_lost_count=0, connection_lost=False,
             connection_state="connected", last_event_ms=NOW, last_ibkr_code=None,
         )
         self.client.is_connected.return_value = True

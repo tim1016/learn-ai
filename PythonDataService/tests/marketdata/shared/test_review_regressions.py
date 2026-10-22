@@ -254,3 +254,20 @@ async def test_qualification_cannot_substitute_another_exchange() -> None:
         assert not client.ib.opened
     finally:
         await stream.aclose()
+
+
+async def test_native_bar_stall_keeps_the_recoverable_failure_kind(monkeypatch: Any) -> None:
+    from app.broker.ibkr.bars import IBKRBarSubscriptionStalled
+
+    def stalled(**kwargs: Any) -> Any:
+        raise IBKRBarSubscriptionStalled("source stopped advancing")
+
+    monkeypatch.setattr("app.marketdata.shared.native._check_realtime_subscription_liveness", stalled)
+    client = Client()
+    client.ib = BarBroker()
+    stream = FeedHub(IbkrSource(client)).stream(subscription(kind="bars"))
+    try:
+        error = await asyncio.wait_for(anext(stream), 1)
+        assert error.kind == "error" and error.cause == "stalled"
+    finally:
+        await stream.aclose()

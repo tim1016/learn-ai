@@ -92,6 +92,7 @@ def _make_ibkr_bar_with(**overrides: Any) -> SimpleNamespace:
 
 def _fake_connected_client(*, connected: bool = True, connection_lost: bool = False) -> MagicMock:
     client = MagicMock()
+    client.shared_feed = None
     client.is_connected.return_value = connected
     client.connection_lost = connection_lost
     return client

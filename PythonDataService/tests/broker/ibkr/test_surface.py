@@ -57,6 +57,7 @@ class _FakeIb:
 
     def __init__(self) -> None:
         self.cancel_calls: list = []
+        self.wrapper = SimpleNamespace(ticker2ReqId={"mktData": SimpleNamespace(get=lambda ticker: None)})
         self._next_conid = 100
         self._qualify_calls = 0
 
@@ -85,7 +86,11 @@ class _FakeIb:
 class _FakeClient:
     """Shim that satisfies the surface stream's ``IbkrClient`` contract."""
 
+    data_loss_epoch = 0
+
     def __init__(self) -> None:
+        self.connection_generation = 1
+        self.shared_feed = None
         self.ib = _FakeIb()
 
     def require_connected(self) -> None:

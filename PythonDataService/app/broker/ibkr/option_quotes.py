@@ -78,6 +78,7 @@ from app.broker.ibkr.option_chain import (
     listed_expiries,
     occ_root,
 )
+from app.marketdata.shared.quotes import QuoteLease, quotes_connected, request_quote
 from app.options.contract import OptionContract
 from app.options.expiry import option_expiry_anchor_ms
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
@@ -179,6 +180,7 @@ class OptionLine:
     ticker: Any = None
     callback: Any = None
     request_id: int | None = None
+    lease: QuoteLease | None = None
     bid: QuoteSide | None = None
     ask: QuoteSide | None = None
     market_data_type: int | None = None
@@ -334,7 +336,7 @@ class OptionQuoteLines:
         if maintained and client is self._owner:
             for symbol, line in tuple(self._lines.items()):
                 line.ticker.updateEvent -= line.callback
-                self._lines[symbol] = OptionLine(line.contract, now, ticker=line.ticker)
+                self._lines[symbol] = OptionLine(line.contract, now, ticker=line.ticker, lease=line.lease)
                 self._attach(self._lines[symbol], client)
         else:
             self.release()
@@ -625,8 +627,8 @@ class OptionQuoteLines:
         self._without = without
 
     def _open(self, contract: OptionContract, listed: ListedContract, client: IbkrClient, now: int) -> None:
-        ticker = client.ib.reqMktData(copy(listed.ibkr_contract), "", False, False)
-        line = OptionLine(contract, now, ticker=ticker)
+        lease = request_quote(client, copy(listed.ibkr_contract))
+        line = OptionLine(contract, now, ticker=lease.ticker, lease=lease)
         self._lines[contract.occ_symbol] = line
         self._attach(line, client)
 
@@ -637,10 +639,11 @@ class OptionQuoteLines:
             if (
                 self._lines.get(symbol) is not line
                 or self._generation != generation
-                or client.connection_state != "connected"
+                or not quotes_connected(client)
             ):
                 return
-            line.ingest(ticker, self._clock())
+            received = line.lease.received_at_ms if line.lease is not None else None
+            line.ingest(ticker, self._clock() if received is None else received)
             if line.has_a_whole_quote:
                 self._line_backoff.succeeded(symbol)
 
@@ -651,13 +654,10 @@ class OptionQuoteLines:
 
     @staticmethod
     def _request_id(client: IbkrClient, line: OptionLine) -> int | None:
-        request_id = client.ib.wrapper.ticker2ReqId["mktData"].get(line.ticker)
-        return request_id if isinstance(request_id, int) else None
+        return None if line.lease is None else line.lease.request_id
 
     def _drop(self, symbol: str) -> None:
         line = self._lines.pop(symbol)
         line.ticker.updateEvent -= line.callback
-        owner = self._owner
-        # After a reconnect the library has forgotten the request; there is nothing left to cancel.
-        if owner is not None and owner.is_connected() and self._request_id(owner, line) is not None:
-            owner.ib.cancelMktData(line.ticker.contract)
+        if line.lease is not None:
+            line.lease.release()

@@ -13,6 +13,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.broker.ibkr.models import _coerce_quote, _coerce_size
+from app.marketdata.shared.quotes import QuoteLease
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
 from app.schemas.market_liveness import (
     MarketStatusSource,
@@ -88,6 +89,7 @@ class MarketSubscription:
     ticker: Any = None
     callback: Any = None
     request_id: int | None = None
+    lease: QuoteLease | None = None
     last_received_at_ms: int | None = None
     bid_received_at_ms: int | None = None
     ask_received_at_ms: int | None = None
@@ -109,6 +111,9 @@ class MarketSubscription:
             self.bid_priced = self.ask_priced = False
             self.trade_timestamp_ms = self.trade_received_at_ms = None
             self.market_data_type = ticker.marketDataType
+        trade_ms = None if self.lease is None else self.lease.trade_ms
+        if trade_ms is None and ticker.rtTime is not None:
+            trade_ms = int(ticker.rtTime.timestamp() * 1000)
         transitions: list[SymbolTradingStatusEvidence] = []
         for tick in ticker.ticks:
             # Negative status evidence remains load-bearing even if the
@@ -122,8 +127,7 @@ class MarketSubscription:
             elif tick.tickType in (2, 3):
                 self.ask_received_at_ms = now
                 self.ask_priced = self.ask_priced or tick.tickType == 2
-            elif tick.tickType in (48, 77) and ticker.rtTime is not None:
-                trade_ms = int(ticker.rtTime.timestamp() * 1000)
+            elif tick.tickType in (48, 77) and trade_ms is not None:
                 if self.trade_timestamp_ms is None or trade_ms > self.trade_timestamp_ms:
                     self.trade_timestamp_ms = trade_ms
                     self.trade_received_at_ms = now

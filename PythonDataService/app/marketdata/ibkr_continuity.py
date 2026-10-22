@@ -104,6 +104,11 @@ class ResolvedBar:
     continuity_event_ref: str | None = None
 
 
+def _feed_generation(client: IbkrClient) -> int:
+    shared = getattr(client, "shared_feed", None)
+    return client.connection_generation if shared is None else shared.connection_generation
+
+
 def _healthy(client: IbkrClient) -> bool:
     return realtime_feed_healthy(client, get_monitor())
 
@@ -139,7 +144,7 @@ class ContinuityLoop:
     interruption: _OpenInterruption | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
-        self.generation = self.client.connection_generation
+        self.generation = (_feed_generation(self.client))
 
     # -- the three steps the feed's retry loop drives -----------------------
 
@@ -239,7 +244,7 @@ class ContinuityLoop:
                 f"{self.symbol} was asked to recover with no interruption open"
             )
         await self._wait_for_healthy(deadline_ms=interruption.deadline_ms)
-        new_generation = self.client.connection_generation
+        new_generation = (_feed_generation(self.client))
         interruption.recovered_ref = await self._record(
             self._event(
                 "recovered",

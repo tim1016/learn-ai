@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 import httpx
 from pydantic import ValidationError
 
-from app.marketdata.shared.protocol import FeedUnavailable, Frame, Subscription
+from app.marketdata.shared.protocol import FeedUnavailable, Frame, SourceHealth, Subscription
 
 MAX_FRAME_BYTES = 262_144
 
@@ -17,6 +17,17 @@ class FeedTransport:
         if not token:
             raise ValueError("Shared feed token is required")
         self._url, self._token = url.rstrip("/"), token
+
+    async def health(self) -> SourceHealth:
+        try:
+            async with httpx.AsyncClient(timeout=3, trust_env=False) as client:
+                response = await client.get(
+                    self._url + "/source-health", headers={"Authorization": f"Bearer {self._token}"}
+                )
+                response.raise_for_status()
+                return SourceHealth.model_validate_json(response.content)
+        except (httpx.HTTPError, ValidationError) as exc:
+            raise FeedUnavailable(f"Shared feed health unavailable ({type(exc).__name__})") from exc
 
     async def stream(self, subscription: Subscription) -> AsyncIterator[Frame]:
         timeout = httpx.Timeout(5, read=5)

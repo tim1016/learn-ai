@@ -61,7 +61,7 @@ class Frame(WireModel):
     bar: SourceBar | None = None
     quote: QuoteUpdate | None = None
     reason: str = ""
-    cause: Literal["socket_down", "soft_loss_1100", "data_lost_1101", "generation_changed"] | None = None
+    cause: Literal["socket_down", "soft_loss_1100", "data_lost_1101", "generation_changed", "stalled"] | None = None
     error_code: int | None = None
 
     @model_validator(mode="after")
@@ -73,3 +73,9 @@ class Frame(WireModel):
 
 class FeedUnavailable(Exception):
     """A source or delivery failed. It never grants permission to trade."""
+
+
+class SourceHealth(WireModel):
+    connected: bool
+    epoch: str
+    observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)

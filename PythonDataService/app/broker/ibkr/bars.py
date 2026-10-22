@@ -917,6 +917,15 @@ async def _iter_leased_raw_bars(
     ``stall_deferred`` lets that consumer hold the stall verdict while its
     clock-driven emit is still due.
     """
+    if getattr(client, "shared_feed", None) is not None:
+        from app.marketdata.shared.bars import shared_raw_bars
+
+        async with aclosing(shared_raw_bars(client, symbol, use_rth=use_rth,
+                                          request_deadline_ms=request_deadline_ms,
+                                          stall_deferred=stall_deferred)) as frames:
+            async for frame in frames:
+                yield frame
+        return
     client.require_connected()
     contract = await qualify_underlying(client, symbol)
     lease = await _REALTIME_BAR_SUBSCRIPTIONS.acquire(
