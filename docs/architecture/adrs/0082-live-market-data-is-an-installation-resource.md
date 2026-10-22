@@ -9,3 +9,11 @@ One extended-hours five-second TRADES source serves compatible bar consumers; ea
 Delivery is bounded per reader. A slow reader loses its own continuity explicitly, without blocking peers. A lost source terminates its generation for all readers; reconnect does not preserve quote readiness. New bar readers start at the source's present position and cannot replay historical entries. New quote readers wait for current price callbacks; no cached tick replay reconstructs a book across destructive size or data-mode transitions. Joining and heartbeats never renew evidence. The last reader releases its source. Original quote-side, halt and trade receipts remain authoritative for freshness.
 
 The internal transport uses the installed HTTP stack and a deployment-owned environment-only token. Redis pub/sub was considered but rejected: it would still require a new demand/lease protocol and would add a second lifecycle to the existing HTTP deployment. No new dependency is introduced. This decision authorizes implementation; it does not authorize changing or restarting a running live bot. Rollout is a separate operator procedure.
+
+Connection health, expected waiting and usable evidence remain separate.
+Waiting for the scheduled session or initial callback is a presentation fact;
+it does not authorize joining a delivering run. The existing delivering warmup
+fact requires an actual recent source observation. Both retain the closed-bar
+order gate. Initial source silence during a scheduled session has a bounded
+wait; established delivery going quiet remains a fault. This distinction avoids
+turning a correction to the operator's explanation into a trading permission.

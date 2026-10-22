@@ -59,6 +59,7 @@ _RESOURCE_LIMIT_SOURCES = (("cpus", "cpus"), ("mem_limit", "memory"))
 # .env.example declares the service's key set, so the render records the
 # declared contract on every machine.
 ENV_FILE_DEFAULTS = {
+    "FLEET_MARKET_DATA_ENV_FILE": "./deploy/fleet/env/market-data.env.example",
     "FLEET_LIVE_ENV_FILE": "./deploy/fleet/env/live.env.example",
     "FLEET_PAPER_ENV_FILE": "./deploy/fleet/env/paper.env.example",
     "FLEET_COORDINATOR_ENV_FILE": "./deploy/fleet/env/coordinator.env.example",

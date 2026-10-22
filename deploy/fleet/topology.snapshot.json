@@ -58,6 +58,8 @@
         "IBKR_LIVE_RUNS_ROOT",
         "IBKR_PORT",
         "IBKR_READONLY",
+        "IBKR_SHARED_FEED_TOKEN",
+        "IBKR_SHARED_FEED_URL",
         "POLYGON_API_KEY",
         "PORT",
         "TRUSTED_HOSTS"
@@ -109,6 +111,8 @@
         "IBKR_LIVE_RUNS_ROOT",
         "IBKR_PORT",
         "IBKR_READONLY",
+        "IBKR_SHARED_FEED_TOKEN",
+        "IBKR_SHARED_FEED_URL",
         "POLYGON_API_KEY",
         "PORT",
         "TRUSTED_HOSTS"
@@ -166,6 +170,35 @@
         "Frontend/src->/app/src:bind",
         "contracts->/contracts:bind"
       ]
+    },
+    "ibkr-market-data": {
+      "container_name": null,
+      "containment": {
+        "cpus": "1",
+        "mem_limit": "536870912",
+        "pids_limit": 128,
+        "read_only": true,
+        "tmpfs": [
+          "/tmp:size=64m,mode=1777"
+        ]
+      },
+      "env_file": [
+        "${FLEET_MARKET_DATA_ENV_FILE:-./deploy/fleet/env/market-data.env}"
+      ],
+      "environment_keys": [
+        "IBKR_BROKER_ENABLED",
+        "IBKR_CLIENT_ID",
+        "IBKR_HOST",
+        "IBKR_PORT",
+        "IBKR_READONLY",
+        "IBKR_SHARED_FEED_TOKEN"
+      ],
+      "image": null,
+      "networks": [
+        "app-network"
+      ],
+      "ports": [],
+      "volumes": []
     },
     "python-service": {
       "container_name": "polygon-data-service",
@@ -263,6 +296,7 @@
     "alpaca-paper-clerk",
     "db",
     "frontend",
+    "ibkr-market-data",
     "python-service",
     "redis"
   ],

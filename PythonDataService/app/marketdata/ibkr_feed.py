@@ -72,6 +72,7 @@ from app.marketdata.feed import (
     warmup_window_start_ms,
 )
 from app.marketdata.ibkr_continuity import MINUTE_INCOMPLETE_REASON_CODE, ContinuityLoop, ResolvedBar
+from app.services.session_authority import scheduled_exchange_phase_at_ms, scheduled_extended_session_bounds
 from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import now_ms_utc
 
@@ -90,11 +91,27 @@ class _SymbolLiveness:
     last_source_wall_ms: int | None = None
     first_bar_seen: bool = False
     active_count: int = 0
+    rth_count: int = 0
+    waiting_since_ms: int | None = None
 
-    def await_first_bar(self) -> None:
+    def await_first_bar(self, *, initial: bool = False) -> None:
         """Withdraw the closed-minute proof, and the source watermark of the line that lost it."""
         self.first_bar_seen = False
         self.last_source_ms = self.last_source_wall_ms = None
+        self.waiting_since_ms = now_ms_utc() if initial else None
+
+    def waiting(self, now_ms: int, stale_threshold_ms: int) -> bool:
+        """An expected wait grants no source-delivery or closed-bar proof."""
+        if self.first_bar_seen or self.last_source_wall_ms is not None or self.waiting_since_ms is None:
+            return False
+        phase = scheduled_exchange_phase_at_ms(now_ms)
+        if phase == "CLOSED" or (self.rth_count == self.active_count and phase != "RTH"):
+            return True
+        bounds = scheduled_extended_session_bounds(et_date_at_ms(now_ms))
+        assert bounds is not None  # The calendar just classified an active session.
+        opening = bounds.rth_open_ms if self.rth_count == self.active_count else bounds.open_ms
+        started = max(self.waiting_since_ms, opening)
+        return 0 <= now_ms - started < stale_threshold_ms
 
     def warming(self, now_ms: int, stale_threshold_ms: int) -> bool:
         """A source bar arrived since the proof was withdrawn, within the threshold."""
@@ -248,8 +265,9 @@ class IbkrMarketDataFeed:
         normalized_symbol = symbol.upper()
         liveness = self._state_for(normalized_symbol)
         if liveness.active_count == 0:
-            liveness.await_first_bar()
+            liveness.await_first_bar(initial=True)
         liveness.active_count += 1
+        liveness.rth_count += int(use_rth)
         logger.info(
             "MarketDataFeed consumer attached",
             extra={
@@ -275,6 +293,7 @@ class IbkrMarketDataFeed:
                     yield bar
         finally:
             liveness.active_count = max(0, liveness.active_count - 1)
+            liveness.rth_count = max(0, liveness.rth_count - int(use_rth))
             if liveness.active_count == 0:
                 liveness.await_first_bar()
             logger.info(
@@ -618,7 +637,8 @@ class IbkrMarketDataFeed:
 
         awaiting_first = [(name, state) for name, state in active_states if not state.first_bar_seen]
         warming_names = [name for name, state in awaiting_first if state.warming(now, self._stale_threshold_ms)]
-        silent_first = [name for name, _ in awaiting_first if name not in warming_names]
+        waiting_names = [name for name, state in awaiting_first if state.waiting(now, self._stale_threshold_ms)]
+        silent_first = [name for name, _ in awaiting_first if name not in warming_names and name not in waiting_names]
         stale_ages = [
             (name, now - freshness_wall_ms)
             for name, state in active_states
@@ -627,6 +647,7 @@ class IbkrMarketDataFeed:
             and now - freshness_wall_ms >= self._stale_threshold_ms
         ]
         warming = False
+        waiting = False
         if not connected:
             reason = "IBKR connection lost"
         elif silent_first:
@@ -643,9 +664,16 @@ class IbkrMarketDataFeed:
                 f"No source bar for {stale_names} in {oldest_age_ms // 1000}s "
                 f"(threshold {self._stale_threshold_ms // 1000}s)"
             )
-        elif warming_names:
-            stale = warming = True
+        elif warming_names or waiting_names:
+            stale = True
+            # 'warming' already authorizes a run to join a delivering source.
+            # A session/first-callback wait must not acquire that authority.
+            warming = bool(warming_names) and not waiting_names
+            waiting = bool(waiting_names)
             reason = (
+                f"The IBKR feed for {', '.join(waiting_names)} is connected and waiting for its session or first source bar; "
+                "orders wait for fresh, complete bar evidence"
+                if waiting_names else
                 f"The IBKR feed for {', '.join(warming_names)} is delivering; "
                 "its first closed minute is still being assembled, and orders wait for it"
             )
@@ -654,6 +682,7 @@ class IbkrMarketDataFeed:
             connected=connected,
             stale=stale,
             warming=warming,
+            waiting=waiting,
             last_bar_ms=last_bar_ms,
             reason=reason,
             active_subscription_count=active_count,

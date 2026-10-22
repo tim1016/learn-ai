@@ -99,8 +99,8 @@ RECONCILIATION_VERDICTS: Final[frozenset[str]] = frozenset(
 )
 
 # ── Channel states ───────────────────────────────────────────────────────────
-ChannelState = Literal["healthy", "unhealthy", "unknown"]
-CHANNEL_STATES: Final[frozenset[str]] = frozenset({"healthy", "unhealthy", "unknown"})
+ChannelState = Literal["healthy", "unhealthy", "warming", "unknown"]
+CHANNEL_STATES: Final[frozenset[str]] = frozenset({"healthy", "unhealthy", "warming", "unknown"})
 
 # ── Station ids (the six-station rail) ───────────────────────────────────────
 StationId = Literal["SIGNAL", "INTENT", "SUBMIT_GATE", "BROKER_ACK", "FILL", "RECONCILED"]
@@ -299,6 +299,7 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
         "The last sweep could not reach the broker; the verdict is out of date.",
     ),
     # Channel states
+    "warming": OperatorCopy("Waiting for a complete bar", "The feed is connected. Orders wait for fresh, complete bar evidence."),
     "healthy": OperatorCopy("Healthy", "The channel is connected and current."),
     "unhealthy": OperatorCopy(
         "Unhealthy",

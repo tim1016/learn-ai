@@ -433,7 +433,7 @@ async def test_health_active_without_first_closed_bar_is_stale(
 
     assert health.stale is True
     assert health.last_bar_ms is None
-    assert "first closed bar" in health.reason.lower()
+    assert health.waiting is True
     pending_bar.cancel()
     await asyncio.gather(pending_bar, return_exceptions=True)
     await stream.aclose()
@@ -486,7 +486,7 @@ def test_health_withdrawn_proof_with_no_delivery_since_is_not_warming(monkeypatc
     health = feed.health("SPY")
 
     assert (health.stale, health.warming) == (True, False)
-    assert "first closed bar" in health.reason
+    assert health.waiting is False
 
 
 @pytest.mark.parametrize(

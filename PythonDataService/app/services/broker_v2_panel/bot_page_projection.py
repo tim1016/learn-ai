@@ -566,7 +566,7 @@ _FEED_STATES: dict[str, HealthLineState] = {
     "not_recorded": "idle",
 }
 
-_CHANNEL_STATES: dict[str, HealthLineState] = {"healthy": "ok", "unhealthy": "problem", "unknown": "attention"}
+_CHANNEL_STATES: dict[str, HealthLineState] = {"healthy": "ok", "unhealthy": "problem", "warming": "attention", "unknown": "attention"}
 
 _NO_EFFECT_ON_STOPPED = "No effect on this stopped bot."
 

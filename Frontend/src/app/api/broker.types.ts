@@ -10885,6 +10885,11 @@ export interface components {
              * @enum {string}
              */
             stream: "market_data" | "execution";
+            /**
+             * Warming
+             * @default false
+             */
+            warming?: boolean;
         };
         /**
          * ChannelHealthView
@@ -10905,7 +10910,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "healthy" | "unhealthy" | "unknown";
+            state: "healthy" | "unhealthy" | "warming" | "unknown";
             /**
              * Stream
              * @enum {string}

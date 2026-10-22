@@ -163,7 +163,7 @@ new lane. Changing a saved profile does not transfer an account assignment.
    configuration: it contains secrets.
 3. Check that neither the committed overlay nor your local override disables
    the data feed. Every lane needs `IBKR_BROKER_ENABLED: "true"` and
-   `IBKR_READONLY: "true"`; client IDs must differ (default Live `1`, Paper `2`).
+   `IBKR_READONLY: "true"`; client IDs must differ (default Live `1`, Paper `2`, shared source `3`).
    `environment:` overrides an `env_file` value, and the last Compose file can
    override an earlier one. After changing these settings, recreate again.
 
@@ -267,7 +267,7 @@ Inside the existing `services:` mapping in `compose.fleet.dev.yaml`, add:
       FLEET_AGENT_ENDPOINT_REF: alpaca-paper-two-agent
       FLEET_WORKER_SERVICE: alpaca-paper-two
       FLEET_COMPOSE_FILES: compose.yaml,compose.fleet.dev.yaml
-      IBKR_CLIENT_ID: "3"
+      IBKR_CLIENT_ID: "4"
 ```
 
 Inside the existing `volumes:` mapping in that same file, add:
@@ -700,3 +700,50 @@ Implementation checks: `scripts/test_alpaca_onboarding_gates.py`, worker-lifecyc
 regressions, durable permission regressions, IBKR liveness regressions, and the
 fleet topology guard. These protect behavior; operational readiness must still
 be checked against the running accounts with section 1.
+
+## Shared read-only live source (#3388)
+
+The fleet's `ibkr-market-data` service owns compatible live bar and quote
+subscriptions for every lane, including individual option contracts. Each
+clerk still uses its own read-only Gateway session for history and contract
+discovery. Default client IDs are Live `1`, Paper `2`, source `3`; any extra
+lane must use another unused ID (the third-lane example uses `4`). Keep these
+IDs distinct even when all lanes use the shared source. Use the existing
+Gateway login and live-data entitlement; Alpaca supplies execution only.
+
+Stage this migration only in an explicitly approved Live maintenance window.
+Do not apply it to a running real-money bot. Prepare the image and files first:
+
+1. Copy `deploy/fleet/env/market-data.env.example` to `market-data.env`, restrict
+   it to mode `600`, and set a strong `IBKR_SHARED_FEED_TOKEN`. Copy the same
+   token into each lane's own env file. Never put it in Compose `environment:`
+   or command-line arguments, print rendered configuration, or copy Alpaca
+   credentials into the source file. Source and lanes must match before a
+   lane is recreated; a missing/incorrect token fails closed.
+2. The committed fleet files set `IBKR_SHARED_FEED_URL` to
+   `http://ibkr-market-data:8000`. Each additional lane inherits that address
+   and carries the matching token in its own env file. The source has no host
+   port, custody mount, or execution credentials. Check local overlays for
+   conflicting URLs, IDs, disabled IBKR, or writable Gateway settings.
+3. Build the reviewed image without restarting services. In an isolated
+   qualification deployment, start the source, then Paper; prove fresh stock
+   bars and the exact option contract's live quote. A source `/health` response
+   proves only that the process is up. Authenticated `/source-health` and each
+   consumer's current, complete evidence determine readiness. Qualify join,
+   last-release, worker crash and source reconnect behavior before Live.
+4. During the approved window, stop Live decisions through the normal controls,
+   preserve the existing custody volumes and restart receipts, and recreate
+   the source and lanes with the same reviewed Compose file set. Do not mix a
+   newly cut-over lane with an old locally subscribing lane: they can request
+   duplicate data. Resume only through the existing readiness and admission
+   checks for the actual traded symbols/contracts.
+
+When the source disconnects, restore its Gateway connectivity and inspect its
+logs; each clerk's history connection can remain healthy during that outage.
+A connected consumer waiting for its session or first complete bar displays a
+preparation state. New orders still require fresh, complete evidence. Stalled,
+delayed, frozen, overflowing or disconnected delivery cannot confer readiness.
+For rollback, stop decisions first and roll back all cut-over lanes together
+in the maintenance window, preserving custody and unique client IDs. Removing
+only the source leaves configured consumers unavailable; they do not silently
+fall back to private subscriptions.

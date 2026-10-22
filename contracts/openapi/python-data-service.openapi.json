@@ -8072,6 +8072,11 @@
             ],
             "title": "Stream",
             "type": "string"
+          },
+          "warming": {
+            "default": false,
+            "title": "Warming",
+            "type": "boolean"
           }
         },
         "required": [
@@ -8110,6 +8115,7 @@
             "enum": [
               "healthy",
               "unhealthy",
+              "warming",
               "unknown"
             ],
             "title": "State",
