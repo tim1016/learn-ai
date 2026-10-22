@@ -57,12 +57,14 @@ class SnapshotRunData(ArchivedRunData):
         self.actual_reads.add(relative)
         return None if relative in self.absent else super().listing(trading_date)
 
-    def option_day(self, contract: OptionContract, trading_date: date) -> Captured[Sequence[MinuteBar]] | None:
-        relative = str(OptionMinuteBarPath(contract.root, contract.occ_symbol, trading_date).relative_path())
-        if relative in self.absent:
-            self.actual_reads.add(relative)
-            return None
-        return super().option_day(contract, trading_date)
+    def option_days(
+        self, contracts: Sequence[OptionContract], trading_date: date,
+    ) -> dict[str, Captured[Sequence[MinuteBar]] | None]:
+        recorded = {contract.occ_symbol: str(OptionMinuteBarPath(contract.root, contract.occ_symbol, trading_date).relative_path())
+                    for contract in contracts}
+        self.actual_reads.update(relative for relative in recorded.values() if relative in self.absent)
+        answered = super().option_days([c for c in contracts if recorded[c.occ_symbol] not in self.absent], trading_date)
+        return {contract.occ_symbol: answered.get(contract.occ_symbol) for contract in contracts}
 
 
 def capture_snapshot(protocol: OptionsSearchProtocol, blobs: BlobStore, *, lake_root: Path | None = None) -> Snapshot:

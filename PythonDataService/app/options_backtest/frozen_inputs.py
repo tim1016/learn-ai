@@ -306,8 +306,7 @@ def _decode(session: FrozenSession, underlying: str, day: date, blobs: BlobStore
     if session.snapshot.manifest or session.snapshot.absent:
         rows["underlying"] = data.underlying_day(day)
         rows["listing"] = data.listing(day)
-        rows["options"] = {symbol: data.option_day(OptionContract.from_occ_symbol(symbol), day)
-                           for symbol in session.contracts}
+        rows["options"] = data.option_days([OptionContract.from_occ_symbol(symbol) for symbol in session.contracts], day)
     return rows
 
 
