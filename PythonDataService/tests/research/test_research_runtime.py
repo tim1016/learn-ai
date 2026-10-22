@@ -562,11 +562,8 @@ async def test_a_boot_releases_what_a_dead_generation_left_staged_and_nothing_el
     import json
     from urllib.parse import urlsplit, urlunsplit
 
-    import redis
-
     import app.jobs.progress as progress_module
-    from app.jobs import facade
-    from app.options_backtest import input_staging, saved_runs
+    from app.options_backtest import saved_runs
     from app.options_backtest.input_staging import InputStaging, job_root
     from app.research.persistence import ownership
     from app.research.persistence.schema import ensure_schema

@@ -200,3 +200,25 @@ def test_every_rendered_env_file_path_redirects_to_a_committed_example() -> None
                 "this repo does not commit — the render would be reproducible only where "
                 "that file happens to exist (#2235)."
             )
+
+
+# The coordinator leaves these out on purpose: lane custody stays on the clerks.
+_CLERK_CUSTODY_TARGETS = frozenset({"/app/artifacts/alpaca_clerk", "/app/alpaca_clerk_legacy"})
+
+
+def _mount_target(entry: str) -> str:
+    while (unbraced := re.sub(r"\$\{[^{}]*\}", "SOURCE", entry)) != entry:
+        entry = unbraced
+    return entry.split(":")[1]
+
+
+def test_the_coordinator_keeps_every_base_data_plane_mount_except_lane_custody() -> None:
+    """compose.fleet.dev.yaml replaces the data plane's whole volume list, so a mount compose.yaml adds vanishes
+    from the fleet topology unless it is repeated there. The option archive's backup destination and restore
+    runbook did, and the nightly backup refused every pass (#3455)."""
+    base = yaml.load((ROOT / "compose.yaml").read_text(), Loader=yaml.BaseLoader)["services"]["python-service"]["volumes"]
+    expected = {_mount_target(entry) for entry in base} - _CLERK_CUSTODY_TARGETS
+    assert {"/app/app", "/lake-backup"} <= expected, "the base mounts did not parse; this contract would check nothing"
+    rendered = {entry.rsplit("->", 1)[1].rsplit(":", 1)[0]
+                for entry in _snapshot()["service_detail"]["python-service"]["volumes"]}
+    assert sorted(expected - rendered) == [], "the fleet coordinator drops these base data-plane mounts"
