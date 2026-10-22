@@ -2,8 +2,8 @@
 
 The estimated fees are worked by hand from the rates the option fee model pins (``app/broker/alpaca/option_fees.py``):
 
-- 2026-10-09: SEC 0.0000206 of a sale's value; TAF 0 (paused); CAT 0.000003 a share, so 0.0003 a contract of 100
-  shares; ORF 0.015 a contract; OCC 0.025 a contract.
+- 2026-10-09: SEC 0.0000206 of a sale's value; TAF 0.003 a contract (what Alpaca Paper posts through FINRA's pause);
+  CAT 0.000003 a share, so 0.0003 a contract of 100 shares; ORF 0.015 a contract; OCC 0.025 a contract.
 - 2026-09-30 and 2026-07-01: the same, with TAF 0.00329 a contract.
 - Before 2026-07-01 there is no CAT rate; before 2026-01-01 there is no TAF rate and before 2026-02-12 no ORF or OCC
   rate; before 2024-05-22 there is no SEC rate.
@@ -104,7 +104,7 @@ def test_a_policy_that_charges_nothing_or_a_fee_per_contract_charges_alike_on_a_
             "0.0875",
             id="a per-contract fee is never rounded in any context",
         ),
-        pytest.param(ESTIMATED, 3, "sell", 2, "1.45", "0.10", id="an estimated fee does not depend on the context"),
+        pytest.param(ESTIMATED, 3, "sell", 2, "1.45", "0.11", id="an estimated fee does not depend on the context"),
     ],
 )
 def test_a_fee_does_not_depend_on_the_decimal_context_it_is_asked_in(
@@ -122,12 +122,13 @@ def test_a_fee_does_not_depend_on_the_decimal_context_it_is_asked_in(
         # Buy 2 at 1.50 on 2026-10-09: CAT 2 x 100 x 0.000003 = 0.0006 up to 0.01; ORF 2 x 0.015 = 0.03;
         # OCC 2 x 0.025 = 0.05; no SEC or TAF on a buy. 0.01 + 0.03 + 0.05 = 0.09.
         pytest.param(date(2026, 10, 9), "buy", 2, "1.50", 100, "0.09", id="a buy of 2 at 1.50"),
-        # Sell 2 at 1.45: SEC 2 x 1.45 x 100 x 0.0000206 = 0.005974 up to 0.01; TAF 2 x 0 = 0; and the buy's
-        # CAT 0.01, ORF 0.03, OCC 0.05. 0.01 + 0 + 0.01 + 0.03 + 0.05 = 0.10.
-        pytest.param(date(2026, 10, 9), "sell", 2, "1.45", 100, "0.10", id="a sale of 2 at 1.45"),
-        # Sell 10 at 12.00: SEC 10 x 12 x 100 x 0.0000206 = 0.2472 up to 0.25; TAF 0; CAT 10 x 100 x 0.000003 = 0.003
-        # up to 0.01; ORF 10 x 0.015 = 0.15; OCC 10 x 0.025 = 0.25. 0.25 + 0 + 0.01 + 0.15 + 0.25 = 0.66.
-        pytest.param(date(2026, 10, 9), "sell", 10, "12.00", 100, "0.66", id="a sale of 10 at 12.00"),
+        # Sell 2 at 1.45: SEC 2 x 1.45 x 100 x 0.0000206 = 0.005974 up to 0.01; TAF 2 x 0.003 = 0.006 up to 0.01; and
+        # the buy's CAT 0.01, ORF 0.03, OCC 0.05. 0.01 + 0.01 + 0.01 + 0.03 + 0.05 = 0.11.
+        pytest.param(date(2026, 10, 9), "sell", 2, "1.45", 100, "0.11", id="a sale of 2 at 1.45"),
+        # Sell 10 at 12.00: SEC 10 x 12 x 100 x 0.0000206 = 0.2472 up to 0.25; TAF 10 x 0.003 = 0.03; CAT
+        # 10 x 100 x 0.000003 = 0.003 up to 0.01; ORF 10 x 0.015 = 0.15; OCC 10 x 0.025 = 0.25.
+        # 0.25 + 0.03 + 0.01 + 0.15 + 0.25 = 0.69.
+        pytest.param(date(2026, 10, 9), "sell", 10, "12.00", 100, "0.69", id="a sale of 10 at 12.00"),
         # Sell 3 at 2.00: SEC 3 x 2.00 x 100 x 0.0000206 = 0.01236 up to 0.02; TAF 3 x 0.00329 = 0.00987 up to 0.01;
         # CAT 3 x 100 x 0.000003 = 0.0009 up to 0.01; ORF 3 x 0.015 = 0.045 up to 0.05; OCC 3 x 0.025 = 0.075 up to
         # 0.08. 0.02 + 0.01 + 0.01 + 0.05 + 0.08 = 0.17
@@ -161,26 +162,26 @@ def test_a_fee_does_not_depend_on_the_decimal_context_it_is_asked_in(
             "0.08",
             id="the first day with every rate published is priced",
         ),
-        # Sell 1 at 0.00 on 2026-10-09: SEC is a share of the sale's value, which is nothing; TAF 0; CAT 0.0003 up to
-        # 0.01; ORF 0.015 up to 0.02; OCC 0.025 up to 0.03. 0 + 0 + 0.01 + 0.02 + 0.03 = 0.06.
+        # Sell 1 at 0.00 on 2026-10-09: SEC is a share of the sale's value, which is nothing; TAF 0.003 up to 0.01; CAT
+        # 0.0003 up to 0.01; ORF 0.015 up to 0.02; OCC 0.025 up to 0.03. 0 + 0.01 + 0.01 + 0.02 + 0.03 = 0.07.
         pytest.param(
             date(2026, 10, 9),
             "sell",
             1,
             "0.00",
             100,
-            "0.06",
+            "0.07",
             id="a sale that fills at nothing owes no SEC fee",
         ),
         # At a cent the sale has a value, however small, and its SEC fee 100 x 0.01 x 0.0000206 = 0.0000206 rounds up to
-        # 0.01: 0.07.
+        # 0.01: 0.08.
         pytest.param(
             date(2026, 10, 9),
             "sell",
             1,
             "0.01",
             100,
-            "0.07",
+            "0.08",
             id="a sale at a cent owes its SEC fee up to the cent",
         ),
         pytest.param(
@@ -204,14 +205,15 @@ def test_a_fee_does_not_depend_on_the_decimal_context_it_is_asked_in(
             id="the contracts own multiplier counts in a buy",
         ),
         # Sell them at 1.45: SEC 1,000 x 1.45 x 10 x 0.0000206 = 0.2987 up to 0.30 (a multiplier of 100 would make it
-        # 2.987 up to 2.99); TAF 0; CAT 0.03; ORF 15.00; OCC 25.00. 0.30 + 0 + 0.03 + 15.00 + 25.00 = 40.33.
+        # 2.987 up to 2.99); TAF 1,000 x 0.003 = 3.00; CAT 0.03; ORF 15.00; OCC 25.00.
+        # 0.30 + 3.00 + 0.03 + 15.00 + 25.00 = 43.33.
         pytest.param(
             date(2026, 10, 9),
             "sell",
             1000,
             "1.45",
             10,
-            "40.33",
+            "43.33",
             id="the contracts own multiplier counts in a sale",
         ),
     ],
@@ -327,13 +329,14 @@ def _charged_per_fill(fills: list[Fill]) -> Decimal:
 @pytest.mark.parametrize(
     ("fills", "per_fill", "settled"),
     [
-        # By fill: 0.09 + 0.10 = 0.19. Settled as a day: SEC 0.005974 up to 0.01; TAF 0; CAT 0.0006 + 0.0006 = 0.0012 up
-        # to 0.01; ORF 0.03 + 0.03 = 0.06; OCC 0.05 + 0.05 = 0.10. 0.01 + 0 + 0.01 + 0.06 + 0.10 = 0.18. The extra cent
-        # is CAT, which each fill rounded up and the day rounded once.
+        # By fill: 0.09 + 0.11 = 0.20. Settled as a day: SEC 0.005974 up to 0.01; TAF 0.006 up to 0.01 (only the sale owes
+        # it); CAT 0.0006 + 0.0006 = 0.0012 up to 0.01; ORF 0.03 + 0.03 = 0.06; OCC 0.05 + 0.05 = 0.10.
+        # 0.01 + 0.01 + 0.01 + 0.06 + 0.10 = 0.19. The extra cent is CAT, which each fill rounded up and the day
+        # rounded once.
         pytest.param(
             (("buy", 2, "1.50"), ("sell", 2, "1.45")),
+            "0.20",
             "0.19",
-            "0.18",
             id="a buy and its sale cost a cent more charged per fill than settled as the day",
         ),
         # By fill each buy owes CAT 0.0003 up to 0.01, ORF 0.015 up to 0.02, OCC 0.025 up to 0.03: 0.06, five times
@@ -347,8 +350,8 @@ def _charged_per_fill(fills: list[Fill]) -> Decimal:
         ),
         pytest.param(
             (("sell", 10, "12.00"),),
-            "0.66",
-            "0.66",
+            "0.69",
+            "0.69",
             id="a lone fill costs exactly what its day settles to",
         ),
     ],

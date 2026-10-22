@@ -642,9 +642,10 @@ proof of them.
   morning after, dated the trading day. A same-day run cannot check its fee
   estimates. The 2026-10-15 comparison of the previous day's rows found that
   Alpaca's OCC and OPT TAF charges exceed this model's estimates (#3306); see
-  the run record below. The model now rounds OCC per execution, as Paper posts
-  it, so only the OPT TAF difference stands. Check the posted rows before
-  qualifying fee accounting.
+  the run record below. The model now rounds OCC per execution and charges OPT
+  TAF at $0.003 a sold contract, as Paper posts them (#3306), so both
+  differences are closed for the four days recorded (golden FEE-003). Check the
+  posted rows before qualifying fee accounting.
 - **Assignment, exercise and expiry.** No event for them arrives on the trade
   stream, and a later activity row arrives a day after. Nothing in a same-day
   experiment exercises that path.
@@ -860,7 +861,8 @@ ORF ($0.57), CAT ($0.02) and OPT REG/SEC ($0.11) agree exactly. Total posted
 fees were $1.90 against the model's $1.65, $0.25 more. The two model differences
 are tracked separately in #3306; the qualification does not change the model.
 (Afterwards the model was changed to round OCC per execution, which removes the
-OCC difference; the OPT TAF difference stands.)
+OCC difference, and to charge OPT TAF at $0.003 a sold contract, which removes
+the TAF difference: 19 × $0.003 = $0.057 rounds up to the $0.06 posted.)
 
 At the account's Home read before the next experiment, there were no running
 bots or held positions and no fee notice was visible. Home still displayed
@@ -961,8 +963,9 @@ The model comparison uses `fees_for_option_fill` and `settle_option_session`
 over the four previously recorded fills and the two recorded contract
 multipliers. This is another observation of #3306's OCC and OPT TAF difference,
 classified as a fee posting; no rate, rounding rule or tolerance was changed.
-(Afterwards the model was changed to round OCC per execution: it now predicts
-$0.12 of OCC, the posted amount, and the day's difference is the $0.01 of OPT TAF.)
+(Afterwards the model was changed to round OCC per execution and to charge OPT
+TAF at $0.003 a sold contract: it now predicts $0.12 of OCC and $0.01 of TAF,
+the posted amounts, and the day's difference is nil: $0.21 against $0.21.)
 The sanitized activity recording is
 `tests/fixtures/alpaca/option_paper_recordings/3225-credit-fees-20261016`, read by
 `test_paper_option_recordings.py`. Its offline bundle has the expected
@@ -1352,7 +1355,10 @@ sold contracts, $0.003 each, the per-contract figure #3306 recorded on 10-13,
 10-14 and 10-15 and still inside FINRA's pause (SR-FINRA-2026-021), where the
 model pins TAF to zero. It is classified as a fee posting; no rate, rounding
 rule or tolerance was changed. Whether the model follows the regulator or what
-Paper posts, and at what rate, is the owner's decision on #3306.
+Paper posts, and at what rate, is the owner's decision on #3306. (Afterwards
+the owner decided on 2026-10-22 that the model follows what Paper posts, and it
+was changed to charge OPT TAF at $0.003 a sold contract: 30 × $0.003 = $0.09,
+the posted amount, so the day's difference is nil.)
 
 OCC, ORF, CAT and OPT REG/SEC agree to the cent. Every execution this day was
 one contract, so how Alpaca rounds the OCC fee of a fill of several contracts

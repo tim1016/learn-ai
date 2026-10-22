@@ -402,18 +402,19 @@ is the durable index, the issue is the working brief.
 The 2026-09-09 Paper / Live workflow audit is historical and in Git history;
 current budget, risk-edit and mode behavior is recorded in ADRs 0059 and 0060.
 
-- **Paper charges OPT TAF the model pins to zero (P2, 2026-10-15, #3306).**
-  `PythonDataService/app/broker/alpaca/option_fees.py` takes FINRA's pause
-  (SR-FINRA-2026-021) as zero option TAF from 2026-10-01, but Alpaca Paper
-  posted OPT TAF on 2026-10-13 (4 contracts, $0.02), 2026-10-14 (19, $0.06)
-  and 2026-10-15 (2, $0.01): about $0.003 a contract, rounded up for the day.
-  The model predicts $0.00 on those days. Whether it should follow the
-  regulator or what Alpaca Paper posts, and at what rate, is undecided; the
-  recordings and executable comparison are in
-  `tests/broker/alpaca/test_paper_option_recordings.py`. The OCC half of #3306
-  is fixed: OCC is rounded up per execution, as Paper posts it (every recorded
-  distinct row, 50 of them, is $0.03 for a one-contract fill). Executions of several
-  contracts are not recorded, so how Alpaca rounds one is not observed.
+- **Option TAF and multi-contract OCC rest on one-contract Paper fills (P3, #3306).**
+  Alpaca Paper posts OPT TAF through FINRA's pause (SR-FINRA-2026-021), and
+  `PythonDataService/app/broker/alpaca/option_fees.py` charges what it posts:
+  $0.003 a sold contract from 2026-10-01 through 2026-12-31, summed over the day
+  and rounded up (owner decision, 2026-10-22). The four recorded days
+  (2026-10-13 to 10-16, golden FEE-003) fit any rate above $0.0026667 and up to
+  $0.003; the pin is the top of that range. Not observed: pause days before
+  2026-10-13, what Alpaca charges after 2026-12-31 (the model keeps FINRA's
+  resumed $0.00329), a day that also traded stock, and a Live account. OCC is
+  rounded up per execution, as Paper posts it (every recorded row, 50 distinct,
+  is $0.03 for a one-contract fill); how Alpaca rounds a fill of several
+  contracts is not observed. Check the first January fee rows and the first
+  multi-contract option fill against the model.
 
 
 ## 13. Data Lab workspace redesign residuals (2026-09-12)

@@ -23,14 +23,17 @@ Reference:
     Archive holds them). SEC §31: the SEC fee rate advisories ``regulatory_fees`` pins, and 17 CFR
     240.31, under which the sale of a listed stock or ETF option is a covered sale. FINRA TAF:
     SR-FINRA-2026-020 (91 FR 60427) for the per-contract ladder and SR-FINRA-2026-021 (SEC Release
-    34-106409) for the pause from 2026-10-01 through 2026-12-31. CAT: SEC Release 34-105449
-    (SR-FINRA-2026-010), a listed option counts its multiplier in executed-equivalent shares.
-    Row-by-row citations are in the golden fixture's attribution.
+    34-106409) for the pause from 2026-10-01 through 2026-12-31, through which the rate is what Alpaca
+    Paper posted instead (golden FEE-003). CAT: SEC Release 34-105449 (SR-FINRA-2026-010), a listed
+    option counts its multiplier in executed-equivalent shares.
+    Row-by-row citations are in the golden fixtures' attribution.
 Canonical implementation: this file, over the date lookup, cent rounding and day settlement of
     ``regulatory_fees``, which the stock model uses too.
 Validated against:
     tests/broker/alpaca/test_option_fees.py;
     tests/fixtures/test_alpaca_option_fees_fixture.py (golden FEE-002);
+    tests/fixtures/test_alpaca_option_taf_fixture.py (golden FEE-003, Alpaca Paper's posted OPT TAF rows,
+    2026-10-13 to 2026-10-16);
     tests/broker/alpaca/test_paper_option_recordings.py (Alpaca Paper's posted ``FEE`` rows, 2026-10-13
     to 2026-10-16).
 
@@ -42,11 +45,20 @@ gives is an estimate until Alpaca posts the day's fees:
   one-contract fill: 1 × $0.025 rounded up to the cent. So OCC is rounded per fill (#3306). No
   multi-contract execution has been recorded, so whether a fill of n contracts is rounded as
   n × $0.025 (this model) or as n × $0.03 is not observed.
-- Alpaca Paper posted OPT TAF on 2026-10-13, 2026-10-14 and 2026-10-15, inside FINRA's pause below,
-  at about $0.003 a contract; this model still pins TAF to zero from 2026-10-01 (#3306).
+- Alpaca Paper posts OPT TAF inside FINRA's pause (SR-FINRA-2026-021), so the pause is not a zero here
+  (#3306; the owner's decision of 2026-10-22 is that the estimate follows what Alpaca charges). Its four
+  recorded days, 2026-10-13 to 2026-10-16, sold 4, 19, 2 and 30 contracts and were charged $0.02, $0.06,
+  $0.01 and $0.09: each is the day's sold contracts × $0.003, rounded up to the cent. The four bound the
+  rate without fixing it: every rate above $0.0026667 and up to $0.003 reproduces all of them, and $0.003
+  is the top of that range and the figure the owner named. FINRA's own $0.00329 does not reproduce the
+  days of 19 and 30 contracts (19 × 0.00329 rounds up to $0.07, 30 × 0.00329 to $0.10). Days of the
+  pause other than those four, and the rate Alpaca charges once the pause ends, are not observed: the
+  table keeps $0.003 through 2026-12-31 and FINRA's resumed $0.00329 from 2027-01-01. Every observed
+  day held option fills alone, one contract a trade; a day that also traded stock is unverified.
 
 - Alpaca dates its schedule by revision and states no effective dates. The ORF, OCC and CAT rows
-  below are dated by the revision that first printed them. SEC and TAF are dated by the regulator.
+  below are dated by the revision that first printed them. SEC is dated by the regulator, and TAF is
+  too except through FINRA's pause.
 - Alpaca's ORF is one flat figure it calls an average of what it remits to the exchanges.
 - A fee type whose rate is not pinned for the trade date is ``None``, never zero, so "unknown" is
   never read as "free". A buy owes no SEC fee and no TAF on any date.
@@ -99,7 +111,8 @@ _ZERO = Decimal("0")
 # trade date before a table's first row has NO pinned rate for that fee type.
 _TAF_PER_CONTRACT: tuple[tuple[int, Decimal], ...] = (
     (et_midnight_ms(date(2026, 1, 1)), Decimal("0.00329")),  # SR-FINRA-2026-020, the 2026 column
-    (et_midnight_ms(date(2026, 10, 1)), Decimal("0")),  # SR-FINRA-2026-021: paused through 2026-12-31
+    # SR-FINRA-2026-021 pauses FINRA's TAF through 2026-12-31; Alpaca Paper still posts it (#3306, FEE-003).
+    (et_midnight_ms(date(2026, 10, 1)), Decimal("0.003")),
     (et_midnight_ms(date(2027, 1, 1)), Decimal("0.00329")),  # SR-FINRA-2026-021, Exhibit 5B: resumes, through 2028
     (et_midnight_ms(date(2029, 1, 1)), Decimal("0.00390")),  # SR-FINRA-2026-020
     (et_midnight_ms(date(2030, 1, 1)), Decimal("0.00404")),

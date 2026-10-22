@@ -9,14 +9,14 @@
     },
     "sell_2_at_2_10": {
       "sec": "0.008652000",
-      "taf": "0",
+      "taf": "0.006",
       "cat": "0.000600",
       "orf": "0.030",
       "occ": "0.050"
     },
     "sell_10_of_a_ten_share_contract": {
       "sec": "0.001133000",
-      "taf": "0",
+      "taf": "0.030",
       "cat": "0.000300",
       "orf": "0.150",
       "occ": "0.250"
@@ -30,31 +30,31 @@
     },
     "spread_sold_leg": {
       "sec": "0.004532000",
-      "taf": "0",
+      "taf": "0.003",
       "cat": "0.000300",
       "orf": "0.015",
       "occ": "0.025"
     },
-    "sell_2_at_2_10_last_day_before_taf_pause": {
-      "sec": "0.008652000",
-      "taf": "0.00658",
-      "cat": "0.000600",
-      "orf": "0.030",
-      "occ": "0.050"
+    "sell_1_at_2_10_last_day_before_taf_pause": {
+      "sec": "0.004326000",
+      "taf": "0.00329",
+      "cat": "0.000300",
+      "orf": "0.015",
+      "occ": "0.025"
     },
-    "sell_2_at_2_10_first_day_of_taf_pause": {
-      "sec": "0.008652000",
-      "taf": "0",
-      "cat": "0.000600",
-      "orf": "0.030",
-      "occ": "0.050"
+    "sell_1_at_2_10_first_day_of_taf_pause": {
+      "sec": "0.004326000",
+      "taf": "0.003",
+      "cat": "0.000300",
+      "orf": "0.015",
+      "occ": "0.025"
     },
-    "sell_2_at_2_10_taf_resumed": {
-      "sec": "0.008652000",
-      "taf": "0.00658",
-      "cat": "0.000600",
-      "orf": "0.030",
-      "occ": "0.050"
+    "sell_1_at_2_10_taf_resumed": {
+      "sec": "0.004326000",
+      "taf": "0.00329",
+      "cat": "0.000300",
+      "orf": "0.015",
+      "occ": "0.025"
     },
     "buy_5_last_day_of_old_orf": {
       "sec": "0",
@@ -102,31 +102,39 @@
   "sessions": {
     "three_fills_on_2026_10_05": {
       "sec": "0.01",
-      "taf": "0.00",
+      "taf": "0.04",
       "cat": "0.01",
       "orf": "0.21",
       "occ": "0.35",
-      "total": "0.58"
+      "total": "0.62"
     },
-    "one_sale_last_day_before_taf_pause": {
-      "sec": "0.01",
-      "taf": "0.01",
+    "nineteen_sales_last_day_before_taf_pause": {
+      "sec": "0.09",
+      "taf": "0.07",
       "cat": "0.01",
-      "orf": "0.03",
-      "occ": "0.05",
-      "total": "0.11"
+      "orf": "0.29",
+      "occ": "0.57",
+      "total": "1.03"
     },
-    "one_sale_first_day_of_taf_pause": {
-      "sec": "0.01",
-      "taf": "0.00",
+    "nineteen_sales_first_day_of_taf_pause": {
+      "sec": "0.09",
+      "taf": "0.06",
       "cat": "0.01",
-      "orf": "0.03",
-      "occ": "0.05",
-      "total": "0.10"
+      "orf": "0.29",
+      "occ": "0.57",
+      "total": "1.02"
+    },
+    "nineteen_sales_taf_resumed": {
+      "sec": "0.09",
+      "taf": "0.07",
+      "cat": "0.01",
+      "orf": "0.29",
+      "occ": "0.57",
+      "total": "1.03"
     }
   },
   "provision_cents": {
-    "one_bull_call_spread": 11,
+    "one_bull_call_spread": 12,
     "two_contracts_bought": 9
   }
 }
