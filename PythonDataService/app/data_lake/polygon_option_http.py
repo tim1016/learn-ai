@@ -45,6 +45,9 @@ _SENDABLE_KEY = re.compile(r"[\x21-\x7e]+")
 #: 2026-10-12: "Your plan doesn't include this data timeframe. Please upgrade your plan").
 _OUTSIDE_PLAN_PHRASE = "data timeframe"
 
+#: What the vendor's front end answers when the server behind it gave no answer (seen 2026-10-23: 502 Bad Gateway).
+_GATEWAY_STATUSES = frozenset({502, 503, 504})
+
 
 def _sendable_key(api_key: str) -> str:
     """The key to send: ``api_key`` without surrounding whitespace, or a typed auth error when it cannot ride in a header.
@@ -73,6 +76,10 @@ class PolygonTimeoutError(PolygonUnansweredError):
 
 class PolygonDisconnectedError(PolygonUnansweredError):
     """The vendor dropped the connection before answering ("Server disconnected without sending a response")."""
+
+
+class PolygonGatewayError(PolygonUnansweredError):
+    """The vendor's front end answered 502, 503 or 504: the server behind it gave no answer."""
 
 
 class PolygonOutsidePlanError(PolygonEntitlementError):
@@ -113,6 +120,8 @@ async def get_json_object(
         message = _outside_plan_message(resp)
         if message is not None:
             raise PolygonOutsidePlanError(f"Polygon 403 for {label}: {message}", 403)
+    if resp.status_code in _GATEWAY_STATUSES:
+        raise PolygonGatewayError(f"Polygon {resp.status_code} for {label}: {resp.text[:200]}", resp.status_code)
     _raise_for_status(resp, label)
     try:
         payload = resp.json(parse_float=Decimal)

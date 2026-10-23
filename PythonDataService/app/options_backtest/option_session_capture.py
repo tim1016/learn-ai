@@ -61,7 +61,8 @@ from app.utils.session_anchors import et_date_at_ms
 
 logger = logging.getLogger(__name__)
 
-#: Tries for one contract's request when the vendor gives no answer: it timed out or dropped the connection.
+#: Tries for one contract's request when the vendor gives no answer: it timed out, dropped the connection, or its
+#: front end answered 502, 503 or 504.
 #: They share one transient attempt, so a vendor outage still fails the session and leaves the ticker's budget
 #: for a later pass.
 UNANSWERED_TRIES_PER_REQUEST = 3
@@ -197,9 +198,9 @@ async def capture_option_session(
                         reservation: StagingReservation) -> _Refusal | None:
             """Fetch, validate and stage one ticker; a refusal is reported, never raised.
 
-            A request the vendor does not answer (a timeout or a dropped connection) is asked again at once, up to
-            ``UNANSWERED_TRIES_PER_REQUEST`` times, so one lost answer no longer fails the whole session until the
-            next pass.
+            A request the vendor does not answer (a timeout, a dropped connection, or a 502, 503 or 504 from its
+            front end) is asked again at once, up to ``UNANSWERED_TRIES_PER_REQUEST`` times, so one lost answer no
+            longer fails the whole session until the next pass.
             """
             try:
                 for tried in range(1, UNANSWERED_TRIES_PER_REQUEST + 1):
@@ -213,8 +214,8 @@ async def capture_option_session(
                     except PolygonUnansweredError as exc:
                         if tried == UNANSWERED_TRIES_PER_REQUEST:
                             raise
-                        # A timeout already waited the whole request timeout, and a dropped connection has nothing
-                        # to wait for, so the next try goes at once.
+                        # A timeout already waited the whole request timeout, and a dropped connection or a gateway
+                        # error has nothing to wait for, so the next try goes at once.
                         logger.warning("Option archive asked again for a contract the vendor did not answer", extra={
                             "action": "option_archive_request_unanswered_retried", "error": type(exc).__name__,
                             "underlying": underlying, "symbol": symbol, "session_ms": session_open_ms_utc(trading_date),
