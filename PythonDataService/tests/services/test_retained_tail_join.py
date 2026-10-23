@@ -285,6 +285,25 @@ async def test_a_hole_reaching_the_oldest_session_of_the_lookback_asks_for_no_mo
 
 
 @pytest.mark.asyncio
+async def test_a_tail_in_the_oldest_session_of_the_lookback_tolerates_history_that_starts_after_it() -> None:
+    """No spare session fits under the lookback there, so the source's window, moved up by a session
+    close its clock passed after the join's ``now_ms``, can start after the tail: the resume warms on
+    that history from its first bar, as an outrun hole does, rather than refusing a healthy run."""
+    now_ms = _et(_THU, 13, 0) + 30_000
+    tuesday = date(2026, 9, 22)
+    history = [*_regular_bars(_WED), *_regular_bars(_THU, until_end_ms=now_ms)]
+    feed = _HistoryFeed(history)
+
+    join = await join_retained_tail(
+        feed, symbol="SPY", session=_RTH, retained_end_ms=_et(tuesday, 10, 0), now_ms=now_ms, lookback_sessions=2,
+    )
+
+    assert feed.lookbacks == [2]
+    assert join.warm_from_ms == history[0].start_ms
+    assert len(join.filled) == len(history)
+
+
+@pytest.mark.asyncio
 async def test_history_reaching_back_to_the_tail_fills_the_hole_without_a_floor() -> None:
     """A source that serves more than the lookback (a harness's pinned warmup) can return history
     that reaches a tail outside it: nothing between them is outside what history covers, so the

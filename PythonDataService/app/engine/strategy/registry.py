@@ -122,7 +122,8 @@ class StrategyBarCadence:
 _REGULAR_SESSION_REFERENCE_YEAR = 2026
 #: The most consecutive sessions that hold one early close at most. The two
 #: nearest early closes (the day after Thanksgiving and Christmas Eve) fit in
-#: 18 sessions, so from 18 a window can hold two.
+#: 18 sessions, so from 18 a window can hold two, as far as the history cap
+#: reaches (a window of 121 sessions can hold three).
 _MOST_SESSIONS_HOLDING_ONE_EARLY_CLOSE = 17
 
 
@@ -151,7 +152,8 @@ def warmup_sessions_holding(bars: int, decision_timeframe_ms: int) -> int | None
     * only regular sessions count, at the whole decision bars one holds; an
       early close counts for nothing;
     * a window of up to 17 sessions holds at most one early close, and a
-      longer one two, so one session is set aside, or two from 18.
+      longer one, up to the history cap, two, so one session is set aside, or
+      two from 18. Past the cap the count is only compared with the cap.
 
     The result depends on the bars and the cadence alone, never on the date,
     so a seal's lookback resolves to the same number whenever it is checked.

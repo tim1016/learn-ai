@@ -32,8 +32,12 @@ from typing import TYPE_CHECKING, Literal, Protocol, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.lean_sidecar.trading_calendar import session_open_ms_utc, session_start_for_bar_count
-from app.utils.session_anchors import MAX_TIMESTAMP_MS
+from app.lean_sidecar.trading_calendar import (
+    session_open_ms_utc,
+    session_start_for_bar_count,
+    session_windows_ms_utc,
+)
+from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms
 
 if TYPE_CHECKING:
     # Type-only: ``decision_session`` sits above this port and imports from it
@@ -121,14 +125,23 @@ def warmup_window_start_ms(lookback_sessions: int, *, now_ms: int) -> int:
 def warmup_sessions_reaching(since_ms: int, *, now_ms: int, at_most: int) -> int:
     """The fewest ``lookback_sessions`` whose window starts at or before ``since_ms``.
 
-    How much history a hole needs, in the unit a fetch is asked for. Refuses
-    a ``since_ms`` the ``at_most``-session window does not reach, since no
-    fetch sized to that lookback could cover it.
+    How much history a hole needs, in the unit a fetch is asked for: one more
+    than the sessions completed by ``now_ms`` that open after ``since_ms``,
+    counted in one pass over the canonical calendar. Refuses a ``since_ms``
+    the ``at_most``-session window does not reach, since no fetch sized to
+    that lookback could cover it. The caller keeps ``since_ms`` inside that
+    window (``retained_tail_join`` checks it first), which bounds the pass.
     """
-    for sessions in range(1, at_most + 1):
-        if warmup_window_start_ms(sessions, now_ms=now_ms) <= since_ms:
-            return sessions
-    raise ValueError(f"no window of at most {at_most} sessions reaches back to {since_ms}")
+    if since_ms >= now_ms:
+        return 1
+    opened_after = sum(
+        1
+        for window in session_windows_ms_utc(et_date_at_ms(since_ms), et_date_at_ms(now_ms))
+        if window.close_ms_utc <= now_ms and window.open_ms_utc > since_ms
+    )
+    if opened_after + 1 > at_most:
+        raise ValueError(f"no window of at most {at_most} sessions reaches back to {since_ms}")
+    return opened_after + 1
 
 
 MAX_WARMUP_LOOKBACK_SESSIONS = 19

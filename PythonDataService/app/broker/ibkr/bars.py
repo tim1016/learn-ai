@@ -68,8 +68,9 @@ REALTIME_BAR_STALL_TIMEOUT_S = 60.0
 _HISTORICAL_BARS_TIMEOUT_S = 15.0
 # IBKR reads ``N D`` as N trading sessions. Extended-hours 1-minute history for SPY,
 # 2026-10-03: 5 sessions in 1.4-1.6 s, 10 in 33.9 s, 15 in 32.0 s, 20 in 56.2 s. Nothing
-# between 5 and 10 is measured, so only a request up to 5 sessions gets the short timeout (#2849).
-_HISTORICAL_BARS_SHORT_REQUEST_MAX_SESSIONS = 5
+# between 5 and 10 is measured, so only a request for up to 5 sessions gets the short
+# timeout. Counted as requested, the session in progress included (#2849).
+_HISTORICAL_BARS_SHORT_TIMEOUT_MAX_SESSIONS_REQUESTED = 5
 _HISTORICAL_BARS_LONG_REQUEST_TIMEOUT_S = 75.0
 _REALTIME_BAR_MAX_NEW_REQUESTS = 60
 _REALTIME_BAR_REQUEST_WINDOW_S = 600.0
@@ -815,14 +816,15 @@ def _contract_venue(contract: object) -> str | None:
     return venue or None
 
 
-def historical_bars_timeout_s(sessions: int) -> float:
-    """How long a request for ``sessions`` sessions of 1-minute history is given to answer.
+def historical_bars_timeout_s(request_sessions: int) -> float:
+    """How long a request for ``request_sessions`` sessions of 1-minute history is given to answer.
 
-    The short timeout up to five sessions, the longest request measured to
+    ``request_sessions`` is the ``N`` of the ``N D`` asked for, the session in
+    progress included. The short timeout up to five, the most measured to
     return at once; the long one for every request past that, which covers
-    the longest measured (20 sessions, 56.2 s).
+    the longest measured (20, 56.2 s).
     """
-    if sessions <= _HISTORICAL_BARS_SHORT_REQUEST_MAX_SESSIONS:
+    if request_sessions <= _HISTORICAL_BARS_SHORT_TIMEOUT_MAX_SESSIONS_REQUESTED:
         return _HISTORICAL_BARS_TIMEOUT_S
     return _HISTORICAL_BARS_LONG_REQUEST_TIMEOUT_S
 

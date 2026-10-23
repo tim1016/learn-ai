@@ -99,3 +99,57 @@ def test_a_tail_the_window_does_not_reach_is_refused() -> None:
 
     with pytest.raises(ValueError, match="no window of at most 3 sessions"):
         warmup_sessions_reaching(session_open_ms_utc(date(2026, 9, 22)), now_ms=now_ms, at_most=3)
+
+
+def _reaching_by_the_window_definition(since_ms: int, now_ms: int, at_most: int) -> int | None:
+    """The fewest sessions whose ``warmup_window_start_ms`` is at or before ``since_ms``, or ``None``."""
+    for sessions in range(1, at_most + 1):
+        if warmup_window_start_ms(sessions, now_ms=now_ms) <= since_ms:
+            return sessions
+    return None
+
+
+_THURSDAY_MIDDAY = session_open_ms_utc(date(2026, 9, 24)) + 3 * _HOUR_MS + 30_000
+
+
+@pytest.mark.parametrize(
+    ("since_ms", "now_ms"),
+    [
+        # Mid-session: the tail and now in the same running session, then the day before.
+        pytest.param(session_open_ms_utc(date(2026, 9, 24)) + 37 * _MINUTE_MS, _THURSDAY_MIDDAY, id="mid-session"),
+        pytest.param(session_open_ms_utc(date(2026, 9, 23)) + 30 * _MINUTE_MS, _THURSDAY_MIDDAY, id="the-day-before"),
+        # A weekend between them, with the tail in a session, after its close and over the weekend.
+        pytest.param(session_open_ms_utc(date(2026, 9, 25)) + _HOUR_MS, _just_after_the_open(date(2026, 9, 28)), id="weekend-from-friday-session"),
+        pytest.param(session_close_ms_utc(date(2026, 9, 25)) + _HOUR_MS, _just_after_the_open(date(2026, 9, 28)), id="weekend-from-friday-after-hours"),
+        pytest.param(session_close_ms_utc(date(2026, 9, 25)) + 30 * _HOUR_MS, _just_after_the_open(date(2026, 9, 28)), id="weekend-from-saturday"),
+        pytest.param(session_open_ms_utc(date(2026, 9, 22)) + _HOUR_MS, _just_after_the_open(date(2026, 9, 28)), id="weekend-from-tuesday"),
+        # Labor Day Monday 2026-09-07 is no session.
+        pytest.param(session_open_ms_utc(date(2026, 9, 3)) + _HOUR_MS, session_open_ms_utc(date(2026, 9, 8)) - _HOUR_MS, id="holiday-from-thursday"),
+        pytest.param(session_close_ms_utc(date(2026, 9, 4)), session_open_ms_utc(date(2026, 9, 8)) - _HOUR_MS, id="holiday-from-friday-close"),
+        pytest.param(session_open_ms_utc(date(2026, 9, 7)) + 3 * _HOUR_MS, session_open_ms_utc(date(2026, 9, 8)) - _HOUR_MS, id="holiday-from-the-holiday"),
+        # The day after Thanksgiving closes at 13:00: a tail before, at and after its close.
+        pytest.param(session_close_ms_utc(date(2026, 11, 27)) - _MINUTE_MS, _just_after_the_open(date(2026, 11, 30)), id="early-close-last-minute"),
+        pytest.param(session_close_ms_utc(date(2026, 11, 27)), _just_after_the_open(date(2026, 11, 30)), id="early-close-at-the-close"),
+        pytest.param(session_close_ms_utc(date(2026, 11, 27)) + _HOUR_MS, _just_after_the_open(date(2026, 11, 30)), id="early-close-after-it"),
+        pytest.param(session_close_ms_utc(date(2026, 11, 25)) - _MINUTE_MS, _just_after_the_open(date(2026, 11, 30)), id="across-thanksgiving"),
+        # Exactly on a session's open and on the open it counts from.
+        pytest.param(session_open_ms_utc(date(2026, 9, 25)), _just_after_the_open(date(2026, 9, 28)), id="tail-on-an-open"),
+        # A tail the window has not left behind: at or after now.
+        pytest.param(_just_after_the_open(date(2026, 9, 28)), _just_after_the_open(date(2026, 9, 28)), id="tail-is-now"),
+        pytest.param(_just_after_the_open(date(2026, 9, 28)) + _HOUR_MS, _just_after_the_open(date(2026, 9, 28)), id="tail-after-now"),
+        # More sessions back than the cap, so it is refused.
+        pytest.param(session_open_ms_utc(date(2026, 8, 3)), _just_after_the_open(date(2026, 9, 28)), id="beyond-the-cap"),
+    ],
+)
+def test_the_sessions_reaching_a_tail_are_those_whose_window_the_definition_starts_before_it(
+    since_ms: int, now_ms: int
+) -> None:
+    """One pass over the calendar agrees with asking ``warmup_window_start_ms`` for each lookback in turn."""
+    at_most = MAX_WARMUP_LOOKBACK_SESSIONS
+    expected = _reaching_by_the_window_definition(since_ms, now_ms, at_most)
+
+    if expected is None:
+        with pytest.raises(ValueError, match=f"no window of at most {at_most} sessions"):
+            warmup_sessions_reaching(since_ms, now_ms=now_ms, at_most=at_most)
+    else:
+        assert warmup_sessions_reaching(since_ms, now_ms=now_ms, at_most=at_most) == expected

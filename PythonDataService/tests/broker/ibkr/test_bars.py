@@ -666,15 +666,17 @@ async def test_fetch_historical_minute_bars_refuses_an_impossible_bar(
 
 
 @pytest.mark.parametrize(
-    ("sessions", "timeout_s"),
+    ("request_sessions", "timeout_s"),
     [(1, 15.0), (5, 15.0), (6, 75.0), (10, 75.0), (15, 75.0), (20, 75.0)],
 )
-def test_historical_bars_timeout_is_longer_only_past_five_sessions(sessions: int, timeout_s: float) -> None:
+def test_historical_bars_timeout_is_longer_only_past_five_sessions_requested(
+    request_sessions: int, timeout_s: float
+) -> None:
     """#2849: IBKR read ``N D`` as N sessions and took 1.4-1.6 s to serve 5 of
     1-minute history, 33.9 s for 10, 32.0 s for 15 and 56.2 s for 20, so a
     request past five is given 75 s. Nothing between 5 and 10 is measured, so
     every request past five gets the same."""
-    assert historical_bars_timeout_s(sessions) == pytest.approx(timeout_s, abs=1e-9, rel=0)
+    assert historical_bars_timeout_s(request_sessions) == pytest.approx(timeout_s, abs=1e-9, rel=0)
 
 
 def test_the_long_timeout_outlasts_the_slowest_measured_request() -> None:

@@ -298,11 +298,6 @@ def test_a_program_with_no_series_has_nothing_to_size_on_any_bar() -> None:
     assert contract.resolved_warmup_lookback_sessions(defaults) == 1
 
 
-def test_the_ceiling_is_the_longest_request_measured_less_the_session_in_progress() -> None:
-    """IBKR returned 20 sessions for ``20 D`` (56.2 s, 2026-10-03) and the request adds the one running."""
-    assert MAX_WARMUP_LOOKBACK_SESSIONS + 1 == 20
-
-
 @pytest.mark.parametrize(
     ("overrides", "unheld_bars"),
     [
