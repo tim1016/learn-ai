@@ -8,7 +8,7 @@ import type { components } from '../../api/broker.types';
 import { OptionsFailureEvidenceComponent } from './options-failure-evidence.component';
 import { OptionsGoldenSearchService } from './options-golden-search.service';
 
-const FIXTURE: components['schemas']['OptionsFailureEvidence'] = { ...raw, scope: 'development', final_exposure: 'not_opened', items: raw.items.map(item => ({ ...item, code: 'missing_held_mark' })) };
+const FIXTURE: components['schemas']['OptionsFailureEvidence'] = { ...raw, scope: 'development', final_exposure: 'not_opened', mark_rule: 'options-held-minute-close-v1', carried_held_marks: 0, carried_share_percent: '0', longest_carried_run: 0, items: raw.items.map(item => ({ ...item, code: 'missing_held_mark' })) };
 type Inspection = components['schemas']['OptionsFailureInspection'];
 const inspection = (code: Inspection['code'] = 'no_eligible_trade_bar'): Inspection => ({ study_id: FIXTURE.study_id, candidate_hash: FIXTURE.candidate_hash, evidence_identity: FIXTURE.evidence_identity, event_id: FIXTURE.items[0].id,
   code, retained_path: FIXTURE.items[0].retained_path, expected_input_sha256: FIXTURE.items[0].expected_input_sha256, snapshot_input_sha256: FIXTURE.items[0].expected_input_sha256,
@@ -26,6 +26,16 @@ it('shows partial scope and real close, and inspects retained input only on requ
   expect(await screen.findByText('No Eligible Trade Bar')).toBeTruthy();
   expect(inspectFailure).toHaveBeenCalledExactlyOnceWith(FIXTURE.study_id, FIXTURE.candidate_hash, 'development', FIXTURE.items[0]);
   expect(screen.getByRole('link', { name: 'Prepare a new linked plan' }).getAttribute('href')).toContain(`parent_study_id=${FIXTURE.study_id}`);
+});
+
+it('discloses a carried mark rule and lists no failure for a valued gap', async () => {
+  const carried: components['schemas']['OptionsFailureEvidence'] = { ...FIXTURE, mark_rule: 'options-held-minute-close-v2', carried_held_marks: 2, carried_share_percent: '0.3338898163606010016694490818030050083472454090150300',
+    longest_carried_run: 1, missing_held_marks: 0, items: [], total: 0, technical_failures: [] };
+  await render(OptionsFailureEvidenceComponent, { inputs: { studyId: carried.study_id, digest: carried.candidate_hash }, providers: [provideRouter([]), { provide: OptionsGoldenSearchService, useValue: { failurePage: async () => carried, inspectFailure: vi.fn() } }] });
+  await screen.findByText('597 / 599 required held marks present; 0 missing.');
+  expect(screen.getByText('options-held-minute-close-v2')).toBeTruthy();
+  expect(screen.getByText(/2 required held marks valued at the previous same-session traded close \(0\.3339% of required\); longest carried run 1 minutes\./)).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Inspect retained input' })).toBeNull();
 });
 
 it('does not let an old input inspection overwrite a changed candidate', async () => {

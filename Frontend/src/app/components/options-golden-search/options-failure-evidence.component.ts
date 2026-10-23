@@ -1,3 +1,4 @@
+import { DecimalPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, inject, input, linkedSignal, resource } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
@@ -11,7 +12,7 @@ type FailureEvent = components['schemas']['OptionsFailureEvent'];
 
 @Component({
   selector: 'app-options-failure-evidence',
-  imports: [RouterLink, ReceiptLabelPipe, TimestampDisplayComponent],
+  imports: [DecimalPipe, RouterLink, ReceiptLabelPipe, TimestampDisplayComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './options-failure-evidence.component.html',
   styleUrl: './options-golden-search.component.scss',
