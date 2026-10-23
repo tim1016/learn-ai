@@ -183,6 +183,7 @@ class EmaPreviousCrossoverAlgorithm(Strategy):
         self._ema_fast = ExponentialMovingAverage(f"EMA{self._fast_period}", self._fast_period)
         self._ema_slow = ExponentialMovingAverage(f"EMA{self._slow_period}", self._slow_period)
         self._rsi = RelativeStrengthIndex(f"RSI{RSI_PERIOD}", RSI_PERIOD)
+        self._signal_indicators = {"ema_fast": self._ema_fast, "ema_slow": self._ema_slow, "rsi": self._rsi}
 
         self._fast_was_above_slow = False
         self._cross_bar_end_ms = None

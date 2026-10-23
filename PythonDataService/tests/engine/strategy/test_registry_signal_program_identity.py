@@ -187,8 +187,8 @@ def test_registry_signal_series_periods_match_the_constructed_indicators() -> No
     """
     contract = _STRATEGY_REGISTRY["ema_crossover_signal"].signal_program_contract
     assert contract is not None
-    periods_by_name = {series.name: series.period for series in contract.signals}
-    warmup_by_name = {series.name: series.warmup_bars for series in contract.signals}
+    periods_by_name = {series.name: series.period for series in contract.resolved_signals(EmaCrossoverSignalParams())}
+    warmup_by_name = {series.name: series.warmup_bars for series in contract.resolved_signals(EmaCrossoverSignalParams())}
 
     # Constructed the exact same way EmaCrossoverSignalAlgorithm.initialize()
     # builds them at the default point ("EMA5", 5), ("EMA10", 10),
@@ -269,40 +269,14 @@ def test_resolved_series_are_exactly_the_indicators_these_parameters_build(
         assert series[name].warmup_bars == _bars_until_ready(indicator), name
 
 
-def test_static_contract_values_are_what_each_program_s_default_and_validated_points_resolve() -> None:
-    """A contract's static ``signals``/``exit_eligibility``/``numerical_provenance`` are its default point.
-
-    A program whose periods or hold are parameters resolves them per seal
-    (#2696, #2796); its static values must still be what the default
-    parameters resolve to, so a seal at the default point is byte-identical
-    to one made before they were resolved.
-
-    A seal's warmup lookback follows its own periods (#2841); at the default
-    and validated points it must stay the static value. A longer one there
-    would move every seal at those points, the running bots' included.
-    """
-    for key, registration in _STRATEGY_REGISTRY.items():
+def test_default_exit_and_provenance_resolve_to_the_registered_values() -> None:
+    for registration in _STRATEGY_REGISTRY.values():
         contract = registration.signal_program_contract
         if contract is None:
             continue
         defaults = registration.param_schema()
-        validated = registration.param_schema(**contract.validated_settings)
-
-        assert contract.resolved_signals(defaults) == contract.signals, (
-            f"{key}: static signals are the default point's resolved signals (#2696, #2796)"
-        )
-        assert contract.resolved_exit_eligibility(defaults) == contract.exit_eligibility, (
-            f"{key}: static exit_eligibility is the default point's resolved exit rule (#2696, #2796)"
-        )
-        assert contract.resolved_numerical_provenance(defaults) == contract.numerical_provenance, (
-            f"{key}: static numerical_provenance is the default point's resolved provenance (#2696, #2796)"
-        )
-        assert contract.resolved_warmup_lookback_days(defaults) == contract.warmup_lookback_days, (
-            f"{key}: warmup lookback at the default point stays the static value (#2841)"
-        )
-        assert contract.resolved_warmup_lookback_days(validated) == contract.warmup_lookback_days, (
-            f"{key}: warmup lookback at the validated point stays the static value (#2841)"
-        )
+        assert contract.resolved_exit_eligibility(defaults) == contract.exit_eligibility
+        assert contract.resolved_numerical_provenance(defaults) == contract.numerical_provenance
 
 
 def test_validated_settings_a_dump_omits_are_their_schema_defaults() -> None:

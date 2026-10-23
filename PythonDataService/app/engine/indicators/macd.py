@@ -27,6 +27,10 @@ Reproducibility details:
     parameters 12/26/9 this is sample 34).
 
 Decimal arithmetic throughout via the embedded EMAs.
+Convergence counts bound recursive seed memory (ADR 0083). They do not
+guarantee the same relative bound for ratios or cancelling output terms.
+Measured twin evidence: tests/engine/indicators/test_convergence_twins.py.
+
 """
 
 from __future__ import annotations
@@ -34,10 +38,13 @@ from __future__ import annotations
 from decimal import Decimal
 
 from app.engine.indicators.base import Indicator
+from app.engine.indicators.convergence import CONVERGENCE_TOLERANCE, cascade_steps
 from app.engine.indicators.ema import ExponentialMovingAverage
 
 
 class MovingAverageConvergenceDivergence(Indicator):
+    series_kind = "macd"
+
     def __init__(
         self,
         name: str,
@@ -77,6 +84,9 @@ class MovingAverageConvergenceDivergence(Indicator):
     @property
     def histogram(self) -> Decimal | None:
         return self._histogram
+
+    def bars_to_converge(self, tolerance: float = CONVERGENCE_TOLERANCE) -> int:
+        return self.ready_bars + cascade_steps(2 / (self.slow_period + 1), 2 / (self.signal_period + 1), tolerance)
 
     def _compute_next_value(self, timestamp_ms: int, value: Decimal) -> Decimal | None:
         self._fast.update(timestamp_ms, value)

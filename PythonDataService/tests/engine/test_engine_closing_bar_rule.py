@@ -115,6 +115,7 @@ class _ScriptedSignalProgram(Strategy):
         )
 
     def initialize(self) -> None:
+        self._signal_indicators = {}
         self.set_start_date(self._first_day.year, self._first_day.month, self._first_day.day)
         self.set_end_date(self._last_day.year, self._last_day.month, self._last_day.day)
         self.set_cash(100_000)

@@ -1599,3 +1599,25 @@ def test_a_journal_row_refuses_an_entry_outcome_that_is_not_true_of_its_fill(
 def test_a_journal_row_says_what_its_entry_came_to_in_the_runners_own_words(word: str) -> None:
     """The journal spells no words of its own: each is one of the runner's set, read back as that."""
     assert _row(entry_outcome=word).entry_outcome is EntryCameTo(word)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('world', ['paper', 'dry_run'])
+async def test_signal_option_bot_spawning_never_searches_or_orders(
+    world: str, on_paper: Callable[..., PaperFloor], on_the_floor: Callable[..., Floor],
+) -> None:
+    floor = (on_paper if world == 'paper' else on_the_floor)()
+    floor.binding = floor.binding.model_copy(update={
+        'strategy_key': 'rsi_mean_reversion', 'strategy_params': {'window': 2, 'resolution_minutes': 1},
+    })
+    await floor.open()
+    # RSI is ready from bar three and asks to buy on these falling prices.
+    # Its fixed memory-decay requirement is thirteen bars, so all five spawn.
+    ran = await floor.run([Step(red(FIRST_GREEN_MS + index * MINUTE, close=str(585 - index))) for index in range(5)])
+    assert len(ran.receipts) == 5
+    assert all(outcome == 'blocked' and facts['reason_code'] == 'INDICATORS_SPAWNING' for outcome, facts in ran.receipts)
+    assert floor.worker.asked == []
+    assert floor.holds() == {}
+    assert floor.fills() == []
+    if world == 'paper':
+        assert floor.venue.option_orders == {}

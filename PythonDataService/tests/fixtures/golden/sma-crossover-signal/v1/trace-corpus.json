@@ -3,16 +3,16 @@
   "program_key": "sma_crossover",
   "program_version": "sma-crossover/v1",
   "entries": [
-    {"cell": "AAPL_W6mo_2025-11-03_to_2026-04-30", "settings": {"long_window": "30", "resolution_minutes": "15", "short_window": "10", "symbol": "AAPL"}, "trace_count": 2576, "trace_root": "4d27b8c82392f9b98ab3322767b931076ba74d6d7126c17885a175d4c1ffe5be"},
-    {"cell": "AAPL_W12mo_2025-05-01_to_2026-04-30", "settings": {"long_window": "30", "resolution_minutes": "15", "short_window": "10", "symbol": "AAPL"}, "trace_count": 5892, "trace_root": "1722da8aa4b5c7aa3a5a03ed8d0f0d63388affe67535e6c595bbe9e7cb43b40a"},
-    {"cell": "QQQ_W3mo_2026-02-02_to_2026-04-30", "settings": {"long_window": "30", "resolution_minutes": "15", "short_window": "10", "symbol": "QQQ"}, "trace_count": 1014, "trace_root": "f596382640df1dd16a95850fe4884833e32707e3775210fbeaa6d1f673c6da97"},
-    {"cell": "QQQ_W6mo_2025-11-03_to_2026-04-30", "settings": {"long_window": "30", "resolution_minutes": "15", "short_window": "10", "symbol": "QQQ"}, "trace_count": 2576, "trace_root": "d8c4b0fd66fe386182298c8879ae3a45ddb67f8587e69e7813ead1074c0915cb"},
-    {"cell": "QQQ_W12mo_2025-05-01_to_2026-04-30", "settings": {"long_window": "30", "resolution_minutes": "15", "short_window": "10", "symbol": "QQQ"}, "trace_count": 5892, "trace_root": "d6c74463f49155768a2ee02a6f79c1747d1ca93a3227cecf4e282ae365f8b8d3"},
-    {"cell": "SPY_W3mo_2026-02-02_to_2026-04-30", "settings": {"long_window": "30", "resolution_minutes": "15", "short_window": "10", "symbol": "SPY"}, "trace_count": 1014, "trace_root": "69404758855330ff7a307c5acaec0f7b438758055f43f038032382b6461e166b"},
-    {"cell": "SPY_W6mo_2025-11-03_to_2026-04-30", "settings": {"long_window": "30", "resolution_minutes": "15", "short_window": "10", "symbol": "SPY"}, "trace_count": 2576, "trace_root": "dd296faf04947de5c1b4c0b5734722defcd2d0ce7afabed6d7b862f2ac0963ce"},
-    {"cell": "SPY_W12mo_2025-05-01_to_2026-04-30", "settings": {"long_window": "30", "resolution_minutes": "15", "short_window": "10", "symbol": "SPY"}, "trace_count": 5892, "trace_root": "c0c08c6dd46165fb60cf1eb60c9f168e49b075f6988bb3ac2a968fc58a0d4774"},
-    {"cell": "TSLA_W6mo_2025-11-03_to_2026-04-30", "settings": {"long_window": "30", "resolution_minutes": "15", "short_window": "10", "symbol": "TSLA"}, "trace_count": 2576, "trace_root": "7340fe1d2bf1604da4b3ce83bdce9a6562183a77cf241a42d15bbd086e08a78d"},
-    {"cell": "TSLA_W12mo_2025-05-01_to_2026-04-30", "settings": {"long_window": "30", "resolution_minutes": "15", "short_window": "10", "symbol": "TSLA"}, "trace_count": 5892, "trace_root": "ba93495408b68038dfb6884aacfc285ec1b656e79ae1bf737b36164895bc7ec5"}
+    {"cell": "AAPL_W6mo_2025-11-03_to_2026-04-30", "settings": {"long_window": "30", "resolution_minutes": "15", "short_window": "10", "symbol": "AAPL"}, "trace_count": 2576, "trace_root": "fb9e81759f598bd8dfa6e1cbfee37f4441f2dd185394daaeb63c408c988cc24c"},
+    {"cell": "AAPL_W12mo_2025-05-01_to_2026-04-30", "settings": {"long_window": "30", "resolution_minutes": "15", "short_window": "10", "symbol": "AAPL"}, "trace_count": 5892, "trace_root": "9377be253b3505eaa5cff633dd0d588a09f3ee1dce6ad0580245871cc37b6afd"},
+    {"cell": "QQQ_W3mo_2026-02-02_to_2026-04-30", "settings": {"long_window": "30", "resolution_minutes": "15", "short_window": "10", "symbol": "QQQ"}, "trace_count": 1014, "trace_root": "83660428bdb68b50c580e5de4b4244df48169ec77030a09d06704606adf5aa01"},
+    {"cell": "QQQ_W6mo_2025-11-03_to_2026-04-30", "settings": {"long_window": "30", "resolution_minutes": "15", "short_window": "10", "symbol": "QQQ"}, "trace_count": 2576, "trace_root": "e91e3c68d94a26d1f79065e7f1f5eb3c257b04707df991118c4777ddf0d9e7be"},
+    {"cell": "QQQ_W12mo_2025-05-01_to_2026-04-30", "settings": {"long_window": "30", "resolution_minutes": "15", "short_window": "10", "symbol": "QQQ"}, "trace_count": 5892, "trace_root": "37914f40768511f122be756f76edf55c674f4d3e4cd0ee9dbac92b186c747286"},
+    {"cell": "SPY_W3mo_2026-02-02_to_2026-04-30", "settings": {"long_window": "30", "resolution_minutes": "15", "short_window": "10", "symbol": "SPY"}, "trace_count": 1014, "trace_root": "ea2e20f6cdb85d9c7e919a59243c97025f33241e29fa8e73a3a29503d6d6ac7d"},
+    {"cell": "SPY_W6mo_2025-11-03_to_2026-04-30", "settings": {"long_window": "30", "resolution_minutes": "15", "short_window": "10", "symbol": "SPY"}, "trace_count": 2576, "trace_root": "5e2f5b0a24879c43b885ed1e1affba63c009669e10e592b37cc14dc92fe70fb0"},
+    {"cell": "SPY_W12mo_2025-05-01_to_2026-04-30", "settings": {"long_window": "30", "resolution_minutes": "15", "short_window": "10", "symbol": "SPY"}, "trace_count": 5892, "trace_root": "142f4f882cab66fbe8fd4f027175c084d00477c428049fc4dc01037008bbeee2"},
+    {"cell": "TSLA_W6mo_2025-11-03_to_2026-04-30", "settings": {"long_window": "30", "resolution_minutes": "15", "short_window": "10", "symbol": "TSLA"}, "trace_count": 2576, "trace_root": "09982e53f74d883adccafd60d22f9cf7db2819b534d82afab9e7b2b5d1f6d928"},
+    {"cell": "TSLA_W12mo_2025-05-01_to_2026-04-30", "settings": {"long_window": "30", "resolution_minutes": "15", "short_window": "10", "symbol": "TSLA"}, "trace_count": 5892, "trace_root": "db468bfaa5a8e9f6a05c5ab46cbfc8f3d8335cb3f9e37d00a7cc61dda03f2339"}
   ],
-  "trace_root": "b0a136f7b485179bc37c7998df430480b94b0866d9bc58dbead636fa84a320e9"
+  "trace_root": "c31a763827885437e8d41327074f0315d6f6f01df06695075bf451c22f159382"
 }

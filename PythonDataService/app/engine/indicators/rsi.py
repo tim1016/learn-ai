@@ -21,6 +21,10 @@ Critical reproducibility details:
     ``samples == period + 1``.
   * Edge case: if ``round(avg_loss, 10) == 0``, RSI = 100.
   * Formula: ``RS = avg_gain / avg_loss``; ``RSI = 100 - 100 / (1 + RS)``.
+Convergence counts bound recursive seed memory (ADR 0083). They do not
+guarantee the same relative bound for ratios or cancelling output terms.
+Measured twin evidence: tests/engine/indicators/test_convergence_twins.py.
+
 """
 
 from __future__ import annotations
@@ -28,9 +32,12 @@ from __future__ import annotations
 from decimal import Decimal
 
 from app.engine.indicators.base import Indicator
+from app.engine.indicators.convergence import CONVERGENCE_TOLERANCE, decay_steps
 
 
 class RelativeStrengthIndex(Indicator):
+    series_kind = "rsi_wilders"
+
     def __init__(self, name: str, period: int) -> None:
         # RSI requires one extra sample before it can produce a value.
         super().__init__(name, period)
@@ -48,6 +55,13 @@ class RelativeStrengthIndex(Indicator):
     def is_ready(self) -> bool:
         # RSI(period) needs period+1 samples (for period deltas).
         return self.samples >= self.period + 1
+
+    @property
+    def ready_bars(self) -> int:
+        return self.period + 1
+
+    def bars_to_converge(self, tolerance: float = CONVERGENCE_TOLERANCE) -> int:
+        return self.ready_bars + decay_steps(1 / self.period, tolerance)
 
     def _compute_next_value(self, timestamp_ms: int, value: Decimal) -> Decimal | None:
         prev = self._prev_input

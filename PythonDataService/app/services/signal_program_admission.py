@@ -23,6 +23,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.config import settings
+from app.engine.indicators.convergence import CONVERGENCE_TOLERANCE
 from app.engine.strategy.params import StrategyParamsBase, decision_timeframe_ms_for
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContract, StrategyRegistration
 from app.research.golden_search.qualifications import (
@@ -241,16 +242,16 @@ def build_start_program_seal(
         clock=SignalClockContract(
             use_rth=binding.use_rth,
             # Resolved for these parameters too: the history the longest
-            # series they build needs, never less than the default (#2841).
+            # series they build needs, up to the history cap (#2857).
             warmup_lookback_days=contract.resolved_warmup_lookback_days(validated),
         ),
         # Copied straight from the registry contract — the same objects, not
         # a re-derivation — so these can never fall out of sync with it.
         # Series, exit rule, parameter-schema version and provenance are
         # resolved for these parameters: an indicator period or a hold is a
-        # parameter, and a seal at the default point stays byte-identical
-        # (#2696, #2796).
+        # parameter (#2696, #2796). Convergence is sealed alongside them (#2857).
         signals=contract.resolved_signals(validated),
+        convergence_tolerance=CONVERGENCE_TOLERANCE,
         decision_streams=contract.decision_streams,
         bar_integrity=contract.bar_integrity,
         exit_eligibility=contract.resolved_exit_eligibility(validated),
@@ -756,6 +757,12 @@ def _seal_checks(
             "program_key",
             configured.program_key == binding.strategy_key,
             "The stored Signal Program seal names a different program than this instance runs.",
+        ),
+        _SealCheck(
+            "convergence_tolerance",
+            configured.convergence_tolerance == CONVERGENCE_TOLERANCE,
+            "The sealed indicator convergence policy no longer matches this build.",
+            next_step="Deploy the bot again.",
         ),
         _SealCheck(
             "program_version",

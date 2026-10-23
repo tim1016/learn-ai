@@ -154,6 +154,15 @@ class SignalSeriesContract(BaseModel):
     field: Literal["close", "high_low_close"]
     period: int = Field(gt=0)
     warmup_bars: int = Field(gt=0)
+    bars_to_converge: int | None = Field(default=None, gt=0)
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_convergence(self, handler: SerializerFunctionWrapHandler):
+        """Old seals remain readable with their original content hashes (#2857)."""
+        payload = handler(self)
+        if self.bars_to_converge is None:
+            payload.pop("bars_to_converge", None)
+        return payload
 
 
 DuplicatePolicy = Literal["reject_conflicting_payload_else_idempotent"]
@@ -317,6 +326,7 @@ class ConfiguredSignalProgramSeal(BaseModel):
     data: SignalDataContract
     clock: SignalClockContract
     signals: tuple[SignalSeriesContract, ...]
+    convergence_tolerance: float | None = None
     decision_streams: tuple[str, ...]
     bar_integrity: SignalBarIntegrityContract
     exit_eligibility: ExitEligibilityContract
@@ -328,6 +338,14 @@ class ConfiguredSignalProgramSeal(BaseModel):
     # Omitted from the hashed payload while unset, so every seal minted
     # before it existed keeps its hash (``strip_absent_qualification``).
     qualification_id: str | None = Field(default=None, min_length=1)
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_convergence(self, handler: SerializerFunctionWrapHandler):
+        """Read old identities without granting them the new convergence policy."""
+        payload = handler(self)
+        if self.convergence_tolerance is None:
+            payload.pop("convergence_tolerance", None)
+        return payload
 
     def semantic_hash(self) -> str:
         return semantic_payload_hash(strip_absent_qualification(self.model_dump(mode="json")))

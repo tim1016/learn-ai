@@ -83,6 +83,8 @@ When a port cannot match its reference exactly, the module docstring says so and
 - **Dividend factors price Polygon's raw `cash_amount` on the raw close** (`app/data_lake/factor_files.py`), as QuantConnect's published factor files do. We do not follow LEAN ToolBox's split-adjusted input convention. Ported verbatim, that convention made a later split rescale every earlier dividend day and made raw-mode backtests pay `cash × S`. Receipt: `docs/references/lean-factor-file-dividend-pricing.md` and the golden `lean-factor-file-aapl`.
 - **The Data Lab indicator warm-up is bounded** (`app/services/indicator_warmup_policy.py`, #2611). It is not run to full convergence. The error is at most about 0.01 points on a 0–100 oscillator and about `1e-4` relative on a price scale, measured against the former 1,000-bar lead-in. Receipt: `docs/references/data-lab-indicator-warmup.md`.
 
+- **Signal Program convergence bounds initialization memory, not every nonlinear output** (ADR 0083, #2857). RSI/ADX ratios, MACD cancellation and Supertrend's latched direction preclude a universal relative output promise. The owner accepted deterministic counts plus pinned real/synthetic twin measurements. Receipt: `PythonDataService/tests/fixtures/golden/indicator-convergence/v1/attribution.md` and its measured output fixture; no LEAN value or readiness tolerance changes.
+
 A new departure is added the same way: a module docstring, a kept receipt, and a line in this list.
 
 ## Consequences

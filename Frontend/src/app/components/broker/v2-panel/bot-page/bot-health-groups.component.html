@@ -20,7 +20,9 @@
       }
     </ul>
     @if (group.key === 'run') {
-      @if (startupJoin(); as join) {
+      @if (spawning(); as progress) {
+        <p><strong>{{ progress.label }}</strong> · {{ progress.explanation }}</p>
+      } @else if (startupJoin(); as join) {
         <app-startup-join-status class="health__join" [view]="join" />
       }
       @if (dutyOutcome(); as outcome) {

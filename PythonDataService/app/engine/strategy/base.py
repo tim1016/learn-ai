@@ -20,6 +20,7 @@ from app.engine.execution.order import OrderEvent
 from app.engine.execution.portfolio import Portfolio
 from app.engine.framework.insight import Insight
 from app.engine.framework.insight_manager import InsightManager
+from app.engine.indicators.base import BarIndicator, Indicator
 from app.engine.strategy.signal_intent import SignalIntent
 
 if TYPE_CHECKING:
@@ -192,6 +193,7 @@ class Strategy(ABC):
         # exposes the same explicit seam so engine code never probes private
         # attributes with ``getattr``.
         self.signal_program: SignalProgram | None = None
+        self._signal_indicators: dict[str, Indicator | BarIndicator] | None = None
         self.start_date: datetime | None = None
         self.end_date: datetime | None = None
         self.initial_cash: Decimal = Decimal(100000)
@@ -199,6 +201,13 @@ class Strategy(ABC):
     # ------------------------------------------------------------------
     # Declarative configuration (called in initialize)
     # ------------------------------------------------------------------
+
+    @property
+    def signal_indicators(self) -> dict[str, Indicator | BarIndicator]:
+        """The exact indicators the initialized program advances, named as its sealed series."""
+        if self._signal_indicators is None:
+            raise RuntimeError("A Signal Program must declare its indicators during initialization")
+        return self._signal_indicators
 
     def _signal_program_handler(self) -> Callable[[TradeBar], None]:
         """Route consolidated bars to the staged program when one owns this

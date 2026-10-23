@@ -21,16 +21,22 @@ from __future__ import annotations
 from decimal import Decimal
 
 from app.engine.indicators.base import Indicator
+from app.engine.indicators.convergence import CONVERGENCE_TOLERANCE, decay_steps
 from app.engine.indicators.sma import SimpleMovingAverage
 
 
 class ExponentialMovingAverage(Indicator):
+    series_kind = "ema"
+
     def __init__(self, name: str, period: int) -> None:
         super().__init__(name, period)
         # Smoothing factor as Decimal for precision.
         self.k: Decimal = Decimal(2) / Decimal(1 + period)
         self._one_minus_k: Decimal = Decimal(1) - self.k
         self._sma = SimpleMovingAverage(f"{name}_seed_sma", period)
+
+    def bars_to_converge(self, tolerance: float = CONVERGENCE_TOLERANCE) -> int:
+        return self.ready_bars + decay_steps(float(self.k), tolerance)
 
     def _compute_next_value(self, timestamp_ms: int, value: Decimal) -> Decimal | None:
         if self.samples <= self.period:

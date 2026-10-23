@@ -46,6 +46,7 @@ from tests._helpers.bot_runner.ema_parity import (
     _EMA_FIRST_EXIT_MS,
     _ema_parity_bars_through_first_exit,
     _ema_signal_evaluation_id,
+    flat_indicator_warmup,
 )
 from tests._helpers.bot_runner.market import (
     _tradable_market_liveness,
@@ -152,6 +153,8 @@ async def test_replay_recreates_a_crashed_candidate_as_uncaptured_with_no_broker
     set_alpaca_clerk(clerk)
     try:
         bars = _ema_parity_bars_through_first_exit()
+        # Exercise crash recovery after convergence, with identical history on replay.
+        warmup = flat_indicator_warmup(bars[0])
         # A completed 15-minute bucket fires on the minute bar that closes it
         # (see `_drain_bar`'s docstring in bot_trade_strategy.py): the bar
         # ending at the EXIT close is that bar, and everything before it is
@@ -166,7 +169,7 @@ async def test_replay_recreates_a_crashed_candidate_as_uncaptured_with_no_broker
         # test_atomic_seam_fault_injection.py uses ("simulated here by
         # simply never calling ...").
         await bot_trade_strategy.run_trade_bot(
-            _binding(run_id="run-1"), _PhaseFeed(live_bars=crashed_run_bars)
+            _binding(run_id="run-1"), _PhaseFeed(live_bars=crashed_run_bars, retained_bars=warmup)
         )
         calls_before_resume = len(clerk.calls)
         assert calls_before_resume >= 1  # the real ENTER already landed
@@ -176,7 +179,7 @@ async def test_replay_recreates_a_crashed_candidate_as_uncaptured_with_no_broker
         # live stream of its own -- its only input is the durable retained
         # ledger, which now includes the crash bar exactly as the real
         # SourceBarLedger would hand a resumed bot.
-        await bot_trade_strategy.run_trade_bot(_binding(run_id="run-2"), _PhaseFeed(retained_bars=bars))
+        await bot_trade_strategy.run_trade_bot(_binding(run_id="run-2"), _PhaseFeed(retained_bars=[*warmup, *bars]))
 
         # No new broker-bound call was ever made for the recovered candidate.
         assert len(clerk.calls) == calls_before_resume
@@ -219,17 +222,20 @@ async def test_replay_of_a_clean_stop_never_fabricates_crash_evidence(
     set_alpaca_clerk(clerk)
     try:
         bars = _ema_parity_bars_through_first_exit()
+        warmup = flat_indicator_warmup(bars[0])
 
         # Run the entire window live, uninterrupted -- the EXIT bucket is
         # captured normally, same as test_ema_trade_bot_matches_first_lean_round_trip.
-        await bot_trade_strategy.run_trade_bot(_binding(run_id="run-1"), _PhaseFeed(live_bars=bars))
+        await bot_trade_strategy.run_trade_bot(
+            _binding(run_id="run-1"), _PhaseFeed(live_bars=bars, retained_bars=warmup)
+        )
         receipts_after_first_run = repo.decision_receipt_tail(strategy_instance_id=_SID, limit=500)
         assert any(receipt.outcome == "exit_intent" for receipt in receipts_after_first_run)
 
         # Resume with the identical window handed back as retained history a
         # second time -- every bucket in it, the EXIT included, already has
         # its receipt, so this must never fabricate crash evidence.
-        await bot_trade_strategy.run_trade_bot(_binding(run_id="run-2"), _PhaseFeed(retained_bars=bars))
+        await bot_trade_strategy.run_trade_bot(_binding(run_id="run-2"), _PhaseFeed(retained_bars=[*warmup, *bars]))
 
         receipts_after_resume = repo.decision_receipt_tail(strategy_instance_id=_SID, limit=500)
         assert receipts_after_resume == receipts_after_first_run
@@ -722,10 +728,15 @@ async def test_resume_names_no_exit_for_an_enter_older_than_the_window_that_fail
         assert {receipt.outcome for receipt in before_resume} == {"no_action"}
         # The ENTER's receipt is still stored, older than the window, and
         # still reads as an entry; only its effect says it failed.
-        [entry] = repo.decision_receipt_tail(
+        older = repo.decision_receipt_tail(
             strategy_instance_id=_SID,
             limit=MAX_DECISION_RECEIPTS_PER_STRATEGY,
             before_seq=before_resume[0].seq,
+        )
+        [entry] = [receipt for receipt in older if receipt.outcome == "enter_intent"]
+        assert all(
+            json.loads(receipt.facts_json)["reason_code"] == "INDICATORS_SPAWNING"
+            for receipt in older if receipt != entry
         )
         assert entry.outcome == "enter_intent"
         effect = repo.effect_operation(json.loads(entry.facts_json)["effect_operation_id"])

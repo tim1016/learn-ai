@@ -162,6 +162,10 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             CHECK((outcome = 'filled') = (filled_start_ms IS NOT NULL AND filled_end_ms IS NOT NULL)),
             CHECK((outcome = 'refused') = (reason_code IS NOT NULL))
         );
+        CREATE TABLE IF NOT EXISTS source_run_indicator_progress (
+            run_id TEXT PRIMARY KEY,
+            payload TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS source_run_startup_join (
             run_id TEXT PRIMARY KEY,
             opened_at_ms INTEGER NOT NULL CHECK(opened_at_ms BETWEEN 0 AND 253402300799999),

@@ -13,10 +13,13 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from datetime import date
+from decimal import Decimal
 from functools import lru_cache
 from typing import Any, Literal
 
-from app.engine.strategy.base import Strategy
+from app.engine.execution.portfolio import Portfolio
+from app.engine.indicators.base import BarIndicator
+from app.engine.strategy.base import Strategy, StrategyContext
 from app.engine.strategy.params import (
     StrategyParamsBase,
     decision_timeframe_ms_for,
@@ -95,6 +98,7 @@ from app.engine.strategy.strategy_view import (
     ViewValue,
 )
 from app.lean_sidecar.trading_calendar import session_windows_ms_utc
+from app.marketdata.feed import MAX_WARMUP_LOOKBACK_DAYS
 from app.schemas.signal_program_seal import (
     ExitEligibilityContract,
     NumericalProvenanceContract,
@@ -133,6 +137,11 @@ def _regular_session_ms() -> int:
     first = date(_REGULAR_SESSION_REFERENCE_YEAR, 1, 1)
     last = date(_REGULAR_SESSION_REFERENCE_YEAR, 12, 31)
     return max(window.close_ms_utc - window.open_ms_utc for window in session_windows_ms_utc(first, last))
+
+
+def bars_per_regular_session(decision_timeframe_ms: int) -> int:
+    """Whole decision bars one regular session holds; zero when the bar is longer than a session."""
+    return _regular_session_ms() // decision_timeframe_ms
 
 
 def _warmup_lookback_days_holding(bars: int, decision_timeframe_ms: int) -> int | None:
@@ -175,7 +184,7 @@ def _warmup_lookback_days_holding(bars: int, decision_timeframe_ms: int) -> int 
     """
     if bars <= 0:
         return 0
-    bars_per_session = _regular_session_ms() // decision_timeframe_ms
+    bars_per_session = bars_per_regular_session(decision_timeframe_ms)
     if bars_per_session == 0:
         return None
     sessions = -(-(bars + _WINDOW_EDGE_BARS) // bars_per_session)
@@ -200,11 +209,10 @@ class SignalProgramContract:
     ``ConfiguredSignalProgramSeal`` — the same objects, not a re-derived or
     hand-duplicated copy — so a semantic field added here is automatically
     part of the sealed identity rather than a second list that can silently
-    fall out of sync. ``signals`` and ``exit_eligibility`` are sealed through
-    ``resolved_signals``/``resolved_exit_eligibility``: the static value,
-    unless the program declares how its parameters change them. The warmup
-    lookback is sealed through ``resolved_warmup_lookback_days``: the static
-    value, or more when the resolved series need it.
+    fall out of sync. The initialized program owns its series requirements. ``resolved_signals``
+    reads them directly, and ``resolved_warmup_lookback_days`` converts their
+    convergence count to a capped history request (#2857). Exit eligibility
+    is resolved from the configured parameters.
     """
 
     program_version: str
@@ -219,9 +227,7 @@ class SignalProgramContract:
     provider: str
     base_timeframe_ms: int
     decision_timeframe_ms: int
-    # Sized for the default periods; a seal records `resolved_warmup_lookback_days`.
-    warmup_lookback_days: int
-    signals: tuple[SignalSeriesContract, ...]
+    program_factory: Callable[[StrategyParamsBase], SignalProgram]
     decision_streams: tuple[str, ...]
     bar_integrity: SignalBarIntegrityContract
     exit_eligibility: ExitEligibilityContract
@@ -238,11 +244,8 @@ class SignalProgramContract:
     # drift (always fails closed) from a wiring-only drift (warns while the
     # toggle is off). Issue #1735.
     wiring_artifact_paths: tuple[str, ...]
-    # How validated parameters change the sealed series and exit countdown,
-    # for a program whose lengths or hold are parameters (#2696). ``None``
-    # means the static ``signals``/``exit_eligibility`` hold for every
-    # parameter set; when set, the static values describe the default point.
-    signals_for: Callable[[StrategyParamsBase], tuple[SignalSeriesContract, ...]] | None = None
+    # How configured parameters change the exit countdown (#2696).
+    # None means the default exit rule holds at every parameter point.
     exit_eligibility_for: Callable[[StrategyParamsBase], ExitEligibilityContract] | None = None
     # Likewise the parameter-schema version and numerical provenance a seal
     # records: an extension that keeps the default point byte-identical
@@ -251,10 +254,19 @@ class SignalProgramContract:
     numerical_provenance_for: Callable[[StrategyParamsBase], NumericalProvenanceContract] | None = None
 
     def resolved_signals(self, params: StrategyParamsBase) -> tuple[SignalSeriesContract, ...]:
-        """The signal series a program built from ``params`` constructs."""
-        if self.signals_for is None:
-            return self.signals
-        return self.signals_for(params)
+        """Seal requirements from the exact initialized indicators the program uses."""
+        program = self.program_factory(params)
+        program.strategy.ctx = StrategyContext(portfolio=Portfolio(initial_cash=Decimal(100_000)))
+        program.strategy.initialize()
+        return tuple(
+            SignalSeriesContract(
+                name=name, indicator=indicator.series_kind,
+                field="high_low_close" if isinstance(indicator, BarIndicator) else "close",
+                period=indicator.period, warmup_bars=indicator.ready_bars,
+                bars_to_converge=indicator.bars_to_converge(),
+            )
+            for name, indicator in program.strategy.signal_indicators.items()
+        )
 
     def resolved_exit_eligibility(self, params: StrategyParamsBase) -> ExitEligibilityContract:
         """The exit rule a program built from ``params`` follows."""
@@ -274,37 +286,36 @@ class SignalProgramContract:
             return self.numerical_provenance
         return self.numerical_provenance_for(params)
 
+    def resolved_decision_timeframe_ms(self, params: StrategyParamsBase) -> int:
+        """The decision bar width a program built from ``params`` runs at."""
+        return decision_timeframe_ms_for(params, qualified_ms=self.decision_timeframe_ms)
+
+    def convergence_bars(self, params: StrategyParamsBase) -> int:
+        """Decision bars until every indicator ``params`` build has converged (#2857)."""
+        return max((series.bars_to_converge or 0 for series in self.resolved_signals(params)), default=0)
+
     def resolved_warmup_lookback_days(self, params: StrategyParamsBase) -> int:
-        """The calendar days of history a program built from ``params`` loads before it decides.
+        """History is capped at twenty days; remaining convergence happens live (#2857)."""
+        days = _warmup_lookback_days_holding(self.convergence_bars(params), self.resolved_decision_timeframe_ms(params))
+        return MAX_WARMUP_LOOKBACK_DAYS if days is None else min(MAX_WARMUP_LOOKBACK_DAYS, max(1, days))
 
-        Never fewer than the static value. More when the longest series these
-        parameters build needs it, at the cadence they run (#2841). It follows
-        from the resolved series and cadence, so a program declares nothing
-        more for it. The static value too when no lookback can be sized
-        (``warmup_lookback_refusal``), so a seal built at such a point reads
-        as it always has.
+    def live_convergence_bars(self, params: StrategyParamsBase) -> int:
+        """Convergence bars the capped history cannot guarantee, so the bot spawns on live ones (#2857).
+
+        Inverts the same history guarantee the seal's lookback is sized by,
+        never a second calendar formula.
         """
-        return max(self.warmup_lookback_days, self._warmup_lookback_days_sized_for(params) or 0)
-
-    def warmup_lookback_refusal(self, params: StrategyParamsBase) -> str | None:
-        """Why no warmup lookback can be sized for ``params``, or ``None`` when one can (#2841).
-
-        A deploy refuses such parameters: the bot would start unwarmed, or
-        never decide.
-        """
-        if self._warmup_lookback_days_sized_for(params) is not None:
-            return None
-        decision_minutes = decision_timeframe_ms_for(params, qualified_ms=self.decision_timeframe_ms) // 60_000
-        return (
-            f"A {decision_minutes}-minute bar is longer than a regular trading session, so these periods "
-            "cannot be warmed up from history. Use a shorter bar."
-        )
-
-    def _warmup_lookback_days_sized_for(self, params: StrategyParamsBase) -> int | None:
-        """The days the longest series ``params`` build needs at their cadence; ``None`` when they cannot be counted."""
-        bars = max((series.warmup_bars for series in self.resolved_signals(params)), default=0)
-        decision_ms = decision_timeframe_ms_for(params, qualified_ms=self.decision_timeframe_ms)
-        return _warmup_lookback_days_holding(bars, decision_ms)
+        needed = self.convergence_bars(params)
+        decision_ms = self.resolved_decision_timeframe_ms(params)
+        held, unheld = 0, needed + 1
+        while unheld - held > 1:
+            middle = (held + unheld) // 2
+            days = _warmup_lookback_days_holding(middle, decision_ms)
+            if days is not None and days <= MAX_WARMUP_LOOKBACK_DAYS:
+                held = middle
+            else:
+                unheld = middle
+        return needed - held
 
     def __post_init__(self) -> None:
         # An empty wiring list is the dangerous shape, not a harmless one: it
@@ -391,14 +402,13 @@ class StrategyRegistration:
     # executes, so the UI never guesses strategy semantics from names.
     strategy_view: StrategyView | None = None
     strategy_bars: StrategyBarCadence = StrategyBarCadence("minute", 1)
-    # A Signal Program is optional because existing strategies may still use
-    # the legacy event-handler lifecycle. When present, this is the one
-    # construction authority for the program and its staged SignalSession.
-    signal_program_factory: Callable[[StrategyParamsBase], SignalProgram] | None = None
-    # Admission metadata is deliberately adjacent to the construction seam.
-    # A factory without a contract is an unqualified program and cannot be
-    # sealed for Start/Resume.
+    # A legacy strategy may have no governed Signal Program.
     signal_program_contract: SignalProgramContract | None = None
+
+    @property
+    def signal_program_factory(self) -> Callable[[StrategyParamsBase], SignalProgram] | None:
+        """Construction and sealed indicator requirements share one authority."""
+        return None if self.signal_program_contract is None else self.signal_program_contract.program_factory
 
 
 def public_params_schema(reg: StrategyRegistration, *, extra_hidden: frozenset[str] = frozenset()) -> dict[str, Any]:
@@ -440,24 +450,6 @@ def _macd_periods_refusal(params: StrategyParamsBase) -> str | None:
     if params.macd_fast < params.macd_slow:
         return None
     return f"macd_fast ({params.macd_fast}) must be less than macd_slow ({params.macd_slow})."
-
-
-def _ema_signals_for(params: StrategyParamsBase) -> tuple[SignalSeriesContract, ...]:
-    """The series either EMA program's ``initialize()`` builds for these lengths.
-
-    An EMA's ``warmup_bars`` is its period (``samples >= period``); RSI(14)
-    is fixed in both program versions and stays at ``period + 1``.
-    """
-    assert isinstance(params, EmaCrossoverSignalParams | EmaPreviousCrossoverParams)
-    return (
-        SignalSeriesContract(
-            name="ema_fast", indicator="ema", field="close", period=params.fast_period, warmup_bars=params.fast_period
-        ),
-        SignalSeriesContract(
-            name="ema_slow", indicator="ema", field="close", period=params.slow_period, warmup_bars=params.slow_period
-        ),
-        SignalSeriesContract(name="rsi", indicator="rsi_wilders", field="close", period=14, warmup_bars=15),
-    )
 
 
 def _ema_exit_eligibility_for(params: StrategyParamsBase) -> ExitEligibilityContract:
@@ -549,84 +541,6 @@ def _ema_parameter_schema_version_for(params: StrategyParamsBase) -> str:
 # its ``initialize()`` builds for these parameters, in the static tuple's
 # order. ``warmup_bars`` is each indicator's own ``is_ready`` threshold
 # (app/engine/indicators/).
-
-
-def _rsi_series(period: int) -> SignalSeriesContract:
-    """Wilders RSI: ready at ``period + 1`` samples (one extra for the first delta)."""
-    return SignalSeriesContract(
-        name="rsi", indicator="rsi_wilders", field="close", period=period, warmup_bars=period + 1
-    )
-
-
-def _adx_series(period: int) -> SignalSeriesContract:
-    """Wilders ADX, read off the full bar: ready at ``2 * period`` samples."""
-    return SignalSeriesContract(
-        name="adx", indicator="adx_wilders", field="high_low_close", period=period, warmup_bars=2 * period
-    )
-
-
-def _macd_series(slow_period: int, signal_period: int) -> SignalSeriesContract:
-    """MACD: its ``period`` and its readiness are both ``slow + signal - 1``, when the signal EMA turns ready.
-
-    The fast length moves the MACD line but neither number; a seal carries it
-    as the ``macd_fast`` parameter only.
-    """
-    warmup = slow_period + signal_period - 1
-    return SignalSeriesContract(name="macd", indicator="macd", field="close", period=warmup, warmup_bars=warmup)
-
-
-def _sma_signals_for(params: StrategyParamsBase) -> tuple[SignalSeriesContract, ...]:
-    """The two SMAs ``SmaCrossoverAlgorithm.initialize()`` builds; each is ready at its period."""
-    assert isinstance(params, SmaCrossoverParams)
-    short, long = params.short_window, params.long_window
-    return (
-        SignalSeriesContract(name="sma_short", indicator="sma", field="close", period=short, warmup_bars=short),
-        SignalSeriesContract(name="sma_long", indicator="sma", field="close", period=long, warmup_bars=long),
-    )
-
-
-def _rsi_mean_reversion_signals_for(params: StrategyParamsBase) -> tuple[SignalSeriesContract, ...]:
-    """The one RSI ``RsiMeanReversionAlgorithm.initialize()`` builds."""
-    assert isinstance(params, RsiMeanReversionParams)
-    return (_rsi_series(params.window),)
-
-
-def _spy_strategy_a_signals_for(params: StrategyParamsBase) -> tuple[SignalSeriesContract, ...]:
-    """The five indicators ``SpyStrategyAAlgorithm`` builds; an EMA is ready at its period."""
-    assert isinstance(params, RsiRangeStrategyAParams)
-    fast, slow = params.ema_fast_period, params.ema_slow_period
-    return (
-        SignalSeriesContract(name="ema_fast", indicator="ema", field="close", period=fast, warmup_bars=fast),
-        SignalSeriesContract(name="ema_slow", indicator="ema", field="close", period=slow, warmup_bars=slow),
-        _macd_series(params.macd_slow, params.macd_signal),
-        _rsi_series(params.rsi_period),
-        _adx_series(params.adx_period),
-    )
-
-
-def _spy_strategy_b_signals_for(params: StrategyParamsBase) -> tuple[SignalSeriesContract, ...]:
-    """The four indicators ``SpyStrategyBAlgorithm`` builds.
-
-    Supertrend is ready at its ATR period. Its multiplier moves the line but
-    not that number; a seal carries it as the ``supertrend_multiplier``
-    parameter only.
-    """
-    assert isinstance(params, RsiRangeStrategyBParams)
-    atr = params.supertrend_atr_period
-    return (
-        _rsi_series(params.rsi_period),
-        _adx_series(params.adx_period),
-        SignalSeriesContract(
-            name="supertrend", indicator="supertrend", field="high_low_close", period=atr, warmup_bars=atr
-        ),
-        _macd_series(params.macd_slow, params.macd_signal),
-    )
-
-
-def _spy_strategy_c_signals_for(params: StrategyParamsBase) -> tuple[SignalSeriesContract, ...]:
-    """The two indicators ``SpyStrategyCAlgorithm`` builds (via ``RsiRangeStrategy``)."""
-    assert isinstance(params, RsiRangeStrategyCParams)
-    return (_rsi_series(params.rsi_period), _adx_series(params.adx_period))
 
 
 # Strategy C's formula names its periods outright, so it holds only while both
@@ -992,38 +906,21 @@ _SPY_STRATEGY_C_VIEW = StrategyView(
 )
 
 
-
 _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     EMA_SIGNAL_PROGRAM_KEY: StrategyRegistration(
         display_name="EMA Crossover Signal",
         deploy_code="ema",
         signal_program_contract=SignalProgramContract(
+            program_factory=build_ema_crossover_signal_program,
             program_version=EMA_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             # The default point's version; `parameter_schema_version_for` resolves a seal's own.
             parameter_schema_version=EmaCrossoverSignalParams.REFERENCE_PARAMETER_SCHEMA_VERSION,
             parameter_schema_version_for=_ema_parameter_schema_version_for,
-            golden_trace_root="16044218d7505ab73b632318def91596fae29e9c1d6c4e58c655e9efa4dbf184",
+            golden_trace_root="7dcd8350134c0a436005a8a8bda52519ab22c88bee2c56634175cd56282f2ac3",
             provider="polygon",
             base_timeframe_ms=60_000,
             decision_timeframe_ms=15 * 60_000,
-            warmup_lookback_days=5,
-            # EmaCrossoverSignalAlgorithm.initialize() constructs exactly
-            # these three named series (EMA(fast), EMA(slow), RSI14), each fed
-            # bar.close at bar.end_ms. These static values are the 5/10
-            # default point; the EMA lengths are parameters (#2696), so a seal
-            # records `signals_for` resolved against its own parameters.
-            # RSI(14) is fixed in this program version. warmup_bars mirrors
-            # each indicator's own is_ready threshold
-            # (app/engine/indicators/base.py: samples >= period; RSI
-            # overrides to period + 1 for its first delta);
-            # test_contract_series_and_hold_describe_the_program_these_parameters_build
-            # holds the series to the indicators the program builds.
-            signals=(
-                SignalSeriesContract(name="ema_fast", indicator="ema", field="close", period=5, warmup_bars=5),
-                SignalSeriesContract(name="ema_slow", indicator="ema", field="close", period=10, warmup_bars=10),
-                SignalSeriesContract(name="rsi", indicator="rsi_wilders", field="close", period=14, warmup_bars=15),
-            ),
             # SignalIntentKind's complete member set (signal_intent.py) —
             # every decision this program can stage collapses to one of
             # these two named streams.
@@ -1045,7 +942,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 countdown_decision_clocks=5,
                 countdown_state_persistable=False,
             ),
-            signals_for=_ema_signals_for,
             exit_eligibility_for=_ema_exit_eligibility_for,
             numerical_provenance=_EMA_REFERENCE_PROVENANCE,
             numerical_provenance_for=_ema_numerical_provenance_for,
@@ -1110,7 +1006,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         strategy_view=_EMA_CROSSOVER_SIGNAL_VIEW,
         strategy_bars=StrategyBarCadence("minute", 15),
         build=lambda p: build_ema_crossover_signal_program(p).strategy,  # type: ignore[return-value]
-        signal_program_factory=build_ema_crossover_signal_program,
         lean_twin="ema_crossover_signal",
         # The twin hardcodes EMA 5/10 and the five-bar hold, so those three are
         # deliberately absent: a non-default value makes the companion
@@ -1121,29 +1016,14 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         display_name="EMA Previous Crossover",
         deploy_code="emap",
         signal_program_contract=SignalProgramContract(
+            program_factory=build_ema_previous_crossover_program,
             program_version=EMA_PREVIOUS_CROSSOVER_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=EmaPreviousCrossoverParams.PARAMETER_SCHEMA_VERSION,
-            golden_trace_root="39ea8919c9b8aea420d173de5f2b3201736afa269f8b26154b6af17736aa24ca",
+            golden_trace_root="cea93a45ee4ec4a8b8fc467e6a6379226ac355af728cef446c2f0bbf919db419",
             provider="polygon",
             base_timeframe_ms=60_000,
             decision_timeframe_ms=15 * 60_000,
-            # Same indicators as ema_crossover_signal, so the same buffer over
-            # the RSI(14) warmup at the default lengths; a deploy at longer
-            # ones seals the days they need (`resolved_warmup_lookback_days`).
-            # At every legal length the lookback also holds the eight bars
-            # beyond the slow EMA's warmup that the longest cross age limit
-            # reaches back, so a bot knows whether a cross is recent.
-            warmup_lookback_days=5,
-            # EmaPreviousCrossoverAlgorithm.initialize() constructs exactly
-            # these three named series, each fed bar.close at bar.end_ms.
-            # These static values are the 5/10 default point; a seal records
-            # `signals_for` resolved against its own lengths.
-            signals=(
-                SignalSeriesContract(name="ema_fast", indicator="ema", field="close", period=5, warmup_bars=5),
-                SignalSeriesContract(name="ema_slow", indicator="ema", field="close", period=10, warmup_bars=10),
-                SignalSeriesContract(name="rsi", indicator="rsi_wilders", field="close", period=14, warmup_bars=15),
-            ),
             decision_streams=tuple(kind.value for kind in SignalIntentKind),
             bar_integrity=SignalBarIntegrityContract(),
             # commit_signal_decision arms the countdown to hold_bars at entry;
@@ -1156,7 +1036,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 countdown_decision_clocks=5,
                 countdown_state_persistable=False,
             ),
-            signals_for=_ema_signals_for,
             exit_eligibility_for=_ema_exit_eligibility_for,
             numerical_provenance=NumericalProvenanceContract(
                 formula=(
@@ -1249,7 +1128,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         strategy_view=_EMA_PREVIOUS_CROSSOVER_VIEW,
         strategy_bars=StrategyBarCadence("minute", 15),
         build=lambda p: build_ema_previous_crossover_program(p).strategy,  # type: ignore[return-value]
-        signal_program_factory=build_ema_previous_crossover_program,
         lean_twin="ema_previous_crossover",
         # The twin reads every setting, so the parity companion is available
         # at any configuration.
@@ -1268,10 +1146,11 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         display_name="SMA Crossover",
         deploy_code="sma",
         signal_program_contract=SignalProgramContract(
+            program_factory=build_sma_crossover_signal_program,
             program_version=SMA_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=SmaCrossoverParams.PARAMETER_SCHEMA_VERSION,
-            golden_trace_root="b0a136f7b485179bc37c7998df430480b94b0866d9bc58dbead636fa84a320e9",
+            golden_trace_root="c31a763827885437e8d41327074f0315d6f6f01df06695075bf451c22f159382",
             provider="polygon",
             base_timeframe_ms=60_000,
             # The cadence this contract is qualified at, and the fallback
@@ -1280,31 +1159,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # different `resolution_minutes` seals its own cadence and
             # cannot prove its running build against this corpus.
             decision_timeframe_ms=15 * 60_000,
-            # SmaCrossoverAlgorithm.initialize() builds SMA(long_window=30),
-            # needing 30 consolidated 15-minute bars (450 minutes) ~= 2
-            # trading sessions (390 min/session, NYSE regular hours) before
-            # is_ready. 7 calendar days is a comfortable buffer over that
-            # 2-session minimum, covering weekends/holidays -- the same
-            # margin-over-minimum convention as ema_crossover_signal's 5-day
-            # buffer over its own (smaller, ~0.6-session) RSI(14) warmup.
-            # Sized at the default periods; a deploy at longer ones seals the
-            # days they need (`resolved_warmup_lookback_days`, #2841).
-            warmup_lookback_days=7,
-            # SmaCrossoverAlgorithm.initialize() constructs exactly these two
-            # named series (SMA{short_window}, SMA{long_window}), each fed
-            # bar.close at bar.end_ms. SimpleMovingAverage has no recursive
-            # seeding (app/engine/indicators/sma.py): is_ready flips at
-            # samples >= period like every other indicator
-            # (app/engine/indicators/base.py), so warmup_bars == period for
-            # both series -- unlike EMA's RSI, there is no period+1 warmup
-            # override to account for. These static values are the 10/30
-            # default point; the windows are parameters, so a seal records
-            # `signals_for` resolved against its own (#2796).
-            signals=(
-                SignalSeriesContract(name="sma_short", indicator="sma", field="close", period=10, warmup_bars=10),
-                SignalSeriesContract(name="sma_long", indicator="sma", field="close", period=30, warmup_bars=30),
-            ),
-            signals_for=_sma_signals_for,
             decision_streams=tuple(kind.value for kind in SignalIntentKind),
             bar_integrity=SignalBarIntegrityContract(),
             # SmaCrossoverAlgorithm.evaluate_signal_bar exits the instant its
@@ -1374,16 +1228,16 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         strategy_view=_SMA_CROSSOVER_VIEW,
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
         build=lambda p: build_sma_crossover_signal_program(p).strategy,  # type: ignore[return-value]
-        signal_program_factory=build_sma_crossover_signal_program,
     ),
     "rsi_mean_reversion": StrategyRegistration(
         display_name="RSI Mean Reversion",
         deploy_code="rsi",
         signal_program_contract=SignalProgramContract(
+            program_factory=build_rsi_mean_reversion_signal_program,
             program_version=RSI_MEAN_REVERSION_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=RsiMeanReversionParams.PARAMETER_SCHEMA_VERSION,
-            golden_trace_root="46d0b13b5e3307d983b4d5b4a1a21ba790db5e5644d164364a787bb2a12acde7",
+            golden_trace_root="0052b457a0aebbd554079ee1b348b1e4547efac32a0b83cbbe26b26318e20747",
             provider="polygon",
             base_timeframe_ms=60_000,
             # The cadence this contract is qualified at, and the fallback
@@ -1392,28 +1246,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # different `resolution_minutes` seals its own cadence and
             # cannot prove its running build against this corpus.
             decision_timeframe_ms=15 * 60_000,
-            # RsiMeanReversionAlgorithm.initialize() builds RSI(window=14),
-            # needing 15 consolidated 15-minute bars (period + 1, same
-            # Wilders warmup override as ema_crossover_signal's own RSI
-            # series) before is_ready. 5 calendar days is the same
-            # margin-over-minimum buffer ema_crossover_signal uses for that
-            # identical ~0.6-session warmup.
-            # Sized at the default periods; a deploy at longer ones seals the
-            # days they need (`resolved_warmup_lookback_days`, #2841).
-            warmup_lookback_days=5,
-            # RsiMeanReversionAlgorithm.initialize() constructs exactly this
-            # one named series (RSI{window}), fed bar.close at bar.end_ms.
-            # warmup_bars is period + 1 -- RelativeStrengthIndex.is_ready
-            # overrides the base Indicator's samples >= period to
-            # samples >= period + 1 (app/engine/indicators/rsi.py), the same
-            # override ema_crossover_signal's own "rsi" series declares.
-            # This static value is the window=14 default point; the window
-            # is a parameter, so a seal records `signals_for` resolved
-            # against its own (#2796).
-            signals=(
-                SignalSeriesContract(name="rsi", indicator="rsi_wilders", field="close", period=14, warmup_bars=15),
-            ),
-            signals_for=_rsi_mean_reversion_signals_for,
             decision_streams=tuple(kind.value for kind in SignalIntentKind),
             bar_integrity=SignalBarIntegrityContract(),
             # RsiMeanReversionAlgorithm.evaluate_signal_bar exits the instant
@@ -1482,7 +1314,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         strategy_view=_RSI_MEAN_REVERSION_VIEW,
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
         build=lambda p: build_rsi_mean_reversion_signal_program(p).strategy,  # type: ignore[return-value]
-        signal_program_factory=build_rsi_mean_reversion_signal_program,
         # No lean_parameter_names: the twin hardcodes 14/30/70, so a run
         # overriding window/oversold/overbought is honestly reported as
         # parameters_unrepresentable_by_twin rather than compared against a
@@ -1502,45 +1333,17 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         strategy_category="operational_validation_harness",
         experimental_notice="Experimental validation only — not a trading strategy",
         signal_program_contract=SignalProgramContract(
+            program_factory=build_deployment_validation_signal_program,
             program_version=DEPLOYMENT_VALIDATION_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=DeploymentValidationParams.PARAMETER_SCHEMA_VERSION,
-            golden_trace_root="f2427abee699b896822b2180b86b5c56f8af45eebe84e98e21251aaba4028dcc",
+            golden_trace_root="7fd116ac7c232e5948728f6b3f8dfe936542fd42da22d1edb551dd363095843c",
             provider="polygon",
             base_timeframe_ms=60_000,
             # This program's decision clock IS the raw minute bar -- there is
             # no consolidated resolution, unlike every other promoted
             # program in this slice.
             decision_timeframe_ms=60_000,
-            # One day, not zero, and the reason is not indicators.
-            # DeploymentValidationConsecutiveGreen resets its green-streak
-            # detector and hold countdown every session (`_reset_day()`, the
-            # instant `on_minute_bar` sees a new calendar date), so on
-            # indicator grounds alone nothing needs warming and zero would be
-            # the honest figure.
-            #
-            # But this field governs a second thing: `replay_warmup_bars`
-            # (app/services/bot_trade_strategy_warmup.py) sizes its
-            # history fetch from it (#2314). At zero the replay has no
-            # window to rebuild from: `recent_closed_bars(lookback_days=0)`
-            # builds the IBKR duration string "0 D", which is not valid. That
-            # failure used to degrade silently to a cold start, switching off
-            # a shipped recovery path from a field whose justification only
-            # mentioned indicators; since #2365 a failed or short warmup
-            # fetch refuses the run (WARMUP_HISTORY_UNAVAILABLE) instead, so
-            # zero would stop every start rather than degrade it.
-            #
-            # One day covers the intra-session state this strategy actually
-            # has. This is deliberately not solved by flooring the value in
-            # the warmup resolver: a floor would make the seal attest one
-            # number while the bot used another, which is the exact defect
-            # repaired for `decision_timeframe_ms` in this same slice.
-            warmup_lookback_days=1,
-            # Not indicator-driven -- evaluate_signal_bar reads only
-            # bar.open/bar.close (a green-bar pattern) and the calendar-derived
-            # session window, so there is no named series to seal here. An
-            # empty tuple states that honestly rather than inventing one.
-            signals=(),
             decision_streams=tuple(kind.value for kind in SignalIntentKind),
             bar_integrity=SignalBarIntegrityContract(),
             # evaluate_signal_bar's exit branch counts down
@@ -1632,17 +1435,17 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         strategy_view=_DEPLOYMENT_VALIDATION_VIEW,
         strategy_bars=StrategyBarCadence("minute", 1),
         build=lambda p: build_deployment_validation_signal_program(p).strategy,  # type: ignore[return-value]
-        signal_program_factory=build_deployment_validation_signal_program,
     ),
     "spy_strategy_a": StrategyRegistration(
         display_name="Strategy A — EMA-gap + MACD + RSI-range",
         deploy_code="sa",
         params_refusal=_macd_periods_refusal,
         signal_program_contract=SignalProgramContract(
+            program_factory=build_spy_strategy_a_signal_program,
             program_version=SPY_STRATEGY_A_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=RsiRangeStrategyAParams.PARAMETER_SCHEMA_VERSION,
-            golden_trace_root="7ee88013046505a9df88fa9c83b94e1f5f4c4de92718dd874ca157b5eea25f5f",
+            golden_trace_root="f36e4e7e14e8ee12949cf323042cf07b2866aa7b0091f66bfdd85d2e22b39b28",
             provider="polygon",
             base_timeframe_ms=60_000,
             # The cadence this contract is qualified at, and the fallback
@@ -1651,50 +1454,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # different `resolution_minutes` seals its own cadence and
             # cannot prove its running build against this corpus.
             decision_timeframe_ms=15 * 60_000,
-            # RsiRangeStrategy.initialize() + SpyStrategyAAlgorithm's
-            # _init_extra_indicators() build five indicators; the longest
-            # warmup is EMA_slow(50) = 50 consolidated 15-minute bars = 750
-            # minutes, ~1.92 trading sessions (390 min/session, NYSE regular
-            # hours). That is much closer to the 2-session boundary (780 min)
-            # than sma_crossover's 30-bar/450-minute warmup (58% of 2
-            # sessions vs. this program's 96%), so a single early close
-            # inside the lookback window could push the true requirement
-            # past 2 full sessions -- 9 calendar days is a slightly larger
-            # buffer than sma_crossover's 7 for that reason, still covering
-            # weekends/holidays.
-            # Sized at the default periods; a deploy at longer ones seals the
-            # days they need (`resolved_warmup_lookback_days`, #2841).
-            warmup_lookback_days=9,
-            # SpyStrategyAAlgorithm.initialize() and _init_extra_indicators()
-            # construct exactly these five named indicators, each fed
-            # bar.close (RSI, EMA_fast, EMA_slow, MACD) or the full bar
-            # (ADX) at bar.end_ms. warmup_bars mirrors each indicator's own
-            # is_ready threshold (app/engine/indicators/base.py: samples >=
-            # period for Indicator/BarIndicator; RelativeStrengthIndex
-            # overrides to period + 1; AverageDirectionalIndex overrides to
-            # 2 * period; MovingAverageConvergenceDivergence's own `period`
-            # bookkeeping value already equals slow_period + signal_period -
-            # 1, the sample count at which its internal signal EMA becomes
-            # ready);
-            # test_resolved_series_are_exactly_the_indicators_these_parameters_build
-            # holds the series to the indicators the program builds. These
-            # static values are the default point; every period is a
-            # parameter, so a seal records `signals_for` resolved against its
-            # own (#2796).
-            signals=(
-                SignalSeriesContract(name="ema_fast", indicator="ema", field="close", period=20, warmup_bars=20),
-                SignalSeriesContract(name="ema_slow", indicator="ema", field="close", period=50, warmup_bars=50),
-                SignalSeriesContract(name="macd", indicator="macd", field="close", period=34, warmup_bars=34),
-                SignalSeriesContract(name="rsi", indicator="rsi_wilders", field="close", period=14, warmup_bars=15),
-                # ADX reads high/low/close off the full bar (Wilder's
-                # directional-movement calculation needs the high/low swing,
-                # not just the close) -- "close" would misdescribe what this
-                # series actually consumes, hence the wider field literal.
-                SignalSeriesContract(
-                    name="adx", indicator="adx_wilders", field="high_low_close", period=14, warmup_bars=28
-                ),
-            ),
-            signals_for=_spy_strategy_a_signals_for,
             decision_streams=tuple(kind.value for kind in SignalIntentKind),
             bar_integrity=SignalBarIntegrityContract(),
             # SpyStrategyAAlgorithm/RsiRangeStrategy.evaluate_signal_bar exits
@@ -1790,17 +1549,17 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         strategy_view=_SPY_STRATEGY_A_VIEW,
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
         build=lambda p: build_spy_strategy_a_signal_program(p).strategy,  # type: ignore[return-value]
-        signal_program_factory=build_spy_strategy_a_signal_program,
     ),
     "spy_strategy_b": StrategyRegistration(
         display_name="Strategy B — Supertrend + ADX + MACD + RSI-range",
         deploy_code="sb",
         params_refusal=_macd_periods_refusal,
         signal_program_contract=SignalProgramContract(
+            program_factory=build_spy_strategy_b_signal_program,
             program_version=SPY_STRATEGY_B_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=RsiRangeStrategyBParams.PARAMETER_SCHEMA_VERSION,
-            golden_trace_root="775a5dfd4a98090111c4aa0f643f647b4b14cf27c9334ac266ebc9565b7485b4",
+            golden_trace_root="25550bb301f73739606453e8b73b3a491acd093346666f550b57fcc919bd6ea9",
             provider="polygon",
             base_timeframe_ms=60_000,
             # The cadence this contract is qualified at, and the fallback
@@ -1809,41 +1568,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # different `resolution_minutes` seals its own cadence and
             # cannot prove its running build against this corpus.
             decision_timeframe_ms=15 * 60_000,
-            # SpyStrategyBAlgorithm.initialize() (via RsiRangeStrategy) builds
-            # RSI(14), ADX(14), Supertrend(atr_period=10), and
-            # MACD(fast=12, slow=26, signal=9). MACD's own warmup (34 bars,
-            # signal_period-1 samples past its slow EMA) is the binding
-            # constraint at 510 minutes (34 * 15) -- just over one RTH
-            # session (390 min) but under two. 7 calendar days is the same
-            # comfortable buffer-over-2-session-minimum convention as
-            # sma_crossover's own 7-day figure, covering weekends/holidays.
-            # Sized at the default periods; a deploy at longer ones seals the
-            # days they need (`resolved_warmup_lookback_days`, #2841).
-            warmup_lookback_days=7,
-            # These static values are the default point; every period is a
-            # parameter, so a seal records `signals_for` resolved against
-            # its own (#2796).
-            # Each series' warmup_bars is its own is_ready threshold
-            # (app/engine/indicators/base.py: samples >= period, except RSI's
-            # period + 1 override and ADX's 2 * period override -- see each
-            # indicator's own docstring). MACD's period is set to
-            # slow_period + signal_period - 1 = 34 at construction
-            # (app/engine/indicators/macd.py), which is also its own
-            # is_ready threshold since MACD delegates is_ready to its
-            # internal signal EMA.
-            # test_resolved_series_are_exactly_the_indicators_these_parameters_build
-            # holds the series to the indicators the program builds.
-            signals=(
-                SignalSeriesContract(name="rsi", indicator="rsi_wilders", field="close", period=14, warmup_bars=15),
-                SignalSeriesContract(
-                    name="adx", indicator="adx_wilders", field="high_low_close", period=14, warmup_bars=28
-                ),
-                SignalSeriesContract(
-                    name="supertrend", indicator="supertrend", field="high_low_close", period=10, warmup_bars=10
-                ),
-                SignalSeriesContract(name="macd", indicator="macd", field="close", period=34, warmup_bars=34),
-            ),
-            signals_for=_spy_strategy_b_signals_for,
             decision_streams=tuple(kind.value for kind in SignalIntentKind),
             bar_integrity=SignalBarIntegrityContract(),
             # RsiRangeStrategy.evaluate_signal_bar exits the instant its
@@ -1937,16 +1661,16 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         strategy_view=_SPY_STRATEGY_B_VIEW,
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
         build=lambda p: build_spy_strategy_b_signal_program(p).strategy,  # type: ignore[return-value]
-        signal_program_factory=build_spy_strategy_b_signal_program,
     ),
     "spy_strategy_c": StrategyRegistration(
         display_name="Strategy C — ADX-rising + RSI-range",
         deploy_code="sc",
         signal_program_contract=SignalProgramContract(
+            program_factory=build_spy_strategy_c_signal_program,
             program_version=SPY_C_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=RsiRangeStrategyCParams.PARAMETER_SCHEMA_VERSION,
-            golden_trace_root="9efc77718f0028e78ad6ea7d56ffda19a510cbba7f5ea3b5a6d5cccade6a75c6",
+            golden_trace_root="dfe2071255b57f835af687cfe1bbefc9d0bec2e742934fe343fc22d1b915493c",
             provider="polygon",
             base_timeframe_ms=60_000,
             # The cadence this contract is qualified at, and the fallback
@@ -1955,40 +1679,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # different `resolution_minutes` seals its own cadence and
             # cannot prove its running build against this corpus.
             decision_timeframe_ms=15 * 60_000,
-            # SpyStrategyCAlgorithm's longest warmup dependency is ADX,
-            # needing 2 * adx_period = 28 consolidated 15-minute bars (420
-            # minutes) before is_ready. A single NYSE RTH session is only
-            # 390 minutes (26 bars of 15 minutes), so warmup spans into a
-            # 2nd session -- the same "~2 trading sessions" situation as
-            # sma_crossover's own SMA(30) warmup. 7 calendar days is the
-            # same comfortable buffer over that 2-session minimum,
-            # covering weekends/holidays.
-            # Sized at the default periods; a deploy at longer ones seals the
-            # days they need (`resolved_warmup_lookback_days`, #2841).
-            warmup_lookback_days=7,
-            # SpyStrategyCAlgorithm.initialize() (via RsiRangeStrategy)
-            # builds RSI(rsi_period=14) and ADX(adx_period=14) -- the only
-            # two indicators this program constructs (no
-            # _init_extra_indicators() override). Both are fed
-            # bar.close/bar at bar.end_ms. RSI's is_ready flips at
-            # samples >= period + 1 (app/engine/indicators/rsi.py, one
-            # extra sample for the first delta); ADX's is_ready flips at
-            # samples >= 2 * period (app/engine/indicators/adx.py -- true
-            # range and directional movement both need a *prior* bar
-            # before the Wilder smoothing itself needs `period` more
-            # samples).
-            # test_resolved_series_are_exactly_the_indicators_these_parameters_build
-            # holds the series to the indicators the program builds. These
-            # static values are the 14/14 default point; both periods are
-            # parameters, so a seal records `signals_for` resolved against
-            # its own (#2796).
-            signals=(
-                SignalSeriesContract(name="rsi", indicator="rsi_wilders", field="close", period=14, warmup_bars=15),
-                SignalSeriesContract(
-                    name="adx", indicator="adx_wilders", field="high_low_close", period=14, warmup_bars=28
-                ),
-            ),
-            signals_for=_spy_strategy_c_signals_for,
             decision_streams=tuple(kind.value for kind in SignalIntentKind),
             bar_integrity=SignalBarIntegrityContract(),
             # SpyStrategyCAlgorithm.evaluate_signal_bar (via RsiRangeStrategy)
@@ -2039,7 +1729,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         strategy_view=_SPY_STRATEGY_C_VIEW,
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
         build=lambda p: build_spy_strategy_c_signal_program(p).strategy,  # type: ignore[return-value]
-        signal_program_factory=build_spy_strategy_c_signal_program,
     ),
 }
 

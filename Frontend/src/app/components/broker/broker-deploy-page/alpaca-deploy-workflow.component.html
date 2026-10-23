@@ -268,6 +268,7 @@
             [strategyLabel]="selectedStrategy()?.label ?? null"
             [trades]="tradesSummary()"
             [sameSymbolNote]="review?.same_symbol_note ?? null"
+            [spawningNote]="review?.spawning_note ?? null"
             [accountNumber]="view.account_id"
             [exits]="options() === null ? exitsSummary() : ordersSummary()"
             [exitsLabel]="options() === null ? 'Exits' : 'Orders'"

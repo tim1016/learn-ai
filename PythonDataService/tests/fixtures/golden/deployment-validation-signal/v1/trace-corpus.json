@@ -3,16 +3,16 @@
   "program_key": "deployment_validation",
   "program_version": "deployment-validation/v1",
   "entries": [
-    {"cell": "AAPL_W6mo_2025-11-03_to_2026-04-30", "settings": {"symbol": "AAPL"}, "trace_count": 43320, "trace_root": "fafff7259d69b15967d145e274c2d0efa5e60b280d422d3dae2679b5d1d4cf89"},
-    {"cell": "AAPL_W12mo_2025-05-01_to_2026-04-30", "settings": {"symbol": "AAPL"}, "trace_count": 93060, "trace_root": "cfbe03f1fc49d86a205852b31592acaa3d5d2b1f1a39f8206a42602c06f77731"},
-    {"cell": "QQQ_W3mo_2026-02-02_to_2026-04-30", "settings": {"symbol": "QQQ"}, "trace_count": 19890, "trace_root": "91227c0f647c39d200d15e4fbf86c4470aa041d0e390bec02c9ace184733f740"},
-    {"cell": "QQQ_W6mo_2025-11-03_to_2026-04-30", "settings": {"symbol": "QQQ"}, "trace_count": 43320, "trace_root": "df58e36f992f21d2bb08fe96439312201ada952dd24b6b23cbd407a73e5a6070"},
-    {"cell": "QQQ_W12mo_2025-05-01_to_2026-04-30", "settings": {"symbol": "QQQ"}, "trace_count": 93060, "trace_root": "13b80e86b2cfea0d76bd0bd93059e2516244ff76a3487470222e0876c90873d8"},
-    {"cell": "SPY_W3mo_2026-02-02_to_2026-04-30", "settings": {"symbol": "SPY"}, "trace_count": 19890, "trace_root": "e796cb624201e259161672393656cdb7426215e7dfccfb1670cfcfe3aca58988"},
-    {"cell": "SPY_W6mo_2025-11-03_to_2026-04-30", "settings": {"symbol": "SPY"}, "trace_count": 43320, "trace_root": "cf4eb1bc7ef93ba35cb72410970114190a50f70e1128f5a85b23959a9e48567f"},
-    {"cell": "SPY_W12mo_2025-05-01_to_2026-04-30", "settings": {"symbol": "SPY"}, "trace_count": 93060, "trace_root": "eeb9bb440afea2b3b072b665a95c907ce1a63066b306f5cbc473287642c1429b"},
-    {"cell": "TSLA_W6mo_2025-11-03_to_2026-04-30", "settings": {"symbol": "TSLA"}, "trace_count": 43320, "trace_root": "a016df82d1f8197515bafb83c8a38a82f6595c16e9febe219dead984bd8f9dc5"},
-    {"cell": "TSLA_W12mo_2025-05-01_to_2026-04-30", "settings": {"symbol": "TSLA"}, "trace_count": 93060, "trace_root": "e44cd5ec3fea1dece541d72f3dc7ee7c5658d3c401135dc2483c238a1e45a3a9"}
+    {"cell": "AAPL_W6mo_2025-11-03_to_2026-04-30", "settings": {"symbol": "AAPL"}, "trace_count": 43320, "trace_root": "4f5839929b18f7a387720a25901347ee1d3bfac289217decf8102741febfeb9f"},
+    {"cell": "AAPL_W12mo_2025-05-01_to_2026-04-30", "settings": {"symbol": "AAPL"}, "trace_count": 93060, "trace_root": "4f4266b1e23c01c8fd26cafd0c3c03ab675d1ae79632b5697b40b3f993f499bd"},
+    {"cell": "QQQ_W3mo_2026-02-02_to_2026-04-30", "settings": {"symbol": "QQQ"}, "trace_count": 19890, "trace_root": "ade22f55befd64c541b73b99b7de05ce581c5bbbf3abe6574799b6e5b0e05be2"},
+    {"cell": "QQQ_W6mo_2025-11-03_to_2026-04-30", "settings": {"symbol": "QQQ"}, "trace_count": 43320, "trace_root": "a157e66121c2fc69db890f69799caebf0d874febe7e7ee721063d8b9cf933a1c"},
+    {"cell": "QQQ_W12mo_2025-05-01_to_2026-04-30", "settings": {"symbol": "QQQ"}, "trace_count": 93060, "trace_root": "841601bd3d3167a61bd6858a6a68f346c52238f12e01b52291f26b8ecce7d48c"},
+    {"cell": "SPY_W3mo_2026-02-02_to_2026-04-30", "settings": {"symbol": "SPY"}, "trace_count": 19890, "trace_root": "ec437964e0b059a86c175b9d920d25165660883fa3ee108b6a2b1b47f2ac550f"},
+    {"cell": "SPY_W6mo_2025-11-03_to_2026-04-30", "settings": {"symbol": "SPY"}, "trace_count": 43320, "trace_root": "4426f6b819dd9fa991920789612da8685a7a73de0be00bd38a486f4bb133a239"},
+    {"cell": "SPY_W12mo_2025-05-01_to_2026-04-30", "settings": {"symbol": "SPY"}, "trace_count": 93060, "trace_root": "c5dd8d172fa158ec4ca8f63103f2532ad04ef7eaf4f4ac955fa5915f5fda3d3b"},
+    {"cell": "TSLA_W6mo_2025-11-03_to_2026-04-30", "settings": {"symbol": "TSLA"}, "trace_count": 43320, "trace_root": "6cec82cbe244e7527f146daf4df4e25ac204e18658d0410aeaa6aded6797690f"},
+    {"cell": "TSLA_W12mo_2025-05-01_to_2026-04-30", "settings": {"symbol": "TSLA"}, "trace_count": 93060, "trace_root": "fb682053e831e9d38b977d475184638400f88f4f1a843f938b8c53dba3e282a3"}
   ],
-  "trace_root": "f2427abee699b896822b2180b86b5c56f8af45eebe84e98e21251aaba4028dcc"
+  "trace_root": "7fd116ac7c232e5948728f6b3f8dfe936542fd42da22d1edb551dd363095843c"
 }

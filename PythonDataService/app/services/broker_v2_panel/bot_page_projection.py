@@ -68,7 +68,7 @@ from app.services.source_bar_ledger import RECOVERY_QUOTE_PROVIDER, RUN_END_CLOS
 from app.utils.et_words import et_clock_words, et_day_words
 from app.utils.session_anchors import et_date_at_ms
 
-SUMMARY_TEMPLATE_VERSION = 2
+SUMMARY_TEMPLATE_VERSION = 3
 # A run the Clerk admitted whose launch record cannot be read.
 _UNREADABLE_RUN = "This bot's latest run record could not be read."
 # The bot page lists a run's newest fills; a longer run still counts every trade.
@@ -168,6 +168,10 @@ def bot_own_status(
             reason="This bot's own custody has a hold or an open question.",
         )
     if panel.health.running:
+        if panel.spawning is not None:
+            return BotOwnStatusView(state="spawning", label="Spawning", reason=panel.spawning.explanation)
+        if panel.startup_join is not None and panel.startup_join.state in {"waiting_for_stream", "filling", "history_joined"}:
+            return BotOwnStatusView(state="preparing", label="Preparing", reason=panel.startup_join.explanation)
         return BotOwnStatusView(state="running", label="Running", reason=None)
     if panel.exposure:
         return BotOwnStatusView(state="ended_holding", label="Ended holding", reason=None)
@@ -225,6 +229,7 @@ def run_summary_facts(panel: BotPanelView, run: RunFacts, *, now_ms: int) -> Run
             panel.end.end_at_ms if panel.end is not None and panel.end.status in ("scheduled", "ending") else None
         ),
         ending=ending,
+        spawning=ending == "running" and panel.spawning is not None,
         decision_count=run.decision_count,
         decision_count_is_floor=run.decision_count_is_floor,
         trade_count=run.trade_count,
@@ -301,7 +306,7 @@ def run_summary_text(facts: RunSummaryFacts) -> str:
     decisions = _decision_words(facts.decision_count, floor=facts.decision_count_is_floor)
     activity = f"{decisions}, {_count_words(facts.trade_count, 'trade')}"
     if facts.ending == "running":
-        parts = [f"Running since {_span_words(facts)}"]
+        parts = [f"Spawning · started {_span_words(facts)}" if facts.spawning else f"Running since {_span_words(facts)}"]
         if facts.scheduled_end_at_ms is not None:
             parts.append(f"ends {et_clock_words(facts.scheduled_end_at_ms)} ET")
     else:

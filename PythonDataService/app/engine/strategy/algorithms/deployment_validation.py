@@ -97,6 +97,7 @@ class DeploymentValidationConsecutiveGreen(Strategy):
         return {"symbol": self._signal_symbol_name}
 
     def initialize(self) -> None:
+        self._signal_indicators = {}
         self.set_start_date(2024, 3, 28)
         self.set_end_date(2026, 4, 15)
         self.set_cash(100000)

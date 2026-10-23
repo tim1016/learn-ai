@@ -275,6 +275,7 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         self._ema5 = ExponentialMovingAverage(f"EMA{self._fast_period}", self._fast_period)
         self._ema10 = ExponentialMovingAverage(f"EMA{self._slow_period}", self._slow_period)
         self._rsi14 = RelativeStrengthIndex("RSI14", 14)
+        self._signal_indicators = {"ema_fast": self._ema5, "ema_slow": self._ema10, "rsi": self._rsi14}
 
         self._prev_ema5_above_ema10 = False
         self._in_position = False

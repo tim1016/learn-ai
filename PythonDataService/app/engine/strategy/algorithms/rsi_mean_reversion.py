@@ -119,6 +119,7 @@ class RsiMeanReversionAlgorithm(Strategy):
         self._symbol = self.ctx.add_equity(self._symbol_name)
 
         self._rsi = RelativeStrengthIndex(f"RSI{self._window}", self._window)
+        self._signal_indicators = {"rsi": self._rsi}
 
         self._in_position = False
         self._pending_entry = None

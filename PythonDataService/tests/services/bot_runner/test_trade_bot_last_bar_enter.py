@@ -42,7 +42,11 @@ from app.services.source_bar_ledger import SourceBarLedger
 from app.utils.session_anchors import et_date_at_ms
 from tests._helpers.bot_runner.custody import _SID, _T0, budget_consent_for_test
 from tests._helpers.bot_runner.doubles import _FakeFeed, _SqliteRuntimeBroker
-from tests._helpers.bot_runner.ema_parity import ema_bars_in_fee_pinned_week, ema_bars_through_a_last_bar_enter
+from tests._helpers.bot_runner.ema_parity import (
+    ema_bars_in_fee_pinned_week,
+    ema_bars_through_a_last_bar_enter,
+    flat_indicator_warmup,
+)
 from tests._helpers.bot_runner.market import clock_read_before_the_close, patch_wall_clock_to_the_fed_bar
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
@@ -72,6 +76,8 @@ def _regular_hours_binding(symbol: str) -> BrokerBotBinding:
     return BrokerBotBinding(
         exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=_SID,
         strategy_key="ema_crossover_signal",
+        # Flat warmup leaves the closing cross at RSI 49.88; keep it eligible.
+        strategy_params={"rsi_min": 49.0},
         broker="alpaca",
         symbol=symbol,
         use_rth=True,
@@ -111,7 +117,7 @@ async def _run(
     facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
     binding = _regular_hours_binding(bars[0].symbol)
     await facade.register_strategy_run(binding)
-    feed = _FakeFeed(bars, mode="finite")
+    feed = _FakeFeed(bars, mode="finite", warmup_bars=flat_indicator_warmup(bars[0]))
     ledger = SourceBarLedger(artifacts_root=tmp_path / "ledger", account_id=_ACCOUNT_ID)
     set_alpaca_clerk(facade)
     try:

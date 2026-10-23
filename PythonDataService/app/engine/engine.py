@@ -36,7 +36,7 @@ from app.utils.timestamps import ny_datetime
 class EvaluationBoundaryError(RuntimeError):
     """The warmup → evaluation transition could not be made safely.
 
-    Raised when scoring would otherwise start on an unready program, or when
+    Raised when scoring would otherwise start on an unconverged program, or when
     the data never reaches the evaluation start at all. Either way the run
     fails closed rather than reporting figures the caller did not ask for.
     """
@@ -239,7 +239,7 @@ class BacktestEngine:
         ``evaluation_start_ms`` (``int64 ms UTC``, an ET-midnight session
         anchor) splits the window into a warmup and an evaluation phase. Bars
         before it prime indicators and stateful primitives; at the first bar
-        on or after it the engine flushes, asserts readiness, and resets
+        on or after it the engine flushes, asserts convergence, and resets
         execution state (see :meth:`_enter_evaluation`), so every figure in
         the returned result describes the evaluation phase only. ``None`` —
         the default — is the historical single-phase run, unchanged.
@@ -512,7 +512,7 @@ class BacktestEngine:
         closing_bar_skips: list[ClosingBarSkip],
         quarantined_decision_bars: list[QuarantinedDecisionBar],
     ) -> None:
-        """Cross from warmup into evaluation: flush, assert readiness, reset.
+        """Cross from warmup into evaluation: flush, assert convergence, reset.
 
         The order is the contract (PRD #1925, "State-transition contract at
         the evaluation boundary"; review finding F10):
@@ -525,8 +525,8 @@ class BacktestEngine:
            on the first evaluation input, after the reset, and a warmup-era
            crossover would become a scored entry whose fill timestamp looks
            perfectly legitimate.
-        2. **Assert readiness.** Elapsed history is not evidence that the
-           program's indicators are ready; the program's own last decision
+        2. **Assert convergence.** Elapsed history is not evidence that the
+           program's indicators have converged; the program's own last decision
            is. A caller that sized the warmup too short fails here rather
            than scoring a cold start.
         3. **Reset execution state.** Positions are flattened without a fill
@@ -544,11 +544,11 @@ class BacktestEngine:
         program = strategy.signal_program
         if program is not None:
             traces = program.session.traces
-            if not traces or not traces[-1].ready:
+            if not traces or not traces[-1].converged:
                 raise EvaluationBoundaryError(
-                    f"program is not ready at the evaluation start {ny_datetime(evaluation_start_ms)}: "
+                    f"program is not converged at the evaluation start {ny_datetime(evaluation_start_ms)}: "
                     f"{len(traces)} warmup decision(s) observed and the last one reported "
-                    f"ready={traces[-1].ready if traces else None}; lengthen the warmup"
+                    f"converged={traces[-1].converged if traces else None}; lengthen the warmup"
                 )
 
         portfolio.clear_pending()

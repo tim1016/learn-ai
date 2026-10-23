@@ -174,7 +174,7 @@ def test_a_warmup_too_short_to_ready_the_program_fails_the_run(seeded_lake, reco
 
     assert response.success is False
     assert response.error is not None
-    assert "not ready" in response.error
+    assert "not converged" in response.error
 
 
 def test_a_manifest_bound_run_fails_when_a_lake_artifact_changed_after_capture(seeded_lake, recorded_persistence) -> None:

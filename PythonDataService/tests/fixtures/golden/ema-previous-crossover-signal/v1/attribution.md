@@ -32,3 +32,8 @@ raw minute bars (`lean/observations.csv`) are reused as priced-data input.
   (`BacktestEngine.for_decision_identity`). Whether the cross is recent is
   part of each trace (`relation_facts.cross_recent`), so the root pins which
   bars had a recent cross, not only which bars entered.
+
+Requalified 2026-10-22 for #2857: session protocol v2 records convergence
+and Spawning facts, including the approved Supertrend 100-bar margin.
+Indicator values, readiness and plain-backtest settlements are unchanged on
+this corpus; the trace roots move because the recorded evidence widened.

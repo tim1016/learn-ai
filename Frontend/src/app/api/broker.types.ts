@@ -10078,7 +10078,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "running" | "finished" | "ended_holding" | "needs_attention";
+            state: "running" | "spawning" | "preparing" | "finished" | "ended_holding" | "needs_attention";
         };
         /**
          * BotPageView
@@ -10179,6 +10179,7 @@ export interface components {
             /** Run Fills */
             run_fills?: components["schemas"]["RunFillView"][] | null;
             sealed_program: components["schemas"]["SealedBotProgram"] | null;
+            spawning?: components["schemas"]["SpawningView"] | null;
             startup_join?: components["schemas"]["StartupJoinView"] | null;
             /**
              * Status
@@ -12251,6 +12252,8 @@ export interface components {
         ConfiguredSignalProgramSeal: {
             bar_integrity: components["schemas"]["SignalBarIntegrityContract"];
             clock: components["schemas"]["SignalClockContract"];
+            /** Convergence Tolerance */
+            convergence_tolerance?: number | null;
             data: components["schemas"]["SignalDataContract"];
             /** Decision Streams */
             decision_streams: string[];
@@ -13574,6 +13577,8 @@ export interface components {
              * @default []
              */
             shortcuts?: components["schemas"]["DeploymentBudgetShortcut"][];
+            /** Spawning Note */
+            spawning_note?: string | null;
             /**
              * State
              * @enum {string}
@@ -29754,6 +29759,11 @@ export interface components {
             scheduled_end_at_ms?: number | null;
             /** Set Aside Usd */
             set_aside_usd: string | null;
+            /**
+             * Spawning
+             * @default false
+             */
+            spawning?: boolean;
             /** Started At Ms */
             started_at_ms?: number | null;
             /** Trade Count */
@@ -31599,6 +31609,8 @@ export interface components {
          *     ADX overrides this to ``2 * period``.
          */
         SignalSeriesContract: {
+            /** Bars To Converge */
+            bars_to_converge?: number | null;
             /**
              * Field
              * @enum {string}
@@ -31674,6 +31686,23 @@ export interface components {
             snapshot: components["schemas"]["RecordedSnapshotItem"];
             /** Success */
             success: boolean;
+        };
+        /** SpawningView */
+        SpawningView: {
+            /** Bars Done */
+            bars_done: number;
+            /** Bars Needed */
+            bars_needed: number;
+            /** Converged */
+            converged: boolean;
+            /** Decision Timeframe Ms */
+            decision_timeframe_ms: number;
+            /** Explanation */
+            explanation: string;
+            /** Label */
+            label: string;
+            /** Sessions Left */
+            sessions_left?: number | null;
         };
         /** SpecBacktestRequest */
         SpecBacktestRequest: {

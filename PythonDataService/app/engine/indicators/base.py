@@ -18,8 +18,31 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from decimal import Decimal
 
+from app.engine.indicators.convergence import CONVERGENCE_TOLERANCE
 
-class Indicator(ABC):
+
+class IndicatorConvergence(ABC):
+    """Every streaming indicator declares its initialization requirement."""
+
+    series_kind: str
+    period: int
+    samples: int
+
+    @property
+    def ready_bars(self) -> int:
+        return self.period
+
+    @abstractmethod
+    def bars_to_converge(self, tolerance: float = CONVERGENCE_TOLERANCE) -> int:
+        """Number of input bars required by this indicator's decay rule."""
+        raise NotImplementedError
+
+    @property
+    def is_converged(self) -> bool:
+        return self.samples >= self.bars_to_converge()
+
+
+class Indicator(IndicatorConvergence):
     """Base class for streaming indicators.
 
     Subclasses implement ``_compute_next_value`` which receives the current
@@ -95,7 +118,7 @@ class Indicator(ABC):
         """Override to clear subclass-specific state."""
 
 
-class BarIndicator(ABC):
+class BarIndicator(IndicatorConvergence):
     """Base class for streaming indicators that consume full OHLCV bars.
 
     Mirrors LEAN's ``BarIndicator<IBaseDataBar>``. Same contract as

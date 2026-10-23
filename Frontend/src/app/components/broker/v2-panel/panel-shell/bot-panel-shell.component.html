@@ -254,6 +254,7 @@
                   [listensTo]="panelData.symbol"
                   [trades]="panelData.traded?.symbol ?? null"
                   [startupJoin]="panelData.startup_join ?? null"
+                  [spawning]="panelData.spawning ?? null"
                   [dutyOutcome]="stranded() ? null : (panelData.health.duty_outcome ?? null)"
                   [clerkGuidance]="panelData.mission_verdict.state === 'blocked' ? panelData.mission_verdict : null"
                 />

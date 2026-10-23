@@ -186,7 +186,10 @@ class ResolvedStrategyView:
             close=bar.close,
             volume=bar.volume,
             phase=phase,
-            phase_text=BEFORE_START_TEXT if phase == "before_start" else None,
+            phase_text=(
+                "Watched, not acted on: spawning" if reason_code == "INDICATORS_SPAWNING"
+                else BEFORE_START_TEXT if phase == "before_start" else None
+            ),
             outcome=outcome,
             reason_code=reason_code,
             decision_seq=decision_seq,

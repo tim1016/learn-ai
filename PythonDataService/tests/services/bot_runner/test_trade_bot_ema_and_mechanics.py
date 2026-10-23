@@ -20,6 +20,7 @@ from tests._helpers.bot_runner.ema_parity import (
     _EMA_FIRST_EXIT_MS,
     _ema_parity_bars_through_first_exit,
     _ema_signal_evaluation_id,
+    flat_indicator_warmup,
 )
 from tests._helpers.canary_admission import admit_canary_pairing
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
@@ -39,18 +40,18 @@ from ._support import (
 
 
 @pytest.mark.asyncio
-async def test_ema_trade_bot_matches_first_lean_round_trip(
+async def test_warmed_ema_trade_bot_retains_the_pinned_round_trip_clocks(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     clerk = _FakeClerk()
     _install_fake_clerk(monkeypatch, clerk)
     admit_canary_pairing(monkeypatch, "ema_crossover_signal", "paper-account")
-    # This test proves LEAN parity at the ENG-007 pinned point (Params
-    # defaults); the deploy runs stamped corpus_coverage=UNCOVERED (ADR 0054),
-    # which is irrelevant to the math it proves.
+    # Synthetic flat history satisfies #2857 before the retained LEAN prices.
+    # This is a custody/decision-identity test; the numerical parity suite
+    # still runs the unmodified reference input and proves the indicator values.
     bars = _ema_parity_bars_through_first_exit()
-    feed = _FakeFeed(bars, mode="hold")
+    feed = _FakeFeed(bars, mode="hold", warmup_bars=flat_indicator_warmup(bars[0]))
     registry = _registry(tmp_path, feed)
 
     await deploy_bot(registry,

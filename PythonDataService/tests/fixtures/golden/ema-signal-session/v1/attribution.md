@@ -144,3 +144,8 @@ not Live-qualified.
 Instances sealed against the relaxed root stay historical and cannot Resume;
 the stopped Paper and Shadow instances are not retargeted. A fresh Live-sealed
 instance is required, which is the deployment this ceremony creates.
+
+Requalified 2026-10-22 for #2857: session protocol v2 records convergence
+and Spawning facts, including the approved Supertrend 100-bar margin.
+Indicator values, readiness and plain-backtest settlements are unchanged on
+this corpus; the trace roots move because the recorded evidence widened.

@@ -851,6 +851,17 @@ against a broker, so this vocabulary survives a broker change.
   indicator values and each entry or exit rule it applied, with threshold,
   observed value and pass/fail. Emitted by the code that decides, never
   recomputed, and never part of the **Evaluation Trace** (ADR 0043, #2639).
+- **Indicator readiness** — the point at which an indicator can produce its
+  reference-defined output. It does not mean its starting history has settled.
+- **Indicator convergence** — completion of the platform's fixed 0.1%
+  initialization-memory decay requirement. Nonlinear outputs and latched
+  directions have measured limitations; it is not a guarantee that every
+  possible price path gives identical signals.
+- **Spawning** — a running bot is still settling the indicators its Signal
+  Program uses. It watches bars without acting until they converge. A bot
+  whose indicators are already converged, or which has none, does not spawn.
+  Preparing is the separate wait for history and live data to join.
+
 - **Before-start evaluation** — a decision explanation for a warmup bar a run
   evaluated before it started deciding. Shown behind the strategy view's "bot
   started" line as "before start · not acted on"; never a decision receipt.

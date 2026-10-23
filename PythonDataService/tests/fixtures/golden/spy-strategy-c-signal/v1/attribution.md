@@ -45,3 +45,8 @@ originally captured to reconcile.
   against (see `numerical_provenance.equivalence_level="bit_exact"` on the
   registry contract, and its comment on why no `tolerance_atol`/
   `tolerance_rtol`/`parity_fixture_ids` are set).
+
+Requalified 2026-10-22 for #2857: session protocol v2 records convergence
+and Spawning facts. Counts include the approved Supertrend 100-bar margin.
+Indicator values, readiness and plain-backtest settlements are unchanged on
+this corpus; its trace roots move because the recorded evidence widened.

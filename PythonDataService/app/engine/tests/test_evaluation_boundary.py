@@ -184,7 +184,7 @@ def test_an_unready_program_at_the_boundary_fails_closed() -> None:
     warmup = _session(DAY_ONE, ["500"])  # one sample cannot ready a 3-period SMA
     evaluation = _session(DAY_TWO, ["505", "506", "507"])
 
-    with pytest.raises(EvaluationBoundaryError, match="not ready"):
+    with pytest.raises(EvaluationBoundaryError, match="not converged"):
         _run(warmup + evaluation, program.strategy, evaluation_start_ms=_ny_midnight_ms(DAY_TWO))
 
 
@@ -261,3 +261,23 @@ def test_fees_insights_logs_and_brackets_from_warmup_do_not_survive_the_boundary
     assert result.log_lines[0].startswith("[EVALUATION START]")
     assert result.insights == []
     assert result.insight_summary.get("total_insights", 0) == 0
+
+
+@pytest.mark.parametrize('warmup_count', [20, 109])
+def test_evaluation_requires_convergence_even_after_rsi_is_ready(warmup_count: int) -> None:
+    from app.engine.strategy.programs.rsi_mean_reversion import (
+        RsiMeanReversionParams,
+        build_rsi_mean_reversion_signal_program,
+    )
+
+    program = build_rsi_mean_reversion_signal_program(RsiMeanReversionParams(resolution_minutes=1))
+    # Use dates inside this program's declared window.
+    first, second = date(2024, 4, 1), date(2024, 4, 2)
+    bars = _session(first, [str(500 + index % 2) for index in range(warmup_count)]) + _session(second, ['500', '501'])
+    if warmup_count < 109:
+        with pytest.raises(EvaluationBoundaryError, match='not converged'):
+            _run(bars, program.strategy, evaluation_start_ms=_ny_midnight_ms(second))
+        assert program.session.traces[-1].ready is True
+    else:
+        _run(bars, program.strategy, evaluation_start_ms=_ny_midnight_ms(second))
+        assert program.session.traces[-1].converged is True

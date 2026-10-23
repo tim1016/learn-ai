@@ -360,6 +360,7 @@ class DeploymentBudgetPreview(BaseModel):
     # bots in this account that already trade the chosen symbol. ``None``
     # when there are none, and for Dry Run, which never trades the account.
     same_symbol_note: str | None = None
+    spawning_note: str | None = None
     # What the strategy's evidence does not cover, when the bot trades another
     # asset than it listens to (#2912). ``None`` when it trades its own symbol.
     traded_asset_warning: UntestedTradedAssetWarning | None = None

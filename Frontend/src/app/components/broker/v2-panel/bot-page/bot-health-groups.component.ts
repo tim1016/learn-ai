@@ -43,6 +43,7 @@ export class BotHealthGroupsComponent {
   protected readonly distinctTradedMarketPulse = computed(() => this.listensTo() !== null && this.trades() === this.listensTo() ? null : this.tradedMarketPulse());
   /** How the run is joining its warmup to the live stream (#2410), while it says. */
   readonly startupJoin = input<StartupJoinView | null>(null);
+  readonly spawning = input<BotPanelView['spawning']>(null);
   /** How the run ended, and what it left at the broker, as the runner recorded it. */
   readonly dutyOutcome = input<BotHealthCard['duty_outcome']>(null);
   /** The Clerk's word on the account while it needs the operator: what is wrong, the next step, the next retry. */
