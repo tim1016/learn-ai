@@ -21,10 +21,12 @@ A verdict turns a pile of metrics into one answer: "keep researching this", "thi
      A Stage 0 rejection short-circuits interpretation: the deeper panels are suppressed and shown only on explicit request.
    - **Stage 3** requires mean OOS Sharpe above 0.5, stability above 0.5, and more than 60% of folds positive.
    - **Stage 2** requires mean OOS Sharpe above 0.3, stability above 0.3, and at least 4 folds.
-   - **Further Stage 3 machinery is deliberately unbuilt:** a Deflated Sharpe above 0.5 on the in-sample grid, cross-asset confirmation, and Hansen SPA / White's Reality Check. No signal has reached Stage 3, so building it would be premature.
+   - **Further Stage 3 gates remain deliberately unbuilt:** requiring Deflated Sharpe above 0.5 on the in-sample grid, cross-asset confirmation, and Hansen SPA / White's Reality Check. No signal has reached Stage 3, so building it would be premature.
    - Stability is `1 − σ/|mean|` of net Sharpe across the threshold grid at a fixed cost of 2 bps (`default_cost=2.0`). A noise-fit signal's Sharpe swings across thresholds, and a real one stays flat.
    - The thresholds are the project defaults adopted from the 2026-04-30 review. A change moves the constants, the methodology doc and `tests/test_graduation.py` together, and is recorded here.
 2. **The alpha-decay test needs at least 5 folds** (`app/research/signal/walk_forward.py`, `ALPHA_DECAY_MIN_FOLDS = 5`). The test regresses per-fold OOS Sharpe on fold index, `S_i = β₀ + β₁·i + ε_i`. A negative `β₁` significant at `p < 0.05` is read as decay. With 4 folds or fewer, the regression has at most 2 residual degrees of freedom and its t-test says almost nothing. So the test is marked invalid, and the UI shows that the trend test needs 5 or more folds instead of a misleading p-value.
+
+   **Signal-path split amendment (2026-10-23).** The Signal Engine's separate `app/research/signal/walk_forward.py` uses a fixed-length rolling train window of `L` months and a following test window of `H` months. It advances the pair by `H` months so test windows do not overlap and combined OOS evidence does not count a month twice. The prior one-month stride happened to be equivalent only when `H = 1`; it duplicated test observations when `H > 1`. This rule does not change the spec-path split policies in decision 3.
 3. **The spec-path walk-forward uses fixed split semantics and a compounded combined curve** (`app/research/walk_forward/`).
    - **Three split policies** (chronological, rolling, anchored) are validated when built. A degenerate input raises before the runner sees a window, rather than silently producing zero folds.
    - **Fold boundaries are half-open**, `[test_start_ms, test_end_ms)`. The runner turns the exclusive end into an inclusive end date, so a boundary day belongs to the later fold, never to both.
@@ -45,6 +47,14 @@ A verdict turns a pile of metrics into one answer: "keep researching this", "thi
    - Alpha Calibration stays a visible, ungraded panel until a new verdict version defines it.
    - Why: the former scorer averaged only the sub-scores that were present and renormalized over the dimensions that were present. A run missing expectancy scored *higher* on Trade Edge, and two runs got comparable-looking grades from different denominators.
    - Receipts: the golden `tests/fixtures/golden/run-verdict-v2/` and `tests/services/test_run_verdict_parity.py`.
+
+5. **Signal Sharpe inference uses the primary-source estimators (2026-10-23 owner-requested implementation).** The OOS interval uses Lo's joint mean/variance delta method with Bartlett HAC. The grid uses Bailey & López de Prado's DSR with observed trial Sharpe dispersion and Appendix 3's estimated independent count. This replaces unsupported N_eff substitution and assumed trial dispersion in newly computed reports.
+   - The interval targets the platform's sample-SD per-bar Sharpe scaled by √B. Lo's population-variance point and SE are both rescaled by √((T−1)/T); this preserves the platform point statistic while making the finite-sample convention explicit. It does not claim annual-aggregated-return Sharpe equivalence.
+   - Reuse the IC bandwidth selector, with a floor of horizon−1 to cover overlapping forward targets. Split HAC segments at dropped observations, missing timestamps, and fold boundaries. Assume zero covariance across those boundaries; report the chosen lag and segments. Too-short segments or nonpositive variance make inference unavailable.
+   - DSR's universe is the whole current threshold × cost grid, because that is the search from which the displayed best is chosen. Every trial uses identical training rows; purge forward targets crossing the split in both grid and walk-forward training. Historical feature searches are outside this universe.
+   - Use sample Sharpe dispersion, raw observation count T, and bias-corrected sample skew/Pearson kurtosis. Estimate N from mean pairwise return correlation, cap at the actual count for negative correlation, and use null maximum zero for exactly N=1. Fractional 1<N<2 is unavailable rather than rounded because the extreme-value approximation is unstable. Any constant or nonfinite trial makes the whole-grid estimate unavailable.
+   - These diagnostics do not alter graduation thresholds. In particular DSR is still not a Stage 3 gate, and its serial-dependence calibration is unestablished. Saved reports without method metadata remain explicitly legacy approximations; they are never relabeled as new calculations.
+   - Numerical receipts: RP-007 (independent scalar Lo HAC fixture), RP-008 (published DSR example and measured-grid fixture), plus RP-005 (retained published IID formula fixture).
 
 ## Consequences
 

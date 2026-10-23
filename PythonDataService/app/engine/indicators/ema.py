@@ -3,17 +3,18 @@
 Formula: EMA[n] = input[n] · k + EMA[n-1] · (1 - k), where k = 2 / (1 + period); SMA-seeded warmup.
 Reference: references/lean/7986ed0aade3ae5de06121682409f05984e32ff7/Indicators/ExponentialMovingAverage.cs
 Canonical implementation: this file.
-Validated against: PythonDataService/tests/test_indicator_parity.py
+Validated against: PythonDataService/tests/fixtures/test_indicator_fixtures.py::TestIND001EMA
 
 Critical reproducibility details:
   * Smoothing constant: ``k = 2 / (1 + period)``
   * Seed: the first ``period`` samples are averaged as a simple moving
-    average. At exactly ``samples == period``, the EMA value is that SMA.
+    average. Before readiness, the published value is zero. At exactly
+    ``samples == period``, the EMA value is that SMA.
   * Thereafter: ``EMA[n] = input[n] * k + EMA[n-1] * (1 - k)``
   * ``is_ready`` becomes True when ``samples >= period``.
 
-LEAN internally feeds the warmup samples to an embedded SMA and uses the
-SMA's ``Current.Value`` as the initial EMA. We replicate that behavior.
+LEAN internally feeds the warmup samples to an embedded SMA and publishes
+zero until the SMA seeds the first ready EMA value.
 """
 
 from __future__ import annotations
@@ -40,10 +41,10 @@ class ExponentialMovingAverage(Indicator):
 
     def _compute_next_value(self, timestamp_ms: int, value: Decimal) -> Decimal | None:
         if self.samples <= self.period:
-            # Warmup: feed the SMA. Until we reach the period sample, the
-            # EMA value should simply be the current SMA (matches LEAN's
-            # behavior where Current.Value tracks the SMA during warmup).
+            # ADR 0069: LEAN feeds its seed SMA but publishes zero until ready.
             self._sma.update(timestamp_ms, value)
+            if self.samples < self.period:
+                return Decimal(0)
             return self._sma.current_value
 
         # Post-warmup: standard EMA recursion.

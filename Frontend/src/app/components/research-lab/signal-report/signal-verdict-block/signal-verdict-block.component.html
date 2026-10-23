@@ -35,7 +35,7 @@
           </div>
           @if (ciIntervalDisplay()) {
             <div class="ci-display"
-              pTooltip="Lo (2002) confidence interval — adjusted for autocorrelation via N_eff. A CI that includes zero means the Sharpe is statistically indistinguishable from noise at this confidence level."
+              pTooltip="Interval on the combined OOS return series; see the uncertainty panel for the method and assumptions. An interval containing zero does not rule out zero Sharpe."
               tooltipPosition="bottom"
             >
               <span class="ci-text">{{ ciIntervalDisplay() }}</span>

@@ -1,7 +1,7 @@
 """Graduation evaluation for the Signal Engine.
 
-Formula: Stage ladder (0/1/2/3) evaluated against IC t-stat, OOS Sharpe, regime coverage, and deflated Sharpe thresholds per ADR 0073 decision 1. Stage 0 rejection short-circuits all downstream.
-Reference: Internal — ADR 0073 decision 1 (the stage ladder); Bailey & López de Prado (2014) Deflated Sharpe for Stage 2+ gate.
+Formula: Stage 0 rejects on low parameter stability, nonpositive median OOS Sharpe, few positive OOS folds, or high-turnover/low-Sharpe combination; surviving signals advance through the OOS Sharpe, stability, and fold-count thresholds in ADR 0073 decision 1.
+Reference: Internal stage policy — ADR 0073 decision 1; deflated Sharpe and IC t-stat are not current graduation gates.
 Canonical implementation: app/research/signal/graduation.py
 Validated against: NONE — pending (pending-fixture per registry)
 

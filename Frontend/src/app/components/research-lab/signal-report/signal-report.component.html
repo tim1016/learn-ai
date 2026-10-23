@@ -248,7 +248,7 @@
         <div class="interpretation-note mb-3">
           <i class="pi pi-info-circle mr-2"></i>
           <span>
-            Neff adjusts raw sample size for autocorrelation using Newey-West truncation
+            Neff estimates a smaller sample size from positive autocorrelation
             (max lag tested: {{ es.maxLagUsed }}, cumulative rho: {{ es.rhoSum | number: '1.4-4' }}).
             Formula in the
             <a routerLink="/docs/signal-engine-methodology">methodology page</a>.
@@ -405,34 +405,39 @@
           </div>
         </div>
 
-        <!-- Sharpe CI panel — Lo (2002) confidence interval. When the
-             backend flags ci.valid = false (e.g. N_eff too small), we
-             still render the card with an explicit caveat instead of
-             hiding it — "no band shown" must be distinguishable from
-             "computation never ran". -->
+        <!-- Unavailable estimates remain visible with their reason. -->
         @if (result().oosSharpeCi; as ci) {
           <div class="sharpe-ci-card mb-4" [class.sharpe-ci-invalid]="!ci.valid">
             @if (ci.valid) {
               <div class="sharpe-ci-row">
-                <div class="sharpe-ci-label">95% CI on combined OOS Sharpe</div>
+                <div class="sharpe-ci-label">{{ ci.method === 'lo_hac' ? 'HAC 95% interval' : 'Approx. 95% interval' }} on combined OOS Sharpe</div>
                 <div class="sharpe-ci-value">
                   [{{ ci.ciLower | number: '1.2-2' }}, {{ ci.ciUpper | number: '1.2-2' }}]
                 </div>
                 <div class="sharpe-ci-se">SE = {{ ci.se | number: '1.3-3' }}</div>
-                <div class="sharpe-ci-neff">N<sub>eff</sub> = {{ ci.nEffUsed | number: '1.0-0' }}</div>
+                @if (ci.method === 'lo_hac') {
+                  <div class="sharpe-ci-neff">Bars = {{ ci.sampleSize | number }} · lag {{ ci.hacLag }} · segments {{ ci.segmentCount }}</div>
+                } @else {
+                  <div class="sharpe-ci-neff">N<sub>eff</sub> = {{ ci.nEffUsed | number: '1.0-0' }}</div>
+                }
               </div>
               <div class="sharpe-ci-note">
                 <i class="pi pi-info-circle"></i>
                 <span>
-                  Lo (2002) interval, autocorrelation-adjusted via N<sub>eff</sub>.
+                  @if (ci.method === 'lo_hac') {
+                    Lo's joint mean/variance uncertainty with Bartlett HAC, within contiguous return segments.
+                    Annualization scales per-bar Sharpe; cross-segment dependence and strategy selection are not covered.
+                  } @else {
+                    Legacy IID formula with a platform N<sub>eff</sub> adjustment; serial-dependence coverage is unverified.
+                  }
                   @if (ci.ciLower < 0 && ci.ciUpper > 0) {
-                    <strong>This CI straddles zero — the headline Sharpe is statistically indistinguishable from noise at 95% confidence.</strong>
+                    <strong>This interval straddles zero — it does not rule out zero Sharpe under this approximation.</strong>
                   }
                 </span>
               </div>
             } @else {
               <div class="sharpe-ci-row">
-                <div class="sharpe-ci-label">95% CI on combined OOS Sharpe</div>
+                <div class="sharpe-ci-label">{{ ci.method === 'lo_hac' ? 'HAC 95% interval' : 'Approx. 95% interval' }} on combined OOS Sharpe</div>
                 <div class="sharpe-ci-value sharpe-ci-value-na">unavailable</div>
                 @if (ci.nEffUsed > 0) {
                   <div class="sharpe-ci-neff">N<sub>eff</sub> = {{ ci.nEffUsed | number: '1.0-0' }}</div>
@@ -441,10 +446,7 @@
               <div class="sharpe-ci-note">
                 <i class="pi pi-exclamation-triangle"></i>
                 <span>
-                  CI could not be computed — the OOS sample is too small to
-                  produce a meaningful band. Treat the headline Sharpe as a
-                  point estimate without inferential weight until the run
-                  has more bars / folds.
+                  {{ ci.unavailableReason || 'The OOS sample cannot support an interval.' }}
                 </span>
               </div>
             }
@@ -572,7 +574,7 @@
     }
   }
 
-  <!-- Backtest Grid - Net Sharpe (with DSR display on the headline) -->
+  <!-- Backtest Grid - Net Sharpe (with selection score on the headline) -->
   @if (result().backtestGrid.length > 0) {
     <div class="mb-6">
       <div class="grid-headline-row">
@@ -582,14 +584,19 @@
         @if (result().deflatedSharpe; as dsr) {
           @if (dsr.valid) {
             <div class="dsr-chip" [attr.data-band]="deflatedSharpeBand"
-                 pTooltip="Bailey & López de Prado Deflated Sharpe Ratio. P(true Sharpe > 0) after deflating the maximum-Sharpe selection across {{ dsr.nTrials }} grid trials."
+                 [pTooltip]="dsr.method === 'dsr_grid' ? 'Deflated Sharpe Ratio using measured training-grid spread and estimated independent trials. Limited to this grid; serial dependence and prior research searches are not corrected.' : 'Legacy selection proxy: assumed trial spread and independent grid trials.'"
                  tooltipPosition="left">
-              <span class="dsr-label">Deflated Sharpe</span>
+              <span class="dsr-label">{{ dsr.method === 'dsr_grid' ? 'Deflated Sharpe Ratio' : 'Sharpe selection proxy' }}</span>
               <span class="dsr-value">{{ dsr.dsrProbability | percent: '1.0-0' }}</span>
               <span class="dsr-meta">
-                raw {{ dsr.rawSharpe | number: '1.2-2' }} · null max {{ dsr.expectedMaxUnderNull | number: '1.2-2' }} · n={{ dsr.nTrials }}
+                raw {{ dsr.rawSharpe | number: '1.2-2' }} · null max {{ dsr.expectedMaxUnderNull | number: '1.2-2' }} · trials={{ dsr.nTrials }}
+                @if (dsr.method === 'dsr_grid') {
+                  · estimated independent={{ dsr.effectiveTrials | number: '1.2-2' }}
+                }
               </span>
             </div>
+          } @else {
+            <div class="dsr-chip" data-band="na">DSR unavailable: {{ dsr.unavailableReason || 'Insufficient evidence' }}</div>
           }
         }
       </div>

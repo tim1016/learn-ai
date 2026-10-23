@@ -1,9 +1,9 @@
 """Walk-forward validation with rolling train/test windows.
 
-Formula: Anchored walk-forward: train [t0, t0+L], test (t0+L, t0+L+H], slide by H; OOS Sharpe aggregated over test windows.
-Reference: López de Prado, Advances in Financial Machine Learning (2018) §7 (Combinatorial Purged Cross-Validation) — verify which walk-forward variant is implemented.
+Formula: Rolling walk-forward: train [t_i, t_i+L), test [t_i+L, t_i+L+H), advance by H; OOS Sharpe aggregated over disjoint test windows.
+Reference: Internal Signal Engine split policy, ADR 0073 decision 2 and 2026-10-23 amendment. No external walk-forward port claimed.
 Canonical implementation: app/research/signal/walk_forward.py
-Validated against: NONE — pending (pending-fixture per registry; reference needs verification)
+Validated against: NONE — pending independent numerical fixture; window behavior in PythonDataService/tests/research/test_signal_engine.py::TestWalkForward.
 """
 
 from __future__ import annotations
@@ -17,11 +17,11 @@ import pandas as pd
 from scipy import stats as scipy_stats
 
 from app.research.features.ta_features import TechnicalFeatures
-from app.research.signal.backtest import run_backtest
+from app.research.signal.backtest import run_backtest, training_return_mask
 from app.research.signal.config import SignalConfig
 from app.research.signal.regime import compute_bar_regime_gate
 from app.research.signal.standardize import apply_threshold_filter
-from app.research.target import compute_15min_forward_return
+from app.research.target import _infer_bar_minutes, compute_15min_forward_return
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,7 @@ class WalkForwardWindow:
     oos_total_trades: int = 0
     oos_dates: list[str] = field(default_factory=list)
     oos_cumulative_returns: list[float] = field(default_factory=list)
+    oos_segment_lengths: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -97,8 +98,8 @@ class WalkForwardResult:
     combined_oos_cumulative_returns: list[float] = field(default_factory=list)
     combined_oos_bar_returns: list[float] = field(default_factory=list)
     """Concatenation of per-fold OOS bar returns. Used by ``compute_sharpe_ci``
-    to attach a Newey-West-style confidence interval to the headline OOS
-    Sharpe."""
+    to attach the platform's HAC Sharpe interval to the headline
+    OOS Sharpe."""
     oos_sharpe_trend_slope: float = 0.0
     alpha_decay: AlphaDecayStats = field(default_factory=AlphaDecayStats)
 
@@ -130,7 +131,7 @@ def run_walk_forward(
     windows: list[WalkForwardWindow] = []
     fold_idx = 0
 
-    for start_idx in range(0, len(months) - total_needed + 1):
+    for start_idx in range(0, len(months) - total_needed + 1, test_months):
         train_month_range = months[start_idx : start_idx + train_months]
         test_month_range = months[start_idx + train_months : start_idx + total_needed]
 
@@ -176,15 +177,15 @@ def run_walk_forward(
         if config.flip_sign:
             z_all = -z_all
 
+        train_eligible = training_return_mask(train_mask, config.horizon)
+
         # Select best threshold on train by net Sharpe
         best_threshold = config.thresholds[0]
         best_train_sharpe = -np.inf
         for threshold in config.thresholds:
-            train_signal = apply_threshold_filter(z_all[train_mask], threshold)
-            train_returns = forward_returns[train_mask]
-            from app.research.signal.backtest import run_backtest as _run_bt
-
-            bt = _run_bt(train_signal, train_returns, config.default_cost_bps)
+            train_signal = apply_threshold_filter(z_all[train_eligible], threshold)
+            train_returns = forward_returns[train_eligible]
+            bt = run_backtest(train_signal, train_returns, config.default_cost_bps)
             if bt.net_sharpe > best_train_sharpe:
                 best_train_sharpe = bt.net_sharpe
                 best_threshold = threshold
@@ -209,6 +210,17 @@ def run_walk_forward(
             include_series=True,
         )
 
+        # Do not form HAC lag products across dropped targets or fold boundaries.
+        valid_positions = np.flatnonzero((test_signal.notna() & test_returns.notna()).to_numpy())
+        if len(valid_positions) < 2:
+            continue
+        valid_timestamps = test_timestamps.iloc[valid_positions].to_numpy(dtype=np.int64)
+        spacing_ms = _infer_bar_minutes(fold_df) * 60_000
+        breaks = np.flatnonzero(
+            (np.diff(valid_positions) != 1) | (np.diff(valid_timestamps) != spacing_ms)
+        ) + 1
+        segment_lengths = [len(part) for part in np.split(valid_positions, breaks) if len(part)]
+
         window = WalkForwardWindow(
             fold_index=fold_idx,
             train_start=str(train_start_date),
@@ -228,6 +240,7 @@ def run_walk_forward(
             oos_total_trades=oos_bt.total_trades,
             oos_dates=oos_bt.dates,
             oos_cumulative_returns=oos_bt.cumulative_returns,
+            oos_segment_lengths=segment_lengths,
         )
         windows.append(window)
         fold_idx += 1

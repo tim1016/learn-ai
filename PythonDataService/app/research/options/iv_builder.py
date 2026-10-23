@@ -1,20 +1,20 @@
 """IV term-structure builder for research options pipeline.
 
-Formula: 30-day constant-maturity IV via variance-time interpolation between the two expiries bracketing 30 calendar days (T1 ≤ 30 < T2, chosen by ``contract_finder._find_bracket_expiries``): σ²_30·30 = w·σ²_T1·T1 + (1-w)·σ²_T2·T2, with w = (T2 - 30)/(T2 - T1) and T in calendar days (the code uses DTE/365, so the 365 cancels). If T1 == T2, or the total variance is not positive, the result is the arithmetic mean of the two IVs.
-Reference: CBOE VIX Whitepaper (2019) for the variance-time basis (industry standard).
+Formula: 30-day constant-maturity IV via variance-time interpolation between the two expiries bracketing 30 calendar days (T1 ≤ 30 < T2, chosen by ``contract_finder._find_bracket_expiries``): σ²_30·30 = w·σ²_T1·T1 + (1-w)·σ²_T2·T2, with w = (T2 - 30)/(T2 - T1) and T in calendar days. Equal-maturity inputs retain the internal arithmetic-mean fallback.
+Reference: Cboe VIX Methodology (2019), constant-maturity total-variance interpolation step only; this module uses selected-contract BSM IVs and does not replicate the model-free VIX calculation.
 Canonical implementation: app/research/options/iv_builder.py
 Validated against: NONE — pending fixture
 """
 from __future__ import annotations
 
 import logging
-import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
 
+from app.engine.edge.features_realtime.iv30_constructor import variance_interpolated_iv
 from app.research.options.contract_finder import find_bracket_contracts
 from app.services.fred_service import get_risk_free_rate
 from app.services.polygon_client import PolygonClientService
@@ -200,21 +200,22 @@ def _derive_iv_for_contract(
 
 
 def _interpolate_iv(iv_low: float, dte_low: int, iv_high: float, dte_high: int) -> float:
-    """30-day constant-maturity variance-time interpolation."""
+    """30-day constant-maturity variance-time interpolation.
+
+    Formula: σ²_30·30 = w·σ²_low·T_low + (1-w)·σ²_high·T_high.
+    Reference: Cboe VIX Methodology (2019), maturity interpolation only.
+    Canonical implementation: app/engine/edge/features_realtime/iv30_constructor.py::variance_interpolated_iv.
+    Validated against: tests/edge/test_iv30_and_vrp.py and tests/research/options/test_iv_builder.py.
+    """
     if dte_high == dte_low:
         return (iv_low + iv_high) / 2
-
-    t_low = dte_low / 365
-    t_high = dte_high / 365
-    t_target = TARGET_DTE / 365
-
-    weight_low = (dte_high - TARGET_DTE) / (dte_high - dte_low)
-    weight_high = (TARGET_DTE - dte_low) / (dte_high - dte_low)
-
-    total_var = weight_low * iv_low**2 * t_low + weight_high * iv_high**2 * t_high
-    if total_var <= 0:
-        return (iv_low + iv_high) / 2
-    return math.sqrt(total_var / t_target)
+    return variance_interpolated_iv(
+        sigma_t1=iv_low,
+        t1_years=dte_low / 365,
+        sigma_t2=iv_high,
+        t2_years=dte_high / 365,
+        target_t_years=TARGET_DTE / 365,
+    )
 
 
 def _normalize_iv_fallback(iv: float, dte: int) -> float | None:

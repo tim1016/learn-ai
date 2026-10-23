@@ -16,11 +16,13 @@ The minimum subset of LEAN required to audit the ports below: originally the
 since #2479 the factor-file sources behind
 `PythonDataService/app/data_lake/factor_files.py`:
 
-| Vendored file | Purpose | Port target | Port reference note |
+| Vendored file | Purpose | Port target | Audit evidence |
 |---|---|---|---|
-| `Indicators/SimpleMovingAverage.cs` | Reference SMA implementation | `PythonDataService/app/engine/indicators/sma.py` | `docs/references/` (TBD on next touch of `sma.py`) |
-| `Indicators/ExponentialMovingAverage.cs` | Reference EMA implementation, including the SMA-seeded warmup behavior | `PythonDataService/app/engine/indicators/ema.py` | `docs/references/` (TBD on next touch of `ema.py`) |
-| `Indicators/RelativeStrengthIndex.cs` | Reference RSI implementation, including Wilders smoothing | `PythonDataService/app/engine/indicators/rsi.py` | `docs/references/` (TBD on next touch of `rsi.py`) |
+| `Indicators/SimpleMovingAverage.cs` | Reference SMA implementation | `PythonDataService/app/engine/indicators/sma.py` | `PythonDataService/tests/fixtures/golden/indicators/IND-002/` |
+| `Indicators/ExponentialMovingAverage.cs` | Reference EMA implementation, including the SMA-seeded warmup behavior | `PythonDataService/app/engine/indicators/ema.py` | `PythonDataService/tests/fixtures/golden/indicators/IND-001/` |
+| `Indicators/RelativeStrengthIndex.cs` | Reference RSI implementation, including Wilders smoothing | `PythonDataService/app/engine/indicators/rsi.py` | `PythonDataService/tests/fixtures/golden/indicators/IND-003/` |
+| `Indicators/MovingAverageTypeExtensions.cs` | Maps RSI's `MovingAverageType.Wilders` to the concrete Wilder average | `PythonDataService/app/engine/indicators/rsi.py` | `PythonDataService/tests/fixtures/golden/indicators/IND-003/` |
+| `Indicators/WilderMovingAverage.cs` | Defines running-SMA warmup and the period-th-delta recurrence used by RSI | `PythonDataService/app/engine/indicators/rsi.py` | `PythonDataService/tests/fixtures/golden/indicators/IND-003/` |
 | `Indicators/IndicatorBase.cs` | Base class — referenced by all three above for `Update`, `IsReady`, `Samples`, and `RollingWindow` semantics | (transitively used) | n/a |
 | `Indicators/MovingAverageType.cs` | Enum — `RelativeStrengthIndex` accepts `MovingAverageType.Wilders` which our port pins to | (transitively used) | n/a |
 | `Data/equity/usa/factor_files/aapl.csv` | QuantConnect's own published AAPL factor file — the **oracle** for factor-file dividend pricing (#2479): its rows encode each dividend as `1 − cash / reference_close` (raw/raw) | `PythonDataService/app/data_lake/factor_files.py::build_factor_file_bytes` | `docs/references/lean-factor-file-dividend-pricing.md`; golden fixture `PythonDataService/tests/fixtures/golden/lean-factor-file-aapl/` |
@@ -44,7 +46,7 @@ git clone --depth 1 --filter=blob:none --sparse https://github.com/QuantConnect/
 cd Lean
 git sparse-checkout set Indicators
 git checkout 7986ed0aade3ae5de06121682409f05984e32ff7
-# Copy the five files listed above into references/lean/7986ed0aade3ae5de06121682409f05984e32ff7/Indicators/
+# Copy the seven Indicators/ files listed above into references/lean/7986ed0aade3ae5de06121682409f05984e32ff7/Indicators/
 ```
 
 The factor-file rows (#2479) can be re-fetched directly at the pinned commit:
@@ -60,7 +62,12 @@ curl -sL "$base/Common/Data/Auxiliary/CorporateFactorProvider.cs"
 
 ## Validation status (cross-reference)
 
-The Python ports of these indicators were validated bit-exactly against LEAN reference output as part of `PythonDataService/app/engine/tests/test_spy_validation.py` (see project memory for the seven LEAN reproducibility traps). The pinning of *this* commit is administrative — it freezes what we have on disk to compare against. If a future LEAN change alters one of these indicators, we will vendor the new commit alongside this one, run the parity test against both, and document any divergence.
+The indicator ports have attributed, tolerance-pinned fixtures in
+`PythonDataService/tests/fixtures/test_indicator_fixtures.py`. EMA and RSI fixture
+v2 correct warmup behavior that v1 missed. The fixtures independently transcribe
+the pinned source; this extract does not contain an executable LEAN reference
+run for every sample. A future reference change requires a new pinned extract
+and an explicit parity comparison.
 
 ## License notice
 

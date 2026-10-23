@@ -199,6 +199,15 @@ def test_a_stored_report_is_served_field_for_field_in_the_engines_own_names() ->
     assert parse_signal_report(stored_text(report)).model_dump() == served(report)
 
 
+def test_historical_inference_is_not_relabeled_as_the_new_method() -> None:
+    content = json.loads(stored_text(a_busy_signal_report()))
+    content["oos_sharpe_ci"].pop("method")
+    content["deflated_sharpe"].pop("method")
+    restored = parse_signal_report(json.dumps(content))
+    assert restored.oos_sharpe_ci.method == "legacy_neff"
+    assert restored.deflated_sharpe.method == "legacy_proxy"
+
+
 async def test_the_report_route_answers_the_stored_report(client: httpx.AsyncClient, history: _Experiments) -> None:
     report = a_busy_signal_report()
     history.reports[41] = stored_text(report)

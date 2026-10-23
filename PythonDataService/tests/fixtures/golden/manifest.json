@@ -10,7 +10,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.black_scholes(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
+        "citation": "py_vollib.black_scholes.black_scholes(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -53,7 +53,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.black_scholes(flag='p', S, K, t, r, sigma). GPL-licensed — generation-only."
+        "citation": "py_vollib.black_scholes.black_scholes(flag='p', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -96,7 +96,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.delta(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.delta(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -139,7 +139,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.gamma(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.gamma(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -182,7 +182,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.theta(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.theta(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -227,7 +227,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.vega(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.vega(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -272,7 +272,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.rho(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.rho(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -317,7 +317,7 @@
       "reference": {
         "kind": "hand_computed",
         "oracle": "numpy.mean + numpy.std(ddof=1), annualized by sqrt(252)",
-        "citation": "Sharpe (1994), Journal of Portfolio Management 21(1) §IV. Verified by hand for 3 synthetic 5-element cases."
+        "citation": "Sharpe (1994), Journal of Portfolio Management 21(1) \u00a7IV. Verified by hand for 3 synthetic 5-element cases."
       },
       "market_input": {
         "source": "synthetic",
@@ -360,7 +360,7 @@
       "reference": {
         "kind": "hand_computed",
         "oracle": "numpy.mean + downside variance (all-N denominator)",
-        "citation": "Bacon, Practical Portfolio Performance Measurement (2e) §8.3. Denominator: all-N (matches canonical _sortino convention)."
+        "citation": "Bacon, Practical Portfolio Performance Measurement (2e) \u00a78.3. Denominator: all-N (matches canonical _sortino convention)."
       },
       "market_input": {
         "source": "synthetic",
@@ -403,7 +403,7 @@
       "reference": {
         "kind": "hand_computed",
         "oracle": "numpy.maximum.accumulate + vectorized fraction (running_max - equity) / running_max",
-        "citation": "Bacon, Practical Portfolio Performance Measurement (2e) §8.2."
+        "citation": "Bacon, Practical Portfolio Performance Measurement (2e) \u00a78.2."
       },
       "market_input": {
         "source": "synthetic",
@@ -574,7 +574,7 @@
       "canonical_callable": "ExponentialMovingAverage",
       "reference": {
         "kind": "hand_computed",
-        "oracle": "pure-Python SMA-seeded EMA formula (k=0.5) without calling canonical class",
+        "oracle": "pure-Python trace of pinned LEAN EMA: zero before readiness, then SMA seed and recurrence, without calling canonical class",
         "citation": "LEAN Indicators/ExponentialMovingAverage.cs (vendored at references/lean/7986ed0...). k=2/(1+period)."
       },
       "market_input": {
@@ -586,9 +586,9 @@
       "tolerance": {
         "atol": 1e-09,
         "rtol": 0.0,
-        "note": "Both oracle and canonical use the same formula; Decimal vs float64. Error < 1e-12."
+        "note": "Pre-ready zero is exact; post-ready oracle uses float64 and canonical uses Decimal, with error < 1e-12."
       },
-      "active_version": 1,
+      "active_version": 2,
       "versions": {
         "1": {
           "input": "input.arrow",
@@ -601,6 +601,19 @@
           "file_sha256": {
             "input.arrow": "7e9925b83bcaaecb77ed9027dd272013b35c2a9ae129efad5be713fe9be3573e",
             "output.arrow": "218c8e0f08a83bbdacc879cd0cc09b27f0c44f3d4ad30a8d602b7d7f48148530"
+          }
+        },
+        "2": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "49ddfb76c7a10d9eeb8e0ef346b5323dc32e22c20640fbe561713cdc8fdc933a",
+            "output.arrow": "ccbd406b07d281466e240971cdd7f98a1c0110c6def8c5cdd58f5f945e4d6c8e"
+          },
+          "file_sha256": {
+            "input.arrow": "7e9925b83bcaaecb77ed9027dd272013b35c2a9ae129efad5be713fe9be3573e",
+            "output.arrow": "1dc344829ef3bad7769f67b93966733a36d972df1e059b26a70d0d9ce287f969"
           }
         }
       },
@@ -654,14 +667,14 @@
     },
     {
       "id": "IND-003",
-      "name": "RSI — Relative Strength Index (period=3, Wilder's smoothing)",
+      "name": "RSI \u2014 Relative Strength Index (period=3, Wilder's smoothing)",
       "category": "indicators",
       "canonical_module": "PythonDataService/app/engine/indicators/rsi.py",
       "canonical_callable": "RelativeStrengthIndex",
       "reference": {
         "kind": "hand_computed",
         "oracle": "pure-Python Wilder RSI formula without calling canonical class",
-        "citation": "LEAN Indicators/RelativeStrengthIndex.cs with MovingAverageType.Wilders (vendored at references/lean/7986ed0...). Seed: simple mean of first period deltas."
+        "citation": "Pinned LEAN Indicators/RelativeStrengthIndex.cs, MovingAverageTypeExtensions.cs and WilderMovingAverage.cs (vendored at references/lean/7986ed0...). Wilder publishes running SMA before its period-th delta, then recurses."
       },
       "market_input": {
         "source": "synthetic",
@@ -674,7 +687,7 @@
         "rtol": 0.0,
         "note": "Decimal (canonical) vs float64 (oracle) Wilder smoothing. Error < 1e-10."
       },
-      "active_version": 1,
+      "active_version": 2,
       "versions": {
         "1": {
           "input": "input.arrow",
@@ -688,6 +701,19 @@
             "input.arrow": "7e9925b83bcaaecb77ed9027dd272013b35c2a9ae129efad5be713fe9be3573e",
             "output.arrow": "c89ae2c215cbdbcf77f51cb5cfd61ba4d63a0d8e7bfc231921dd66d2f7f05dd1"
           }
+        },
+        "2": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "49ddfb76c7a10d9eeb8e0ef346b5323dc32e22c20640fbe561713cdc8fdc933a",
+            "output.arrow": "7d4ebeecdb47a5cda2572ea70ed7abfb4ea96f32ad210ca846acb6e76b943190"
+          },
+          "file_sha256": {
+            "input.arrow": "7e9925b83bcaaecb77ed9027dd272013b35c2a9ae129efad5be713fe9be3573e",
+            "output.arrow": "0dd332c55a2ac657fc90fc8b0668133e33749c12482c370f4351872d3bf8d5d0"
+          }
         }
       },
       "status": "active",
@@ -697,14 +723,14 @@
     },
     {
       "id": "IV-001",
-      "name": "Implied Volatility Solver — Round-Trip Recovery",
+      "name": "Implied Volatility Solver \u2014 Round-Trip Recovery",
       "category": "options-pricing",
       "canonical_module": "PythonDataService/app/volatility/solver.py",
       "canonical_callable": "implied_volatility",
       "reference": {
         "kind": "hand_computed",
-        "oracle": "sigma_known — BSM pricing formula generates market_price; solver must recover sigma_known",
-        "citation": "Hull, J. (2022) Options, Futures, and Other Derivatives (11e) §19.11; Brent, R. (1973) Algorithms for Minimization Without Derivatives §4."
+        "oracle": "sigma_known \u2014 BSM pricing formula generates market_price; solver must recover sigma_known",
+        "citation": "Hull, J. (2022) Options, Futures, and Other Derivatives (11e) \u00a719.11; Brent, R. (1973) Algorithms for Minimization Without Derivatives \u00a74."
       },
       "market_input": {
         "source": "synthetic",
@@ -740,7 +766,7 @@
     },
     {
       "id": "IV-002",
-      "name": "SVI Total Variance Surface — Gatheral Raw Parameterisation",
+      "name": "SVI Total Variance Surface \u2014 Gatheral Raw Parameterisation",
       "category": "options-pricing",
       "canonical_module": "PythonDataService/app/volatility/fitting.py",
       "canonical_callable": "fit_svi",
@@ -783,7 +809,7 @@
     },
     {
       "id": "IV-003",
-      "name": "IV30 Constant-Maturity — Variance-Time Interpolation",
+      "name": "IV30 Constant-Maturity \u2014 Variance-Time Interpolation",
       "category": "options-pricing",
       "canonical_module": "PythonDataService/app/volatility/vix_replication.py",
       "canonical_callable": "vix_style_iv30",
@@ -869,7 +895,7 @@
     },
     {
       "id": "IV-005",
-      "name": "SPY 2024-12-20 Options Chain Snapshot — VIX-Style IV30 Regression Anchor",
+      "name": "SPY 2024-12-20 Options Chain Snapshot \u2014 VIX-Style IV30 Regression Anchor",
       "category": "options-pricing",
       "canonical_module": "PythonDataService/app/volatility/vix_replication.py",
       "canonical_callable": "vix_style_iv30",
@@ -916,7 +942,7 @@
     },
     {
       "id": "RV-002",
-      "name": "HF Two-Component Realized Volatility — ABDL (window=3 days, ETH)",
+      "name": "HF Two-Component Realized Volatility \u2014 ABDL (window=3 days, ETH)",
       "category": "realized-volatility",
       "canonical_module": "PythonDataService/app/engine/edge/features_realtime/hf_realized_vol.py",
       "canonical_callable": "hf_realized_vol_trd252",
@@ -959,7 +985,7 @@
     },
     {
       "id": "RV-004",
-      "name": "Model-Free Variance Replication — CBOE VIX 2019 Formula",
+      "name": "Model-Free Variance Replication \u2014 CBOE VIX 2019 Formula",
       "category": "realized-volatility",
       "canonical_module": "PythonDataService/app/volatility/vix_replication.py",
       "canonical_callable": "replicate_expiry_variance",
@@ -1114,7 +1140,7 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture — Phase 3 golden fixture system",
+          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
           "attribution": "attribution.md",
           "content_sha256": {
             "input.arrow": "70aa7cd04aa1bc2f10f343e7265da135337ef0ece59eabb7183c4ef9ca25ddbb",
@@ -1159,7 +1185,7 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture — Phase 3 golden fixture system",
+          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
           "attribution": "attribution.md",
           "content_sha256": {
             "input.arrow": "73c16d4b565de82de5d49eed5a62b44d5f8f205e49dd745431a99cd7308a9c5a",
@@ -1204,7 +1230,7 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture — Phase 3 golden fixture system",
+          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
           "attribution": "attribution.md",
           "content_sha256": {
             "input.arrow": "43d5af3d86f030fb251438cfc46041d3d73a4aba1d695856abf8c0e074968524",
@@ -1249,7 +1275,7 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture — Phase 3 golden fixture system. Oracle corrected to ddof=1 to match canonical pandas std().",
+          "justification": "Initial fixture \u2014 Phase 3 golden fixture system. Oracle corrected to ddof=1 to match canonical pandas std().",
           "attribution": "attribution.md",
           "content_sha256": {
             "input.arrow": "62a703e6a8dcc50cb24359537d713bc3aca7e82b1d6bed81472a2be487fc3e1c",
@@ -1264,6 +1290,100 @@
       "status": "active",
       "validated_by": [
         "tests/fixtures/test_research_fixtures.py::TestRP004SignalZscore"
+      ]
+    },
+    {
+      "id": "RP-005",
+      "name": "Lo IID Sharpe Standard Error (Published Table 1)",
+      "category": "research-primitives",
+      "canonical_module": "PythonDataService/app/research/signal/sharpe.py",
+      "canonical_callable": "compute_iid_sharpe_ci",
+      "reference": {
+        "kind": "external_reference",
+        "oracle": "Lo (2002) Table 1 published standard errors at T=60",
+        "citation": "Lo, A. W. (2002). The Statistics of Sharpe Ratios. Financial Analysts Journal 58(4), Eq. 9 and Table 1, pp. 38\u201339. https://traders.studentorg.berkeley.edu/papers/The-Statistics-of-Sharpe-Ratios.pdf"
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/lo_sharpe_ci.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 0.0005,
+        "rtol": 0.0,
+        "note": "The external table reports three decimals; half a unit in its last published digit."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "generated": "2026-10-23",
+          "justification": "Initial fixture copied from Lo's published Table 1; synthetic returns isolate the IID formula.",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.json": "bb0aaef4607c1e15e7d3a0eeda9066d98c1416839130d7e49f487eb248507257",
+            "output.json": "54fb4b75141a8649c41b5de0a9d966622d46019ab04614e6e6598d80c6345f54",
+            "attribution.md": "86026566e6eab833e73a8459e60f7d6be50cab93fbb34479e835da1f39d32d12"
+          },
+          "file_sha256": {
+            "input.json": "684aea9760c7c485900938e6c9b943fb98480b99865d7ddd0cb6f388cf330a01",
+            "output.json": "d11cb14b05b8314f9086b2bf6b5b0b89cbb3f81b40a2ee8821e1eb5397a2f525",
+            "attribution.md": "86026566e6eab833e73a8459e60f7d6be50cab93fbb34479e835da1f39d32d12"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_research_fixtures.py::TestRP005LoSharpeCI"
+      ]
+    },
+    {
+      "id": "RP-006",
+      "name": "Research Backtest Position, Cost, and Drawdown Arithmetic",
+      "category": "research-primitives",
+      "canonical_module": "PythonDataService/app/research/signal/backtest.py",
+      "canonical_callable": "run_backtest",
+      "reference": {
+        "kind": "internal_regression",
+        "oracle": "Hand-calculated position lag, transaction costs, and cumulative-return drawdown from an initial zero balance",
+        "citation": "Internal research backtest policy in app/research/signal/backtest.py; no external engine equivalence claim."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/signal_backtest_hand.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-12,
+        "rtol": 0.0,
+        "note": "Short hand-calculated decimal sequences; IEEE-754 accumulation can differ only at the last few digits."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "generated": "2026-10-23",
+          "justification": "Initial internal-policy fixture; pins initial-balance drawdown and lagged cost arithmetic.",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.json": "9b8501c121ec5ad7c57a5179064b64c0715314e5acc00521ede3ae9cd0a5a2b9",
+            "output.json": "b4d9fed9bad220c6378094a62c50301a0955bf985e435de00256f9f2d5ac5f2b",
+            "attribution.md": "9b123ea74e459113dfd0ddf543c31702f300695836b3f37d1d35b6540e4eed5f"
+          },
+          "file_sha256": {
+            "input.json": "2e9dc082c2275c751620675e02499312daf3245eb521bec75731139262cb592c",
+            "output.json": "f26c2b0ce311cabf1c5019653cdb2df19c2b254181c0a4a2728a41ef62ac3103",
+            "attribution.md": "9b123ea74e459113dfd0ddf543c31702f300695836b3f37d1d35b6540e4eed5f"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_research_fixtures.py::TestRP006SignalBacktest"
       ]
     },
     {
@@ -1294,7 +1414,7 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture — Phase 3 golden fixture system",
+          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
           "attribution": "attribution.md",
           "content_sha256": {
             "input.arrow": "70aa7cd04aa1bc2f10f343e7265da135337ef0ece59eabb7183c4ef9ca25ddbb",
@@ -1339,7 +1459,7 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture — Phase 3 golden fixture system",
+          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
           "attribution": "attribution.md",
           "content_sha256": {
             "input.arrow": "a03cf8af86dbc3673e0486273504425f379f6496f6d73d8f654272cdfed86b2e",
@@ -2001,7 +2121,7 @@
       "reference": {
         "kind": "hand_computed",
         "oracle": "hand-written figures checked by an independent exhaustive Fraction payoff scan per expiry",
-        "citation": "Alpaca, Options Level 3 Trading (https://docs.alpaca.markets/docs/options-level-3-trading), maintenance-margin steps 1–5, read 2026-10-08; ADR 0076 decision 28. See the fixture attribution."
+        "citation": "Alpaca, Options Level 3 Trading (https://docs.alpaca.markets/docs/options-level-3-trading), maintenance-margin steps 1\u20135, read 2026-10-08; ADR 0076 decision 28. See the fixture attribution."
       },
       "market_input": {
         "source": "synthetic",
@@ -2086,7 +2206,7 @@
     },
     {
       "id": "AM-001",
-      "name": "American option price and delta, no dividend — QuantLib Leisen-Reimer tree",
+      "name": "American option price and delta, no dividend \u2014 QuantLib Leisen-Reimer tree",
       "category": "options-pricing",
       "canonical_module": "PythonDataService/app/options/american.py",
       "canonical_callable": "american_value",
@@ -2131,7 +2251,7 @@
     },
     {
       "id": "AM-002",
-      "name": "American option price and delta from a second engine, with and without cash dividends — QuantLib escrowed finite-difference engine",
+      "name": "American option price and delta from a second engine, with and without cash dividends \u2014 QuantLib escrowed finite-difference engine",
       "category": "options-pricing",
       "canonical_module": "PythonDataService/app/options/american.py",
       "canonical_callable": "american_value",
@@ -2178,7 +2298,7 @@
     },
     {
       "id": "AM-003",
-      "name": "American implied volatility recovery and the delta at it — QuantLib Leisen-Reimer prices",
+      "name": "American implied volatility recovery and the delta at it \u2014 QuantLib Leisen-Reimer prices",
       "category": "options-pricing",
       "canonical_module": "PythonDataService/app/options/american.py",
       "canonical_callable": "american_implied_volatility",
@@ -2315,7 +2435,7 @@
     },
     {
       "id": "AM-006",
-      "name": "American option price and delta with a cash dividend one day ahead — QuantLib escrowed finite-difference engine",
+      "name": "American option price and delta with a cash dividend one day ahead \u2014 QuantLib escrowed finite-difference engine",
       "category": "options-pricing",
       "canonical_module": "PythonDataService/app/options/american.py",
       "canonical_callable": "american_value",
@@ -2333,7 +2453,7 @@
       "tolerance": {
         "atol": 0.005,
         "rtol": 0.0,
-        "note": "An accepted second-engine discretization divergence, not rounding. At the adaptive default, price atol 5e-3 and delta atol 1e-3 over six cases; measured maxima 2.87e-3 and 2.83e-4. At explicit 2,003 steps, price atol 3e-3 and delta atol 1e-4; measured maxima 1.66e-3 and 5.74e-5. An explicit 401-step day-one in-the-money call is 1.90e-2 below the reference, outside AM-002’s own 5e-3 fixture tolerance. The test file states both tolerances. The adaptive implied-volatility solve recovers the reference input within atol 5e-4 and its delta within atol 1e-3; measured maxima 4.30e-4 and 4.79e-4."
+        "note": "An accepted second-engine discretization divergence, not rounding. At the adaptive default, price atol 5e-3 and delta atol 1e-3 over six cases; measured maxima 2.87e-3 and 2.83e-4. At explicit 2,003 steps, price atol 3e-3 and delta atol 1e-4; measured maxima 1.66e-3 and 5.74e-5. An explicit 401-step day-one in-the-money call is 1.90e-2 below the reference, outside AM-002\u2019s own 5e-3 fixture tolerance. The test file states both tolerances. The adaptive implied-volatility solve recovers the reference input within atol 5e-4 and its delta within atol 1e-3; measured maxima 4.30e-4 and 4.79e-4."
       },
       "active_version": 1,
       "versions": {
@@ -2457,7 +2577,7 @@
       "canonical_callable": "SpyStrategyAAlgorithm, SpyStrategyBAlgorithm, SpyStrategyCAlgorithm",
       "reference": {
         "kind": "internal_regression",
-        "oracle": "Strategy A/B/C's own current (pre-port) trade_log output, captured once as a refactor-neutrality receipt — not an external correctness oracle.",
+        "oracle": "Strategy A/B/C's own current (pre-port) trade_log output, captured once as a refactor-neutrality receipt \u2014 not an external correctness oracle.",
         "citation": "docs/references/strategy-abc-self-equivalence.md"
       },
       "market_input": {
@@ -2628,7 +2748,7 @@
       "reference": {
         "kind": "cross_engine",
         "oracle": "the Python canonical (bs_greeks.py, strategy_engine.py) evaluated at generation time, against the browser copy Frontend/src/app/utils/black-scholes.ts",
-        "citation": "ADR 0068 exception 1; Hull, Options Futures and Other Derivatives (10e), §15.8 and §19. The canonical itself is pinned by BS-001..BS-007 and test_bs_cross_engine_parity.py."
+        "citation": "ADR 0068 exception 1; Hull, Options Futures and Other Derivatives (10e), \u00a715.8 and \u00a719. The canonical itself is pinned by BS-001..BS-007 and test_bs_cross_engine_parity.py."
       },
       "market_input": {
         "source": "synthetic",
@@ -2759,6 +2879,100 @@
       "status": "active",
       "validated_by": [
         "tests/broker/alpaca/clerk/test_outside_reconciliation.py"
+      ]
+    },
+    {
+      "id": "RP-007",
+      "name": "Lo Non-IID Sharpe HAC Interval",
+      "category": "research-primitives",
+      "canonical_module": "PythonDataService/app/research/signal/sharpe.py",
+      "canonical_callable": "compute_sharpe_ci",
+      "reference": {
+        "kind": "external_reference",
+        "oracle": "Independent scalar equation oracle",
+        "citation": "Lo (2002), eq. 14\u201315 and Appendix. https://traders.studentorg.berkeley.edu/papers/The-Statistics-of-Sharpe-Ratios.pdf"
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/sharpe_inference.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-12,
+        "rtol": 0.0,
+        "note": "See attribution: 1e-12 for equation-derived values; RP-008 published values use 0.00005 rounding tolerance."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "generated": "2026-10-23",
+          "justification": "Initial primary-source equation and published-example fixtures.",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.json": "d3c6f4a1c4775b93faa44d78890c9745ae61a4b9a3e9d70566bcf485894112e2",
+            "output.json": "09f0ae7af3b4634955b88e40bc271ebffd6aeaee43c0e09675a8152f824d8816",
+            "attribution.md": "f95e0607e05156d8f13c32efd0c9b11217694ef9c4cd2dc9a9daa71af56c5b95"
+          },
+          "file_sha256": {
+            "input.json": "c321502b8ddf497972185f4984586c3d34587b847f30f55e78a6f6caf68ec90b",
+            "output.json": "5673521e73fd0f30464ed79d14f6568a59a8503670283d321052af397affec41",
+            "attribution.md": "f95e0607e05156d8f13c32efd0c9b11217694ef9c4cd2dc9a9daa71af56c5b95"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_sharpe_fixtures.py::TestRP007LoHac"
+      ]
+    },
+    {
+      "id": "RP-008",
+      "name": "Deflated Sharpe Published Example and Measured Grid",
+      "category": "research-primitives",
+      "canonical_module": "PythonDataService/app/research/signal/sharpe.py",
+      "canonical_callable": "compute_deflated_sharpe",
+      "reference": {
+        "kind": "external_reference",
+        "oracle": "Published numerical example plus independent measured-grid oracle",
+        "citation": "Bailey and L\u00f3pez de Prado (2014), eq. 1\u20132, Appendix 3 eq. 9, numerical example pp. 9\u201310. https://www.davidhbailey.com/dhbpapers/deflated-sharpe.pdf"
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/sharpe_inference.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 5e-05,
+        "rtol": 0.0,
+        "note": "See attribution: 1e-12 for equation-derived values; RP-008 published values use 0.00005 rounding tolerance."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "generated": "2026-10-23",
+          "justification": "Initial primary-source equation and published-example fixtures.",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.json": "198e8d8e5741122bcfd3fbf9232c6555bc1010a8fdcde323f30fbadc6db97d55",
+            "output.json": "38c2d208df871a6282f9785d4d31a54f87b55b058d4cf865f3e64427b0393f3d",
+            "attribution.md": "6254d35dae0d34324cf487a541f7f9a02146f393989a97010ca862f3a46f4979"
+          },
+          "file_sha256": {
+            "input.json": "2c7b3286bbad6893236ca474173a1f85153f5bef09ae90f3dfead9c0a5cf445f",
+            "output.json": "64181fe5ec25af1d7e9c7b5484be9bc01b302a337da04011a96f10b00bed8451",
+            "attribution.md": "6254d35dae0d34324cf487a541f7f9a02146f393989a97010ca862f3a46f4979"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_sharpe_fixtures.py::TestRP008DeflatedSharpe"
       ]
     }
   ]

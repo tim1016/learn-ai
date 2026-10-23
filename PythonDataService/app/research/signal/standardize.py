@@ -1,9 +1,11 @@
 """Z-score standardization and threshold filtering.
 
-Formula: z = (x − mean_train) / std_train; rank-normalization = rank(x) / (N+1) ∈ (0,1); threshold filter = signal > threshold → +1, < −threshold → −1, else 0.
-Reference: Standard z-score / rank transformation. Rank-normalization per Spearman rank IC convention.
+Formula: z = (x − mean_train) / std_train; threshold filter = z > threshold → +1, z < −threshold → −1, else 0.
+Reference: Standard sample z-score (ddof=1); threshold filter is an internal signal rule.
 Canonical implementation: app/research/signal/standardize.py
-Validated against: NONE — pending (pending-fixture per registry)
+Validated against: PythonDataService/tests/fixtures/test_research_fixtures.py::TestRP004SignalZscore (RP-004, z-score only, atol=1e-9, rtol=0).
+
+The threshold filter has behavior coverage in tests/research/test_signal_engine.py::TestThresholdFilter; no external fixture is claimed for it.
 """
 
 from __future__ import annotations

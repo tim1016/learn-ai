@@ -655,6 +655,11 @@ export class SignalRunnerComponent {
 
   private mapSharpeCi(r: Record<string, unknown>): SharpeCi {
     return {
+      method: (r['method'] as string | undefined) ?? 'legacy_neff',
+      sampleSize: (r['sample_size'] as number | undefined) ?? 0,
+      hacLag: (r['hac_lag'] as number | undefined) ?? 0,
+      segmentCount: (r['segment_count'] as number | undefined) ?? 0,
+      unavailableReason: (r['unavailable_reason'] as string | undefined) ?? '',
       point: r['point'] as number,
       se: r['se'] as number,
       ciLower: r['ci_lower'] as number,
@@ -667,6 +672,12 @@ export class SignalRunnerComponent {
 
   private mapDeflatedSharpe(r: Record<string, unknown>): DeflatedSharpe {
     return {
+      method: (r['method'] as string | undefined) ?? 'legacy_proxy',
+      sampleSize: (r['sample_size'] as number | undefined) ?? 0,
+      effectiveTrials: (r['effective_trials'] as number | undefined) ?? 0,
+      trialSharpeStd: (r['trial_sharpe_std'] as number | undefined) ?? 0,
+      meanTrialCorrelation: (r['mean_trial_correlation'] as number | undefined) ?? 0,
+      unavailableReason: (r['unavailable_reason'] as string | undefined) ?? '',
       rawSharpe: r['raw_sharpe'] as number,
       expectedMaxUnderNull: r['expected_max_under_null'] as number,
       dsrProbability: r['dsr_probability'] as number,

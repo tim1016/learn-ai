@@ -31031,6 +31031,11 @@ export interface components {
              */
             dsr_probability: number;
             /**
+             * Effective Trials
+             * @default 0
+             */
+            effective_trials: number;
+            /**
              * Expected Max Under Null
              * @default 0
              */
@@ -31040,6 +31045,16 @@ export interface components {
              * @default 0
              */
             kurtosis: number;
+            /**
+             * Mean Trial Correlation
+             * @default 0
+             */
+            mean_trial_correlation: number;
+            /**
+             * Method
+             * @default legacy_proxy
+             */
+            method: string;
             /**
              * N Trials
              * @default 0
@@ -31051,10 +31066,25 @@ export interface components {
              */
             raw_sharpe: number;
             /**
+             * Sample Size
+             * @default 0
+             */
+            sample_size: number;
+            /**
              * Skewness
              * @default 0
              */
             skewness: number;
+            /**
+             * Trial Sharpe Std
+             * @default 0
+             */
+            trial_sharpe_std: number;
+            /**
+             * Unavailable Reason
+             * @default
+             */
+            unavailable_reason: string;
             /**
              * Valid
              * @default false
@@ -31335,6 +31365,16 @@ export interface components {
              */
             confidence_level: number;
             /**
+             * Hac Lag
+             * @default 0
+             */
+            hac_lag: number;
+            /**
+             * Method
+             * @default legacy_neff
+             */
+            method: string;
+            /**
              * N Eff Used
              * @default 0
              */
@@ -31345,10 +31385,25 @@ export interface components {
              */
             point: number;
             /**
+             * Sample Size
+             * @default 0
+             */
+            sample_size: number;
+            /**
              * Se
              * @default 0
              */
             se: number;
+            /**
+             * Segment Count
+             * @default 0
+             */
+            segment_count: number;
+            /**
+             * Unavailable Reason
+             * @default
+             */
+            unavailable_reason: string;
             /**
              * Valid
              * @default false
@@ -31565,6 +31620,11 @@ export interface components {
              * @default 0
              */
             oos_net_sharpe: number;
+            /**
+             * Oos Segment Lengths
+             * @default []
+             */
+            oos_segment_lengths: number[];
             /**
              * Oos Total Trades
              * @default 0

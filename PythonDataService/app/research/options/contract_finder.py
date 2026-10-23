@@ -1,20 +1,19 @@
 """Options contract finder for research pipeline.
 
-Formula: Select bracketing contracts by target delta (BSM delta = N(d1) for calls, N(d1)-1 for puts, d1 = (ln(S/K) + (r + σ²/2)·T) / (σ·√T)); interpolate between nearest-delta contracts. Select bracketing expiries for IV30 construction.
-Reference: Internal — no external port reference; delta formula per Hull §19.4. Contract selection heuristics are repo-specific.
+Formula: Select the available strike nearest target delta (BSM delta = N(d1) for calls, N(d1)-1 for puts, d1 = (ln(S/K) + (r + σ²/2)·T) / (σ·√T)); choose expiries bracketing 30 calendar days. No strike interpolation occurs.
+Reference: BSM delta per Hull §19.4; nearest-strike and expiry selection are internal rules, not an external port.
 Canonical implementation: app/research/options/contract_finder.py
 Validated against: NONE — pending (no golden fixture)
 """
 from __future__ import annotations
 
 import logging
-import math
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pandas as pd
-from scipy.stats import norm
 
+from app.services.bs_greeks import black_scholes_greeks
 from app.services.polygon_client import PolygonClientService
 from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 
@@ -35,13 +34,24 @@ def _bs_delta(
     sigma: float,
     option_type: str,
 ) -> float:
-    """Black-Scholes delta for strike selection."""
+    """Zero-dividend BSM delta for strike selection.
+
+    Formula: call Δ=N(d1), put Δ=N(d1)-1 for q=0.
+    Reference: Hull §19.4, BSM delta.
+    Canonical implementation: app/services/bs_greeks.py::black_scholes_greeks.
+    Validated against: tests/services/test_bs_cross_engine_parity.py and tests/research/options/test_contract_finder.py.
+    """
     if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
         return 0.0
-    d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
-    if option_type == "call":
-        return float(norm.cdf(d1))
-    return float(norm.cdf(d1) - 1)
+    return black_scholes_greeks(
+        spot=S,
+        strike=K,
+        ttm_years=T,
+        volatility=sigma,
+        rate=r,
+        dividend=0.0,
+        is_call=option_type == "call",
+    ).delta
 
 
 def _find_atm_strike(contracts: list[dict], stock_close: float) -> dict | None:

@@ -1,0 +1,36 @@
+{
+  "cases": [
+    {
+      "name": "entry_cost_before_recovery",
+      "signal": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "forward_returns": [
+        0.0,
+        0.005,
+        0.005
+      ],
+      "cost_bps": 100.0,
+      "bars_per_day": 1
+    },
+    {
+      "name": "reversal_and_flatten",
+      "signal": [
+        1.0,
+        -1.0,
+        -1.0,
+        0.0
+      ],
+      "forward_returns": [
+        0.0,
+        0.02,
+        0.01,
+        -0.03
+      ],
+      "cost_bps": 100.0,
+      "bars_per_day": 1
+    }
+  ]
+}
