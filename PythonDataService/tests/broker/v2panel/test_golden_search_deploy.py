@@ -128,17 +128,14 @@ def _ready_default_of(program: str, symbol: str, **overrides: object) -> tuple[J
     return default, offered_from_registry
 
 
-def test_a_ready_default_deploy_would_refuse_falls_back_to_the_registry_point_and_says_why() -> None:
-    """#2841: a READY tuple whose periods need more history than a bot can load was still offered, then always refused."""
-    default, registry_parameters = _ready_default_of("sma_crossover", "SPY", short_window=50, long_window=500)
-
+def test_a_ready_default_can_finish_convergence_after_the_history_cap() -> None:
+    """#2857: long periods retain their qualification and complete Spawning live."""
+    default, _ = _ready_default_of("sma_crossover", "SPY", short_window=50, long_window=500)
     preset = _qualified_configuration("sma_crossover", "SPY", {("sma_crossover", "SPY"): default})
-
     assert preset is not None
-    assert preset.parameters == registry_parameters
-    assert preset.explanation.startswith(_REGISTRY_EXPLANATION_START)
-    assert "The Golden Search default for SPY is not offered" in preset.explanation
-    assert "39 days" in preset.explanation
+    assert preset.parameters["short_window"] == 50
+    assert preset.parameters["long_window"] == 500
+    assert "study study-ab" in preset.explanation
 
 
 @pytest.fixture

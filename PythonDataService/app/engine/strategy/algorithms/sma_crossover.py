@@ -128,6 +128,7 @@ class SmaCrossoverAlgorithm(Strategy):
 
         self._sma_short = SimpleMovingAverage(f"SMA{self._short_window}", self._short_window)
         self._sma_long = SimpleMovingAverage(f"SMA{self._long_window}", self._long_window)
+        self._signal_indicators = {"sma_short": self._sma_short, "sma_long": self._sma_long}
 
         self._prev_short_above_long = None
         self._in_position = False

@@ -72,8 +72,8 @@ def test_declared_warmup_is_at_least_one_day(key: str) -> None:
     discussed indicators (#1734). Never again."""
     contract = _STRATEGY_REGISTRY[key].signal_program_contract
     assert contract is not None
-    assert contract.warmup_lookback_days >= 1, (
-        f"'{key}' declares warmup_lookback_days={contract.warmup_lookback_days}; "
+    assert contract.resolved_warmup_lookback_days(_STRATEGY_REGISTRY[key].param_schema()) >= 1, (
+        f"'{key}' declares warmup_lookback_days={contract.resolved_warmup_lookback_days(_STRATEGY_REGISTRY[key].param_schema())}; "
         "0 silently disables FR-016 crash replay"
     )
 

@@ -34,6 +34,10 @@ Reproducibility details:
 
 Decimal arithmetic throughout — no float drift across the recursive
 smoothing.
+Convergence counts bound recursive seed memory (ADR 0083). They do not
+guarantee the same relative bound for ratios or cancelling output terms.
+Measured twin evidence: tests/engine/indicators/test_convergence_twins.py.
+
 """
 
 from __future__ import annotations
@@ -42,9 +46,12 @@ from decimal import Decimal
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.indicators.base import BarIndicator
+from app.engine.indicators.convergence import CONVERGENCE_TOLERANCE, cascade_steps
 
 
 class AverageDirectionalIndex(BarIndicator):
+    series_kind = "adx_wilders"
+
     def __init__(self, name: str, period: int) -> None:
         super().__init__(name, period)
         self._period_dec = Decimal(period)
@@ -81,6 +88,13 @@ class AverageDirectionalIndex(BarIndicator):
     @property
     def minus_di(self) -> Decimal | None:
         return self._minus_di
+
+    @property
+    def ready_bars(self) -> int:
+        return 2 * self.period
+
+    def bars_to_converge(self, tolerance: float = CONVERGENCE_TOLERANCE) -> int:
+        return self.ready_bars + cascade_steps(1 / self.period, 1 / self.period, tolerance)
 
     def _compute_next_value(self, bar: TradeBar) -> Decimal | None:
         prev_high = self._prev_high

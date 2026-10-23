@@ -34,6 +34,7 @@ from app.marketdata.feed import (
     WarmupRefusalReason,
 )
 from app.schemas.decision_explanation import DecisionExplanationRecord
+from app.schemas.indicator_convergence import IndicatorProgress
 from app.services.decision_session import RunDecisionSession
 from app.services.source_bar_store_schema import (
     LEGACY_SOURCE_BAR_LEDGER_FILENAME,
@@ -649,6 +650,24 @@ class SourceBarLedger:
                     },
                 )
         return records
+
+    def record_indicator_progress(self, *, run_id: str, progress: IndicatorProgress) -> None:
+        """Retain this run's latest convergence evidence, including immediately after history."""
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO source_run_indicator_progress (run_id, payload) VALUES (?, ?) "
+                "ON CONFLICT(run_id) DO UPDATE SET payload = excluded.payload",
+                (run_id, progress.model_dump_json()),
+            )
+
+    def indicator_progress(self, *, run_id: str) -> IndicatorProgress | None:
+        with self._lock:
+            if not self._has_table("source_run_indicator_progress"):
+                return None
+            row = self._conn.execute(
+                "SELECT payload FROM source_run_indicator_progress WHERE run_id = ?", (run_id,)
+            ).fetchone()
+        return None if row is None else IndicatorProgress.model_validate_json(row["payload"])
 
     def record_startup_opened(self, *, run_id: str, at_ms: int) -> None:
         """Record that a run subscribed and is preparing, keep-first (#2410)."""

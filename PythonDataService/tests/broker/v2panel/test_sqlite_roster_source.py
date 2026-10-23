@@ -1536,3 +1536,40 @@ def test_roster_membership_spares_only_the_inert_retired_registrations(
         assert membership.with_live_custody == ["troubled-bot", "live-bot"]
     finally:
         repo.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('needs_attention', 'exposure', 'label'), [
+    (False, {}, 'Working'), (True, {}, 'Working'), (False, None, 'Restoring'), (True, None, 'Unavailable'),
+])
+async def test_catalog_spawning_preserves_trouble_and_unreadable_states(
+    monkeypatch: pytest.MonkeyPatch, needs_attention: bool, exposure: dict | None, label: str,
+) -> None:
+    from app.schemas.indicator_convergence import IndicatorProgress
+
+    row = BotCatalogView(
+        strategy_instance_id='spawn', strategy_key='rsi_mean_reversion', strategy_label='RSI', broker='alpaca',
+        account_id='paper-account', symbol='SPY', mode='trade', phase='ON_DUTY', desired_state='RUNNING',
+        running=True, status_label=label, status_explanation='The actual evidence problem.', exposure=exposure,
+        fills_today=0, realized_pnl_today=0, open_pnl=0, day_pnl=0, last_activity_at_ms=None,
+        needs_attention=needs_attention, group='running', world_label='Paper',
+    )
+    binding = SimpleNamespace(strategy_instance_id='spawn', mode='trade')
+    registry = SimpleNamespace(bindings_for_broker=lambda broker: [binding])
+
+    async def catalog(broker: str, account: str):
+        return [row]
+
+    monkeypatch.setattr(panel_data_source, 'validate_account', _resolved_account)
+    monkeypatch.setattr(panel_data_source, 'get_bot_task_registry', lambda: registry)
+    monkeypatch.setattr(panel_data_source, 'read_sqlite_catalog', catalog)
+    monkeypatch.setattr(panel_data_source, '_run_source_evidence_for', lambda binding: SimpleNamespace(
+        indicator_progress=IndicatorProgress(bars_done=20, bars_needed=109, converged=False, decision_timeframe_ms=900000),
+    ))
+    [listed] = await panel_data_source.get_catalog('alpaca', 'paper-account')
+    if needs_attention or exposure is None:
+        assert listed.status_label == label
+        assert listed.status_explanation == row.status_explanation
+    else:
+        assert listed.status_label == 'Spawning'
+        assert '20 of 109' in listed.status_explanation

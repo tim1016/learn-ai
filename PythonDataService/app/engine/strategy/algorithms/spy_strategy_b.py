@@ -73,6 +73,7 @@ class SpyStrategyBAlgorithm(RsiRangeStrategy):
     def _init_extra_indicators(self) -> None:
         self._supertrend = Supertrend("B_Supertrend", self.supertrend_atr_period, self.supertrend_multiplier)
         self._macd = MovingAverageConvergenceDivergence("B_MACD", self.macd_fast, self.macd_slow, self.macd_signal)
+        self.signal_indicators.update({"supertrend": self._supertrend, "macd": self._macd})
 
     def _update_extra_indicators(self, bar: TradeBar) -> None:
         assert self._supertrend is not None

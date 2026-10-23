@@ -18,6 +18,7 @@ runtime/binding types this module duck-types against.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -40,26 +41,6 @@ from app.schemas.decision_explanation import DecisionExplanationRecord
 if TYPE_CHECKING:
     from app.services.bot_runner import BrokerBotBinding
     from app.services.bot_trade_strategy import _LiveSignalRuntime
-
-_WARMUP_LOOKBACK_DAYS = 5
-"""Floor for the trailing calendar-day window backfilled before live
-decisions begin.
-
-This is no longer the lookback every strategy gets -- it is only the floor
-:func:`_warmup_lookback_days_for` falls back to for an unregistered
-``strategy_key`` or a registration with no ``signal_program_contract`` (see
-that function's docstring). #1708 review finding 3: a fresh RTH session
-alone provides only ~26 fifteen-minute bars -- short of the
-ADX(28)/EMA(50)-class warmup several registered strategies need -- so a
-strategy deployed cold would silently withhold decisions for its first
-day(s) of live trading. Review finding (post-#1708): the floor alone was
-not generous enough for every registered program either -- Strategy A's
-sealed contract declares 9 days, not 5 -- so a fixed constant let a
-program silently start deciding on incomplete history. Each sealed
-program's own ``SignalProgramContract.warmup_lookback_days`` (see
-``app/engine/strategy/registry.py``) is now the primary source; this
-constant only floors it.
-"""
 
 _COMMIT_WORTHY_OUTCOMES: frozenset[str] = ENTER_OUTCOMES | EXIT_OUTCOMES
 
@@ -85,20 +66,18 @@ def _warmup_lookback_days_for(binding: BrokerBotBinding) -> int:
     is the one the instance's own periods resolved (#2841), so a long-period
     deploy warms on more than its program's default days.
 
-    No ``max()`` against the module floor. Flooring the sealed value would
-    reintroduce exactly the defect repaired for ``decision_timeframe_ms``:
-    the seal would attest one number while the bot used another. The floor
-    remains only for an instance with no seal at all — a legacy or
-    non-Signal-Program strategy, which has no attestation to contradict.
+    An unsealed replay resolves the same requirement from its configured
+    program. There is no separate legacy floor (#2857).
     """
     seal = binding.sealed_program
     if seal is not None:
         return seal.configured_signal.clock.warmup_lookback_days
-    registration = _STRATEGY_REGISTRY.get(binding.strategy_key)
-    contract = None if registration is None else registration.signal_program_contract
+    registration = _STRATEGY_REGISTRY[binding.strategy_key]
+    contract = registration.signal_program_contract
     if contract is None:
-        return _WARMUP_LOOKBACK_DAYS
-    return max(contract.warmup_lookback_days, _WARMUP_LOOKBACK_DAYS)
+        raise ValueError("Warmup requires a registered Signal Program")
+    params = registration.param_schema.model_validate({**(binding.strategy_params or {}), "symbol": binding.symbol})
+    return contract.resolved_warmup_lookback_days(params)
 
 
 async def replay_warmup_bars(
@@ -219,6 +198,8 @@ async def replay_warmup_bars(
     names_next = bool(captured.outcomes) or captured.ran_before
     before_start: list[DecisionExplanationRecord] = []
     later_run_starts = sorted(captured.run_first_closes_ms, reverse=True)
+    if captured.spawning_closes_ms:
+        runtime.program.replay_spawning_closes = captured.spawning_closes_ms
     for market_bar in warmup_bars:
         if _reaches_a_run_start(later_run_starts, market_bar.end_ms):
             # The run that decided the bucket this bar closes started flat.
@@ -228,14 +209,18 @@ async def replay_warmup_bars(
         # say, which is exactly the blanket-discard behavior FR-016 needs
         # to stop applying to already-captured buckets.
         runtime.replay_closed_bar(context, market_bar, mode=EvaluationMode.DECIDE)
-        stage = runtime.active_stage()
+        stage = runtime.active_stage() or runtime.take_completed_stage()
         if stage is not None:
             if record_before_start is not None:
                 record = DecisionExplanationRecord.from_decision(stage.bar, stage.decision)
                 if record is not None:
                     before_start.append(record)
             known_outcome = captured.outcomes.get(stage.trace.evaluation_id)
-            if known_outcome is not None:
+            if stage.settlement is not None:
+                # Captured spawning clocks use the same auto-discard gate as live.
+                # All other historical clocks remain staged for their own disposition.
+                names_next = known_outcome is not None or names_next
+            elif known_outcome is not None:
                 runtime.settle(
                     Settlement.COMMIT
                     if known_outcome in _COMMIT_WORTHY_OUTCOMES
@@ -246,10 +231,12 @@ async def replay_warmup_bars(
                 # Only a bucket some run decided live can be a crash artifact:
                 # history (a fresh deploy's warmup, or #2314's hole fill) was
                 # never decided, so its candidates are ordinary catch-up. Nor
-                # is a bucket whose receipt has rotated out (#2850).
+                # is a bucket whose receipt has rotated out (#2850), or an
+                # unconverged observation lost before its first spawning receipt (#2857).
                 if (
                     names_next
                     and stage.decision.intent is not None
+                    and stage.decision.converged
                     and market_bar.provenance != "history"
                     and captured.covers(stage.trace.bar_close_ms)
                 ):
@@ -258,6 +245,8 @@ async def replay_warmup_bars(
                 runtime.settle(Settlement.DISCARD)
         context.signal_intents.clear()
         context.consolidated_bars.clear()
+    if captured.spawning_closes_ms:
+        runtime.program.replay_spawning_closes = frozenset()
     runtime.strategy.on_force_flat()
     if record_before_start is not None and before_start:
         record_before_start(before_start)
@@ -302,6 +291,7 @@ class CapturedDecisions:
     rotated_out_before_ms: int | None
     run_first_closes_ms: frozenset[int]
     ran_before: bool
+    spawning_closes_ms: frozenset[int] = frozenset()
 
     def covers(self, bar_close_ms: int) -> bool:
         """Whether this read reaches back to a bucket that closed at ``bar_close_ms``.
@@ -379,4 +369,9 @@ def captured_decision_outcomes(
         rotated_out_before_ms=rotated_out_before_ms(window),
         run_first_closes_ms=run_first_closes_ms(window),
         ran_before=receipts.ran_before(run_id),
+        spawning_closes_ms=frozenset(
+            facts["decision_bar_close_ms"]
+            for receipt in window
+            if (facts := json.loads(receipt.facts_json)).get("reason_code") == "INDICATORS_SPAWNING"
+        ),
     )

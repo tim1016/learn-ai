@@ -66,6 +66,7 @@ from app.schemas.broker_v2_panel import (
     PanelActionRequest,
     PanelActionResult,
 )
+from app.schemas.indicator_convergence import IndicatorProgress
 from app.schemas.options_bot import OPTIONS_BOT_KEY
 from app.schemas.run_admission import ProgramBuildAdmissionFact
 from app.services.bot_binding_repository import (
@@ -138,6 +139,7 @@ from app.services.broker_v2_panel.sqlite_panel_source import (
     read_sqlite_decision_receipts,
     read_sqlite_panel_evidence,
 )
+from app.services.indicator_spawning import spawning_view
 from app.services.signal_program_admission import prove_running_program_build
 from app.services.source_bar_ledger import (
     RetainedContinuityEvent,
@@ -274,6 +276,7 @@ class RunSourceEvidence:
     events: list[RetainedContinuityEvent]
     warmup_join: RetainedWarmupJoin | None
     startup_join: RetainedStartupJoin | None
+    indicator_progress: IndicatorProgress | None = None
 
 
 def _run_source_evidence_for(binding: BrokerBotBinding) -> RunSourceEvidence | None:
@@ -298,6 +301,7 @@ def _run_source_evidence_for(binding: BrokerBotBinding) -> RunSourceEvidence | N
             events=ledger.events(run_id=binding.run_id),
             warmup_join=ledger.warmup_join(run_id=binding.run_id),
             startup_join=ledger.startup_join(run_id=binding.run_id),
+            indicator_progress=ledger.indicator_progress(run_id=binding.run_id),
         ),
         unavailable_action="panel_feed_continuity_unavailable",
     )
@@ -447,7 +451,18 @@ async def get_catalog(broker: str, account_id: str, *, home: bool = False) -> li
         if home and facade is not None
         else []
     )
-    return [*sqlite_catalog, *synthetic_rows, *rehearsal_rows]
+    rows = [*sqlite_catalog, *synthetic_rows, *rehearsal_rows]
+    by_sid = {binding.strategy_instance_id: binding for binding in bindings}
+    result = []
+    for row in rows:
+        binding = by_sid.get(row.strategy_instance_id)
+        if row.running and not row.needs_attention and row.exposure is not None and binding is not None and row.bot_kind == "signal":
+            evidence = _run_source_evidence_for(binding)
+            view = spawning_view(None if evidence is None else evidence.indicator_progress, running=True)
+            if view is not None:
+                row = row.model_copy(update={"status_label": view.label, "status_explanation": f"{view.label}: {view.explanation}"})
+        result.append(row)
+    return result
 
 
 async def _get_panel_with_entries_from_authority(
@@ -586,6 +601,7 @@ async def _get_panel_with_entries_from_authority(
         feed_continuity_run_id=binding.run_id,
         warmup_join=None if source_evidence is None else source_evidence.warmup_join,
         startup_join=None if source_evidence is None else source_evidence.startup_join,
+        indicator_progress=None if source_evidence is None else source_evidence.indicator_progress,
         render_explanation=_explanation_renderer(binding),
     )
     # An uncleanly ended bot's notices take the Clerk's own latest pass as a

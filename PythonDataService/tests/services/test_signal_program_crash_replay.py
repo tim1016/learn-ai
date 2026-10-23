@@ -31,7 +31,7 @@ produces genuine up-and-down moves so RSI/ADX/Supertrend-gated programs (not
 just EMA/SMA crossovers) actually clear their entry conditions. A pure
 monotonic ramp pins Wilder's RSI at 100 (no losses to average), which never
 clears an ``<= overbought`` gate. Verified empirically against every
-currently-registered sealed program that a 230-bucket walk (seed 7) produces
+currently-registered sealed program that a 320-bucket walk (seed 7) produces
 at least one ENTER and one EXIT for each; ``_reference_traces`` asserts this
 budget holds rather than silently producing a vacuous test if a future
 program needs a longer warmup.
@@ -78,6 +78,7 @@ from __future__ import annotations
 from collections import Counter
 from decimal import Decimal
 from itertools import pairwise
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -122,7 +123,7 @@ def _generate_random_walk_closes(
     return [f"{price:.4f}" for price in prices]
 
 
-_RANDOM_WALK_CLOSES = _generate_random_walk_closes(seed=7, count=231)
+_RANDOM_WALK_CLOSES = _generate_random_walk_closes(seed=7, count=320)
 """Decision-bucket budget for the "needs a real intent" tests (2, 3, 4).
 
 A budget, not an expected count. How many buckets these closes actually
@@ -134,7 +135,7 @@ is precisely why no fixed bucket count is asserted anywhere in this file
 any more; see :func:`_assert_decision_clock_is_contiguous`.
 
 Sized with margin above the slowest sealed program observed while writing
-this file (``spy_strategy_a``, first intent at bucket 207 of this exact
+this file (``spy_strategy_a``, first converged intent at bucket 304 of this exact
 seeded walk); ``_reference_traces`` fails loudly if it ever stops being
 generous enough rather than degrading to a vacuous test.
 """
@@ -478,7 +479,7 @@ async def test_replay_warmup_bars_is_idempotent_for_an_already_blocked_candidate
     resolution_minutes = _resolution_minutes(key)
 
     reference_traces = await _reference_traces(key, symbol, resolution_minutes)
-    target_index = next(i for i, trace in enumerate(reference_traces) if trace.staged_candidate is not None)
+    target_index = next(i for i, trace in enumerate(reference_traces) if trace.converged and trace.staged_candidate is not None)
     captured = {trace.evaluation_id: "no_action" for trace in reference_traces}
     captured[reference_traces[target_index].evaluation_id] = "blocked"
 
@@ -621,7 +622,7 @@ async def test_replay_warmup_bars_names_the_candidate_without_disposition(key: s
     resolution_minutes = _resolution_minutes(key)
 
     reference_traces = await _reference_traces(key, symbol, resolution_minutes)
-    target_index = next(i for i, trace in enumerate(reference_traces) if trace.staged_candidate is not None)
+    target_index = next(i for i, trace in enumerate(reference_traces) if trace.converged and trace.staged_candidate is not None)
     target_trace = reference_traces[target_index]
     # Every bucket BEFORE the crash window is durably captured; the target
     # bucket's own evaluation_id is deliberately OMITTED.
@@ -693,7 +694,7 @@ async def test_replay_warmup_bars_does_not_flag_a_bucket_that_closed_before_the_
     resolution_minutes = _resolution_minutes(key)
 
     reference_traces = await _reference_traces(key, symbol, resolution_minutes)
-    target_index = next(i for i, trace in enumerate(reference_traces) if trace.staged_candidate is not None)
+    target_index = next(i for i, trace in enumerate(reference_traces) if trace.converged and trace.staged_candidate is not None)
     retained = reference_traces[target_index + 1 :]
     assert retained, (
         f"'{key}' staged its first candidate on its last bucket, leaving no retained window -- "
@@ -737,7 +738,7 @@ async def test_replay_warmup_bars_still_flags_a_bucket_that_closed_at_the_rotati
     resolution_minutes = _resolution_minutes(key)
 
     reference_traces = await _reference_traces(key, symbol, resolution_minutes)
-    target_index = next(i for i, trace in enumerate(reference_traces) if trace.staged_candidate is not None)
+    target_index = next(i for i, trace in enumerate(reference_traces) if trace.converged and trace.staged_candidate is not None)
     target_trace = reference_traces[target_index]
     captured = {
         trace.evaluation_id: "no_action"
@@ -765,3 +766,70 @@ async def test_replay_warmup_bars_still_flags_a_bucket_that_closed_at_the_rotati
         f"'{key}' exempted a bucket that closed exactly at the rotation boundary"
     )
     assert recovered[0][1].trace.evaluation_id == target_trace.evaluation_id
+
+
+@pytest.mark.asyncio
+async def test_captured_spawning_clocks_replay_the_exact_trace_and_are_not_crash_candidates(tmp_path: Path) -> None:
+    from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
+    from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+    from app.services.bot_trade_strategy import _append_decision_receipt, _evaluation_from_active_stage
+    from app.services.bot_trade_strategy_warmup import captured_decision_outcomes
+
+    binding = _binding(strategy_key='rsi_mean_reversion', symbol='SPY')
+    all_bars = _minute_bars_for_closes('SPY', 15, _generate_random_walk_closes(seed=7, count=108))
+    history = [bar.model_copy(update={'provenance': 'history'}) for bar in all_bars[:20 * 15]]
+    live = all_bars[20 * 15:]
+    runtime, context, executor = _fresh_runtime_and_executor('rsi_mean_reversion', 'SPY')
+    await replay_warmup_bars(runtime, context, _StaticWarmupFeed(history), binding, captured_decisions=None)
+    runtime.program.require_convergence = True
+    repo = ClerkSqliteRepository.initialize(account_id='spawn-proof', artifacts_root=tmp_path)
+    repo.register_strategy_instance(strategy_instance_id=binding.strategy_instance_id, symbol='SPY', config_hash='spawn')
+    receipts = SqliteDecisionReceipts(repo, strategy_instance_id=binding.strategy_instance_id)
+    try:
+        for bar in live:
+            runtime.replay_closed_bar(context, bar, mode=EvaluationMode.DECIDE)
+            evaluation = _evaluation_from_active_stage(binding, runtime, context, bar)
+            if evaluation is not None:
+                assert evaluation.trace.spawning
+                _append_decision_receipt(receipts, binding=binding, evaluation=evaluation,
+                                         outcome='blocked', reason_code='INDICATORS_SPAWNING')
+        captured = captured_decision_outcomes(receipts, run_id='next-run')
+        assert len(captured.spawning_closes_ms) == 88
+        recovered_runtime, recovered_context, recovered_executor = _fresh_runtime_and_executor('rsi_mean_reversion', 'SPY')
+        recovered = await replay_warmup_bars(
+            recovered_runtime, recovered_context, _StaticWarmupFeed(history + live), binding,
+            captured_decisions=captured,
+        )
+        assert recovered == []
+        assert trace_root(runtime.program.session.traces) == trace_root(recovered_runtime.program.session.traces)
+        assert executor.intents == recovered_executor.intents == []
+    finally:
+        repo.close()
+
+
+@pytest.mark.asyncio
+async def test_crash_before_first_spawning_receipt_does_not_recover_a_decision() -> None:
+    binding = _binding(strategy_key="rsi_mean_reversion", symbol="SPY")
+    bars = _minute_bars_for_closes("SPY", 15, [str(500 - index) for index in range(21)])
+    history = [bar.model_copy(update={"provenance": "history"}) for bar in bars[:20 * 15]]
+    live = bars[20 * 15:]
+    original, original_context, _ = _fresh_runtime_and_executor("rsi_mean_reversion", "SPY")
+    await replay_warmup_bars(
+        original, original_context, _StaticWarmupFeed(history), binding, captured_decisions=None,
+    )
+    original.program.require_convergence = True
+    for bar in live:
+        original.replay_closed_bar(original_context, bar, mode=EvaluationMode.DECIDE)
+    lost_trace = original.program.session.traces[-1]
+    assert lost_trace.spawning and not lost_trace.converged
+    assert lost_trace.staged_candidate == "ENTER"
+
+    recovered_runtime, context, executor = _fresh_runtime_and_executor("rsi_mean_reversion", "SPY")
+    recovered = await replay_warmup_bars(
+        recovered_runtime, context, _StaticWarmupFeed(history + live), binding,
+        captured_decisions=CapturedDecisions(
+            outcomes={}, rotated_out_before_ms=None, run_first_closes_ms=frozenset(), ran_before=True,
+        ),
+    )
+    assert recovered == []
+    assert _broker_contacts(executor, context) == []

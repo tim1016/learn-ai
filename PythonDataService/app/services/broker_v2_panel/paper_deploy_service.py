@@ -22,7 +22,6 @@ from app.engine.strategy.registry import (
     strategy_experimental_notice,
 )
 from app.lean_sidecar.trading_calendar import next_trading_day
-from app.marketdata.feed import MAX_WARMUP_LOOKBACK_DAYS
 from app.research.golden_search.qualification_service import JudgedQualification, public_parameters
 from app.schemas.account_authority import CustodyWorld, world_admits_account_mode
 from app.schemas.broker_bots import (
@@ -158,20 +157,6 @@ def resolve_deploy_strategy_params(
     refusal = None if registration.params_refusal is None else registration.params_refusal(validated)
     if refusal is not None:
         raise ValueError(f"Invalid strategy parameters: {refusal}")
-    # A lookback the feed cannot load would be sealed here and refused at
-    # Start; one that cannot be sized would start the bot unwarmed (#2841).
-    # A strategy with no contract seals no lookback to check.
-    contract = registration.signal_program_contract
-    if contract is not None:
-        lookback_refusal = contract.warmup_lookback_refusal(validated)
-        if lookback_refusal is not None:
-            raise ValueError(f"Invalid strategy parameters: {lookback_refusal}")
-        lookback_days = contract.resolved_warmup_lookback_days(validated)
-        if lookback_days > MAX_WARMUP_LOOKBACK_DAYS:
-            raise ValueError(
-                f"Invalid strategy parameters: These periods need {lookback_days} days of history to warm up; "
-                f"a bot can load at most {MAX_WARMUP_LOOKBACK_DAYS}. Use shorter periods or a shorter bar."
-            )
     defaults = registration.param_schema().model_dump(exclude={"symbol"})
     effective = validated.model_dump(exclude={"symbol"})
     diverges = tuple(sorted(name for name, value in effective.items() if value != defaults.get(name)))

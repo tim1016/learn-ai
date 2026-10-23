@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.broker.alpaca.clerk.models import EpochMs
 
-BotOwnState = Literal["running", "finished", "ended_holding", "needs_attention"]
+BotOwnState = Literal["running", "spawning", "preparing", "finished", "ended_holding", "needs_attention"]
 """The bot's own status: an account condition never sets it (R9)."""
 
 
@@ -67,6 +67,7 @@ class RunSummaryFacts(BaseModel):
     ended_at_ms: EpochMs | None = None
     scheduled_end_at_ms: EpochMs | None = None
     ending: RunEnding
+    spawning: bool = False
     decision_count: int = Field(ge=0)
     # The Clerk keeps a bot's newest 1,000 decisions; a longer run may count only those.
     decision_count_is_floor: bool = False

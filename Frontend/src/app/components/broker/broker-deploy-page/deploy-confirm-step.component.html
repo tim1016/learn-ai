@@ -20,6 +20,7 @@
         }
       </dd>
     </div>
+    @if (spawningNote(); as note) { <div><dt>Startup</dt><dd>{{ note }}</dd></div> }
     <div><dt>{{ exitsLabel() }}</dt><dd>{{ exits() }}</dd></div>
     <div>
       <dt>{{ dryRun() ? 'Simulated starting cash' : 'Budget' }}</dt>

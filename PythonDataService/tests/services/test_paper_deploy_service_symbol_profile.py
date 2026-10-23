@@ -13,7 +13,6 @@ import pytest
 
 from app.engine.indicators.macd import MovingAverageConvergenceDivergence
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
-from app.marketdata.feed import MAX_WARMUP_LOOKBACK_DAYS
 from app.schemas.run_admission import StrategyValidationAdmissionFact
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.broker_v2_panel.paper_deploy_service import resolve_deploy_strategy_params
@@ -162,56 +161,20 @@ def test_deploy_refuses_exactly_the_macd_periods_the_indicator_cannot_build(
         resolve_deploy_strategy_params(strategy_key, _SYMBOL, overrides)
 
 
-@pytest.mark.parametrize(
-    ("long_window", "lookback_days", "loads"),
-    [(200, 18, True), (258, 20, True), (259, 24, False), (500, 39, False)],
-    ids=["sma_50_200", "at_the_limit", "first_past_the_limit", "long_past_the_limit"],
-)
-def test_deploy_refuses_exactly_the_periods_whose_warmup_history_a_bot_cannot_load(
-    long_window: int, lookback_days: int, loads: bool
-) -> None:
-    """#2841: a lookback longer than any history request that returns was sealed, then refused at Start.
-
-    SMA on its default 15-minute bars. Each case first asks the contract how
-    many days these periods would seal.
-    """
+@pytest.mark.parametrize(("long_window", "lookback_days"), [(200, 18), (258, 20), (259, 20), (500, 20)])
+def test_deploy_caps_history_and_accepts_long_periods(long_window: int, lookback_days: int) -> None:
     registration = _STRATEGY_REGISTRY["sma_crossover"]
     contract = registration.signal_program_contract
     assert contract is not None
     overrides = {"short_window": 50, "long_window": long_window}
     assert contract.resolved_warmup_lookback_days(registration.param_schema(**overrides)) == lookback_days
-
-    if loads:
-        assert resolve_deploy_strategy_params("sma_crossover", _SYMBOL, overrides).effective["long_window"] == long_window
-        return
-    with pytest.raises(ValueError, match=rf"need {lookback_days} days .* at most {MAX_WARMUP_LOOKBACK_DAYS}\b"):
-        resolve_deploy_strategy_params("sma_crossover", _SYMBOL, overrides)
+    assert resolve_deploy_strategy_params("sma_crossover", _SYMBOL, overrides).effective["long_window"] == long_window
 
 
-@pytest.mark.parametrize("resolution_minutes", [391, 480, 1440])
-def test_deploy_refuses_a_bar_longer_than_a_regular_session(resolution_minutes: int) -> None:
-    """#2841: SMA on such a bar was accepted and sealed its default seven days.
-
-    The bot then started unwarmed, or on a 1440-minute bar never decided at
-    all: the days such a bar needs cannot be counted.
-    """
-    with pytest.raises(
-        ValueError,
-        match=(
-            rf"Invalid strategy parameters: A {resolution_minutes}-minute bar is longer than a regular trading "
-            r"session, so these periods cannot be warmed up from history\. Use a shorter bar\."
-        ),
-    ):
-        resolve_deploy_strategy_params("sma_crossover", _SYMBOL, {"resolution_minutes": resolution_minutes})
-
-
-def test_deploy_sizes_the_history_a_bar_one_session_long_needs() -> None:
-    """A regular session holds one whole 390-minute bar, so its lookback is counted, and refused for its length.
-
-    SMA's default periods need 60 days at that bar.
-    """
-    with pytest.raises(ValueError, match=rf"need 60 days .* at most {MAX_WARMUP_LOOKBACK_DAYS}\b"):
-        resolve_deploy_strategy_params("sma_crossover", _SYMBOL, {"resolution_minutes": 390})
+@pytest.mark.parametrize("resolution_minutes", [390, 391, 480, 1440])
+def test_deploy_accepts_a_bar_at_least_one_session_long(resolution_minutes: int) -> None:
+    resolved = resolve_deploy_strategy_params("sma_crossover", _SYMBOL, {"resolution_minutes": resolution_minutes})
+    assert resolved.effective["resolution_minutes"] == resolution_minutes
 
 
 @pytest.mark.parametrize("strategy_key", sorted(_STRATEGY_REGISTRY))

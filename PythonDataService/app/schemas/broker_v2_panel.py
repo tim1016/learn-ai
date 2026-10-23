@@ -50,6 +50,7 @@ from app.schemas.bot_history import BotHistoryStatus
 from app.schemas.bot_page import BotPageView
 from app.schemas.deployment_budget import ExitEstimateView
 from app.schemas.exit_terms import ExitTerms
+from app.schemas.indicator_convergence import SpawningView
 from app.schemas.operator_blocker import OperatorBlocker, OperatorConfirmationCopy
 from app.schemas.option_chart import ChartPremiumPane, ChartRuleLine
 from app.schemas.options_bot import OptionsBotConfiguration
@@ -748,6 +749,7 @@ class BotPanelView(BaseModel):
     # ``None`` for a run that predates the startup record (#2410) or whose
     # ledger is unreadable.
     startup_join: StartupJoinView | None = None
+    spawning: SpawningView | None = None
     mission_verdict: MissionVerdictView
     execution_policy: str
     health: BotHealthCard

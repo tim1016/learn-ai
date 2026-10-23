@@ -112,6 +112,7 @@ from app.services.broker_v2_panel.paper_deploy_service import (
     strategy_gate_recovery,
 )
 from app.services.broker_v2_panel.strategy_catalog import GoldenValidationScope
+from app.services.indicator_spawning import deploy_spawn_estimate
 from app.services.strategy_validation_manifest import (
     StrategyValidationManifestError,
     load_strategy_validation_entries,
@@ -378,6 +379,7 @@ async def preview_alpaca_deployment_budget(
         raise budget_deploy.budget_error(exc) from exc
     return preview.model_copy(update={
         "same_symbol_note": same_symbol_note,
+        "spawning_note": deploy_spawn_estimate(request.strategy_key, {**resolved.effective, "symbol": request.symbol}),
         "traded_asset_warning": _untested_traded_asset_warning(request),
         "trades_summary": _trades_summary(request),
         "option_review": option_review if preview.option_review is None else preview.option_review,

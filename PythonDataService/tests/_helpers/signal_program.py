@@ -104,7 +104,7 @@ def sealed_series_points() -> list[tuple[str, dict[str, int]]]:
     points: list[tuple[str, dict[str, int]]] = [(key, {}) for key in SEALED_KEYS]
     for key, registration in sealed_programs():
         contract = registration.signal_program_contract
-        if contract is not None and contract.signals:
+        if contract is not None and contract.resolved_signals(registration.param_schema()):
             periods = OFF_VALIDATED_PERIODS[key]
             assert len(set(periods.values())) == len(periods), f"'{key}' repeats a period value off its validated point"
             points.append((key, periods))

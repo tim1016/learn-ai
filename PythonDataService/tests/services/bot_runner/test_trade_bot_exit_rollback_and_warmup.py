@@ -198,7 +198,7 @@ async def test_signal_strategy_decides_on_the_first_live_bucket_after_warmup_bac
     clerk = _FakeClerk()
     set_alpaca_clerk(clerk)
     try:
-        warmup_bars = _rsi_warmup_bars(_SESSION_OPEN_MS, consolidated_bars=20)
+        warmup_bars = _rsi_warmup_bars(_SESSION_OPEN_MS, consolidated_bars=110)
         live_bars = _plunge_bucket_bars(
             _SESSION_OPEN_MS + 15 * 60_000,
             flat_price=str(warmup_bars[-1].close),
@@ -262,7 +262,7 @@ async def test_final_rth_bucket_decides_at_once_but_its_enter_is_not_sent(
     clerk = _FakeClerk(repository=repo)
     set_alpaca_clerk(clerk)
     try:
-        warmup_bars = _rsi_warmup_bars(_SESSION_CLOSE_MS - 15 * 60_000, consolidated_bars=20)
+        warmup_bars = _rsi_warmup_bars(_SESSION_CLOSE_MS - 15 * 60_000, consolidated_bars=110)
         # The live stream ends exactly at the session close, in "hold"
         # mode -- no further bar will ever arrive to naturally fire the
         # final bucket via the consolidator's ordinary lazy-fire path.
@@ -311,7 +311,7 @@ async def test_a_closing_bar_exit_is_not_sent_and_fires_on_the_next_sessions_fir
     bucket_ms = 15 * 60_000
     next_open_ms = session_open_ms_utc(next_trading_day(et_date_at_ms(_SESSION_CLOSE_MS)))
     try:
-        warmup_bars = _rsi_warmup_bars(_SESSION_CLOSE_MS - 2 * bucket_ms, consolidated_bars=20)
+        warmup_bars = _rsi_warmup_bars(_SESSION_CLOSE_MS - 2 * bucket_ms, consolidated_bars=110)
         # 15:30-15:45 plunges RSI below oversold (ENTER); the closing bucket
         # spikes it above overbought (EXIT due on the closing bar); the next
         # session's first bucket holds the spike, so the EXIT is still due.
@@ -338,6 +338,41 @@ async def test_a_closing_bar_exit_is_not_sent_and_fires_on_the_next_sessions_fir
 
         assert _sent(clerk) == [("ENTER", _SESSION_CLOSE_MS - bucket_ms), ("EXIT", next_open_ms + bucket_ms)]
         assert _closing_bar_refusals(repo) == [_SESSION_CLOSE_MS]
+    finally:
+        set_alpaca_clerk(None)
+        repo.close()
+
+
+@pytest.mark.asyncio
+async def test_spawning_receipts_send_no_order_and_the_convergence_bar_can_enter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ready RSI asks to enter while spawning; only bar 109 reaches custody."""
+    admit_canary_pairing(monkeypatch, "rsi_mean_reversion", "paper-account")
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
+    repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
+    clerk = _FakeClerk(repository=repo)
+    set_alpaca_clerk(clerk)
+    warmup = _rsi_warmup_bars(_SESSION_OPEN_MS, consolidated_bars=107)
+    first = _SESSION_OPEN_MS + 15 * 60_000
+    second = first + 15 * 60_000
+    live = _plunge_bucket_bars(first, flat_price=str(warmup[-1].close), plunge_close="380")
+    live += _plunge_bucket_bars(second, flat_price="380", plunge_close="360")
+    registry = _registry(tmp_path, _WarmableFeed(live, warmup))
+    try:
+        await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID,
+                         strategy_key="rsi_mean_reversion", symbol="SPY", mode="trade", quantity=1)
+        await _wait_for(lambda: len(clerk.calls) == 1)
+        await registry.stop("alpaca", _SID)
+        assert _sent(clerk) == [("ENTER", second)]
+        rows = repo.decision_receipt_tail(strategy_instance_id=_SID, limit=100)
+        spawn = [json.loads(row.facts_json) for row in rows if json.loads(row.facts_json).get("reason_code") == "INDICATORS_SPAWNING"]
+        assert len(spawn) == 1
+        assert spawn[0]["decision_bar_close_ms"] == first
+        assert spawn[0]["convergence_bars_done"] == 108
+        assert spawn[0]["convergence_bars_needed"] == 109
+        assert spawn[0]["converged"] is False
+        assert spawn[0]["trace_digest"]
     finally:
         set_alpaca_clerk(None)
         repo.close()

@@ -61,7 +61,7 @@ def test_a_hidden_non_numeric_parameter_does_not_exclude() -> None:
 
 
 def test_a_registration_without_a_signal_program_cannot_be_sized_and_is_excluded() -> None:
-    registration = replace(_STRATEGY_REGISTRY["sma_crossover"], signal_program_factory=None)
+    registration = replace(_STRATEGY_REGISTRY["sma_crossover"], signal_program_contract=None)
 
     answer = sweep_eligibility(registration)
 

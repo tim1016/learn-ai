@@ -25,7 +25,7 @@ from app.services.bot_runtime import DecisionFenceFeed
 from app.services.bot_trade_strategy import StrategyEvaluation, strategy_evaluations
 from tests._helpers.bot_runner.custody import _T0
 from tests._helpers.bot_runner.doubles import _FakeFeed
-from tests._helpers.bot_runner.ema_parity import _ema_parity_bars_through_first_exit
+from tests._helpers.bot_runner.ema_parity import _ema_parity_bars_through_first_exit, flat_indicator_warmup
 
 from ._support import _EMA_FIRST_ENTER_MS, _RTH_MS, _bar
 
@@ -139,7 +139,8 @@ async def test_human_override_strategies_emit_canonical_live_intents(
         created_at_ms=_T0,
     )
     is_signal_program = _STRATEGY_REGISTRY[strategy_key].signal_program_factory is not None
-    feed = _FakeFeed(_strategy_signal_bars(closes, bar_minutes=15 if is_signal_program else 1), mode="finite")
+    bars = _strategy_signal_bars(closes, bar_minutes=15 if is_signal_program else 1)
+    feed = _FakeFeed(bars, mode="finite", warmup_bars=flat_indicator_warmup(bars[0], decision_bars=250))
 
     kinds: list[SignalIntentKind] = []
     async for evaluation in strategy_evaluations(binding, feed):
@@ -181,7 +182,7 @@ async def test_binding_strategy_params_reach_the_constructed_live_strategy() -> 
             created_at_ms=_T0,
             strategy_params=strategy_params,
         )
-        feed = _FakeFeed(bars, mode="finite")
+        feed = _FakeFeed(bars, mode="finite", warmup_bars=flat_indicator_warmup(bars[0]))
         kinds: list[SignalIntentKind] = []
         async for evaluation in strategy_evaluations(binding, feed):
             if evaluation.settle_stage is not None:
@@ -214,9 +215,10 @@ async def test_ema_live_adapter_exposes_and_settles_signal_program_stages() -> N
     evaluation_count = 0
     staged_count = 0
     intents: list[SignalIntentKind] = []
+    bars = _ema_parity_bars_through_first_exit()
     async for evaluation in strategy_evaluations(
         binding,
-        _FakeFeed(_ema_parity_bars_through_first_exit(), mode="finite"),
+        _FakeFeed(bars, mode="finite", warmup_bars=flat_indicator_warmup(bars[0])),
     ):
         evaluation_count += 1
         if evaluation.settle_stage is not None:

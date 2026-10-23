@@ -5809,6 +5809,8 @@
           "state": {
             "enum": [
               "running",
+              "spawning",
+              "preparing",
               "finished",
               "ended_holding",
               "needs_attention"
@@ -6153,6 +6155,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/SealedBotProgram"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "spawning": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SpawningView"
               },
               {
                 "type": "null"
@@ -11629,6 +11641,17 @@
           "clock": {
             "$ref": "#/components/schemas/SignalClockContract"
           },
+          "convergence_tolerance": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Convergence Tolerance"
+          },
           "data": {
             "$ref": "#/components/schemas/SignalDataContract"
           },
@@ -14372,6 +14395,17 @@
             },
             "title": "Shortcuts",
             "type": "array"
+          },
+          "spawning_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spawning Note"
           },
           "state": {
             "enum": [
@@ -56741,6 +56775,11 @@
             ],
             "title": "Set Aside Usd"
           },
+          "spawning": {
+            "default": false,
+            "title": "Spawning",
+            "type": "boolean"
+          },
           "started_at_ms": {
             "anyOf": [
               {
@@ -60318,6 +60357,18 @@
         "additionalProperties": false,
         "description": "One named signal series a program consumes off the sealed data contract.\n\nA program's ``data`` contract seals the *shared* provider/symbol/timeframe\npair every series reads from; this seals each named series drawn from\nthat shared stream \u2014 e.g. ``ema_fast``, ``ema_slow``, and ``rsi`` all read\n``field=\"close\"`` off the same 15-minute decision bar. ``field`` also\nadmits ``\"high_low_close\"`` for a ``BarIndicator``-family series (e.g.\n``spy_strategy_a``'s ADX) that reads the full high/low/close swing\nrather than a single scalar -- ``field=\"close\"`` would misdescribe what\nsuch a series actually consumes. ``warmup_bars`` is\nthe series' own ``is_ready`` threshold: the\n``app.engine.indicators`` base class exposes ``is_ready`` as\n``samples >= period``, so an EMA's ``warmup_bars`` equals its period; RSI\noverrides this to ``period + 1`` (one extra sample for the first delta);\nADX overrides this to ``2 * period``.",
         "properties": {
+          "bars_to_converge": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bars To Converge"
+          },
           "field": {
             "enum": [
               "close",
@@ -60521,6 +60572,60 @@
           "snapshot"
         ],
         "title": "SnapshotResponse",
+        "type": "object"
+      },
+      "SpawningView": {
+        "additionalProperties": false,
+        "properties": {
+          "bars_done": {
+            "minimum": 0.0,
+            "title": "Bars Done",
+            "type": "integer"
+          },
+          "bars_needed": {
+            "minimum": 0.0,
+            "title": "Bars Needed",
+            "type": "integer"
+          },
+          "converged": {
+            "title": "Converged",
+            "type": "boolean"
+          },
+          "decision_timeframe_ms": {
+            "exclusiveMinimum": 0.0,
+            "title": "Decision Timeframe Ms",
+            "type": "integer"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "sessions_left": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sessions Left"
+          }
+        },
+        "required": [
+          "bars_done",
+          "bars_needed",
+          "converged",
+          "decision_timeframe_ms",
+          "label",
+          "explanation"
+        ],
+        "title": "SpawningView",
         "type": "object"
       },
       "SpecBacktestRequest": {

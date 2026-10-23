@@ -7,7 +7,7 @@
     }
     <a class="home-tile__sid" [routerLink]="botLink()">{{ bot.strategy_instance_id }}</a>
   </span>
-  <span class="home-tile__chip">{{ groupWords() }}</span>
+  <span class="home-tile__chip">{{ bot.running ? bot.status_label : groupWords() }}</span>
 </header>
 <p class="home-tile__meta">
   <span class="home-tile__chip">{{ bot.bot_kind === 'options' ? 'Options' : 'Signal' }}</span>

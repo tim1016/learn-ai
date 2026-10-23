@@ -119,21 +119,18 @@ def _sealed_binding() -> BrokerBotBinding:
 _LEGACY_DEFAULT_SEAL = Path(__file__).parents[1] / "fixtures" / "signal_program_seals" / "ema_default_before_2696.json"
 
 
-def test_a_default_ema_seal_minted_before_the_lengths_became_parameters_still_proves_and_reseals_byte_identically() -> None:
-    """The fixture is the seal master minted (81292e4a, before #2696) for ``_binding()`` with ``_validation()``.
-
-    The EMA lengths and hold became parameters with identity-neutral
-    defaults; a running bot sealed before that must keep proving, and a seal
-    minted now at the reference lengths must hash exactly as it did.
-    """
+def test_a_pre_convergence_seal_stays_readable_but_requires_redeployment() -> None:
+    """The old immutable identity is retained, while #2857 changes Start eligibility."""
     legacy = SealedBotProgram.model_validate_json(_LEGACY_DEFAULT_SEAL.read_text(encoding="utf-8"))
+    restored = SealedBotProgram.model_validate_json(legacy.model_dump_json())
+    assert restored.bot_configuration_hash == legacy.bot_configuration_hash
     proof = prove_running_program_build(_binding().model_copy(update={"sealed_program": legacy}), verified_at_ms=_NOW)
-
-    assert (proof.state, proof.corpus_coverage) == ("PROVEN", "COVERED"), proof.explanation
+    assert proof.state == "UNPROVEN"
+    assert proof.next_step == "Deploy the bot again."
     binding = _binding()
     fresh = build_start_program_seal(binding, _validation(), parameter_origins=binding.strategy_param_origins)
     assert fresh is not None
-    assert (fresh.configured_signal_hash, fresh.bot_configuration_hash) == (legacy.configured_signal_hash, legacy.bot_configuration_hash)
+    assert fresh.configured_signal_hash != legacy.configured_signal_hash
 
 
 def test_a_seal_off_the_reference_lengths_records_the_extended_schema_and_provenance() -> None:
@@ -313,7 +310,7 @@ def test_seal_signal_semantics_come_from_the_registry_contract() -> None:
 
     assert configured.protocol_version == contract.protocol_version
     assert configured.parameter_schema_version == contract.parameter_schema_version
-    assert configured.signals == contract.signals
+    assert configured.signals == contract.resolved_signals(_STRATEGY_REGISTRY["ema_crossover_signal"].param_schema())
     assert configured.decision_streams == contract.decision_streams
     assert configured.bar_integrity == contract.bar_integrity
     assert configured.exit_eligibility == contract.exit_eligibility
@@ -602,7 +599,7 @@ def test_explicit_default_lengths_seal_exactly_like_the_pre_lengths_point() -> N
 
     assert explicit.configured_signal_hash == omitted.configured_signal_hash
     assert set(explicit.configured_signal.parameters) == {"symbol", *_DEFAULT_GATES}
-    assert explicit.configured_signal.signals == contract.signals
+    assert explicit.configured_signal.signals == contract.resolved_signals(_STRATEGY_REGISTRY["ema_crossover_signal"].param_schema())
     assert explicit.configured_signal.exit_eligibility == contract.exit_eligibility
     assert explicit.configured_signal.parameters_match_validated_settings is True
 
@@ -647,7 +644,9 @@ def test_seal_claiming_the_default_series_or_hold_for_other_lengths_fails_closed
     binding, seal = _lengths_seal(**_NON_DEFAULT_LENGTHS)
     contract = _STRATEGY_REGISTRY["ema_crossover_signal"].signal_program_contract
     assert contract is not None
-    tampered = seal.configured_signal.model_copy(update={field: getattr(contract, field)})
+    default_value = (contract.resolved_signals(_STRATEGY_REGISTRY["ema_crossover_signal"].param_schema())
+                     if field == "signals" else contract.exit_eligibility)
+    tampered = seal.configured_signal.model_copy(update={field: default_value})
     binding = binding.model_copy(update={"sealed_program": seal.model_copy(update={"configured_signal": tampered})})
 
     proof = prove_running_program_build(binding, verified_at_ms=_NOW)
@@ -716,7 +715,7 @@ def test_a_deploy_off_the_default_periods_seals_the_periods_it_runs(program_key:
 
     contract = _STRATEGY_REGISTRY[program_key].signal_program_contract
     assert contract is not None, "#2796: the program has a registered contract"
-    stale = configured.model_copy(update={"signals": contract.signals})
+    stale = configured.model_copy(update={"signals": contract.resolved_signals(_STRATEGY_REGISTRY[program_key].param_schema())})
     binding = binding.model_copy(update={"sealed_program": seal.model_copy(update={"configured_signal": stale})})
 
     proof = prove_running_program_build(binding, verified_at_ms=_NOW)
@@ -745,12 +744,12 @@ def test_a_strategy_c_seal_off_its_default_periods_does_not_claim_them_in_its_fo
 # The calendar days each program seals at its ``LONG_PERIODS`` point. Every one
 # is above the program's default, which cannot warm that deploy's longest series.
 _LOOKBACK_DAYS_AT_LONG_PERIODS: dict[str, int] = {
-    "ema_crossover_signal": 6,
+    "ema_crossover_signal": 17,
     "sma_crossover": 18,
-    "rsi_mean_reversion": 11,
-    "spy_strategy_a": 18,
-    "spy_strategy_b": 13,
-    "spy_strategy_c": 12,
+    "rsi_mean_reversion": 20,
+    "spy_strategy_a": 20,
+    "spy_strategy_b": 20,
+    "spy_strategy_c": 20,
 }
 
 
@@ -770,16 +769,16 @@ def test_a_long_period_deploy_seals_the_lookback_its_periods_need(program_key: s
 
     sealed_days = seal.configured_signal.clock.warmup_lookback_days
     proven = prove_running_program_build(binding, verified_at_ms=_NOW)
-    stale_clock = seal.configured_signal.clock.model_copy(update={"warmup_lookback_days": contract.warmup_lookback_days})
+    stale_clock = seal.configured_signal.clock.model_copy(update={"warmup_lookback_days": 1})
     stale = seal.configured_signal.model_copy(update={"clock": stale_clock})
     stale_binding = binding.model_copy(update={"sealed_program": seal.model_copy(update={"configured_signal": stale})})
     refused = prove_running_program_build(stale_binding, verified_at_ms=_NOW)
 
     assert sealed_days == _LOOKBACK_DAYS_AT_LONG_PERIODS[program_key], "#2841: the seal records the lookback its periods need"
-    assert sealed_days > contract.warmup_lookback_days, "#2841: the sealed lookback is above the program's default"
+    assert sealed_days >= contract.resolved_warmup_lookback_days(_STRATEGY_REGISTRY[program_key].param_schema()), "#2841: the sealed lookback is above the program's default"
     assert proven.state == "PROVEN", "#2841: a seal naming the lookback its periods need proves its build"
     assert (
-        stale_clock.warmup_lookback_days == contract.warmup_lookback_days != sealed_days
+        stale_clock.warmup_lookback_days == 1 != sealed_days
     ), "#2841: the stale seal names the program's default lookback, not the one its periods need"
     assert refused.state == "UNPROVEN", "#2841: a seal naming the default lookback for a long-period deploy fails closed"
     assert "warmup requirement" in refused.explanation, "#2841: the refusal names the warmup requirement"
@@ -788,17 +787,9 @@ def test_a_long_period_deploy_seals_the_lookback_its_periods_need(program_key: s
 
 
 @pytest.mark.parametrize("resolution_minutes", [391, 1440])
-def test_a_seal_on_a_bar_longer_than_a_session_still_names_the_default_lookback(resolution_minutes: int) -> None:
-    """Deploy now refuses such a bar (#2841); a seal built on one before that must not move.
-
-    No lookback can be sized for it, so the seal records the default days as
-    it always did, and a bot already bound to that seal still proves its build.
-    """
+def test_a_seal_on_a_bar_longer_than_a_session_caps_its_history(resolution_minutes: int) -> None:
     binding, seal = _off_validated_seal("sma_crossover", {"resolution_minutes": resolution_minutes})
-    contract = _STRATEGY_REGISTRY["sma_crossover"].signal_program_contract
-    assert contract is not None
-
-    assert seal.configured_signal.clock.warmup_lookback_days == contract.warmup_lookback_days
+    assert seal.configured_signal.clock.warmup_lookback_days == 20
     assert prove_running_program_build(binding, verified_at_ms=_NOW).state == "PROVEN"
 
 
@@ -1141,3 +1132,20 @@ def test_parameters_the_strategy_rejects_are_a_typed_seal_refusal_not_a_raw_vali
 
     with pytest.raises(SignalProgramSealError, match=r"not valid for ema_crossover_signal: gap"):
         build_start_program_seal(binding, _validation(), parameter_origins=binding.strategy_param_origins)
+
+
+def test_a_pre_convergence_seal_requires_a_new_deployment() -> None:
+    binding = _sealed_binding()
+    seal = binding.sealed_program
+    assert seal is not None
+    configured = seal.configured_signal
+    assert configured.convergence_tolerance == 0.001
+    assert all(series.bars_to_converge is not None for series in configured.signals)
+    legacy = configured.model_copy(update={
+        'convergence_tolerance': None,
+        'signals': tuple(series.model_copy(update={'bars_to_converge': None}) for series in configured.signals),
+    })
+    stale = binding.model_copy(update={'sealed_program': seal.model_copy(update={'configured_signal': legacy})})
+    proof = prove_running_program_build(stale, verified_at_ms=_NOW)
+    assert proof.state == 'UNPROVEN'
+    assert proof.next_step == 'Deploy the bot again.'

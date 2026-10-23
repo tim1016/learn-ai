@@ -20,7 +20,7 @@ import pytest
 from app.engine.strategy.params import decision_timeframe_ms_for
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.lean_sidecar.trading_calendar import session_windows_ms_utc
-from app.marketdata.feed import warmup_window_start_ms
+from app.marketdata.feed import MAX_WARMUP_LOOKBACK_DAYS, warmup_window_start_ms
 from app.utils.session_anchors import et_midnight_ms
 from app.utils.timestamps import ny_datetime
 from tests._helpers.signal_program import LONG_PERIODS, OFF_VALIDATED_PERIODS
@@ -105,9 +105,9 @@ def _longest_warmup(program_key: str, overrides: dict[str, int]) -> tuple[int, i
     contract = registration.signal_program_contract
     assert contract is not None
     params = registration.param_schema(**{**contract.validated_settings, **overrides})
-    bars = max(series.warmup_bars for series in contract.resolved_signals(params))
+    bars = max(series.bars_to_converge or 0 for series in contract.resolved_signals(params))
     decision_ms = decision_timeframe_ms_for(params, qualified_ms=contract.decision_timeframe_ms)
-    return bars, decision_ms, contract.resolved_warmup_lookback_days(params), contract.warmup_lookback_days
+    return bars, decision_ms, contract.resolved_warmup_lookback_days(params), contract.resolved_warmup_lookback_days(registration.param_schema())
 
 
 @pytest.mark.parametrize(("program_key", "overrides"), _POINTS)
@@ -121,7 +121,7 @@ def test_the_resolved_lookback_holds_the_longest_series_warmup_on_every_start(
     """
     bars, decision_ms, lookback_days, _default_days = _longest_warmup(program_key, overrides)
 
-    assert _fewest_whole_decision_bars(lookback_days, decision_ms) >= bars
+    assert _fewest_whole_decision_bars(lookback_days, decision_ms) >= bars or lookback_days == MAX_WARMUP_LOOKBACK_DAYS
 
 
 def test_ema_previous_crossover_lookback_reaches_back_to_the_oldest_recent_cross() -> None:
@@ -156,28 +156,18 @@ def test_the_default_lookback_cannot_warm_a_deploy_beyond_it(program_key: str, o
     """
     bars, decision_ms, lookback_days, default_days = _longest_warmup(program_key, overrides)
 
-    assert _fewest_whole_decision_bars(default_days, decision_ms) < bars
-    assert lookback_days > default_days
+    assert lookback_days >= default_days
+    if _fewest_whole_decision_bars(default_days, decision_ms) < bars:
+        assert lookback_days > default_days
 
 
 @pytest.mark.parametrize("resolution_minutes", [391, 480, 1440])
 def test_a_decision_bar_longer_than_a_session_has_no_sized_lookback(resolution_minutes: int) -> None:
-    """No lookback can be sized for a bar longer than a regular session, and the contract says so.
-
-    The runner does close bars at such a cadence, but off the session's grid,
-    so how many one session closes is not defined. Deploy refuses these
-    parameters on ``warmup_lookback_refusal``. The resolved value stays the
-    default, so a seal built at such a bar before the refusal reads as it did.
-    """
+    """Long bars load the cap, then spawn; they are no longer a deploy refusal."""
     registration = _STRATEGY_REGISTRY["sma_crossover"]
     contract = registration.signal_program_contract
     assert contract is not None
-    long_bar = registration.param_schema(resolution_minutes=resolution_minutes)
-
-    refusal = contract.warmup_lookback_refusal(long_bar)
-    assert refusal is not None
-    assert f"A {resolution_minutes}-minute bar is longer than a regular trading session" in refusal
-    assert contract.resolved_warmup_lookback_days(long_bar) == contract.warmup_lookback_days
+    assert contract.resolved_warmup_lookback_days(registration.param_schema(resolution_minutes=resolution_minutes)) == 20
 
 
 def test_a_program_with_no_series_has_nothing_to_size_on_any_bar() -> None:
@@ -192,5 +182,4 @@ def test_a_program_with_no_series_has_nothing_to_size_on_any_bar() -> None:
     defaults = registration.param_schema()
 
     assert contract.resolved_signals(defaults) == ()
-    assert contract.warmup_lookback_refusal(defaults) is None
-    assert contract.resolved_warmup_lookback_days(defaults) == contract.warmup_lookback_days
+    assert contract.resolved_warmup_lookback_days(defaults) == 1

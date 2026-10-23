@@ -110,3 +110,23 @@ def _ema_signal_evaluation_id(bar_close_ms: int, *, symbol: str = "SPY") -> str:
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def flat_indicator_warmup(first: MarketDataBar, *, decision_bars: int = 110) -> list[MarketDataBar]:
+    """Synthetic flat history for execution-mechanics tests, before retained prices.
+
+    This is not a LEAN value-parity input: it lets tests of custody, lateness,
+    and closing-bar protection exercise already-converged indicators (#2857).
+    The real LEAN fixtures and their pinned observations remain unchanged.
+    """
+    minutes = decision_bars * 15
+    return [
+        first.model_copy(update={
+            "start_ms": first.start_ms - (minutes - index) * 60_000,
+            "end_ms": first.start_ms - (minutes - index - 1) * 60_000,
+            "fetched_at_ms": first.start_ms - (minutes - index - 1) * 60_000,
+            "open": first.open, "high": first.open, "low": first.open, "close": first.open,
+            "provenance": "history",
+        })
+        for index in range(minutes)
+    ]

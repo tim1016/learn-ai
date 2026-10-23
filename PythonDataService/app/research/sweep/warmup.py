@@ -1,33 +1,10 @@
-"""Warmup requirement and run-up planning for a parameter sweep.
+"""Research run-ups use the same indicator convergence counts as live bots.
 
-A sweep is a comparison between candidates. Run cold, a 200-period setting
-spends its first 200 bars without a usable indicator while a 5-period
-setting spends five, so the leaderboard tilts toward short lookbacks for a
-reason that has nothing to do with the strategy. Every cell therefore runs
-behind the same run-up, sized for the slowest candidate in the grid.
-
-Formula:
-  * ``required_samples(candidate)`` — the number of emitted decision-cadence
-    bars after which the program's own ``evaluate_signal_bar`` first reports
-    ``ready``, plus one. The probe feeds a deterministic synthetic price path
-    through the real program object, so cascaded dependencies (MACD's signal
-    line starts only once the slow EMA is ready), off-by-one readiness (RSI
-    needs ``period + 1``), doubled windows (ADX needs ``2 x period``), and
-    fixed periods (the EMA program declares no lookback parameter at all) are
-    all measured rather than declared. The extra sample is the prior-state
-    bar a crossover comparison needs before its first decision can differ
-    from "seed".
-  * ``plan_run_up`` — converts the grid's maximum requirement to calendar
-    history through the canonical trading calendar, counting whole scheduled
-    spans per session (so an early close contributes fewer bars and a daily
-    cadence contributes one per session). Sessions before the requested
-    range are used when the lake holds them; otherwise the run-up is carved
-    from the front of the range and scoring starts later. A requirement the
-    range cannot satisfy is refused.
-Reference: PRD https://github.com/tim1016/learn-ai/issues/1926 "Run-up
-  before the window" and review finding F02 (the readiness table:
-  RSI(26) -> 27 samples, ADX(200) -> 400, MACD 12/500/200 -> 699).
-Canonical implementation: this file.
+Formula: required samples = max of the program's indicator convergence counts;
+  at least one decision bar, then whole sessions from the canonical calendar.
+Reference: issue #2857 (fixed 0.1% memory-decay convergence).
+Canonical implementation: indicator counts in app/engine/indicators/;
+  calendar run-up planning in this file.
 Validated against: tests/research/sweep/test_warmup.py.
 """
 
@@ -37,15 +14,12 @@ import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
-from decimal import Decimal
 from functools import lru_cache
 from itertools import product
 from pathlib import Path
 
 from app.engine.data.availability import Resolution, check_availability
-from app.engine.data.trade_bar import TradeBar
-from app.engine.execution.portfolio import Portfolio
-from app.engine.strategy.base import StrategyContext
+from app.engine.strategy.params import decision_timeframe_ms_for
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.lean_sidecar.trading_calendar import (
     session_open_ms_utc,
@@ -54,13 +28,7 @@ from app.lean_sidecar.trading_calendar import (
 )
 from app.research.sweep.grid import ParamRange, expand_param
 
-# A program that is not ready after this many decision bars has no finite
-# requirement this feature can size a run-up for.
-MAX_PROBE_SAMPLES = 10_000
 _ONE_DAY_MS = 24 * 60 * 60 * 1000
-# 2024-01-02 09:30 ET: any real session open works; the probe never touches
-# the calendar, it only needs monotonic bar clocks of the right width.
-_PROBE_EPOCH_MS = 1_704_205_800_000
 
 
 class WarmupProbeError(ValueError):
@@ -95,33 +63,8 @@ class RunUpPlan:
     carved_from_range: bool
 
 
-def _probe_bar(symbol: str, sample: int, bar_span_ms: int) -> TradeBar:
-    """A deterministic, gently varying bar so no indicator sees a degenerate path."""
-    start_ms = _PROBE_EPOCH_MS + (sample - 1) * bar_span_ms
-    price = Decimal("500") + Decimal(str(round(6 * math.sin(sample / 5.0) + (sample % 3), 2)))
-    return TradeBar(
-        symbol=symbol,
-        start_ms=start_ms,
-        end_ms=start_ms + bar_span_ms,
-        open=price,
-        high=price + Decimal("0.5"),
-        low=price - Decimal("0.5"),
-        close=price,
-        volume=1_000,
-    )
-
-
 def probe_warmup_samples(strategy_key: str, params: Mapping[str, object]) -> WarmupProbe:
-    """Measure how many decision bars ``strategy_key`` needs before it is ready.
-
-    Constructs the registered program from validated ``params`` exactly as a
-    backtest would, initializes it against a bare context, and feeds
-    synthetic bars into ``evaluate_signal_bar`` — the pure decision seam that
-    never emits an intent — until its decision reports ``ready``. The probe
-    is deterministic in its inputs, so results are memoized per full
-    assignment: a form re-preflighting on every edit, or a study probing the
-    same grid for every fold, pays for each distinct candidate once.
-    """
+    """Read the initialized program's requirements without a synthetic price probe."""
     return _probe_cached(strategy_key, tuple(sorted((str(k), _hashable(v)) for k, v in params.items())))
 
 
@@ -130,12 +73,12 @@ PROBE_BUDGET = 512
 
 @dataclass(frozen=True)
 class SlowestProbe:
-    """The slowest candidate's readiness and how it was found."""
+    """The slowest candidate's convergence and how it was found."""
 
     probe: WarmupProbe
     probed_candidates: int
     # False: every candidate was probed. True: the grid exceeded PROBE_BUDGET and the relevance shortcut
-    # (monotone, independent readiness) chose which candidates to probe.
+    # (monotone, independent convergence) chose which candidates to probe.
     bounded: bool
 
 
@@ -145,18 +88,18 @@ def _span_key(probe: WarmupProbe) -> tuple[int, int]:
 
 
 def slowest_warmup_probe(strategy_key: str, symbol: str, param_ranges: Mapping[str, ParamRange]) -> SlowestProbe:
-    """The slowest candidate's readiness, exactly when the grid is small and bounded when it is not.
+    """The slowest candidate's convergence, exactly when the grid is small and bounded when it is not.
 
     Up to ``PROBE_BUDGET`` candidates every assignment is probed: no
-    assumption about which parameters move readiness, or about how they
+    assumption about which parameters move convergence, or about how they
     interact, is made. Past the budget the work is bounded: the baseline
     (every parameter at its smallest value) and each swept parameter alone
-    at its largest value identify the parameters that move readiness; every
+    at its largest value identify the parameters that move convergence; every
     combination of those is probed with the rest at baseline, or — past the
-    budget again — only the extreme assignment. That path assumes readiness
+    budget again — only the extreme assignment. That path assumes convergence
     is monotone in each relevant parameter and that relevance does not depend
     on another parameter's value; it is true of lookbacks and the decision
-    cadence, the settings that move readiness today, and the receipt records
+    cadence, the settings that move convergence today, and the receipt records
     that the bounded path was taken (``bounded``).
     """
     values = {name: sorted(expand_param(spec)) for name, spec in param_ranges.items()}
@@ -191,31 +134,16 @@ def _probe_cached(strategy_key: str, assignment: tuple[tuple[str, object], ...])
     registration = _STRATEGY_REGISTRY.get(strategy_key)
     if registration is None:
         raise WarmupProbeError(f"unknown strategy {strategy_key!r}")
-    factory = registration.signal_program_factory
-    if factory is None:
-        raise WarmupProbeError(
-            f"strategy {strategy_key!r} registers no signal program; its readiness cannot be measured, "
-            "so it cannot be swept"
-        )
+    contract = registration.signal_program_contract
+    if contract is None:
+        raise WarmupProbeError(f"strategy {strategy_key!r} registers no signal program and cannot be swept")
     validated = registration.param_schema.model_validate(params)
-    program = factory(validated)
-    strategy = program.strategy
-    strategy.ctx = StrategyContext(portfolio=Portfolio(initial_cash=Decimal(100_000)))
-    program.activate_for_backtest()
-    strategy.initialize()
-    symbol = str(getattr(validated, "symbol", "SPY")).upper()
-    bar_span_ms = program.session.timeframe_ms
-    for sample in range(1, MAX_PROBE_SAMPLES + 1):
-        decision = strategy.evaluate_signal_bar(_probe_bar(symbol, sample, bar_span_ms))
-        if decision.ready:
-            return WarmupProbe(
-                strategy_key=strategy_key,
-                first_ready_sample=sample,
-                required_samples=sample + 1,
-                bar_span_ms=bar_span_ms,
-            )
-    raise WarmupProbeError(
-        f"strategy {strategy_key!r} with {params!r} was not ready after {MAX_PROBE_SAMPLES} decision bars"
+    series = contract.resolved_signals(validated)
+    return WarmupProbe(
+        strategy_key=strategy_key,
+        first_ready_sample=max((item.warmup_bars for item in series), default=1),
+        required_samples=max(1, max((item.bars_to_converge or 0 for item in series), default=0)),
+        bar_span_ms=decision_timeframe_ms_for(validated, qualified_ms=contract.decision_timeframe_ms),
     )
 
 

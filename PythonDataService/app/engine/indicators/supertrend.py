@@ -34,6 +34,13 @@ Reproducibility details:
 
 Decimal arithmetic throughout — no float drift in the ATR recursion or
 the band clamps.
+
+Convergence is an accepted bounded policy (ADR 0083), not an exact output
+guarantee: ATR seed decay plus 100 bars of direction settling. On 125 pinned
+synthetic starts the ATR-only count left 12 direction mismatches; the margin
+left none, as on the 125 real starts. Other paths can retain a different latch.
+Receipt: tests/fixtures/golden/indicator-convergence/v1/measured.json and
+tests/engine/indicators/test_convergence_twins.py.
 """
 
 from __future__ import annotations
@@ -42,9 +49,13 @@ from decimal import Decimal
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.indicators.base import BarIndicator
+from app.engine.indicators.convergence import CONVERGENCE_TOLERANCE, decay_steps
 
 
 class Supertrend(BarIndicator):
+    series_kind = "supertrend"
+    _DIRECTION_SETTLING_MARGIN = 100
+
     def __init__(
         self,
         name: str,
@@ -93,6 +104,9 @@ class Supertrend(BarIndicator):
     @property
     def lower_band(self) -> Decimal | None:
         return self._lower_band
+
+    def bars_to_converge(self, tolerance: float = CONVERGENCE_TOLERANCE) -> int:
+        return self.ready_bars + decay_steps(1 / self.atr_period, tolerance) + self._DIRECTION_SETTLING_MARGIN
 
     def _compute_next_value(self, bar: TradeBar) -> Decimal | None:
         if self._prev_close is None:

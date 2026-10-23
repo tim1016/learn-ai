@@ -448,7 +448,6 @@ def test_non_sealed_strategy_does_not_offer_a_paper_access_workflow(
         replace(
             registration,
             signal_program_contract=None,
-            signal_program_factory=None,
         ),
     )
 

@@ -48,8 +48,12 @@ def test_probe_reproduces_the_reviewed_readiness_thresholds(strategy_key: str, p
     probe = probe_warmup_samples(strategy_key, {"symbol": "SPY", **params})
 
     assert probe.first_ready_sample == first_ready, "the first ready sample is the reviewed readiness threshold"
-    # One prior-state bar on top, so a crossover can be a fresh one on the first scored bar.
-    assert probe.required_samples == first_ready + 1, "the requirement is the first ready sample plus one prior-state bar"
+    from app.engine.strategy.registry import _STRATEGY_REGISTRY
+    registration = _STRATEGY_REGISTRY[strategy_key]
+    contract = registration.signal_program_contract
+    assert contract is not None
+    series = contract.resolved_signals(registration.param_schema(**params))
+    assert probe.required_samples == max(item.bars_to_converge for item in series)
     assert probe.bar_span_ms == FIFTEEN_MIN_MS, "the decision cadence is fifteen minutes"
 
 
@@ -63,7 +67,7 @@ def test_probe_ignores_the_hold_and_reads_the_decision_cadence_from_the_program(
     )
     assert hourly.bar_span_ms == 60 * 60_000, "an hourly program decides on hour bars"
     assert daily.bar_span_ms == DAY_MS, "a daily program decides on day bars"
-    assert hourly.required_samples == daily.required_samples == 4, "the requirement does not depend on the cadence"
+    assert hourly.required_samples == daily.required_samples == 3, "the requirement does not depend on the cadence"
 
 
 def test_probe_refuses_an_unknown_strategy() -> None:

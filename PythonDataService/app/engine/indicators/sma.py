@@ -19,13 +19,20 @@ from collections import deque
 from decimal import Decimal
 
 from app.engine.indicators.base import Indicator
+from app.engine.indicators.convergence import CONVERGENCE_TOLERANCE, require_tolerance
 
 
 class SimpleMovingAverage(Indicator):
+    series_kind = "sma"
+
     def __init__(self, name: str, period: int) -> None:
         super().__init__(name, period)
         self._window: deque[Decimal] = deque(maxlen=period)
         self._sum: Decimal = Decimal(0)
+
+    def bars_to_converge(self, tolerance: float = CONVERGENCE_TOLERANCE) -> int:
+        require_tolerance(tolerance)
+        return self.ready_bars
 
     def _compute_next_value(self, timestamp_ms: int, value: Decimal) -> Decimal | None:
         if len(self._window) == self.period:

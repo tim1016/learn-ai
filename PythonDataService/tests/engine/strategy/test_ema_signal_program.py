@@ -8,6 +8,7 @@ from decimal import Decimal
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import BacktestEngine
+from app.engine.indicators.base import IndicatorConvergence
 from app.engine.strategy.algorithms.ema_crossover_signal import EmaCrossoverSignalAlgorithm
 from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
@@ -72,6 +73,7 @@ class _StubSignalStrategy:
     """
 
     settings: dict[str, str] = field(default_factory=dict)
+    signal_indicators: dict[str, IndicatorConvergence] = field(default_factory=dict)
 
     def evaluate_signal_bar(self, _bar: TradeBar) -> SignalDecision:
         return SignalDecision(

@@ -24,7 +24,11 @@ from app.services.bot_dry_run import DryRunActivity, DryRunActivityJournal
 from app.services.bot_registry_projection import read_dry_run_activity
 from tests._helpers.bot_runner.custody import _SID, _T0, _registry, budget_consent_for_test, deploy_bot
 from tests._helpers.bot_runner.doubles import _FakeClerk, _FakeFeed
-from tests._helpers.bot_runner.ema_parity import _ema_parity_bars_through_first_exit, ema_bars_in_fee_pinned_week
+from tests._helpers.bot_runner.ema_parity import (
+    _ema_parity_bars_through_first_exit,
+    ema_bars_in_fee_pinned_week,
+    flat_indicator_warmup,
+)
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 from ._support import _install_fake_clerk, _wait_for
@@ -121,7 +125,8 @@ async def test_dry_run_records_simulated_round_trip_with_zero_broker_writes(
                 await runtime.envelope_sync.tick()
                 yield bar
 
-    feed = ClockedFeed(bars, mode="hold")
+    warmup = flat_indicator_warmup(bars[0])
+    feed = ClockedFeed(bars, mode="hold", warmup_bars=warmup)
     registry = _registry(tmp_path, feed)
 
     admitted = await registry.deploy_with_admission(
@@ -160,7 +165,7 @@ async def test_dry_run_records_simulated_round_trip_with_zero_broker_writes(
     assert runtime.authority_kind == "synthetic"
     assert runtime.selected_account_id == account_id
     retained = SourceBarLedger(artifacts_root=tmp_path, account_id=account_id)
-    assert len(retained.bars(provider="lean-golden", symbol="SPY")) == len(bars)
+    assert len(retained.bars(provider="lean-golden", symbol="SPY")) == len(warmup) + len(bars)
     assert all(row.bar_ref.startswith(f"source-bar:{account_id}:") for row in activity)
     # The EMA's 15-minute decision is priced at its own close, not at
     # whichever raw minute was latest when the decision surfaced. Each journal
@@ -195,7 +200,7 @@ async def test_dry_run_refuses_a_decision_taken_after_its_delivery_allowance(
     monkeypatch.setattr(feed_continuity_policy, "now_ms_utc", lambda: bars[-1].end_ms + 86_400_000)
     clerk = _FakeClerk()
     _install_fake_clerk(monkeypatch, clerk)
-    feed = _FakeFeed(bars, mode="hold")
+    feed = _FakeFeed(bars, mode="hold", warmup_bars=flat_indicator_warmup(bars[0]))
     registry = _registry(tmp_path, feed)
 
     await deploy_bot(registry,
@@ -235,7 +240,8 @@ async def test_dry_run_refuses_a_market_enter_decided_on_the_last_bar(
 ) -> None:
     """#2607: the sandbox refuses a closing-bar ENTER exactly as Live does.
 
-    QQQ's first EMA ENTER is decided on its second session's last bucket --
+    Flat history settles the indicators; rsi_min=49 keeps the warmed QQQ
+    fixture's 49.88 RSI eligible. Its first ENTER is on the last bucket --
     the closing bar, decided only after the close. The Dry Run runner shares
     the live runner's closing-bar screen, so the ENTER is discarded and
     receipted ``CLOSING_BAR`` before its synthetic Clerk is reached, and no
@@ -258,7 +264,7 @@ async def test_dry_run_refuses_a_market_enter_decided_on_the_last_bar(
     monkeypatch.setattr(clerk_runtime, "prepared_top_of_book", lambda _symbol, _now: SimpleNamespace(ask=bars[-1].close))
     clerk = _FakeClerk()
     _install_fake_clerk(monkeypatch, clerk)
-    feed = _FakeFeed(bars, mode="hold")
+    feed = _FakeFeed(bars, mode="hold", warmup_bars=flat_indicator_warmup(bars[0]))
     registry = _registry(tmp_path, feed)
 
     await registry.deploy_with_admission(
@@ -266,6 +272,8 @@ async def test_dry_run_refuses_a_market_enter_decided_on_the_last_bar(
         strategy_instance_id=_SID,
         strategy_key="ema_crossover_signal",
         symbol="QQQ",
+        strategy_params={"rsi_min": 49.0},
+        strategy_param_origins={"rsi_min": "deploy_override"},
         mode="dry_run",
         quantity=3,
         budget_consent=DeployBudgetConsent(committed_cents=1_000_000, risk_revision=0, actor="owner",

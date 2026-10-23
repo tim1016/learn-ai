@@ -47,6 +47,7 @@ from app.schemas.broker_v2_panel import (
     TransactionRail,
 )
 from app.schemas.decision_explanation import DecisionExplanationRecord
+from app.schemas.indicator_convergence import IndicatorProgress
 from app.schemas.run_admission import (
     ProgramBuildAdmissionFact,
     proven_build_copy,
@@ -68,6 +69,7 @@ from app.services.broker_v2_panel.feed_continuity_projection import (
 )
 from app.services.broker_v2_panel.outcome_copy import outcome_card_copy
 from app.services.broker_v2_panel.panel_authority_guard import default_authority_account_id
+from app.services.indicator_spawning import spawning_view
 from app.services.pricing_bar_stream import (
     PRICING_BAR_CONFLICT,
     PRICING_BAR_LATE,
@@ -604,6 +606,7 @@ def build_panel(
     feed_continuity_run_id: str | None = None,
     warmup_join: RetainedWarmupJoin | None = None,
     startup_join: RetainedStartupJoin | None = None,
+    indicator_progress: IndicatorProgress | None = None,
     end: BotEndView | None = None,
     render_explanation: ExplanationRenderer | None = None,
 ) -> BotPanelView:
@@ -723,6 +726,7 @@ def build_panel(
         ),
         warmup_join=build_warmup_join(warmup_join),
         startup_join=build_startup_join(startup_join, running=status.running),
+        spawning=spawning_view(indicator_progress, running=status.running),
         mission_verdict=_mission_verdict(
             status,
             clerk,

@@ -1,0 +1,216 @@
+{
+  "real": {
+    "sma30": {
+      "bars": 30,
+      "starts": 125,
+      "mean_initial_error": [
+        0.0
+      ],
+      "mean_final_error": [
+        0.0
+      ],
+      "error_ratios": [
+        0.0
+      ],
+      "direction_mismatches": 0
+    },
+    "ema50": {
+      "bars": 223,
+      "starts": 125,
+      "mean_initial_error": [
+        0.16741885586719865
+      ],
+      "mean_final_error": [
+        0.00016522880034372745
+      ],
+      "error_ratios": [
+        0.0009869187045143325
+      ],
+      "direction_mismatches": 0
+    },
+    "rsi14": {
+      "bars": 109,
+      "starts": 125,
+      "mean_initial_error": [
+        6.450198556797226
+      ],
+      "mean_final_error": [
+        0.007157360187798956
+      ],
+      "error_ratios": [
+        0.0011096340871951176
+      ],
+      "direction_mismatches": 0
+    },
+    "adx14": {
+      "bars": 153,
+      "starts": 125,
+      "mean_initial_error": [
+        7.181697964763381
+      ],
+      "mean_final_error": [
+        0.002579247965980414
+      ],
+      "error_ratios": [
+        0.0003591418044361315
+      ],
+      "direction_mismatches": 0
+    },
+    "macd12_26_9": {
+      "bars": 129,
+      "starts": 125,
+      "mean_initial_error": [
+        0.05394570310548273,
+        0.0844273750006864,
+        0.03278883464681602
+      ],
+      "mean_final_error": [
+        3.653485760665825e-05,
+        5.372751644606247e-05,
+        1.7192658839404217e-05
+      ],
+      "error_ratios": [
+        0.0006772524131388151,
+        0.0006363755410567444,
+        0.0005243449187686737
+      ],
+      "direction_mismatches": 0
+    },
+    "supertrend10_3": {
+      "bars": 176,
+      "starts": 125,
+      "mean_initial_error": [
+        0.8695265693279012
+      ],
+      "mean_final_error": [
+        4.7756709450128365e-09
+      ],
+      "error_ratios": [
+        5.492265692012358e-09
+      ],
+      "direction_mismatches": 0
+    }
+  },
+  "synthetic": {
+    "sma30": {
+      "bars": 30,
+      "starts": 125,
+      "mean_initial_error": [
+        0.0
+      ],
+      "mean_final_error": [
+        0.0
+      ],
+      "error_ratios": [
+        0.0
+      ],
+      "direction_mismatches": 0
+    },
+    "ema50": {
+      "bars": 223,
+      "starts": 125,
+      "mean_initial_error": [
+        0.6914469489781349
+      ],
+      "mean_final_error": [
+        0.0006824019271258887
+      ],
+      "error_ratios": [
+        0.0009869187045143325
+      ],
+      "direction_mismatches": 0
+    },
+    "rsi14": {
+      "bars": 109,
+      "starts": 125,
+      "mean_initial_error": [
+        5.844961682584657
+      ],
+      "mean_final_error": [
+        0.005447147918273417
+      ],
+      "error_ratios": [
+        0.000931939029558304
+      ],
+      "direction_mismatches": 0
+    },
+    "adx14": {
+      "bars": 153,
+      "starts": 125,
+      "mean_initial_error": [
+        9.001405955895384
+      ],
+      "mean_final_error": [
+        0.002279426643791413
+      ],
+      "error_ratios": [
+        0.0002532300681649098
+      ],
+      "direction_mismatches": 0
+    },
+    "macd12_26_9": {
+      "bars": 129,
+      "starts": 125,
+      "mean_initial_error": [
+        0.27625932856375496,
+        0.42360122487099483,
+        0.15667641445613212
+      ],
+      "mean_final_error": [
+        0.00018744237472636472,
+        0.0002756493338659912,
+        8.820695913962652e-05
+      ],
+      "error_ratios": [
+        0.0006785015213815915,
+        0.0006507283682901025,
+        0.0005629881143618052
+      ],
+      "direction_mismatches": 0
+    },
+    "supertrend10_3": {
+      "bars": 176,
+      "starts": 125,
+      "mean_initial_error": [
+        6.642430027608852
+      ],
+      "mean_final_error": [
+        9.76004285985927e-07
+      ],
+      "error_ratios": [
+        1.4693482384145937e-07
+      ],
+      "direction_mismatches": 0
+    }
+  },
+  "supertrend_atr_only": {
+    "real": {
+      "bars": 76,
+      "starts": 125,
+      "mean_initial_error": [
+        0.8695265693279012
+      ],
+      "mean_final_error": [
+        0.0002938778634182599
+      ],
+      "error_ratios": [
+        0.00033797456430274716
+      ],
+      "direction_mismatches": 0
+    },
+    "synthetic": {
+      "bars": 76,
+      "starts": 125,
+      "mean_initial_error": [
+        6.642430027608852
+      ],
+      "mean_final_error": [
+        0.9419138291363812
+      ],
+      "error_ratios": [
+        0.14180259712505427
+      ],
+      "direction_mismatches": 12
+    }
+  }
+}

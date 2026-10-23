@@ -49,6 +49,17 @@ const BLOCKED: BotPanelView['mission_verdict'] = {
 };
 
 describe('BotHealthGroupsComponent (#2794)', () => {
+  it('shows Spawning and backend progress while indicators settle', async () => {
+    await render(BotHealthGroupsComponent, { inputs: {
+      health: HEALTH, startupJoin: JOINING,
+      spawning: { label: 'Spawning', explanation: '20 of 109 indicator bars settled; needs about 4 more trading sessions.',
+        bars_done: 20, bars_needed: 109, converged: false, decision_timeframe_ms: 900000, sessions_left: 4 },
+    } });
+    expect(screen.getByText('Spawning')).toBeTruthy();
+    expect(screen.getByText(/20 of 109/)).toBeTruthy();
+    expect(screen.queryByText(JOINING.label)).toBeNull();
+  });
+
   it('shows one market read when listened and traded underlying are the same', async () => {
     const pulse = fakeBotPanelView().market_pulse;
     await render(BotHealthGroupsComponent, { inputs: {

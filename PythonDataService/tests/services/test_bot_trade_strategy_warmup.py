@@ -1,21 +1,4 @@
-"""Per-program warmup lookback regression coverage.
-
-``replay_warmup_bars`` (``app/services/bot_trade_strategy_warmup.py``) asks
-``MarketDataFeed.recent_closed_bars`` for a trailing calendar-day window
-before a live strategy starts deciding. That window used to be a single
-hardcoded ``_WARMUP_LOOKBACK_DAYS = 5`` for every registered strategy, even
-though each sealed program's own ``SignalProgramContract`` (in
-``app/engine/strategy/registry.py``) already declares the window its own
-math actually needs -- e.g. ``sma_crossover`` declares 7 days, well above
-the floor. A strategy needing more than 5 days silently withheld live
-decisions (``ready=False``) until enough bars accumulated organically,
-while looking "running" the whole time.
-
-These tests prove ``_warmup_lookback_days_for`` (and, through it,
-``replay_warmup_bars``) prefers the registered contract's own
-``warmup_lookback_days`` over the constant, and that the constant still
-floors an unregistered ``strategy_key``.
-"""
+"""History uses the sealed convergence requirement, preserving feed integrity and crash recovery."""
 
 from __future__ import annotations
 
@@ -48,7 +31,6 @@ from app.marketdata.feed import (
 from app.marketdata.ibkr_feed import IbkrMarketDataFeed, require_warmup_coverage
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_trade_strategy_warmup import (
-    _WARMUP_LOOKBACK_DAYS,
     _warmup_lookback_days_for,
     captured_decision_outcomes,
     replay_warmup_bars,
@@ -120,18 +102,15 @@ def _context() -> StrategyContext:
 @pytest.mark.parametrize(
     ("strategy_key", "expected_days"),
     [
-        pytest.param("sma_crossover", 7, id="sma_crossover-contract-declares-7"),
-        pytest.param("spy_strategy_a", 9, id="spy_strategy_a-contract-declares-9"),
-        pytest.param(
-            "not-a-registered-strategy", _WARMUP_LOOKBACK_DAYS, id="unregistered-strategy-key-floors-at-the-constant"
-        ),
+        pytest.param("sma_crossover", 6, id="sma_crossover"),
+        pytest.param("spy_strategy_a", 19, id="spy_strategy_a"),
     ],
 )
-def test_warmup_lookback_days_for_prefers_the_contract_window_and_floors_an_unregistered_key(
+def test_warmup_lookback_days_for_uses_the_program_convergence_window(
     strategy_key: str, expected_days: int
 ) -> None:
     assert _warmup_lookback_days_for(_binding(strategy_key=strategy_key)) == expected_days, (
-        "lookback days: the registered contract's own window, else the constant floor"
+        "lookback days follow the initialized program's convergence requirement"
     )
 
 
@@ -153,7 +132,7 @@ async def test_replay_warmup_bars_requests_the_larger_contract_lookback_from_the
     )
 
     assert result == []
-    assert feed.recorded_lookback_days == 7
+    assert feed.recorded_lookback_days == 6
 
 
 # 2026-09-23 (Wed) 15:00 EDT. A 7-day lookback starts Wed 09-16 15:00, which
@@ -398,7 +377,7 @@ def test_warmup_lookback_days_for_reads_the_seal_over_the_live_registry() -> Non
 
     contract = _STRATEGY_REGISTRY["spy_strategy_a"].signal_program_contract
     assert contract is not None
-    assert seal.configured_signal.clock.warmup_lookback_days == contract.warmup_lookback_days
+    assert seal.configured_signal.clock.warmup_lookback_days == contract.resolved_warmup_lookback_days(_STRATEGY_REGISTRY["spy_strategy_a"].param_schema())
 
     # The seal is the source: a stale seal keeps its own window rather than
     # silently adopting whatever the registry says today.
@@ -408,7 +387,7 @@ def test_warmup_lookback_days_for_reads_the_seal_over_the_live_registry() -> Non
         update={"sealed_program": seal.model_copy(update={"configured_signal": stale_configured})}
     )
 
-    assert _warmup_lookback_days_for(sealed_binding) == contract.warmup_lookback_days
+    assert _warmup_lookback_days_for(sealed_binding) == contract.resolved_warmup_lookback_days(_STRATEGY_REGISTRY["spy_strategy_a"].param_schema())
     assert _warmup_lookback_days_for(stale_binding) == 11
 
 
@@ -465,7 +444,7 @@ async def test_a_sealed_long_period_deploy_warms_on_the_lookback_its_periods_nee
     contract = _STRATEGY_REGISTRY["sma_crossover"].signal_program_contract
     assert contract is not None
     assert _warmup_lookback_days_for(sealed_binding) == 18
-    assert feed.recorded_lookback_days == 18 > contract.warmup_lookback_days
+    assert feed.recorded_lookback_days == 18 > contract.resolved_warmup_lookback_days(_STRATEGY_REGISTRY["sma_crossover"].param_schema())
 
 
 # A start an 18-day window holds the fewest decision bars at, of every minute
@@ -563,7 +542,7 @@ async def test_a_long_period_deploy_is_ready_at_its_first_live_decision_only_on_
     sealed = _sealed_sma_50_200_binding()
     seal = sealed.sealed_program
     assert seal is not None
-    default_clock = seal.configured_signal.clock.model_copy(update={"warmup_lookback_days": contract.warmup_lookback_days})
+    default_clock = seal.configured_signal.clock.model_copy(update={"warmup_lookback_days": contract.resolved_warmup_lookback_days(_STRATEGY_REGISTRY["sma_crossover"].param_schema())})
     sealed_before_2841 = sealed.model_copy(
         update={
             "sealed_program": seal.model_copy(
@@ -588,7 +567,7 @@ async def test_a_long_period_deploy_is_ready_at_its_first_live_decision_only_on_
     assert on_sealed_lookback.decision_bar_close_ms == first_decision_close_ms
     assert on_default_lookback.decision_bar_close_ms == first_decision_close_ms
     assert on_sealed_lookback.bar.provenance == on_default_lookback.bar.provenance == "realtime"
-    assert (lookback_days, _warmup_lookback_days_for(sealed_before_2841)) == (18, 7)
+    assert (lookback_days, _warmup_lookback_days_for(sealed_before_2841)) == (18, 6)
     assert on_sealed_lookback.trace.ready is True
     assert on_default_lookback.trace.ready is False
 
@@ -700,3 +679,23 @@ async def test_warmup_hands_its_evaluations_to_the_run_as_before_start_evaluatio
     by_close = {record.bar.end_ms: record for record in recorded}
     at_1430 = {check.check_id: check.passed for check in by_close[1_790_706_600_000].checks}
     assert at_1430 == {"fresh_cross": True, "gap": False, "rsi_band": False}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('resolution_minutes', [391, 480, 1440])
+async def test_long_bars_make_progress_through_the_real_minute_stream(resolution_minutes: int) -> None:
+    from app.engine.strategy.signal_program import Settlement
+    from app.services.bot_trade_strategy import strategy_evaluations
+
+    minutes = _regular_hours_minutes(date(2025, 1, 2), date(2025, 1, 10))
+    binding = _binding(strategy_key='sma_crossover').model_copy(update={
+        'strategy_params': {'short_window': 2, 'long_window': 3, 'resolution_minutes': resolution_minutes},
+    })
+    traces = []
+    async for evaluation in strategy_evaluations(binding, _SyntheticMinuteFeed(minutes, start_ms=minutes[0].start_ms)):
+        traces.append(evaluation.trace)
+        evaluation.settle_stage(Settlement.DISCARD)
+    assert len(traces) >= 3
+    assert [trace.spawning for trace in traces[:3]] == [True, True, False]
+    assert traces[2].converged is True
+    assert traces[2].convergence_bars_done == 3

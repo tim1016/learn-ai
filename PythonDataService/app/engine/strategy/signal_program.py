@@ -17,11 +17,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
+from datetime import timedelta
 from enum import StrEnum
 from typing import Any, Protocol
 
+from app.engine.consolidators.trade_bar_consolidator import _floor_to_period_ms
 from app.engine.data.trade_bar import TradeBar
+from app.engine.indicators.base import BarIndicator, Indicator
 from app.engine.strategy.decision_explanation import DecisionExplanation
 from app.engine.strategy.signal_intent import SignalIntent
 
@@ -65,6 +68,10 @@ class EvaluationTrace:
     reason_evidence: dict[str, str | int | bool]
     action_plan_request: dict[str, str] | None
     evaluation_mode: EvaluationMode = EvaluationMode.DECIDE
+    converged: bool = False
+    convergence_bars_done: int = 0
+    convergence_bars_needed: int = 0
+    spawning: bool = False
 
     def semantic_payload(self) -> dict[str, Any]:
         """Return only fields that define the observable decision meaning."""
@@ -124,10 +131,14 @@ class SignalDecision:
     # What this decision saw, for the owner (#2639). ``_build_trace`` never
     # copies it, so it can grow without moving any trace digest or root.
     explanation: DecisionExplanation | None = None
+    converged: bool = False
 
 
 class SignalProgramStrategy(Protocol):
     """Public strategy interface owned by a typed signal program."""
+
+    @property
+    def signal_indicators(self) -> dict[str, Indicator | BarIndicator]: ...
 
     def evaluate_signal_bar(self, bar: TradeBar) -> SignalDecision: ...
 
@@ -159,7 +170,7 @@ class SignalSession:
     # shape; app.engine.strategy.registry mirrors this constant into each
     # registry contract rather than re-declaring it, so the two cannot
     # drift apart silently.
-    PROTOCOL_VERSION = "signal-session-protocol/v1"
+    PROTOCOL_VERSION = "signal-session-protocol/v2"
 
     def __init__(
         self,
@@ -184,6 +195,18 @@ class SignalSession:
         self.traces: list[EvaluationTrace] = []
 
     @property
+    def convergence_bars_needed(self) -> int:
+        return max((indicator.bars_to_converge() for indicator in self._strategy.signal_indicators.values()), default=0)
+
+    @property
+    def convergence_bars_done(self) -> int:
+        return min((indicator.samples for indicator in self._strategy.signal_indicators.values()), default=0)
+
+    @property
+    def converged(self) -> bool:
+        return all(indicator.is_converged for indicator in self._strategy.signal_indicators.values())
+
+    @property
     def active_stage(self) -> EvaluationStage | None:
         return self._active_stage
 
@@ -192,17 +215,22 @@ class SignalSession:
         bar: TradeBar,
         *,
         mode: EvaluationMode,
+        require_convergence: bool = False,
     ) -> EvaluationStage | StageQuarantine:
         """Evaluate one complete bucket under its captured immutable mode."""
         if self._active_stage is not None:
             return self._quarantine(bar, StageStatus.UNSETTLED_STAGE, "UNSETTLED_STAGE")
-        if bar.end_ms - bar.start_ms != self.timeframe_ms:
+        if not self._matches_timeframe(bar):
             return self._quarantine(bar, StageStatus.REJECTED_BAR, "TIMEFRAME_MISMATCH")
         if self._last_bar_close_ms is not None and bar.end_ms <= self._last_bar_close_ms:
             return self._quarantine(bar, StageStatus.REJECTED_BAR, "NON_MONOTONIC_DECISION_CLOCK")
         decision = self._strategy.evaluate_signal_bar(bar)
+        decision = replace(decision, converged=self.converged)
+        spawning = require_convergence and not decision.converged
+        if spawning:
+            mode = EvaluationMode.OBSERVE_ONLY
         intents = () if decision.intent is None else (decision.intent,)
-        trace = self._build_trace(bar=bar, decision=decision, mode=mode)
+        trace = self._build_trace(bar=bar, decision=decision, mode=mode, spawning=spawning)
         stage = EvaluationStage(bar=bar, trace=trace, intents=intents, decision=decision)
         self._active_stage = stage
         self._last_bar_close_ms = bar.end_ms
@@ -212,6 +240,20 @@ class SignalSession:
             # but it cannot resurrect this already-discarded evaluation.
             self.settle(Settlement.DISCARD)
         return stage
+
+    def _matches_timeframe(self, bar: TradeBar) -> bool:
+        width = bar.end_ms - bar.start_ms
+        if width == self.timeframe_ms:
+            return True
+        if self.timeframe_ms < 86_400_000 or width <= 0:
+            return False
+        # The canonical daily consolidator labels the bucket by its rounded
+        # start and its last input's end, rather than midnight-to-midnight.
+        period = timedelta(milliseconds=self.timeframe_ms)
+        return (
+            _floor_to_period_ms(bar.start_ms, period) == bar.start_ms
+            and _floor_to_period_ms(bar.end_ms - 1, period) == bar.start_ms
+        )
 
     def settle(self, settlement: Settlement) -> EvaluationStage:
         """Commit the staged semantic action or restore the strategy's retryable state."""
@@ -249,6 +291,7 @@ class SignalSession:
         bar: TradeBar,
         decision: SignalDecision,
         mode: EvaluationMode,
+        spawning: bool,
     ) -> EvaluationTrace:
         settings = self._strategy.signal_program_settings()
         evaluation_id = _semantic_hash(
@@ -267,6 +310,10 @@ class SignalSession:
             bar_qualified=True,
             bucket_closed=True,
             ready=decision.ready,
+            converged=decision.converged,
+            convergence_bars_done=self.convergence_bars_done,
+            convergence_bars_needed=self.convergence_bars_needed,
+            spawning=spawning,
             relation_facts=decision.relation_facts,
             signal_facts=decision.signal_facts,
             staged_candidate=decision.intent.kind.value if decision.intent is not None else None,
@@ -283,6 +330,8 @@ class SignalProgram:
     strategy: SignalProgramStrategy
     session: SignalSession
     active: bool = False
+    require_convergence: bool = False
+    replay_spawning_closes: frozenset[int] = frozenset()
     _default_evaluation_mode: EvaluationMode | None = None
     _captured_modes_by_close_ms: dict[int, EvaluationMode] = field(default_factory=dict)
     _completed_stages: list[EvaluationStage] = field(default_factory=list)
@@ -331,7 +380,10 @@ class SignalProgram:
         mode = self._resolve_evaluation_mode(bar.end_ms)
         if mode is None:
             raise RuntimeError("SignalProgram requires a captured evaluation mode for every live bar")
-        stage = self.session.advance(bar, mode=mode)
+        stage = self.session.advance(
+            bar, mode=mode,
+            require_convergence=self.require_convergence or bar.end_ms in self.replay_spawning_closes,
+        )
         if isinstance(stage, StageQuarantine):
             # A quarantine used to fall through this method with no branch at
             # all: the session refused the bar, the runner never learned of

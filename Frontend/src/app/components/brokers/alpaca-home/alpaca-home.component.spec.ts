@@ -561,6 +561,15 @@ describe('AlpacaHomeComponent', () => {
     expect(screen.getByRole('link', { name: 'Open order records' }).getAttribute('href')).toBe(`${ACCOUNT_URL}/activity`);
   });
 
+  it('shows Spawning on the Wall while the backend reports pending indicators (#2857)', async () => {
+    const bots = catalog();
+    bots[0] = { ...bots[0], status_label: 'Spawning', status_explanation: 'Indicators are settling.' };
+    const { view } = await renderHome({ url: `${ACCOUNT_URL}?view=wall`, getCatalog: async () => bots });
+
+    const tile = view.container.querySelector('app-home-bot-tile');
+    expect(tile?.querySelector('.home-tile__head .home-tile__chip')?.textContent?.trim()).toBe('Spawning');
+  });
+
   it('shows the Wall in exactly the List’s order, and streams candles only while it is shown', async () => {
     const { wall, router, view } = await renderHome();
     const listOrder = sids(screen.getByRole('list', { name: 'Bots' }));

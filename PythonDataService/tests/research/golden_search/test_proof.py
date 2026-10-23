@@ -46,15 +46,14 @@ SYMBOL = "SPY"
 CONTRACT = _STRATEGY_REGISTRY[PROGRAM].signal_program_contract
 assert CONTRACT is not None
 VALIDATED = dict(CONTRACT.validated_settings)
-# The study's receipt spans two weeks; the proof replays one warmup session
-# (Mon 2025-02-03) and scores the three sessions after it.
+# Five warmup sessions converge RSI(14), then three sessions are scored.
 SNAPSHOT_START, SNAPSHOT_END = date(2025, 2, 3), date(2025, 2, 14)
 WINDOW = ProofWindow(
-    start_ms=et_midnight_ms(date(2025, 2, 4)),
-    end_ms=et_midnight_ms(date(2025, 2, 7)),
+    start_ms=et_midnight_ms(date(2025, 2, 10)),
+    end_ms=et_midnight_ms(date(2025, 2, 13)),
     warmup_from_ms=et_midnight_ms(date(2025, 2, 3)),
 )
-PROOF_SESSIONS = [date(2025, 2, 3), date(2025, 2, 4), date(2025, 2, 5), date(2025, 2, 6)]
+PROOF_SESSIONS = expected_sessions(date(2025, 2, 3), date(2025, 2, 12))
 ARTIFACT_DIGEST = "a" * 64
 WIRING_DIGEST = "b" * 64
 
@@ -303,7 +302,7 @@ def test_decision_trace_on_a_seeded_lake_is_deterministic_and_its_root_binds_the
     )
 
     # Four regular sessions of 26 fifteen-minute decision bars each.
-    assert first.trace_count == 4 * 26, "four regular sessions of 26 fifteen-minute decision bars each"
+    assert first.trace_count == len(PROOF_SESSIONS) * 26
     assert first == second, "the same replay on a seeded lake is deterministic"
     assert widened.trace_count == first.trace_count, "other parameters decide on the same bars"
     assert widened.trace_root != first.trace_root, "the trace root binds the parameters"
@@ -318,20 +317,20 @@ def test_decision_trace_refuses_a_cold_start_at_the_window(snapshot: DataSnapsho
         warmup_from_ms=et_midnight_ms(date(2025, 2, 1)),
     )
 
-    with pytest.raises(EvaluationBoundaryError, match="not ready at the evaluation start"):
+    with pytest.raises(EvaluationBoundaryError, match="not converged at the evaluation start"):
         decision_trace(PROGRAM, SYMBOL, VALIDATED, cold, roots=[lake], manifest=snapshot.artifacts)
 
 
 def test_decision_trace_refuses_a_window_without_a_decision(lake: Path) -> None:
     # The scored session holds five regular minutes: the replay crosses into
     # evaluation primed, but no fifteen-minute decision bar closes inside it.
-    seed_store_day(lake, SYMBOL, date(2025, 2, 4), count=5)
+    seed_store_day(lake, SYMBOL, date(2025, 2, 10), count=5)
     short = capture_data_snapshot(
         roots=[lake], symbol=SYMBOL, resolution="minute", data_start=SNAPSHOT_START, data_end=SNAPSHOT_END
     )
     window = ProofWindow(
-        start_ms=et_midnight_ms(date(2025, 2, 4)),
-        end_ms=et_midnight_ms(date(2025, 2, 5)),
+        start_ms=et_midnight_ms(date(2025, 2, 10)),
+        end_ms=et_midnight_ms(date(2025, 2, 11)),
         warmup_from_ms=et_midnight_ms(date(2025, 2, 3)),
     )
 

@@ -191,17 +191,12 @@ async def test_deploy_rejects_an_invalid_parameter_with_a_clear_message(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route", ["bots", "bots/admission"])
-async def test_deploy_refuses_periods_whose_warmup_history_a_bot_cannot_load(
+async def test_deploy_accepts_periods_that_complete_convergence_with_live_bars(
     deploy_app,
     monkeypatch: pytest.MonkeyPatch,
     route: str,
 ) -> None:
-    """#2841: SMA 50/500 needs 39 days of history. It was sealed, and the bot then refused at Start.
-
-    Each period is inside its own bounds, so only the lookback refuses it:
-    on the Deploy and on the check the form runs before it, with nothing
-    handed to the runner.
-    """
+    """#2857: capped history is followed by Spawning instead of refusing deployment."""
     fast_app, registry = deploy_app
     monkeypatch.setattr(
         "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
@@ -223,11 +218,11 @@ async def test_deploy_refuses_periods_whose_warmup_history_a_bot_cannot_load(
             },
         )
 
-    assert response.status_code == 400
-    detail = response.json()["detail"]
-    assert detail["message"] == "The submitted strategy parameters are invalid."
-    assert "39 days" in detail["why"]
-    assert registry.deploy_calls == []
+    assert response.status_code == (201 if route == "bots" else 200)
+    if route == "bots":
+        assert registry.deploy_calls[0]["strategy_params"]["long_window"] == 500
+    else:
+        assert registry.deploy_calls == []
 
 
 @pytest.mark.asyncio

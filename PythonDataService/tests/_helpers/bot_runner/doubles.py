@@ -69,7 +69,9 @@ class _FakeFeed:
         mode: str = "hold",
         error: Exception | None = None,
         observed_at_ms: int | None = None,
+        warmup_bars: list[MarketDataBar] | None = None,
     ) -> None:
+        self._warmup_bars = warmup_bars or []
         self._bars = bars
         self._mode = mode
         self._error = error
@@ -134,7 +136,7 @@ class _FakeFeed:
         lookback_days: int = 5,
     ) -> list[MarketDataBar]:
         del symbol, use_rth, lookback_days
-        return []
+        return self._warmup_bars
 
     def health(self, _symbol: str | None = None) -> FeedHealth:
         return FeedHealth(

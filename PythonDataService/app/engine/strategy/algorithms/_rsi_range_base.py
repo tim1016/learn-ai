@@ -121,6 +121,7 @@ class RsiRangeStrategy(Strategy):
         self._symbol = self.ctx.add_equity(self._symbol_name)
         self._rsi = RelativeStrengthIndex(f"{self.__class__.__name__}_RSI", self.rsi_period)
         self._adx = AverageDirectionalIndex(f"{self.__class__.__name__}_ADX", self.adx_period)
+        self._signal_indicators = {"rsi": self._rsi, "adx": self._adx}
         self._init_extra_indicators()
         self.ctx.register_consolidator(self._symbol, self._resolution, self._signal_program_handler())
 

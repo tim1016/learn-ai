@@ -55,6 +55,7 @@ from app.marketdata.feed import (
 )
 from app.schemas.action_plan import traded_instrument, traded_market_symbol
 from app.schemas.decision_explanation import DecisionExplanationRecord
+from app.schemas.indicator_convergence import IndicatorProgress
 from app.schemas.market_liveness import MarketLivenessFact
 from app.services.bot_decision_quarantine import QuarantineJournal, QuarantineReceiptSink
 from app.services.bot_trade_strategy_warmup import (
@@ -656,6 +657,7 @@ async def _signal_strategy_evaluations(
     captured_decisions: CapturedDecisions | None,
     quarantine_receipts: QuarantineReceiptSink | None,
     record_before_start: BeforeStartSink | None = None,
+    record_convergence: Callable[[IndicatorProgress], None] | None = None,
 ) -> AsyncIterator[StrategyEvaluation]:
     """Run one canonical signal-intent strategy on the production minute stream."""
     runtime = _build_signal_strategy(
@@ -674,6 +676,9 @@ async def _signal_strategy_evaluations(
         captured_decisions=captured_decisions,
         record_before_start=record_before_start,
     )
+    runtime.program.require_convergence = True
+    if record_convergence is not None:
+        record_convergence(_indicator_progress(runtime))
     # Warmup replays backfilled buckets through the same entrypoint, so it is
     # the first place a mis-shaped decision clock shows up. Drain here too, or
     # a run that never reaches a live bar would never report why.
@@ -689,7 +694,17 @@ async def _signal_strategy_evaluations(
         runtime.replay_closed_bar(context, market_bar, mode=mode)
         evaluation = _evaluation_from_active_stage(binding, runtime, context, market_bar)
         if evaluation is not None:
+            if record_convergence is not None:
+                record_convergence(_indicator_progress(runtime))
             yield evaluation
+
+
+def _indicator_progress(runtime: _LiveSignalRuntime) -> IndicatorProgress:
+    session = runtime.program.session
+    return IndicatorProgress(
+        bars_done=session.convergence_bars_done, bars_needed=session.convergence_bars_needed,
+        converged=session.converged, decision_timeframe_ms=session.timeframe_ms,
+    )
 
 
 def _evaluation_from_active_stage(
@@ -775,6 +790,7 @@ async def strategy_evaluations(
     quarantine_receipts: QuarantineReceiptSink | None = None,
     session: RunDecisionSession | None = None,
     record_before_start: BeforeStartSink | None = None,
+    record_convergence: Callable[[IndicatorProgress], None] | None = None,
 ) -> AsyncIterator[StrategyEvaluation]:
     """Stream one strategy's evaluations.
 
@@ -814,7 +830,7 @@ async def strategy_evaluations(
         raise ValueError(f"unsupported Alpaca paper strategy: {binding.strategy_key}")
     _validate_decision_session(binding, session)
     async for evaluation in _signal_strategy_evaluations(
-        binding, feed, captured_decisions, quarantine_receipts, record_before_start
+        binding, feed, captured_decisions, quarantine_receipts, record_before_start, record_convergence
     ):
         yield evaluation
 
@@ -961,6 +977,7 @@ async def run_trade_bot(
             quarantine_receipts=decision_receipts,
             session=session,
             record_before_start=_before_start_recorder(source_bars, binding),
+            record_convergence=(None if source_bars is None else lambda progress: source_bars.record_indicator_progress(run_id=binding.run_id, progress=progress)),
         ):
             if len(evaluation.intents) > 1:
                 raise RuntimeError("A supported trade strategy emitted multiple intents for one closed bar.")
@@ -975,6 +992,13 @@ async def run_trade_bot(
                     evaluation=evaluation,
                     outcome=CRASH_CANDIDATE_OUTCOME,
                     reason_code="CANDIDATE_UNCAPTURED_AT_CRASH",
+                )
+                continue
+            if evaluation.trace.spawning:
+                _discard_evaluation(evaluation)
+                _append_decision_receipt(
+                    decision_receipts, binding=binding, evaluation=evaluation,
+                    outcome="blocked", reason_code="INDICATORS_SPAWNING",
                 )
                 continue
             if not evaluation.intents:
@@ -1205,6 +1229,9 @@ def _append_decision_receipt(
     # so a receipt written now is always content-verifiable. Rows written
     # before that hold no `trace_digest` key at all.
     facts["trace_digest"] = _evaluation_trace_digest(evaluation)
+    facts["converged"] = evaluation.trace.converged
+    facts["convergence_bars_done"] = evaluation.trace.convergence_bars_done
+    facts["convergence_bars_needed"] = evaluation.trace.convergence_bars_needed
     if evaluation.explanation is not None:
         facts["explanation"] = evaluation.explanation.model_dump(mode="json")
     if liveness is not None:
@@ -2055,6 +2082,7 @@ async def run_dry_run_bot(
             quarantine_receipts=decision_receipts,
             session=session,
             record_before_start=_before_start_recorder(source_bars, binding),
+            record_convergence=(None if source_bars is None else lambda progress: source_bars.record_indicator_progress(run_id=binding.run_id, progress=progress)),
         ):
             if len(evaluation.intents) > 1:
                 raise RuntimeError("A supported Dry Run strategy emitted multiple intents for one closed bar.")
@@ -2069,6 +2097,13 @@ async def run_dry_run_bot(
                     evaluation=evaluation,
                     outcome=CRASH_CANDIDATE_OUTCOME,
                     reason_code="CANDIDATE_UNCAPTURED_AT_CRASH",
+                )
+                continue
+            if evaluation.trace.spawning:
+                _discard_evaluation(evaluation)
+                _append_decision_receipt(
+                    decision_receipts, binding=binding, evaluation=evaluation,
+                    outcome="blocked", reason_code="INDICATORS_SPAWNING",
                 )
                 continue
             if not evaluation.intents:
