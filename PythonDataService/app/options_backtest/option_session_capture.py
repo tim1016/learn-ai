@@ -51,7 +51,7 @@ from app.data_lake.option_session_staging import (
 from app.data_lake.path_policy import resolve_staging_root
 from app.data_lake.polygon_fetcher import PolygonFetchError
 from app.data_lake.polygon_option_bars import fetch_listed_option_minute_bars, require_listed_option_symbol
-from app.data_lake.polygon_option_http import PolygonTimeoutError
+from app.data_lake.polygon_option_http import PolygonUnansweredError
 from app.engine.live.identity import confine_path_to_root
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.options_backtest.chain_download import Outcome, capture_underlying
@@ -61,9 +61,10 @@ from app.utils.session_anchors import et_date_at_ms
 
 logger = logging.getLogger(__name__)
 
-#: Tries for one contract's request when the vendor does not answer in time. They share one transient
-#: attempt, so a vendor outage still fails the session and leaves the ticker's budget for a later pass.
-TIMEOUT_TRIES_PER_REQUEST = 3
+#: Tries for one contract's request when the vendor gives no answer: it timed out or dropped the connection.
+#: They share one transient attempt, so a vendor outage still fails the session and leaves the ticker's budget
+#: for a later pass.
+UNANSWERED_TRIES_PER_REQUEST = 3
 
 
 def read_session_completeness(
@@ -196,11 +197,12 @@ async def capture_option_session(
                         reservation: StagingReservation) -> _Refusal | None:
             """Fetch, validate and stage one ticker; a refusal is reported, never raised.
 
-            A request that times out is asked again at once, up to ``TIMEOUT_TRIES_PER_REQUEST`` times, so one slow
-            answer no longer fails the whole session until the next pass.
+            A request the vendor does not answer (a timeout or a dropped connection) is asked again at once, up to
+            ``UNANSWERED_TRIES_PER_REQUEST`` times, so one lost answer no longer fails the whole session until the
+            next pass.
             """
             try:
-                for tried in range(1, TIMEOUT_TRIES_PER_REQUEST + 1):
+                for tried in range(1, UNANSWERED_TRIES_PER_REQUEST + 1):
                     try:
                         async with vendor_request_gate():
                             if paused():
@@ -208,13 +210,15 @@ async def capture_option_session(
                             bars = await fetch_listed_option_minute_bars(symbol, trading_date, settings.POLYGON_API_KEY,
                                                                        listed_tickers=listed_symbols)
                         break
-                    except PolygonTimeoutError:
-                        if tried == TIMEOUT_TRIES_PER_REQUEST:
+                    except PolygonUnansweredError as exc:
+                        if tried == UNANSWERED_TRIES_PER_REQUEST:
                             raise
-                        # The wait already lasted the whole request timeout, so the next try goes at once.
-                        logger.warning("Option archive asked again for a contract that timed out", extra={
-                            "action": "option_archive_request_timeout_retried", "underlying": underlying,
-                            "symbol": symbol, "session_ms": session_open_ms_utc(trading_date), "try": tried})
+                        # A timeout already waited the whole request timeout, and a dropped connection has nothing
+                        # to wait for, so the next try goes at once.
+                        logger.warning("Option archive asked again for a contract the vendor did not answer", extra={
+                            "action": "option_archive_request_unanswered_retried", "error": type(exc).__name__,
+                            "underlying": underlying, "symbol": symbol, "session_ms": session_open_ms_utc(trading_date),
+                            "try": tried})
                 payload = encode_option_day(bars, symbol=symbol, trading_date=trading_date)
                 check_member_size(payload)
                 parse_option_day_zip(payload, symbol, trading_date)

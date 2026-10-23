@@ -63,8 +63,16 @@ def _sendable_key(api_key: str) -> str:
     return key
 
 
-class PolygonTimeoutError(PolygonFetchError):
-    """The vendor did not answer within the request timeout; asking again may succeed."""
+class PolygonUnansweredError(PolygonFetchError):
+    """The vendor gave no answer to the request; asking again at once may succeed."""
+
+
+class PolygonTimeoutError(PolygonUnansweredError):
+    """The vendor did not answer within the request timeout."""
+
+
+class PolygonDisconnectedError(PolygonUnansweredError):
+    """The vendor dropped the connection before answering ("Server disconnected without sending a response")."""
 
 
 class PolygonOutsidePlanError(PolygonEntitlementError):
@@ -97,6 +105,8 @@ async def get_json_object(
         resp = await client.get(url, params=params, headers={"Authorization": f"Bearer {key}"})
     except httpx.TimeoutException as exc:
         raise PolygonTimeoutError(f"Polygon request timed out for {label}: {exc}", status_code=None) from exc
+    except (httpx.RemoteProtocolError, httpx.ReadError) as exc:
+        raise PolygonDisconnectedError(f"Polygon dropped the connection for {label}: {exc}", status_code=None) from exc
     except (httpx.RequestError, httpx.InvalidURL) as exc:
         raise PolygonFetchError(f"Polygon transport error for {label}: {exc}", status_code=None) from exc
     if resp.status_code == 403:

@@ -201,12 +201,20 @@ async def test_explicit_transient_retry_budget_and_planned_pause(fake_catalog, t
     assert recovered.failure is None and route.call_count == 4
 
 
+@pytest.mark.parametrize("lost", [httpx.ReadTimeout("slow"),
+                                  httpx.RemoteProtocolError("Server disconnected without sending a response."),
+                                  httpx.ReadError("Connection reset by peer")],
+                         ids=["timed_out", "server_disconnected", "connection_reset"])
 @respx.mock
-async def test_a_timed_out_contract_request_is_asked_again_and_the_session_completes(fake_catalog, tmp_lake):
-    """One slow answer used to fail the whole session until the archive's next pass, days later."""
+async def test_a_contract_request_the_vendor_does_not_answer_is_asked_again_and_the_session_completes(
+        fake_catalog, tmp_lake, lost):
+    """One lost answer used to fail the whole session until the archive's next pass, days later.
+
+    A dropped connection put three sessions on retry overnight on 2026-10-23, after timeouts were already asked again.
+    """
     await prepare(fake_catalog, tmp_lake, CALL, PUT)
     respx.get(url(CALL)).mock(return_value=no_trades(CALL.occ_symbol))
-    put = respx.get(url(PUT)).mock(side_effect=[httpx.ReadTimeout("slow"), no_trades(PUT.occ_symbol)])
+    put = respx.get(url(PUT)).mock(side_effect=[lost, no_trades(PUT.occ_symbol)])
     result = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS)
     assert result.failure is None and put.call_count == 2
     assert (await asyncio.to_thread(read_session_completeness, "SPY", FRIDAY))[1]
@@ -215,7 +223,7 @@ async def test_a_timed_out_contract_request_is_asked_again_and_the_session_compl
 @respx.mock
 async def test_a_contract_that_never_answers_spends_one_transient_attempt_per_session_attempt(fake_catalog, tmp_lake):
     """Retrying inline must not let a vendor outage exhaust a ticker's budget in one pass."""
-    from app.options_backtest.option_session_capture import TIMEOUT_TRIES_PER_REQUEST
+    from app.options_backtest.option_session_capture import UNANSWERED_TRIES_PER_REQUEST
 
     await prepare(fake_catalog, tmp_lake, CALL)
     route = respx.get(url(CALL)).mock(side_effect=httpx.ReadTimeout("down"))
@@ -223,7 +231,7 @@ async def test_a_contract_that_never_answers_spends_one_transient_attempt_per_se
         failed = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS)
         assert failed.failure.reason == "provider_api_error"
     refused = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS)
-    assert refused.failure.reason == "fetch_timeout" and route.call_count == 3 * TIMEOUT_TRIES_PER_REQUEST
+    assert refused.failure.reason == "fetch_timeout" and route.call_count == 3 * UNANSWERED_TRIES_PER_REQUEST
 
 
 @respx.mock
