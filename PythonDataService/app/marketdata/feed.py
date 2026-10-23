@@ -32,7 +32,12 @@ from typing import TYPE_CHECKING, Literal, Protocol, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.utils.session_anchors import MAX_TIMESTAMP_MS
+from app.lean_sidecar.trading_calendar import (
+    session_open_ms_utc,
+    session_start_for_bar_count,
+    session_windows_ms_utc,
+)
+from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms
 
 if TYPE_CHECKING:
     # Type-only: ``decision_session`` sits above this port and imports from it
@@ -99,20 +104,51 @@ class WarmupMinutesMissing(MarketDataFeedError):
         self.missing_end_ms = missing_end_ms
 
 
-def warmup_window_start_ms(lookback_days: int, *, now_ms: int) -> int:
-    """Where a ``lookback_days`` warmup window starts: that many 24-hour days before ``now_ms``.
+def warmup_window_start_ms(lookback_sessions: int, *, now_ms: int) -> int:
+    """Where a ``lookback_sessions`` warmup window starts: the open of the
+    ``lookback_sessions``-th most recent session completed by ``now_ms``.
+
+    A lookback counts regular sessions, as the vendor's ``N D`` history request
+    does (#2849), and the canonical calendar says which sessions exist, so a
+    weekend, a holiday or an early close moves the window's start by the
+    sessions it holds and never by a calendar-day count. The window runs from
+    that open to ``now_ms``: it also holds the session in progress, if any.
 
     The one definition of the window a sealed warmup lookback covers, shared
     by the fresh-warmup coverage rule (``ibkr_feed._owed_warmup_sessions``)
     and a resumed run's hole join (``retained_tail_join``), so the two can
     never disagree about whether a hole reaches past the lookback.
     """
-    return now_ms - lookback_days * 86_400_000
+    return session_open_ms_utc(session_start_for_bar_count(now_ms, target_bars=lookback_sessions, bar_span_ms=None))
 
 
-MAX_WARMUP_LOOKBACK_DAYS = 20
-"""The longest warmup lookback a deploy may seal: the longest 1-minute history
-request measured to return (20 days, 48 s) (#2841)."""
+def warmup_sessions_reaching(since_ms: int, *, now_ms: int, at_most: int) -> int:
+    """The fewest ``lookback_sessions`` whose window starts at or before ``since_ms``.
+
+    How much history a hole needs, in the unit a fetch is asked for: one more
+    than the sessions completed by ``now_ms`` that open after ``since_ms``,
+    counted in one pass over the canonical calendar. Refuses a ``since_ms``
+    the ``at_most``-session window does not reach, since no fetch sized to
+    that lookback could cover it. The caller keeps ``since_ms`` inside that
+    window (``retained_tail_join`` checks it first), which bounds the pass.
+    """
+    if since_ms >= now_ms:
+        return 1
+    opened_after = sum(
+        1
+        for window in session_windows_ms_utc(et_date_at_ms(since_ms), et_date_at_ms(now_ms))
+        if window.close_ms_utc <= now_ms and window.open_ms_utc > since_ms
+    )
+    if opened_after + 1 > at_most:
+        raise ValueError(f"no window of at most {at_most} sessions reaches back to {since_ms}")
+    return opened_after + 1
+
+
+MAX_WARMUP_LOOKBACK_SESSIONS = 19
+"""The longest warmup lookback a deploy may seal, in completed sessions: 19,
+since the request also asks for the session in progress, and a 20-session
+request (``20 D``) is the longest measured to return (56.2 s, 2026-10-03;
+5 took 1.6 s, 10 took 33.9 s, 15 took 32.0 s) (#2849)."""
 
 
 WarmupRefusalReason = Literal[
@@ -470,15 +506,15 @@ class MarketDataFeed(Protocol):
         symbol: str,
         *,
         use_rth: bool = True,
-        lookback_days: int = 5,
+        lookback_sessions: int = 5,
     ) -> list[MarketDataBar]:
-        """Return closed 1-minute bars from the trailing ``lookback_days``
-        calendar days, oldest first.
+        """Return closed 1-minute bars from the trailing ``lookback_sessions``
+        regular sessions, oldest first (:func:`warmup_window_start_ms`).
 
         Used to warm up a consumer's indicator state before it starts
         making decisions from ``stream_bars`` -- never itself a decision
         input. A live history source whose fetch fails, or returns history
-        that does not cover every session the ``lookback_days`` window owes, raises
+        that does not cover every session the ``lookback_sessions`` window owes, raises
         ``MarketDataFeedError`` (reason ``WARMUP_HISTORY_UNAVAILABLE``)
         rather than returning a short list: a short list silently read as
         "that is all the history there is" would start the run cold on a

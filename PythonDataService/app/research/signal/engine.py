@@ -1,6 +1,6 @@
 """Signal engine orchestrator — converts validated features into tradable signals.
 
-Formula: Orchestration only — wraps standardize, backtest, walk_forward, diagnostics, graduation into a single Signal pipeline. No new arithmetic.
+Formula: Orchestrates standardize, backtest, walk_forward, diagnostics, and graduation; its signal-behavior summary computes active signed-return mean, skew, win/loss means, and hit rate.
 Reference: Internal.
 Canonical implementation: app/research/signal/engine.py
 Validated against: NONE — pending (pending-fixture per registry)
@@ -104,9 +104,9 @@ class SignalEngineReport:
     joint_regime_coverage: list[RegimeBucket] = field(default_factory=list)
     signal_behavior: SignalBehaviorMetrics | None = None
     oos_sharpe_ci: SharpeCi | None = None
-    """Lo (2002) confidence interval for the headline OOS Sharpe."""
+    """Lo joint mean/variance HAC interval on the combined OOS return series."""
     deflated_sharpe: DeflatedSharpe | None = None
-    """Bailey & López de Prado DSR for the in-sample grid headline."""
+    """DSR from measured trial dispersion and estimated independent grid trials."""
     methodology: dict | None = None
     research_log: str = ""
     error: str | None = None
@@ -226,7 +226,7 @@ def run_signal_engine(
             f"({len(config.thresholds)} thresholds × {len(config.cost_bps_options)} cost levels)"
         )
         on_progress(0, n_configs, "configs", "Starting in-sample sweep")
-        report.backtest_grid = run_backtest_grid(
+        grid = run_backtest_grid(
             feature=feature,
             forward_returns=forward_returns,
             regime_gate=regime_gate,
@@ -235,7 +235,9 @@ def run_signal_engine(
             thresholds=config.thresholds,
             cost_bps_options=config.cost_bps_options,
             timestamps=df["timestamp"],
+            horizon=config.horizon,
         )
+        report.backtest_grid = grid.results
         on_progress(n_configs, n_configs, "configs", "In-sample sweep complete")
 
         # Find best config
@@ -249,33 +251,17 @@ def run_signal_engine(
                 f"cost = {best.cost_bps:.0f} bps, net Sharpe = {best.net_sharpe:.2f}"
             )
 
-        # Step 5a: Deflated Sharpe on the in-sample grid headline.
-        # The grid evaluates ``len(thresholds) × len(cost_bps_options)``
-        # configurations and we report the maximum; under the null of
-        # zero true Sharpe, the maximum is upward-biased. DSR computes
-        # the probability that the true Sharpe exceeds zero given the
-        # selection — see authority doc § 4.7.
-        if best is not None and best.cumulative_returns:
-            best_bar_returns = np.diff(
-                np.asarray(best.cumulative_returns, dtype=float),
-                prepend=0.0,
+        # Step 5a: DSR over the complete, aligned training grid.
+        if best is not None:
+            report.deflated_sharpe = compute_deflated_sharpe(
+                trial_returns=grid.trial_returns,
+                selected_index=report.backtest_grid.index(best),
             )
-            if best_bar_returns.size >= 3:
-                best_n_eff = compute_effective_sample_size(
-                    pd.Series(best_bar_returns)
-                ).effective_n
-                n_trials = len(config.thresholds) * len(config.cost_bps_options)
-                report.deflated_sharpe = compute_deflated_sharpe(
-                    selected_sharpe_annual=best.net_sharpe,
-                    bar_returns=best_bar_returns,
-                    n_trials=n_trials,
-                    n_eff=best_n_eff,
-                )
-                if report.deflated_sharpe is not None:
-                    on_log(
-                        f"Deflated Sharpe = {report.deflated_sharpe.raw_sharpe:.2f} "
-                        f"(P(true Sharpe > 0) = {report.deflated_sharpe.dsr_probability * 100:.1f}%)"
-                    )
+            dsr = report.deflated_sharpe
+            on_log(
+                f"Grid DSR = {dsr.dsr_probability * 100:.1f}%; estimated independent trials = {dsr.effective_trials:.2f}"
+                if dsr.valid else f"Grid DSR unavailable: {dsr.unavailable_reason}"
+            )
 
         # Step 5b: Signal behavior metrics on best config
         if report.best_threshold > 0:
@@ -324,22 +310,16 @@ def run_signal_engine(
                 f"{wf.pct_windows_positive_sharpe * 100:.0f}% windows positive"
             )
 
-        # Step 6b: Lo (2002) confidence interval on the headline OOS Sharpe.
-        if (
-            report.walk_forward is not None
-            and report.walk_forward.combined_oos_bar_returns
-        ):
-            oos_bars_arr = np.asarray(
-                report.walk_forward.combined_oos_bar_returns, dtype=float
+        # Step 6b: Joint mean/variance HAC interval; do not bridge missing targets.
+        if report.walk_forward is not None and report.walk_forward.combined_oos_bar_returns:
+            report.oos_sharpe_ci = compute_sharpe_ci(
+                np.asarray(report.walk_forward.combined_oos_bar_returns, dtype=float),
+                min_hac_lag=max(0, config.horizon - 1),
+                segment_lengths=[
+                    length for window in report.walk_forward.windows
+                    for length in window.oos_segment_lengths
+                ],
             )
-            if oos_bars_arr.size >= 3:
-                oos_n_eff = compute_effective_sample_size(
-                    pd.Series(oos_bars_arr)
-                ).effective_n
-                report.oos_sharpe_ci = compute_sharpe_ci(
-                    bar_returns=oos_bars_arr,
-                    n_eff=oos_n_eff,
-                )
 
         # ── Step 7: Effective sample size ──────────────────────────────
         cancel_check()

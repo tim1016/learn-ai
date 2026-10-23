@@ -98,7 +98,7 @@ from app.engine.strategy.strategy_view import (
     ViewValue,
 )
 from app.lean_sidecar.trading_calendar import session_windows_ms_utc
-from app.marketdata.feed import MAX_WARMUP_LOOKBACK_DAYS
+from app.marketdata.feed import MAX_WARMUP_LOOKBACK_SESSIONS
 from app.schemas.signal_program_seal import (
     ExitEligibilityContract,
     NumericalProvenanceContract,
@@ -116,19 +116,15 @@ class StrategyBarCadence:
     multiplier: int | ChartParamRef
 
 
-# ── Warmup lookback that follows a program's own periods (#2841) ─────────────
+# ── Warmup lookback that follows a program's own periods (#2841, #2849) ──────
 
 #: The year whose longest scheduled session is read as the regular session.
 _REGULAR_SESSION_REFERENCE_YEAR = 2026
-#: Each of the lookback window's two edges can cut one decision bar.
-_WINDOW_EDGE_BARS = 2
-_DAYS_PER_WEEK = 7
-_WEEKEND_DAYS = 2
-#: Five weekdays, less the one holiday a scheduled week can hold.
-_SESSIONS_PER_WEEK = 4
-#: Set aside once: a holiday beside an early close (Thanksgiving and the Friday
-#: after it; Christmas Eve and Christmas Day).
-_HOLIDAY_AND_EARLY_CLOSE_DAYS = 2
+#: The most consecutive sessions that hold one early close at most. The two
+#: nearest early closes (the day after Thanksgiving and Christmas Eve) fit in
+#: 18 sessions, so from 18 a window can hold two, as far as the history cap
+#: reaches (a window of 121 sessions can hold three).
+_MOST_SESSIONS_HOLDING_ONE_EARLY_CLOSE = 17
 
 
 @lru_cache(maxsize=1)
@@ -144,24 +140,25 @@ def bars_per_regular_session(decision_timeframe_ms: int) -> int:
     return _regular_session_ms() // decision_timeframe_ms
 
 
-def _warmup_lookback_days_holding(bars: int, decision_timeframe_ms: int) -> int | None:
-    """The calendar days of lookback that hold ``bars`` whole decision bars, whenever the run starts.
+def warmup_sessions_holding(bars: int, decision_timeframe_ms: int) -> int | None:
+    """The completed sessions of lookback that hold ``bars`` whole decision bars, whenever the run starts.
 
-    A lookback is the ``days`` × 24 hours before the start
-    (``app.marketdata.feed.warmup_window_start_ms``). Cut at any time of day,
-    that window holds every session of some ``days`` dates in a row, less the
-    bar each of its two edges cuts. The count is the worst the scheduled
-    calendar produces, not an average week:
+    A lookback is the ``sessions`` most recent sessions completed at the start
+    (``app.marketdata.feed.warmup_window_start_ms``): whole sessions, from a
+    session's open, so its oldest edge cuts no decision bar and a weekend or a
+    holiday costs nothing. The count is the worst the scheduled calendar
+    produces, not an average stretch:
 
     * only regular sessions count, at the whole decision bars one holds; an
       early close counts for nothing;
-    * seven dates hold five weekdays and at most one scheduled holiday, so a
-      week counts four sessions, behind its weekend;
-    * two more weekdays are set aside once, for a holiday beside an early
-      close.
+    * a window of up to 17 sessions holds at most one early close, and a
+      longer one, up to the history cap, two, so one session is set aside, or
+      two from 18. Past the cap the count is only compared with the cap.
 
     The result depends on the bars and the cadence alone, never on the date,
     so a seal's lookback resolves to the same number whenever it is checked.
+    The vendor reads ``N D`` as N sessions, the one in progress counted, so
+    the request is one more than this (#2849).
 
     Zero when no bar is needed. ``None`` when bars are needed and the decision
     bar is longer than a regular session: the consolidator still closes bars
@@ -169,16 +166,14 @@ def _warmup_lookback_days_holding(bars: int, decision_timeframe_ms: int) -> int 
     how many one session closes is not defined and no lookback can be
     promised to warm them.
 
-    Two things sit outside the count. An unscheduled closure of several days
-    can leave the window short; the run then starts unready and warms on live
-    bars. November's clock change moves the window's first edge by an hour;
-    no closure is scheduled within two weeks of it, so the weekdays set aside
-    cover that hour.
+    One thing sits outside the count: a session the calendar schedules in
+    full that ends early (a halt, an emergency close) holds fewer bars; the
+    run then starts unready and warms on live bars.
 
-    Formula: sessions = ceil((bars + 2) / (regular session // decision bar));
-      weeks, rest = divmod(sessions + 2 - 1, 4); days = 7 × weeks + 2 + rest + 1
-    Reference: repository-internal (owner decision 2026-10-03, #2841); session
-      structure from the canonical NYSE calendar.
+    Formula: full = ceil(bars / (regular session // decision bar));
+      sessions = full + 1 while that is at most 17, else full + 2
+    Reference: repository-internal (owner decision 2026-10-03, #2841; sessions
+      since #2849); session structure from the canonical NYSE calendar.
     Canonical implementation: this file.
     Validated against: tests/engine/strategy/test_signal_program_warmup_lookback.py
     """
@@ -187,9 +182,11 @@ def _warmup_lookback_days_holding(bars: int, decision_timeframe_ms: int) -> int 
     bars_per_session = bars_per_regular_session(decision_timeframe_ms)
     if bars_per_session == 0:
         return None
-    sessions = -(-(bars + _WINDOW_EDGE_BARS) // bars_per_session)
-    whole_weeks, last_week_sessions = divmod(sessions + _HOLIDAY_AND_EARLY_CLOSE_DAYS - 1, _SESSIONS_PER_WEEK)
-    return _DAYS_PER_WEEK * whole_weeks + _WEEKEND_DAYS + last_week_sessions + 1
+    full_sessions = -(-bars // bars_per_session)
+    with_one_early_close = full_sessions + 1
+    if with_one_early_close <= _MOST_SESSIONS_HOLDING_ONE_EARLY_CLOSE:
+        return with_one_early_close
+    return full_sessions + 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,7 +207,7 @@ class SignalProgramContract:
     hand-duplicated copy — so a semantic field added here is automatically
     part of the sealed identity rather than a second list that can silently
     fall out of sync. The initialized program owns its series requirements. ``resolved_signals``
-    reads them directly, and ``resolved_warmup_lookback_days`` converts their
+    reads them directly, and ``resolved_warmup_lookback_sessions`` converts their
     convergence count to a capped history request (#2857). Exit eligibility
     is resolved from the configured parameters.
     """
@@ -294,10 +291,14 @@ class SignalProgramContract:
         """Decision bars until every indicator ``params`` build has converged (#2857)."""
         return max((series.bars_to_converge or 0 for series in self.resolved_signals(params)), default=0)
 
-    def resolved_warmup_lookback_days(self, params: StrategyParamsBase) -> int:
-        """History is capped at twenty days; remaining convergence happens live (#2857)."""
-        days = _warmup_lookback_days_holding(self.convergence_bars(params), self.resolved_decision_timeframe_ms(params))
-        return MAX_WARMUP_LOOKBACK_DAYS if days is None else min(MAX_WARMUP_LOOKBACK_DAYS, max(1, days))
+    def resolved_warmup_lookback_sessions(self, params: StrategyParamsBase) -> int:
+        """History is capped at ``MAX_WARMUP_LOOKBACK_SESSIONS``; remaining convergence happens live (#2857, #2849)."""
+        sessions = warmup_sessions_holding(
+            self.convergence_bars(params), self.resolved_decision_timeframe_ms(params)
+        )
+        if sessions is None:
+            return MAX_WARMUP_LOOKBACK_SESSIONS
+        return min(MAX_WARMUP_LOOKBACK_SESSIONS, max(1, sessions))
 
     def live_convergence_bars(self, params: StrategyParamsBase) -> int:
         """Convergence bars the capped history cannot guarantee, so the bot spawns on live ones (#2857).
@@ -310,8 +311,8 @@ class SignalProgramContract:
         held, unheld = 0, needed + 1
         while unheld - held > 1:
             middle = (held + unheld) // 2
-            days = _warmup_lookback_days_holding(middle, decision_ms)
-            if days is not None and days <= MAX_WARMUP_LOOKBACK_DAYS:
+            sessions = warmup_sessions_holding(middle, decision_ms)
+            if sessions is not None and sessions <= MAX_WARMUP_LOOKBACK_SESSIONS:
                 held = middle
             else:
                 unheld = middle
@@ -494,7 +495,7 @@ _EMA_LENGTHS_PROVENANCE = NumericalProvenanceContract(
     tolerance_atol=1e-9,
     tolerance_rtol=0.0,
     parity_fixture_ids=(
-        "tests/fixtures/golden/ema-signal-session/v1/trace-corpus.json",
+        "tests/fixtures/golden/ema-signal-session/v2/trace-corpus.json",
         "tests/fixtures/golden/cross-engine-studies/cells/SPY_W3mo_2026-02-02_to_2026-04-30",
         "tests/fixtures/golden/cross-engine-studies/cells/QQQ_W3mo_2026-02-02_to_2026-04-30",
         "tests/fixtures/golden/cross-engine-studies/cells/SPY_W6mo_2025-11-03_to_2026-04-30",
@@ -917,7 +918,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # The default point's version; `parameter_schema_version_for` resolves a seal's own.
             parameter_schema_version=EmaCrossoverSignalParams.REFERENCE_PARAMETER_SCHEMA_VERSION,
             parameter_schema_version_for=_ema_parameter_schema_version_for,
-            golden_trace_root="7dcd8350134c0a436005a8a8bda52519ab22c88bee2c56634175cd56282f2ac3",
+            golden_trace_root="0adde56fcdb6e5b33f65e03e0a673f0768d6a40f7e33165171dba9230d00b06c",
             provider="polygon",
             base_timeframe_ms=60_000,
             decision_timeframe_ms=15 * 60_000,
@@ -964,7 +965,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # 2026-09-17 with the accepted Golden review and the registered
             # LEAN-parity defaults, so the UI and runtime corpus authorize the
             # same exact parameter point. See ADR 0054 and
-            # tests/fixtures/golden/ema-signal-session/v1/attribution.md
+            # tests/fixtures/golden/ema-signal-session/v2/attribution.md
             # ("Regeneration 2026-09-17") for the reconciliation record.
             # The 5/10/5 lengths are the qualified point too (#2696); a
             # parameter dump omits them while they sit there, which
@@ -1020,7 +1021,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             program_version=EMA_PREVIOUS_CROSSOVER_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=EmaPreviousCrossoverParams.PARAMETER_SCHEMA_VERSION,
-            golden_trace_root="cea93a45ee4ec4a8b8fc467e6a6379226ac355af728cef446c2f0bbf919db419",
+            golden_trace_root="4f0a798aa372e24d029dd20782d73972881b97bf06c0bf1a78d4ae509097e566",
             provider="polygon",
             base_timeframe_ms=60_000,
             decision_timeframe_ms=15 * 60_000,
@@ -1071,7 +1072,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 tolerance_atol=1e-6,
                 tolerance_rtol=0.0,
                 parity_fixture_ids=(
-                    "tests/fixtures/golden/ema-previous-crossover-signal/v1/trace-corpus.json",
+                    "tests/fixtures/golden/ema-previous-crossover-signal/v2/trace-corpus.json",
                     "tests/fixtures/golden/strategy-parity/ENG-010/v1/output.json",
                 ),
             ),
@@ -1237,7 +1238,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             program_version=RSI_MEAN_REVERSION_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=RsiMeanReversionParams.PARAMETER_SCHEMA_VERSION,
-            golden_trace_root="0052b457a0aebbd554079ee1b348b1e4547efac32a0b83cbbe26b26318e20747",
+            golden_trace_root="d74241c83f7d94edb07bc0804da18795f16f0f6890fab65bffc82ebb63c3512d",
             provider="polygon",
             base_timeframe_ms=60_000,
             # The cadence this contract is qualified at, and the fallback
@@ -1445,7 +1446,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             program_version=SPY_STRATEGY_A_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=RsiRangeStrategyAParams.PARAMETER_SCHEMA_VERSION,
-            golden_trace_root="f36e4e7e14e8ee12949cf323042cf07b2866aa7b0091f66bfdd85d2e22b39b28",
+            golden_trace_root="f788e66f45abc69622835fe04ef30ac5393afa8eee3548504213222a0b4b5cd0",
             provider="polygon",
             base_timeframe_ms=60_000,
             # The cadence this contract is qualified at, and the fallback
@@ -1559,7 +1560,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             program_version=SPY_STRATEGY_B_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=RsiRangeStrategyBParams.PARAMETER_SCHEMA_VERSION,
-            golden_trace_root="25550bb301f73739606453e8b73b3a491acd093346666f550b57fcc919bd6ea9",
+            golden_trace_root="7ad7d30d404d16a88a70bf7fc37b70a91ad359a2f8e90eed54fe6c88fcb2e29b",
             provider="polygon",
             base_timeframe_ms=60_000,
             # The cadence this contract is qualified at, and the fallback
@@ -1670,7 +1671,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             program_version=SPY_C_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=RsiRangeStrategyCParams.PARAMETER_SCHEMA_VERSION,
-            golden_trace_root="dfe2071255b57f835af687cfe1bbefc9d0bec2e742934fe343fc22d1b915493c",
+            golden_trace_root="54c1fd8f0fdd3cfc23c5a043c39ade9ccd4b91cb3770a178b4096bc0f12e440f",
             provider="polygon",
             base_timeframe_ms=60_000,
             # The cadence this contract is qualified at, and the fallback

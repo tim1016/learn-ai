@@ -376,7 +376,7 @@ class _RetainedSourceBarFeed:
         symbol: str,
         *,
         use_rth: bool = True,
-        lookback_days: int = 5,
+        lookback_sessions: int = 5,
     ) -> list[MarketDataBar]:
         """Open the live stream, then warm up exactly through where it takes over (#2410).
 
@@ -397,7 +397,7 @@ class _RetainedSourceBarFeed:
             run_id=self._run_id,
             session=session,
             symbol=symbol,
-            lookback_days=lookback_days,
+            lookback_sessions=lookback_sessions,
         )
         return [bar for bar in warmup if session.includes(bar)]
 

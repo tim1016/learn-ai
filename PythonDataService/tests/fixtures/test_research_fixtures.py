@@ -4,11 +4,14 @@ RP-001  compute_information_coefficient  — Spearman IC (mean, t-stat)
 RP-002  compute_quantile_analysis        — bin-mean monotonicity
 RP-003  _empirical_position              — Phipson-Smyth p-value
 RP-004  compute_train_zscore             — train-period z-score
+RP-005  compute_iid_sharpe_ci                — Lo (2002) published IID standard errors
+RP-006  run_backtest                     — internal position/cost/drawdown arithmetic
 REL-001 compute_information_coefficient  — IC hit_rate (win-rate stability)
 REL-004 compute_ic_decay_curve          — IC per horizon (EMA-10 decay)
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -252,6 +255,70 @@ class TestRP004SignalZscore:
         assert abs(train_z_mean) < 1e-9, (
             f"Mean of train z-scores should be 0.0, got {train_z_mean:.9f}"
         )
+
+
+# ---------------------------------------------------------------------------
+# RP-005 — Lo (2002) IID Sharpe standard error
+# ---------------------------------------------------------------------------
+
+class TestRP005LoSharpeCI:
+    _DIR = GOLDEN / "research-primitives" / "RP-005" / "v1"
+
+    def test_published_standard_errors(self) -> None:
+        from app.research.signal.sharpe import compute_iid_sharpe_ci
+
+        inputs = json.loads((self._DIR / "input.json").read_text(encoding="utf-8"))["cases"]
+        outputs = json.loads((self._DIR / "output.json").read_text(encoding="utf-8"))["cases"]
+        for case, expected in zip(inputs, outputs, strict=True):
+            returns = np.asarray(case["returns"], dtype=np.float64)
+            result = compute_iid_sharpe_ci(
+                returns,
+                bars_per_year=case["bars_per_year"],
+            )
+            assert result.valid
+            assert np.isclose(result.point, case["sharpe"], atol=1e-12, rtol=0.0)
+            assert np.isclose(
+                result.se,
+                expected["published_standard_error"],
+                atol=0.0005,
+                rtol=0.0,
+            )
+
+
+# ---------------------------------------------------------------------------
+# RP-006 — Internal research backtest arithmetic
+# ---------------------------------------------------------------------------
+
+class TestRP006SignalBacktest:
+    _DIR = GOLDEN / "research-primitives" / "RP-006" / "v1"
+
+    def test_position_cost_and_drawdown(self) -> None:
+        from app.research.signal.backtest import run_backtest
+
+        inputs = json.loads((self._DIR / "input.json").read_text(encoding="utf-8"))["cases"]
+        outputs = json.loads((self._DIR / "output.json").read_text(encoding="utf-8"))["cases"]
+        for case, expected in zip(inputs, outputs, strict=True):
+            assert case["name"] == expected["name"]
+            result = run_backtest(
+                signal=pd.Series(case["signal"], dtype="float64"),
+                forward_returns=pd.Series(case["forward_returns"], dtype="float64"),
+                cost_bps=case["cost_bps"],
+                bars_per_day=case["bars_per_day"],
+                timestamps=pd.Series(range(len(case["signal"])), dtype="int64"),
+                include_series=True,
+            )
+            np.testing.assert_allclose(result.positions, expected["positions"], atol=0.0, rtol=0.0)
+            np.testing.assert_allclose(
+                result.cumulative_returns, expected["cumulative_returns"], atol=1e-12, rtol=0.0
+            )
+            for field in (
+                "net_total_return",
+                "gross_total_return",
+                "max_drawdown",
+                "annualized_turnover",
+            ):
+                assert np.isclose(getattr(result, field), expected[field], atol=1e-12, rtol=0.0)
+            assert result.total_trades == expected["total_trades"]
 
 
 # ---------------------------------------------------------------------------

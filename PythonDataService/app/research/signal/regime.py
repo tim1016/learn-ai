@@ -1,6 +1,6 @@
 """Bar-level regime classification for signal gating.
 
-Formula: vol regime = rolling_std(log_return, 20) vs vol_low_pct / vol_high_pct percentiles; trend regime = sign(MA_20 − MA_20.shift(5)); joint (vol, trend) label = (vol_bin, trend_sign).
+Formula: daily vol = std(intraday log returns); vol regime compares daily vol with cross-day quantiles; trend regime compares MA(daily close, ma_window).diff(ma_slope_diff)/ma_slope_diff with half the median absolute slope; the gate selects Low Vol and Sideways.
 Reference: Internal — no external reference.
 Canonical implementation: app/research/signal/regime.py
 Validated against: NONE — pending (pending-fixture per registry)

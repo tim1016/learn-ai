@@ -42,7 +42,7 @@ class RsiMeanReversionParams(StrategyParamsBase):
 
 
 RSI_MEAN_REVERSION_SIGNAL_PROGRAM_KEY = "rsi_mean_reversion"
-RSI_MEAN_REVERSION_SIGNAL_PROGRAM_VERSION = "rsi-mean-reversion/v1"
+RSI_MEAN_REVERSION_SIGNAL_PROGRAM_VERSION = "rsi-mean-reversion/v2"
 
 
 def build_rsi_mean_reversion_signal_program(params: StrategyParamsBase) -> SignalProgram:

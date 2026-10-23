@@ -630,17 +630,24 @@ async def test_two_workers_gone_in_a_row_is_a_search_not_run() -> None:
 
 
 async def test_a_worker_that_does_not_answer_within_the_bound_is_ended_and_replaced() -> None:
-    workers = Workers()
-    lane = OptionSearchLane("entry", executor=workers, hang_bound_s=0.05)
+    hung_worker = Held()
+    made: list[Executor] = []
+
+    def worker() -> Executor:
+        # Recovery answers on submission, so the test need not release a
+        # second held answer before another 50 ms deadline on a busy runner.
+        made.append(hung_worker if not made else InThisProcess())
+        return made[-1]
+
+    lane = OptionSearchLane("entry", executor=worker, hang_bound_s=0.05)
 
     hung = await lane.search(_ask(_AT_THE_MONEY))
-    searching_again = lane.start(_ask(_AT_THE_MONEY))
-    await _moments()
-    workers.made[1].let_go()
+    again = await lane.search(_ask(_AT_THE_MONEY))
 
     assert isinstance(hung, SearchNotRun) and hung.reason is SearchNotRunReason.WORKER_DID_NOT_ANSWER
-    assert workers.made[0].shut_down and len(workers.made) == 2
-    assert isinstance(await searching_again, Resolution)
+    assert len(hung_worker.searches) == 1
+    assert hung_worker.shut_down and len(made) == 2
+    assert isinstance(again, Resolution)
 
 
 class _ComingUp(Held):

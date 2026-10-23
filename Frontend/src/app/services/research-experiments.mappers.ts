@@ -315,6 +315,11 @@ function toBehavior(b: Schema['SignalReportBehavior']): SignalBehaviorMetrics {
 
 function toSharpeCi(c: Schema['SignalReportSharpeCi']): SharpeCi {
   return {
+    method: c.method ?? 'legacy_neff',
+    sampleSize: c.sample_size ?? 0,
+    hacLag: c.hac_lag ?? 0,
+    segmentCount: c.segment_count ?? 0,
+    unavailableReason: c.unavailable_reason ?? '',
     point: c.point,
     se: c.se,
     ciLower: c.ci_lower,
@@ -327,6 +332,12 @@ function toSharpeCi(c: Schema['SignalReportSharpeCi']): SharpeCi {
 
 function toDeflatedSharpe(d: Schema['SignalReportDeflatedSharpe']): DeflatedSharpe {
   return {
+    method: d.method ?? 'legacy_proxy',
+    sampleSize: d.sample_size ?? 0,
+    effectiveTrials: d.effective_trials ?? 0,
+    trialSharpeStd: d.trial_sharpe_std ?? 0,
+    meanTrialCorrelation: d.mean_trial_correlation ?? 0,
+    unavailableReason: d.unavailable_reason ?? '',
     rawSharpe: d.raw_sharpe,
     expectedMaxUnderNull: d.expected_max_under_null,
     dsrProbability: d.dsr_probability,

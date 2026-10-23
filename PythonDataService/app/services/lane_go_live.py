@@ -44,9 +44,9 @@ logger = logging.getLogger(__name__)
 
 #: The instrument whose bars prove the feed: the owner's reference symbol.
 BAR_CHECK_SYMBOL = "SPY"
-#: Trailing calendar days asked for. Wide enough that a long weekend (a
-#: Friday holiday, then Saturday and Sunday) still ends inside the window.
-BAR_CHECK_LOOKBACK_DAYS = 5
+#: Trading sessions asked for: IBKR reads ``N D`` as N sessions (#2849), so a
+#: long weekend (a Friday holiday, then Saturday and Sunday) cannot empty it.
+BAR_CHECK_LOOKBACK_SESSIONS = 5
 #: The lane's own bound on the whole check (qualify + one historical request).
 IBKR_BAR_CHECK_TIMEOUT_S = 30.0
 #: How long a passing check counts toward a release.
@@ -166,7 +166,7 @@ async def check_ibkr_historical_bars(
             fetch_historical_minute_bars(
                 client,
                 BAR_CHECK_SYMBOL,
-                duration=f"{BAR_CHECK_LOOKBACK_DAYS} D",
+                duration=f"{BAR_CHECK_LOOKBACK_SESSIONS} D",
                 use_rth=True,
             ),
             timeout=IBKR_BAR_CHECK_TIMEOUT_S,
@@ -186,7 +186,7 @@ async def check_ibkr_historical_bars(
         raise _fail(
             "ibkr_no_bars",
             f"IB Gateway answered the historical {BAR_CHECK_SYMBOL} bar request with no bars "
-            f"for the last {BAR_CHECK_LOOKBACK_DAYS} days; a connection that returns no bar "
+            f"for the last {BAR_CHECK_LOOKBACK_SESSIONS} sessions; a connection that returns no bar "
             "proves nothing.",
         )
     check = LaneBarCheck(
@@ -251,7 +251,7 @@ def release_lane_go_live(
 
 __all__ = [
     "BAR_CHECK_FRESHNESS_MS",
-    "BAR_CHECK_LOOKBACK_DAYS",
+    "BAR_CHECK_LOOKBACK_SESSIONS",
     "BAR_CHECK_SYMBOL",
     "IBKR_BAR_CHECK_TIMEOUT_S",
     "GoLiveBarCheckRequired",

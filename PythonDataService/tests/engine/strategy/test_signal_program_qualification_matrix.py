@@ -68,6 +68,7 @@ from scripts.run_signal_program_build_qualification import (
     _CLOSURE_EXCLUSIONS_BY_PROGRAM,
     signal_decision_import_closure,
 )
+from tests._helpers.signal_program import committed_trace_corpus_path
 
 _FIXTURES = Path(__file__).resolve().parents[2] / "fixtures/golden"
 _CELLS = _FIXTURES / "cross-engine-studies/cells"
@@ -79,22 +80,6 @@ def _contract(key: str) -> Any:
     contract = _STRATEGY_REGISTRY[key].signal_program_contract
     assert contract is not None, f"'{key}' has a factory but no contract"
     return contract
-
-
-def _corpus_path(key: str) -> Path:
-    """Locate a program's corpus by the program_key it records.
-
-    Deliberately not derived from the registry key: EMA's fixture directory
-    predates the ``<key>-signal`` convention the others follow, and a
-    mechanical name would silently miss it.
-    """
-    matches = [
-        path
-        for path in _FIXTURES.glob("*/v1/trace-corpus.json")
-        if json.loads(path.read_text(encoding="utf-8")).get("program_key") == key
-    ]
-    assert len(matches) == 1, f"expected exactly one committed corpus for '{key}', found {len(matches)}"
-    return matches[0]
 
 
 # Replaying all ten cells for every sealed program takes roughly 30 seconds.
@@ -112,8 +97,9 @@ def test_validated_settings_corpus_has_a_pinned_trace_root(key: str) -> None:
     """
     registration = _STRATEGY_REGISTRY[key]
     contract = _contract(key)
-    corpus = json.loads(_corpus_path(key).read_text(encoding="utf-8"))
+    corpus = json.loads(committed_trace_corpus_path(key).read_text(encoding="utf-8"))
 
+    assert corpus["program_version"] == contract.program_version
     assert trace_corpus_root(corpus["entries"]) == corpus["trace_root"]
     assert len(corpus["entries"]) == 10
     assert corpus["trace_root"] == contract.golden_trace_root

@@ -59596,6 +59596,11 @@
             "title": "Dsr Probability",
             "type": "number"
           },
+          "effective_trials": {
+            "default": 0.0,
+            "title": "Effective Trials",
+            "type": "number"
+          },
           "expected_max_under_null": {
             "default": 0.0,
             "title": "Expected Max Under Null",
@@ -59605,6 +59610,16 @@
             "default": 0.0,
             "title": "Kurtosis",
             "type": "number"
+          },
+          "mean_trial_correlation": {
+            "default": 0.0,
+            "title": "Mean Trial Correlation",
+            "type": "number"
+          },
+          "method": {
+            "default": "legacy_proxy",
+            "title": "Method",
+            "type": "string"
           },
           "n_trials": {
             "default": 0,
@@ -59616,10 +59631,25 @@
             "title": "Raw Sharpe",
             "type": "number"
           },
+          "sample_size": {
+            "default": 0,
+            "title": "Sample Size",
+            "type": "integer"
+          },
           "skewness": {
             "default": 0.0,
             "title": "Skewness",
             "type": "number"
+          },
+          "trial_sharpe_std": {
+            "default": 0.0,
+            "title": "Trial Sharpe Std",
+            "type": "number"
+          },
+          "unavailable_reason": {
+            "default": "",
+            "title": "Unavailable Reason",
+            "type": "string"
           },
           "valid": {
             "default": false,
@@ -59628,6 +59658,12 @@
           }
         },
         "required": [
+          "method",
+          "effective_trials",
+          "trial_sharpe_std",
+          "mean_trial_correlation",
+          "sample_size",
+          "unavailable_reason",
           "raw_sharpe",
           "expected_max_under_null",
           "dsr_probability",
@@ -60045,6 +60081,16 @@
             "title": "Confidence Level",
             "type": "number"
           },
+          "hac_lag": {
+            "default": 0,
+            "title": "Hac Lag",
+            "type": "integer"
+          },
+          "method": {
+            "default": "legacy_neff",
+            "title": "Method",
+            "type": "string"
+          },
           "n_eff_used": {
             "default": 0.0,
             "title": "N Eff Used",
@@ -60055,10 +60101,25 @@
             "title": "Point",
             "type": "number"
           },
+          "sample_size": {
+            "default": 0,
+            "title": "Sample Size",
+            "type": "integer"
+          },
           "se": {
             "default": 0.0,
             "title": "Se",
             "type": "number"
+          },
+          "segment_count": {
+            "default": 0,
+            "title": "Segment Count",
+            "type": "integer"
+          },
+          "unavailable_reason": {
+            "default": "",
+            "title": "Unavailable Reason",
+            "type": "string"
           },
           "valid": {
             "default": false,
@@ -60067,6 +60128,11 @@
           }
         },
         "required": [
+          "method",
+          "sample_size",
+          "hac_lag",
+          "segment_count",
+          "unavailable_reason",
           "point",
           "se",
           "ci_lower",
@@ -60383,6 +60449,14 @@
             "title": "Oos Net Sharpe",
             "type": "number"
           },
+          "oos_segment_lengths": {
+            "default": [],
+            "items": {
+              "type": "integer"
+            },
+            "title": "Oos Segment Lengths",
+            "type": "array"
+          },
           "oos_total_trades": {
             "default": 0,
             "title": "Oos Total Trades",
@@ -60447,7 +60521,8 @@
           "oos_win_rate",
           "oos_total_trades",
           "oos_dates",
-          "oos_cumulative_returns"
+          "oos_cumulative_returns",
+          "oos_segment_lengths"
         ],
         "title": "SignalReportWalkForwardWindow",
         "type": "object"

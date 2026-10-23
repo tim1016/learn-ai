@@ -73,9 +73,11 @@ REGISTRATION = _STRATEGY_REGISTRY[PROGRAM]
 CONTRACT = REGISTRATION.signal_program_contract
 assert CONTRACT is not None
 SNAPSHOT_START, SNAPSHOT_END = date(2025, 2, 3), date(2025, 2, 14)
+# Five warmup sessions (130 fifteen-minute decision bars) converge the EMA
+# program's 109-bar requirement (#2857); three sessions are scored.
 WINDOW = ProofWindow(
-    start_ms=et_midnight_ms(date(2025, 2, 4)),
-    end_ms=et_midnight_ms(date(2025, 2, 7)),
+    start_ms=et_midnight_ms(date(2025, 2, 10)),
+    end_ms=et_midnight_ms(date(2025, 2, 13)),
     warmup_from_ms=et_midnight_ms(date(2025, 2, 3)),
 )
 NOTE = "Approved after the final test; the research weakness is accepted."
@@ -371,8 +373,8 @@ async def test_approve_study_publishes_one_qualified_version_and_moves_the_defau
     assert engine_request.summary_only is False
     assert engine_request.auto_fetch is False
     assert (engine_request.from_date, engine_request.to_date, engine_request.warmup_from_date) == (
-        "2025-02-04",
-        "2025-02-06",
+        "2025-02-10",
+        "2025-02-12",
         "2025-02-03",
     )
     assert engine_request.params == _candidate(symbol)

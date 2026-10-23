@@ -83,7 +83,7 @@ class RsiRangeStrategyAParams(StrategyParamsBase):
 
 
 SPY_STRATEGY_A_SIGNAL_PROGRAM_KEY = "spy_strategy_a"
-SPY_STRATEGY_A_SIGNAL_PROGRAM_VERSION = "spy-strategy-a/v1"
+SPY_STRATEGY_A_SIGNAL_PROGRAM_VERSION = "spy-strategy-a/v2"
 
 
 def build_spy_strategy_a_signal_program(params: StrategyParamsBase) -> SignalProgram:

@@ -160,6 +160,9 @@ def test_strategy_rsi_uses_canonical_wilders_value_and_bar_close_timestamp() -> 
     result = compute_strategy_indicator_results(bars, [("rsi", {"length": 5})])[0]
 
     assert isinstance(result.data, list)
-    assert [point.value for point in result.data[:-1]] == [None] * 5
-    assert result.data[-1].value == pytest.approx(60.0, rel=0, abs=1e-9)
-    assert result.data[-1].t == bars[-1].end_ms
+    # Pinned LEAN RelativeStrengthIndex/WilderMovingAverage publish the
+    # running-SMA RSI before readiness (IND-003), then the Wilder recurrence.
+    assert [point.value for point in result.data] == pytest.approx(
+        [100.0, 100.0, 50.0, 200.0 / 3.0, 50.0, 60.0], rel=0, abs=1e-9,
+    )
+    assert [point.t for point in result.data] == [bar.end_ms for bar in bars]

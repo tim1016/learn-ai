@@ -25,15 +25,25 @@ fixture and a verifier:
 | History is stable after the fact | 4171 bars fetched 09:31 and 16:10 identical | bit-exact (not pinned) |
 | 5-second history is not a substitute | 210 of 4640 differ | — (not used) |
 
-**Limits.** One day, one liquid symbol for the price comparison. The fetch is
-clamped to the sealed warmup lookback (10 days of 1-minute history returned in
-0.6 s; 20 days took 48 s). A load of more than 10 days is given 75 s instead of
-15 s, and Deploy refuses a lookback over 20 days; nothing between 10 and 20
-days is measured. Unverified: the 2026-09-24 capture's 5-day fetch with
-extended hours at Thursday 09:31 ET returned 4171 bars (4 × 960 + 331), which
-is five trading days and not five calendar days, so IBKR's `N D` appears to
-count trading days. Re-capture on a second symbol and day before widening the
-claim.
+**Limits.** One day, one liquid symbol for the price comparison.
+
+**`N D` counts trading sessions (#2849).** Read-only probe, IB Gateway Paper,
+SPY 1-minute `TRADES`, explicit end times, 2026-10-03:
+
+| Request (end time, duration) | Bars | Sessions returned | Took |
+|---|---|---|---|
+| Mon 2026-09-28 09:31 ET, `5 D`, extended hours | 4171 | 5 (Tue 22 to Fri 25 in full, Mon 28 to 09:30) | 1.4 s |
+| Thu 2026-10-01 09:31 ET, `5 D`, extended hours | 4171 | 5 (Fri 25 to Wed 30 in full, Thu 1 to 09:30) | 1.6 s |
+| Mon 2026-09-28 09:31 ET, `5 D`, regular hours | 1561 | 5 (4 × 390 + 1) | 0.2 s |
+| Mon 2026-09-28 09:31 ET, `10 D`, extended hours | 8971 | 10 | 33.9 s |
+| Mon 2026-09-28 09:31 ET, `15 D`, extended hours | 13771 | 15 | 32.0 s |
+| Mon 2026-09-28 09:31 ET, `20 D`, extended hours | 18571 | 20 | 56.2 s |
+
+So the warmup lookback is a count of completed sessions, and it asks for one
+more (`N+1 D`) for the session in progress. A request of more than five
+sessions is given 75 s instead of 15 s; nothing between 5 and 10 is measured.
+The ceiling is 19 completed sessions, which is the `20 D` that was measured to
+return. One symbol; re-probe a second before widening the claim.
 
 ## The startup join (#2410)
 

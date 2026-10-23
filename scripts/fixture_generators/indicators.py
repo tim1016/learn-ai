@@ -9,7 +9,8 @@ All indicators use period=3.
 
 IND-001 — EMA(period=3)
   k = 2/(1+3) = 0.5
-  Warmup (samples 1-3): SMA-seeded — EMA = mean of all samples so far
+  Pre-ready (samples 1-2): output 0 while the internal SMA accumulates
+  First ready value (sample 3): SMA of the first 3 samples
   Post-warmup (samples 4+): EMA[n] = price[n]*0.5 + EMA[n-1]*0.5
   is_ready at samples >= 3
 
@@ -18,14 +19,15 @@ IND-002 — SMA(period=3)
   is_ready at samples >= 3
 
 IND-003 — RSI(period=3), Wilder's smoothing
-  Seed: simple mean of first 3 gain/loss deltas (samples 2-4)
-  Post-warmup Wilder: avg_new = (avg_old*(period-1) + sample) / period
+  First price sample: RSI=100 (child gain/loss averages still zero)
+  Deltas 1-2: running SMA of gain/loss deltas
+  Delta 3 onward: avg_new = (avg_old*(period-1) + sample) / period
   is_ready at samples >= period+1 = 4
 
 Input: 3 test cases, each with 8 price bars (columns p0..p7).
-Output: 8 indicator values per bar (v0..v7). NaN for bars where
-        _compute_next_value returned None (RSI before is_ready).
-        EMA and SMA always return a value (warmup = running SMA).
+Output: 8 indicator values per bar (v0..v7). All three indicators publish
+        throughout warmup. EMA returns zero before readiness; SMA returns
+        its running mean; RSI starts at 100.
 
 Prices chosen to produce non-trivial, hand-verifiable values:
   Case A: [10, 12, 14, 16, 18, 20, 22, 24]  — monotone increasing
@@ -47,6 +49,7 @@ sys.path.insert(0, str(REPO_ROOT / "PythonDataService"))
 from golden_support.hashing import compute_hashes  # noqa: E402
 from golden_support.io import write_arrow  # noqa: E402
 
+
 def _generation_date() -> str:
     return date.today().isoformat()
 PERIOD = 3
@@ -62,11 +65,10 @@ PRICE_CASES: list[list[float]] = [
 
 
 def _oracle_ema(prices: list[float], period: int) -> list[float]:
-    """EMA with SMA-seeded warmup; k = 2/(1+period).
+    """LEAN EMA with SMA seed and zero published before readiness.
 
-    During warmup (samples 1..period): returns running arithmetic mean.
-    Post-warmup: standard EMA recursion.
-    Always returns a value (never None).
+    Samples before period publish zero while accumulating the seed SMA.
+    Sample period publishes the SMA; later samples follow EMA recursion.
     """
     k = 2.0 / (1 + period)
     one_minus_k = 1.0 - k
@@ -77,9 +79,10 @@ def _oracle_ema(prices: list[float], period: int) -> list[float]:
     for i, p in enumerate(prices):
         sample = i + 1  # 1-based sample count
         warmup_sum += p
-        if sample <= period:
-            # SMA warmup: running mean of all samples seen so far
-            ema = warmup_sum / sample
+        if sample < period:
+            ema = 0.0
+        elif sample == period:
+            ema = warmup_sum / period
         else:
             assert ema is not None
             ema = p * k + ema * one_minus_k
@@ -106,21 +109,20 @@ def _oracle_sma(prices: list[float], period: int) -> list[float]:
 
 
 def _oracle_rsi(prices: list[float], period: int) -> list[float | None]:
-    """RSI with Wilder's smoothing.
+    """RSI with LEAN's Wilder child-average lifecycle.
 
-    Matches canonical rsi.py exactly:
-      - First sample: no delta → None
-      - Samples 2..(period+1): accumulate gain/loss for initial SMA seed → None
-      - Sample period+1: seed avg_gain, avg_loss from simple mean → return RSI
-      - Subsequent: Wilder smoothing (avg*(period-1) + sample) / period
+    Transcribes pinned LEAN RelativeStrengthIndex and WilderMovingAverage:
+      - First price: no delta; zero child averages make RSI 100.
+      - Deltas 1..period-1: child averages publish a running SMA.
+      - Delta period onward: Wilder recurrence using the previous average.
 
     Edge case: if round(avg_loss, 10) == 0, RSI = 100.
     is_ready at samples >= period+1.
     """
     result: list[float | None] = []
     prev: float | None = None
-    avg_gain: float | None = None
-    avg_loss: float | None = None
+    avg_gain = 0.0
+    avg_loss = 0.0
     gain_sum = 0.0
     loss_sum = 0.0
     delta_samples = 0
@@ -128,7 +130,7 @@ def _oracle_rsi(prices: list[float], period: int) -> list[float | None]:
     for p in prices:
         if prev is None:
             prev = p
-            result.append(None)
+            result.append(100.0)
             continue
 
         gain = max(0.0, p - prev)
@@ -139,26 +141,17 @@ def _oracle_rsi(prices: list[float], period: int) -> list[float | None]:
         if delta_samples < period:
             gain_sum += gain
             loss_sum += loss
-            result.append(None)
-        elif delta_samples == period:
-            gain_sum += gain
-            loss_sum += loss
-            avg_gain = gain_sum / period
-            avg_loss = loss_sum / period
-            if round(avg_loss, 10) == 0.0:
-                result.append(100.0)
-            else:
-                rs = avg_gain / avg_loss
-                result.append(100.0 - 100.0 / (1.0 + rs))
+            avg_gain = gain_sum / delta_samples
+            avg_loss = loss_sum / delta_samples
         else:
-            assert avg_gain is not None and avg_loss is not None
             avg_gain = (avg_gain * (period - 1) + gain) / period
             avg_loss = (avg_loss * (period - 1) + loss) / period
-            if round(avg_loss, 10) == 0.0:
-                result.append(100.0)
-            else:
-                rs = avg_gain / avg_loss
-                result.append(100.0 - 100.0 / (1.0 + rs))
+
+        if round(avg_loss, 10) == 0.0:
+            result.append(100.0)
+        else:
+            rs = avg_gain / avg_loss
+            result.append(100.0 - 100.0 / (1.0 + rs))
 
     return result
 
@@ -251,7 +244,8 @@ See `indicators.py::PRICE_CASES`.
 
 **Layer 2 — Methodology provenance:** LEAN `Indicators/ExponentialMovingAverage.cs`
 (vendored at `references/lean/7986ed0aade3ae5de06121682409f05984e32ff7`).
-SMA-seeded warmup; k = 2/(1+period).
+`ComputeNextValue` publishes zero before `IsReady`, then the SMA seed;
+k = 2/(1+period).
 
 **Layer 3 — Independent numerical oracle:** Pure-Python formula without calling
 the canonical `ExponentialMovingAverage` class. Seeding and recursion written
@@ -260,19 +254,20 @@ from first principles.
 ## Formula
 
 k = 2/(1+{PERIOD}) = {k}
-Warmup (samples 1..{PERIOD}): EMA = mean(prices[0..i])  — running arithmetic mean
-Post-warmup:                 EMA[n] = price[n]*{k} + EMA[n-1]*{1-k}
+Pre-ready (samples 1..{PERIOD-1}): published EMA = 0
+First ready (sample {PERIOD}): EMA = mean(prices[0..{PERIOD-1}])
+Post-warmup: EMA[n] = price[n]*{k} + EMA[n-1]*{1-k}
 
 ## Critical Seeding Detail
 
-The EMA seeds with the running arithmetic mean during warmup, not NaN.
-At samples={PERIOD}, EMA = SMA(all {PERIOD} warmup prices) — this is the canonical seed.
+The internal SMA accumulates during warmup, while LEAN's EMA publishes zero.
+At samples={PERIOD}, EMA = SMA(all {PERIOD} warmup prices) — the first ready value.
 Post-warmup starts at sample {PERIOD+1}.
 
 ## Hand-Verification (Case A: prices={PRICE_CASES[0][:4]})
 
-sample 1: EMA = {PRICE_CASES[0][0]}   (mean of [p0])
-sample 2: EMA = {(PRICE_CASES[0][0]+PRICE_CASES[0][1])/2}  (mean of [p0,p1])
+sample 1: EMA = 0.0  (internal SMA has [p0])
+sample 2: EMA = 0.0  (internal SMA has [p0,p1])
 sample 3: EMA = {sma3}  (SMA seed = mean of [p0,p1,p2])
 sample 4: EMA = {a[3]}*{k} + {sma3}*{1-k} = {ema4}
 
@@ -288,7 +283,7 @@ atol=1e-9, rtol=0.0
 ## NaN Convention
 
 v0..v7 in the output table contain float values for all bars (no NaN),
-because the EMA always returns a value (warmup returns the running SMA).
+because LEAN publishes zero before EMA readiness.
 
 ## Regeneration
 
@@ -298,7 +293,8 @@ because the EMA always returns a value (warmup returns the running SMA).
 ## Generation Metadata
 
 Generated: {_generation_date()}
-Oracle: hand_computed — pure-Python SMA-seeded EMA formula without calling canonical
+Oracle: hand_computed — pure-Python trace of pinned LEAN `ComputeNextValue`
+without calling the canonical class
 Script: scripts/fixture_generators/indicators.py
 {'Justification: ' + justification if justification else '(initial generation)'}
 """,
@@ -397,17 +393,6 @@ def generate_ind002(version_dir: Path, justification: str = "") -> None:
 
 def _write_attribution_ind003(path: Path, justification: str) -> None:
     b = PRICE_CASES[1]
-    # Hand trace Case B first 5 samples
-    deltas_b = [(b[i] - b[i - 1]) for i in range(1, 5)]
-    gains_b = [max(0.0, d) for d in deltas_b]
-    losses_b = [max(0.0, -d) for d in deltas_b]
-    seed_avg_gain = sum(gains_b[:PERIOD]) / PERIOD
-    seed_avg_loss = sum(losses_b[:PERIOD]) / PERIOD
-    if round(seed_avg_loss, 10) == 0.0:
-        seed_rsi: float | str = 100.0
-    else:
-        seed_rsi = 100.0 - 100.0 / (1.0 + seed_avg_gain / seed_avg_loss)
-
     path.write_text(
         f"""# IND-003 — Relative Strength Index (period={PERIOD}, Wilder's smoothing)
 
@@ -416,24 +401,33 @@ def _write_attribution_ind003(path: Path, justification: str) -> None:
 **Layer 1 — Market input provenance:** Synthetic. Same 3-case grid as IND-001.
 See `indicators.py::PRICE_CASES`.
 
-**Layer 2 — Methodology provenance:** LEAN `Indicators/RelativeStrengthIndex.cs`
-with `MovingAverageType.Wilders`
+**Layer 2 — Methodology provenance:** Pinned LEAN
+`Indicators/RelativeStrengthIndex.cs`, `Indicators/MovingAverageTypeExtensions.cs`,
+`Indicators/WilderMovingAverage.cs`, and `Indicators/SimpleMovingAverage.cs`
 (vendored at `references/lean/7986ed0aade3ae5de06121682409f05984e32ff7`).
-Seed: simple mean of first period gain/loss deltas; then Wilder's smoothing.
+The factory maps `MovingAverageType.Wilders` to `WilderMovingAverage`.
+The RSI emits a value even before its child averages are ready.
 
 **Layer 3 — Independent numerical oracle:** Pure-Python Wilder RSI formula without
-calling `RelativeStrengthIndex` class.
+calling `RelativeStrengthIndex` class. The oracle uses the algebraically
+rearranged recurrence below in binary float; canonical Decimal arithmetic
+preserves LEAN's `sample*k + previous*(1-k)` order with `k=1/period`.
+The fixture proves strict-float equivalence, not identical Decimal strings.
+The period-14 arithmetic-order regression is
+`TestIND003RSI.test_wilder_source_operation_order_at_ready_boundary` in
+`tests/fixtures/test_indicator_fixtures.py`.
 
 ## Formula
 
 gain[i] = max(0, price[i] - price[i-1])
 loss[i] = max(0, price[i-1] - price[i])
 
-Seed (after period={PERIOD} deltas):
-  avg_gain = mean(gain[0..{PERIOD-1}])
-  avg_loss = mean(loss[0..{PERIOD-1}])
+First price sample: no child updates; both averages are zero, so RSI=100.
 
-Wilder smoothing (post-seed):
+For deltas 1..{PERIOD-1}, each child Wilder average returns the running SMA
+of the deltas seen so far.
+
+From delta {PERIOD} onward:
   avg_gain = (avg_gain * {PERIOD-1} + gain) / {PERIOD}
   avg_loss = (avg_loss * {PERIOD-1} + loss) / {PERIOD}
 
@@ -442,22 +436,16 @@ Edge: if round(avg_loss, 10) == 0, RSI = 100
 
 is_ready at samples >= {PERIOD+1} (one extra for first delta)
 
-## NaN Convention
-
-v0 (first sample — no delta) and v1..v{PERIOD-1} (accumulating for seed) are NaN.
-First non-NaN value appears at v{PERIOD} (sample {PERIOD+1}).
-
 ## Hand-Verification (Case B, first 5 bars: {b[:5]})
 
-deltas (gains): {gains_b[:3]}
-deltas (losses): {losses_b[:3]}
-Seed avg_gain={seed_avg_gain:.6f}, avg_loss={seed_avg_loss:.6f}
-RSI at v{PERIOD} ≈ {seed_rsi if isinstance(seed_rsi, str) else f'{seed_rsi:.6f}'}
+v0: no delta; avg=(0,0), RSI=100.
+v1: gain=2; avg=(2,0), RSI=100.
+v2: loss=2; running avg=(1,1), RSI=50.
+v3: gain=4; Wilder avg=(2,2/3), RSI=75. This is the first ready bar.
+v4: loss=2; Wilder avg=(4/3,10/9), RSI=600/11 ≈ 54.545455.
 
-## Critical Seeding Convention (D-009)
-
-First avg is simple mean of period deltas (not Wilder's of period+1).
-This matches LEAN's seeding. Some textbooks differ.
+Fixture v1 incorrectly withheld all pre-ready RSI values and seeded with
+the simple mean of all {PERIOD} deltas. This version corrects that mismatch.
 
 ## Canonical Implementation
 

@@ -1,0 +1,42 @@
+{
+  "cases": [
+    {
+      "name": "entry_cost_before_recovery",
+      "positions": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "cumulative_returns": [
+        -0.01,
+        -0.005,
+        0.0
+      ],
+      "net_total_return": 0.0,
+      "gross_total_return": 0.01,
+      "max_drawdown": 0.01,
+      "annualized_turnover": 84.0,
+      "total_trades": 1
+    },
+    {
+      "name": "reversal_and_flatten",
+      "positions": [
+        1.0,
+        -1.0,
+        -1.0,
+        0.0
+      ],
+      "cumulative_returns": [
+        -0.01,
+        -0.01,
+        -0.02,
+        0.0
+      ],
+      "net_total_return": 0.0,
+      "gross_total_return": 0.04,
+      "max_drawdown": 0.02,
+      "annualized_turnover": 252.0,
+      "total_trades": 3
+    }
+  ]
+}

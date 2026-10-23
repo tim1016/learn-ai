@@ -1,9 +1,9 @@
 """Backtesting engine: position sizing, cost modeling, performance metrics.
 
-Formula: PnL = Σ sign(signal) · (return[t+1] − cost); Sharpe = mean_PnL / std_PnL · √(bars_per_year); max_drawdown via running peak. Position sizing: unit or z-score proportional.
+Formula: w[t]=clip(signal[t],-1,1); r_net[t]=w[t-1]·r[t]−(cost_bps/10000)·|w[t]−w[t-1]|, with w[-1]=0 and first gross return 0; Sharpe=mean(r_net)/std(r_net)·√(bars_per_year); max drawdown from cumulative net returns, including the initial zero balance.
 Reference: Internal — distinct-purpose research engine (not the LEAN-ported event-driven backtester in app/engine/). No external port reference.
 Canonical implementation: app/research/signal/backtest.py
-Validated against: NONE — pending (pending-fixture per registry)
+Validated against: tests/fixtures/test_research_fixtures.py::TestRP006SignalBacktest (internal hand-calculated fixture; no external engine parity).
 """
 
 from __future__ import annotations
@@ -40,6 +40,27 @@ class BacktestResult:
     gross_total_return: float = 0.0
 
 
+@dataclass
+class BacktestGrid:
+    """Report metrics plus transient aligned trial returns for DSR."""
+
+    results: list[BacktestResult]
+    trial_returns: np.ndarray
+
+
+def training_return_mask(train_mask: pd.Series, horizon: int) -> pd.Series:
+    """Exclude forward targets whose endpoint falls outside training."""
+    return train_mask & train_mask.shift(-horizon, fill_value=False)
+
+
+def _return_path(sig: np.ndarray, ret: np.ndarray, cost_bps: float) -> tuple[np.ndarray, ...]:
+    positions = np.clip(sig, -1.0, 1.0)
+    turnover = np.abs(np.diff(positions, prepend=0.0))
+    gross = np.zeros(len(sig))
+    gross[1:] = positions[:-1] * ret[1:]
+    return positions, turnover, gross, gross - cost_bps / 10_000.0 * turnover
+
+
 def run_backtest(
     signal: pd.Series,
     forward_returns: pd.Series,
@@ -54,7 +75,6 @@ def run_backtest(
     Step 5: r_net_t = w_{t-1} * r_t - cost * |w_t - w_{t-1}|  (NO lookahead)
     Step 6: Compute all performance metrics
     """
-    cost_frac = cost_bps / 10_000.0
     bars_per_year = bars_per_day * 252
 
     # Align signal and returns, drop NaN
@@ -67,14 +87,7 @@ def run_backtest(
         return BacktestResult(threshold=0.0, cost_bps=cost_bps)
 
     # Positions: w_t = sign(signal_t), cap at +/-1
-    positions = np.clip(sig, -1.0, 1.0)
-
-    # Returns: r_net_t = w_{t-1} * r_t - cost * |w_t - w_{t-1}|
-    # Use w_{t-1} to avoid lookahead: position from previous bar earns current return
-    turnover = np.abs(np.diff(positions, prepend=0.0))
-    gross_returns = np.zeros(n)
-    gross_returns[1:] = positions[:-1] * ret[1:]  # w_{t-1} * r_t
-    net_returns = gross_returns - cost_frac * turnover
+    positions, turnover, gross_returns, net_returns = _return_path(sig, ret, cost_bps)
 
     # Metrics
     gross_sharpe = _annualized_sharpe(gross_returns, bars_per_year)
@@ -122,11 +135,20 @@ def run_backtest_grid(
     cost_bps_options: tuple[float, ...],
     timestamps: pd.Series | None = None,
     bars_per_day: int = 390,
-) -> list[BacktestResult]:
-    """Run all (threshold x cost_bps) combinations."""
+    horizon: int = 15,
+) -> BacktestGrid:
+    """Score all trials on identical training observations, purging split-crossing targets."""
     z_scores = compute_train_zscore(feature, train_mask, flip_sign)
+    eligible = training_return_mask(train_mask, horizon) & z_scores.notna() & forward_returns.notna()
+    if regime_gate is not None:
+        eligible &= regime_gate.notna()
+    z_scores = z_scores[eligible]
+    forward_returns = forward_returns[eligible]
+    regime_gate = regime_gate[eligible] if regime_gate is not None else None
+    timestamps = timestamps[eligible] if timestamps is not None else None
 
     results: list[BacktestResult] = []
+    trial_returns: list[np.ndarray] = []
     best_net_sharpe = -np.inf
     best_key: tuple[float, float] | None = None
 
@@ -136,6 +158,7 @@ def run_backtest_grid(
             signal = signal * regime_gate
 
         for cost in cost_bps_options:
+            trial_returns.append(_return_path(signal.to_numpy(), forward_returns.to_numpy(), cost)[3])
             bt = run_backtest(
                 signal,
                 forward_returns,
@@ -172,7 +195,7 @@ def run_backtest_grid(
                 results[i] = best_bt
                 break
 
-    return results
+    return BacktestGrid(results, np.asarray(trial_returns, dtype=float))
 
 
 def _annualized_sharpe(returns: np.ndarray, bars_per_year: int) -> float:
@@ -187,12 +210,10 @@ def _annualized_sharpe(returns: np.ndarray, bars_per_year: int) -> float:
 
 
 def _max_drawdown(returns: np.ndarray) -> float:
-    """Maximum drawdown from cumulative returns."""
-    cum = np.cumsum(returns)
+    """Maximum additive drawdown from cumulative returns, starting at zero."""
+    cum = np.concatenate(([0.0], np.cumsum(returns)))
     peak = np.maximum.accumulate(cum)
     drawdown = peak - cum
-    if len(drawdown) == 0:
-        return 0.0
     return float(np.max(drawdown))
 
 

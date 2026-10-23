@@ -268,8 +268,8 @@ class ScriptedFeed:
             await self._floor.runner_has_finished(sum(step.bar.symbol == self._signal for step in self._script))
             await self._floor.supervisor_passes(1)
 
-    async def recent_closed_bars(self, symbol: str, *, use_rth: bool = True, lookback_days: int = 5) -> list[MarketDataBar]:
-        del symbol, use_rth, lookback_days
+    async def recent_closed_bars(self, symbol: str, *, use_rth: bool = True, lookback_sessions: int = 5) -> list[MarketDataBar]:
+        del symbol, use_rth, lookback_sessions
         return []
 
     def health(self, _symbol: str | None = None) -> FeedHealth:

@@ -12,22 +12,16 @@ the generator against a corpus it did not author.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
 from scripts.generate_signal_program_trace_corpus import format_corpus_text, generate_corpus
-
-_FIXTURES = Path(__file__).resolve().parents[2] / "fixtures/golden"
+from tests._helpers.signal_program import committed_trace_corpus_path
 
 # Regenerating every sealed program corpus takes roughly 50 seconds by itself.
 # The daily suite retains this numerical-fidelity proof without consuming most
 # of the two-minute pull-request budget.
 pytestmark = pytest.mark.slow
-
-
-def _committed(relative: str) -> dict[str, object]:
-    return json.loads((_FIXTURES / relative).read_text(encoding="utf-8"))
 
 
 def test_generator_reproduces_every_committed_ema_per_cell_trace_root() -> None:
@@ -45,7 +39,7 @@ def test_generator_reproduces_every_committed_ema_per_cell_trace_root() -> None:
     corpus recorded -- same bars, same warmup, same settings coercion,
     same staging.
     """
-    committed = _committed("ema-signal-session/v1/trace-corpus.json")
+    committed = json.loads(committed_trace_corpus_path("ema_crossover_signal").read_text(encoding="utf-8"))
     generated = generate_corpus("ema_crossover_signal")
 
     committed_by_cell = {entry["cell"]: entry for entry in committed["entries"]}
@@ -86,13 +80,8 @@ def test_every_generated_program_corpus_is_byte_identical_to_its_committed_file(
 
     for key in regenerable:
         corpus = generate_corpus(key)
-        candidates = [
-            path
-            for path in _FIXTURES.glob("*/v1/trace-corpus.json")
-            if json.loads(path.read_text(encoding="utf-8")).get("program_key") == key
-        ]
-        assert len(candidates) == 1, f"expected exactly one committed corpus for '{key}', found {len(candidates)}"
-        assert format_corpus_text(corpus) == candidates[0].read_text(encoding="utf-8"), (
+        path = committed_trace_corpus_path(key)
+        assert format_corpus_text(corpus) == path.read_text(encoding="utf-8"), (
             f"'{key}' corpus is not byte-regenerable -- rerun "
             f"scripts/generate_signal_program_trace_corpus.py --program {key}"
         )

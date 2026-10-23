@@ -231,9 +231,25 @@ describe('ResearchService', () => {
       });
       expect.soft(result.effectiveSample).toMatchObject({ rawN: 200, autocorrelationLag1: 0.2 });
       expect.soft(result.signalBehavior).toMatchObject({ avgForwardReturnWhenActive: 0.001, hitRate: 0.52 });
-      expect.soft(result.oosSharpeCi).toMatchObject({ ciLower: 0.4, ciUpper: 1.2, nEffUsed: 150 });
-      expect.soft(result.deflatedSharpe).toMatchObject({ dsrProbability: 0.9, nTrials: 10 });
+      expect.soft(result.oosSharpeCi).toMatchObject({ ciLower: 0.4, ciUpper: 1.2, nEffUsed: 150, method: 'legacy_neff' });
+      expect.soft(result.deflatedSharpe).toMatchObject({ dsrProbability: 0.9, nTrials: 10, method: 'legacy_proxy' });
       expect.soft(result.methodology).toMatchObject({ trainMonths: 6, thresholds: [0.5, 1.0], costBpsOptions: [2, 5] });
+    });
+
+    it('preserves new inference methods and unavailable reasons', async () => {
+      const pending = firstValueFrom(service.getSignalExperimentReport(44));
+      httpMock.expectOne(`${BASE}/signal-experiments/44/report`).flush({
+        ...FULL_REPORT,
+        oos_sharpe_ci: { ...FULL_REPORT.oos_sharpe_ci, method: 'lo_hac', sample_size: 1200, hac_lag: 14, segment_count: 4 },
+        deflated_sharpe: { ...FULL_REPORT.deflated_sharpe, method: 'dsr_grid', valid: false, sample_size: 800,
+          effective_trials: 1.4, trial_sharpe_std: 0.01, mean_trial_correlation: 0.9,
+          unavailable_reason: 'Effective trial count between one and two' },
+      });
+      const result = await pending;
+      expect(result?.oosSharpeCi).toMatchObject({ method: 'lo_hac', sampleSize: 1200, hacLag: 14, segmentCount: 4 });
+      expect(result?.deflatedSharpe).toMatchObject({ method: 'dsr_grid', valid: false, sampleSize: 800,
+        effectiveTrials: 1.4, trialSharpeStd: 0.01, meanTrialCorrelation: 0.9,
+        unavailableReason: 'Effective trial count between one and two' });
     });
 
     it('maps absent blocks to null and a stored error to the view model\'s error', async () => {

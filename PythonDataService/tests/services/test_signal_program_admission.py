@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from app.config import settings
 from app.engine.strategy.program_sources import DECLARED_PROGRAM_SOURCE_PATHS
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
+from app.marketdata.feed import MAX_WARMUP_LOOKBACK_SESSIONS
 from app.schemas.run_admission import (
     CORPUS_UNCOVERED_EXPLANATION,
     CORPUS_UNCOVERED_NEXT_STEP,
@@ -741,20 +742,21 @@ def test_a_strategy_c_seal_off_its_default_periods_does_not_claim_them_in_its_fo
 
 # --- #2841: the warmup lookback follows the deployed periods ------------------
 
-# The calendar days each program seals at its ``LONG_PERIODS`` point. Every one
-# is above the program's default, which cannot warm that deploy's longest series.
-_LOOKBACK_DAYS_AT_LONG_PERIODS: dict[str, int] = {
-    "ema_crossover_signal": 17,
-    "sma_crossover": 18,
-    "rsi_mean_reversion": 20,
-    "spy_strategy_a": 20,
-    "spy_strategy_b": 20,
-    "spy_strategy_c": 20,
+# The completed sessions each program seals at its ``LONG_PERIODS`` point (#2849).
+# Every one is above the program's default, which cannot warm that deploy's
+# longest series; the four longest are held at the history cap.
+_LOOKBACK_SESSIONS_AT_LONG_PERIODS: dict[str, int] = {
+    "ema_crossover_signal": 8,
+    "sma_crossover": 9,
+    "rsi_mean_reversion": MAX_WARMUP_LOOKBACK_SESSIONS,
+    "spy_strategy_a": MAX_WARMUP_LOOKBACK_SESSIONS,
+    "spy_strategy_b": MAX_WARMUP_LOOKBACK_SESSIONS,
+    "spy_strategy_c": MAX_WARMUP_LOOKBACK_SESSIONS,
 }
 
 
 @pytest.mark.parametrize(
-    "program_key", sorted(_LOOKBACK_DAYS_AT_LONG_PERIODS), ids=lambda program_key: program_key
+    "program_key", sorted(_LOOKBACK_SESSIONS_AT_LONG_PERIODS), ids=lambda program_key: program_key
 )
 def test_a_long_period_deploy_seals_the_lookback_its_periods_need(program_key: str) -> None:
     """Every program sealed its default lookback whatever periods the deploy ran (#2841).
@@ -767,18 +769,18 @@ def test_a_long_period_deploy_seals_the_lookback_its_periods_need(program_key: s
     contract = _STRATEGY_REGISTRY[program_key].signal_program_contract
     assert contract is not None, "#2841: the program has a registered contract"
 
-    sealed_days = seal.configured_signal.clock.warmup_lookback_days
+    sealed_sessions = seal.configured_signal.clock.warmup_lookback_days
     proven = prove_running_program_build(binding, verified_at_ms=_NOW)
     stale_clock = seal.configured_signal.clock.model_copy(update={"warmup_lookback_days": 1})
     stale = seal.configured_signal.model_copy(update={"clock": stale_clock})
     stale_binding = binding.model_copy(update={"sealed_program": seal.model_copy(update={"configured_signal": stale})})
     refused = prove_running_program_build(stale_binding, verified_at_ms=_NOW)
 
-    assert sealed_days == _LOOKBACK_DAYS_AT_LONG_PERIODS[program_key], "#2841: the seal records the lookback its periods need"
-    assert sealed_days >= contract.resolved_warmup_lookback_days(_STRATEGY_REGISTRY[program_key].param_schema()), "#2841: the sealed lookback is above the program's default"
+    assert sealed_sessions == _LOOKBACK_SESSIONS_AT_LONG_PERIODS[program_key], "#2841: the seal records the lookback its periods need"
+    assert sealed_sessions > contract.resolved_warmup_lookback_sessions(_STRATEGY_REGISTRY[program_key].param_schema()), "#2841: the sealed lookback is above the program's default"
     assert proven.state == "PROVEN", "#2841: a seal naming the lookback its periods need proves its build"
     assert (
-        stale_clock.warmup_lookback_days == 1 != sealed_days
+        stale_clock.warmup_lookback_days == 1 != sealed_sessions
     ), "#2841: the stale seal names the program's default lookback, not the one its periods need"
     assert refused.state == "UNPROVEN", "#2841: a seal naming the default lookback for a long-period deploy fails closed"
     assert "warmup requirement" in refused.explanation, "#2841: the refusal names the warmup requirement"
@@ -786,10 +788,33 @@ def test_a_long_period_deploy_seals_the_lookback_its_periods_need(program_key: s
     assert refused.next_step == "Deploy the bot again.", "#2841: only a new deploy repairs it"
 
 
+def test_a_seal_that_counted_calendar_days_is_refused_and_redeployed() -> None:
+    """#2849: the seal's warmup field counts completed sessions; before, calendar days.
+
+    The EMA default sealed 12 days under #2841 and seals 6 sessions now. The
+    stored field keeps its name, so the old seal still reads, and the
+    equality with what the registry resolves is what refuses it: only a new
+    deploy seals the sessions.
+    """
+    binding, seal = _off_validated_seal("ema_crossover_signal", {})
+    assert seal.configured_signal.clock.warmup_lookback_days == 6
+    assert prove_running_program_build(binding, verified_at_ms=_NOW).state == "PROVEN"
+
+    sealed_in_days = seal.configured_signal.clock.model_copy(update={"warmup_lookback_days": 12})
+    old_seal = seal.model_copy(
+        update={"configured_signal": seal.configured_signal.model_copy(update={"clock": sealed_in_days})}
+    )
+    refused = prove_running_program_build(binding.model_copy(update={"sealed_program": old_seal}), verified_at_ms=_NOW)
+
+    assert refused.state == "UNPROVEN"
+    assert "warmup requirement" in refused.explanation
+    assert refused.next_step == "Deploy the bot again."
+
+
 @pytest.mark.parametrize("resolution_minutes", [391, 1440])
 def test_a_seal_on_a_bar_longer_than_a_session_caps_its_history(resolution_minutes: int) -> None:
     binding, seal = _off_validated_seal("sma_crossover", {"resolution_minutes": resolution_minutes})
-    assert seal.configured_signal.clock.warmup_lookback_days == 20
+    assert seal.configured_signal.clock.warmup_lookback_days == MAX_WARMUP_LOOKBACK_SESSIONS
     assert prove_running_program_build(binding, verified_at_ms=_NOW).state == "PROVEN"
 
 

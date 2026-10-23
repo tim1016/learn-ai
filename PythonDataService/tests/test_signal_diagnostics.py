@@ -158,7 +158,7 @@ def test_compute_sharpe_ci_brackets_point_estimate():
     # 500 IID returns at a known per-bar Sharpe ≈ 0.05
     returns = rng.normal(loc=0.001, scale=0.02, size=500)
 
-    result = compute_sharpe_ci(returns, n_eff=500.0)
+    result = compute_sharpe_ci(returns)
 
     assert result.valid is True
     assert result.ci_lower < result.point < result.ci_upper
@@ -176,81 +176,102 @@ def test_compute_sharpe_ci_brackets_point_estimate():
     ],
 )
 def test_compute_sharpe_ci_invalid_returns(returns, n_eff):
-    result = compute_sharpe_ci(np.array(returns), n_eff=n_eff)
+    result = compute_sharpe_ci(np.array(returns))
 
     assert result.valid is False
 
 
-def test_compute_sharpe_ci_widens_when_n_eff_shrinks():
-    """Autocorrelation correction should widen the CI."""
-    rng = np.random.default_rng(seed=7)
-    returns = rng.normal(loc=0.001, scale=0.02, size=500)
-
-    raw = compute_sharpe_ci(returns, n_eff=500.0)
-    autocorrelated = compute_sharpe_ci(returns, n_eff=100.0)
-
-    assert autocorrelated.se > raw.se
-    assert (autocorrelated.ci_upper - autocorrelated.ci_lower) > (
-        raw.ci_upper - raw.ci_lower
-    )
+def test_hac_accounts_for_serial_dependence_in_both_moments():
+    returns = np.repeat(np.array([-.03, .01, .04, -.01] * 30), 10)
+    uncorrelated = compute_sharpe_ci(returns, hac_lag=0)
+    correlated = compute_sharpe_ci(returns, hac_lag=9)
+    assert correlated.valid
+    assert correlated.se > uncorrelated.se
+    assert correlated.point == pytest.approx(float(returns.mean()/returns.std(ddof=1)*np.sqrt(98280)), abs=1e-12)
 
 
-# ─── Deflated Sharpe (Bailey & López de Prado 2014) ────────────────────────
+def test_hac_does_not_bridge_segments():
+    returns = np.array([-.02]*10 + [.03]*10)
+    pooled = compute_sharpe_ci(returns, hac_lag=5)
+    segmented = compute_sharpe_ci(returns, hac_lag=5, segment_lengths=[10, 10])
+    assert pooled.valid and segmented.valid
+    assert pooled.se != segmented.se
+    assert segmented.segment_count == 2
 
 
-def test_compute_deflated_sharpe_more_trials_lowers_dsr():
-    """Searching across more configurations should deflate the Sharpe more."""
-    rng = np.random.default_rng(seed=11)
-    returns = rng.normal(loc=0.0008, scale=0.02, size=2000)
-    sr_annual = 1.0  # mid-range annualised Sharpe
-
-    one_trial = compute_deflated_sharpe(
-        selected_sharpe_annual=sr_annual,
-        bar_returns=returns,
-        n_trials=1,
-        n_eff=2000.0,
-    )
-    many_trials = compute_deflated_sharpe(
-        selected_sharpe_annual=sr_annual,
-        bar_returns=returns,
-        n_trials=200,
-        n_eff=2000.0,
-    )
-
-    assert one_trial.valid is True
-    assert many_trials.valid is True
-    assert one_trial.dsr_probability >= many_trials.dsr_probability
-    assert many_trials.expected_max_under_null > one_trial.expected_max_under_null
+@pytest.mark.parametrize("returns", [[1., 2., np.nan, 4.], [1., np.inf, 2., 3.]])
+def test_inference_rejects_nonfinite_without_dropping_alignment(returns):
+    assert not compute_sharpe_ci(np.array(returns)).valid
+    assert not compute_deflated_sharpe(np.array([returns]), 0).valid
 
 
-def test_compute_deflated_sharpe_invalid_with_insufficient_data():
-    result = compute_deflated_sharpe(
-        selected_sharpe_annual=0.5,
-        bar_returns=np.array([0.01, 0.02]),
-        n_trials=10,
-        n_eff=2.0,
-    )
-
-    assert result.valid is False
+def test_hac_rejects_invalid_segment_partition():
+    with pytest.raises(ValueError, match="partition"):
+        compute_sharpe_ci(np.arange(10.), segment_lengths=[5, 4])
+    result = compute_sharpe_ci(np.arange(10.), hac_lag=5, segment_lengths=[5, 5])
+    assert not result.valid
+    assert result.unavailable_reason
 
 
-def test_compute_deflated_sharpe_reports_n_trials_and_moments():
-    rng = np.random.default_rng(seed=23)
-    returns = rng.normal(loc=0.0, scale=0.02, size=1000)
+def test_dsr_single_trial_and_identical_trials_have_zero_null_maximum():
+    returns = np.random.default_rng(11).normal(.001, .02, 100)
+    single = compute_deflated_sharpe(returns[None, :], 0)
+    duplicate = compute_deflated_sharpe(np.tile(returns, (4, 1)), 0)
+    assert single.valid and duplicate.valid
+    assert duplicate.effective_trials == 1
+    assert duplicate.expected_max_under_null == 0
+    assert duplicate.dsr_probability == pytest.approx(single.dsr_probability, abs=1e-12)
 
-    result = compute_deflated_sharpe(
-        selected_sharpe_annual=0.6,
-        bar_returns=returns,
-        n_trials=16,
-        n_eff=1000.0,
-    )
 
+def test_dsr_reports_unavailable_for_constant_trial_or_small_effective_count():
+    returns = np.random.default_rng(12).normal(0, .02, 100)
+    constant = compute_deflated_sharpe(np.stack([returns, np.zeros(100)]), 0)
+    assert not constant.valid
+    assert "constant" in constant.unavailable_reason
+    correlated = compute_deflated_sharpe(np.stack([returns, returns + np.linspace(0, .001, 100)]), 0)
+    assert 1 < correlated.effective_trials < 2
+    assert not correlated.valid
+    assert "between one and two" in correlated.unavailable_reason
+
+
+def test_dsr_uses_observed_trial_spread_and_raw_sample_length():
+    trials = np.random.default_rng(23).normal(0, .02, (16, 1000))
+    result = compute_deflated_sharpe(trials, 0, bars_per_year=1)
+    assert result.valid
     assert result.n_trials == 16
-    assert result.raw_sharpe == pytest.approx(0.6, abs=1e-12)
-    # Skew of standard-normal-ish returns is close to zero.
-    assert abs(result.skewness) < 0.5
-    # Pearson kurtosis (not excess) of normal returns ≈ 3.
-    assert 2.0 < result.kurtosis < 4.0
+    assert result.sample_size == 1000
+    assert result.trial_sharpe_std == pytest.approx(float(np.std(trials.mean(axis=1)/trials.std(axis=1, ddof=1), ddof=1)), abs=1e-12)
+    assert result.raw_sharpe == pytest.approx(float(trials[0].mean()/trials[0].std(ddof=1)), abs=1e-12)
+    assert 2 < result.kurtosis < 4
+
+
+@pytest.mark.parametrize("value", [.01, -.01, .1])
+def test_constant_nonzero_returns_are_unavailable_and_json_safe(value):
+    import json
+    from dataclasses import asdict
+
+    from app.research.signal.sharpe import compute_iid_sharpe_ci
+
+    returns = np.full(100, value)
+    results = [compute_sharpe_ci(returns), compute_iid_sharpe_ci(returns),
+               compute_deflated_sharpe(returns[None, :], 0)]
+    for result in results:
+        assert not result.valid
+        assert "constant" in result.unavailable_reason
+        json.dumps(asdict(result), allow_nan=False)
+
+
+def test_dsr_unavailable_moments_do_not_leak_nan_into_report():
+    import json
+    from dataclasses import asdict
+
+    returns = np.ones(100)
+    returns[-1] = np.nextafter(1., 2.)
+    # Distinct observations, but the variance is too small relative to the
+    # mean for SciPy to estimate higher moments reliably.
+    result = compute_deflated_sharpe(returns[None, :], 0)
+    assert not result.valid
+    json.dumps(asdict(result), allow_nan=False)
 
 
 # ─── Joint regime coverage ──────────────────────────────────────────────────

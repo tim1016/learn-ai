@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import date, timedelta
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,7 +21,12 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.ibkr.bars import IBKRBarStreamError
 from app.engine.execution.portfolio import Portfolio
 from app.engine.strategy.base import StrategyContext
-from app.lean_sidecar.trading_calendar import session_open_ms_utc, session_windows_ms_utc
+from app.lean_sidecar.trading_calendar import (
+    session_close_ms_utc,
+    session_open_ms_utc,
+    session_start_for_bar_count,
+    session_windows_ms_utc,
+)
 from app.marketdata.feed import (
     WARMUP_HISTORY_UNAVAILABLE,
     MarketDataBar,
@@ -31,7 +36,7 @@ from app.marketdata.feed import (
 from app.marketdata.ibkr_feed import IbkrMarketDataFeed, require_warmup_coverage
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_trade_strategy_warmup import (
-    _warmup_lookback_days_for,
+    _warmup_lookback_sessions_for,
     captured_decision_outcomes,
     replay_warmup_bars,
 )
@@ -52,24 +57,24 @@ def _binding(*, strategy_key: str) -> BrokerBotBinding:
 
 
 class _RecordingFeed:
-    """``MarketDataFeed`` double that records the ``lookback_days`` it was
+    """``MarketDataFeed`` double that records the ``lookback_sessions`` it was
     asked for and returns no history -- ``replay_warmup_bars`` only needs
     the recorded call for this test, never the bars themselves."""
 
     feed_id = "fake-recording"
 
     def __init__(self) -> None:
-        self.recorded_lookback_days: int | None = None
+        self.recorded_lookback_sessions: int | None = None
 
     async def recent_closed_bars(
         self,
         symbol: str,
         *,
         use_rth: bool = True,
-        lookback_days: int = 5,
+        lookback_sessions: int = 5,
     ) -> list[MarketDataBar]:
         del symbol, use_rth
-        self.recorded_lookback_days = lookback_days
+        self.recorded_lookback_sessions = lookback_sessions
         return []
 
 
@@ -100,26 +105,25 @@ def _context() -> StrategyContext:
 
 
 @pytest.mark.parametrize(
-    ("strategy_key", "expected_days"),
+    ("strategy_key", "expected_sessions"),
     [
-        pytest.param("sma_crossover", 6, id="sma_crossover"),
-        pytest.param("spy_strategy_a", 19, id="spy_strategy_a"),
+        pytest.param("sma_crossover", 3, id="sma_crossover"),
+        pytest.param("spy_strategy_a", 10, id="spy_strategy_a"),
     ],
 )
-def test_warmup_lookback_days_for_uses_the_program_convergence_window(
-    strategy_key: str, expected_days: int
+def test_warmup_lookback_sessions_for_uses_the_program_convergence_window(
+    strategy_key: str, expected_sessions: int
 ) -> None:
-    assert _warmup_lookback_days_for(_binding(strategy_key=strategy_key)) == expected_days, (
-        "lookback days follow the initialized program's convergence requirement"
+    assert _warmup_lookback_sessions_for(_binding(strategy_key=strategy_key)) == expected_sessions, (
+        "lookback sessions follow the initialized program's convergence requirement"
     )
 
 
 @pytest.mark.asyncio
 async def test_replay_warmup_bars_requests_the_larger_contract_lookback_from_the_feed() -> None:
-    """End-to-end through ``replay_warmup_bars``: a strategy whose sealed
-    contract declares more than the floor (``sma_crossover`` declares 7, the
-    floor is 5) must have that larger window actually requested from the
-    feed -- not just resolvable in isolation."""
+    """End-to-end through ``replay_warmup_bars``: the sessions the sealed
+    contract declares (``sma_crossover`` declares 3) must be what is actually
+    requested from the feed -- not just resolvable in isolation."""
     feed = _RecordingFeed()
     binding = _binding(strategy_key="sma_crossover")
 
@@ -132,12 +136,12 @@ async def test_replay_warmup_bars_requests_the_larger_contract_lookback_from_the
     )
 
     assert result == []
-    assert feed.recorded_lookback_days == 6
+    assert feed.recorded_lookback_sessions == 3
 
 
-# 2026-09-23 (Wed) 15:00 EDT. A 7-day lookback starts Wed 09-16 15:00, which
-# holds only 1h of that day's session (not owed). Owed: Thu 09-17, Fri 09-18,
-# Mon 09-21, Tue 09-22 (wholly inside) and today, 5.5h of 6.5h elapsed
+# 2026-09-23 (Wed) 15:00 EDT. A 4-session lookback starts at the open of the
+# fourth most recent completed session, Thu 09-17. Owed: Thu 09-17, Fri 09-18,
+# Mon 09-21, Tue 09-22 (each completed) and today, 5.5h of 6.5h elapsed
 # (canonical calendar; no hardcoded time in the code under test).
 _NOW_MS = 1_790_190_000_000
 _EARLIEST_OWED_CLOSE_MS = 1_789_675_200_000  # 2026-09-17 16:00 EDT
@@ -197,7 +201,7 @@ async def test_replay_warmup_bars_refuses_the_run_when_the_sealed_lookback_is_no
     Drives the real ``IbkrMarketDataFeed`` warmup path with only the IBKR
     history call faked. Before the fix every case replayed normally -- the
     strategy then decided on the bare indicator minimum (or on one session)
-    instead of the sealed 7-day lookback. Now replay ends with the typed
+    instead of the sealed lookback. Now replay ends with the typed
     refusal before any warmup state is built.
     """
     monkeypatch.setattr("app.marketdata.ibkr_feed.fetch_historical_minute_bars", history)
@@ -236,37 +240,48 @@ def _one_bar_per_owed_session(*, skip: int | None = None) -> list[MarketDataBar]
     ] + [_bar_at(_NOW_MS - 2 * _MINUTE_MS)]
 
 
-def _assert_refused(bars: list[MarketDataBar], *, lookback_days: int, now_ms: int) -> None:
+def _assert_refused(bars: list[MarketDataBar], *, lookback_sessions: int, now_ms: int) -> None:
     with pytest.raises(MarketDataFeedError) as refused:
-        require_warmup_coverage(bars, lookback_days=lookback_days, now_ms=now_ms)
+        require_warmup_coverage(bars, lookback_sessions=lookback_sessions, now_ms=now_ms)
     assert refused.value.reason == WARMUP_HISTORY_UNAVAILABLE
 
 
 # 2026-09-23 08:30 EDT, before today's open.
 _BEFORE_OPEN_MS = _TODAY_OPEN_MS - 3_600_000
 _YESTERDAY_OPEN_MS, _YESTERDAY_CLOSE_MS = _OWED_SESSIONS_MS[3]
+_HOUR_MS = 3_600_000
+# Monday 2026-09-21, 08:30 EDT: the one completed session is Friday's, across a weekend.
+_MONDAY_BEFORE_OPEN_MS = session_open_ms_utc(date(2026, 9, 21)) - _HOUR_MS
+_FRIDAY_CLOSE_MS = session_close_ms_utc(date(2026, 9, 18))
+# Tuesday 2026-09-08, 08:30 EDT: Labor Day Monday was no session, so the one
+# completed session is the Friday before it, across a weekend and a holiday.
+_TUESDAY_AFTER_LABOR_DAY_MS = session_open_ms_utc(date(2026, 9, 8)) - _HOUR_MS
+_PRE_LABOR_DAY_FRIDAY_CLOSE_MS = session_close_ms_utc(date(2026, 9, 4))
+# The day after Thanksgiving, 2026-11-27, closes at 13:00 EST: a 210-minute session.
+_BLACK_FRIDAY_OPEN_MS = session_open_ms_utc(date(2026, 11, 27))
+_WEDNESDAY_BEFORE_THANKSGIVING_CLOSE_MS = session_close_ms_utc(date(2026, 11, 25))
 
 
 @pytest.mark.parametrize(
-    ("make_bars", "lookback_days", "now_ms"),
+    ("make_bars", "lookback_sessions", "now_ms"),
     [
         # Review 4090020257: history reaching the window's earliest session was
         # accepted even with whole sessions after it absent -- a truncated response
         # passed as complete. Every owed session must be covered.
         pytest.param(
-            lambda: _one_bar_per_owed_session(skip=1), 7, _NOW_MS, id="review-4090020257-missing-a-later-owed-session-1"
+            lambda: _one_bar_per_owed_session(skip=1), 4, _NOW_MS, id="review-4090020257-missing-a-later-owed-session-1"
         ),
         pytest.param(
-            lambda: _one_bar_per_owed_session(skip=2), 7, _NOW_MS, id="review-4090020257-missing-a-later-owed-session-2"
+            lambda: _one_bar_per_owed_session(skip=2), 4, _NOW_MS, id="review-4090020257-missing-a-later-owed-session-2"
         ),
         pytest.param(
-            lambda: _one_bar_per_owed_session(skip=3), 7, _NOW_MS, id="review-4090020257-missing-a-later-owed-session-3"
+            lambda: _one_bar_per_owed_session(skip=3), 4, _NOW_MS, id="review-4090020257-missing-a-later-owed-session-3"
         ),
         # The newest boundary counts too: at 15:00 most of today's session has
         # elapsed, so history ending yesterday is short.
         pytest.param(
             lambda: [_bar_at(close_ms - _MINUTE_MS) for _open_ms, close_ms in _OWED_SESSIONS_MS[:-1]],
-            7,
+            4,
             _NOW_MS,
             id="missing-today-once-it-is-owed",
         ),
@@ -276,59 +291,95 @@ _YESTERDAY_OPEN_MS, _YESTERDAY_CLOSE_MS = _OWED_SESSIONS_MS[3]
         # as an empty warmup.
         pytest.param(
             lambda: [_bar_at(open_ms - _MINUTE_MS, session_phase="PRE") for open_ms, _close in _OWED_SESSIONS_MS],
-            7,
+            4,
             _NOW_MS,
             id="review-4090020268-extended-hours-bars-are-not-counted",
         ),
-        # Review 4090020265: a one-day warmup at 08:30 starts 08:30 yesterday, so
-        # all of yesterday's session is inside it. Excluding the window's first ET
-        # date outright owed nothing, and an empty response started the run cold.
+        # Review 4090020265: a one-session warmup at 08:30 owes yesterday's
+        # session. Owing nothing for the window's first date let an empty
+        # response start the run cold.
         pytest.param(
             lambda: [],
             1,
             _BEFORE_OPEN_MS,
-            id="review-4090020265-owes-the-session-on-the-window-s-first-date-empty-response",
+            id="review-4090020265-owes-the-last-completed-session-empty-response",
+        ),
+        # Monday morning: the session owed is Friday's, across the weekend. An
+        # empty response, or one that stops at Thursday, is short (#2849).
+        pytest.param(
+            lambda: [],
+            1,
+            _MONDAY_BEFORE_OPEN_MS,
+            id="monday-morning-owes-fridays-session-empty-response",
+        ),
+        pytest.param(
+            lambda: [_bar_at(session_close_ms_utc(date(2026, 9, 17)) - _MINUTE_MS)],
+            1,
+            _MONDAY_BEFORE_OPEN_MS,
+            id="monday-morning-owes-fridays-session-thursdays-bar-is-not-friday-s",
+        ),
+        # Labor Day Monday is no session: the one completed session is the
+        # Friday before it, across a weekend and a holiday.
+        pytest.param(
+            lambda: [_bar_at(session_close_ms_utc(date(2026, 9, 3)) - _MINUTE_MS)],
+            1,
+            _TUESDAY_AFTER_LABOR_DAY_MS,
+            id="tuesday-after-labor-day-owes-the-friday-before-it",
+        ),
+        # An early close is a short session: at 11:30 EST the day after
+        # Thanksgiving, 120 of its 210 minutes have passed, so it is owed -- on
+        # a regular day that is 31% of the session and is not.
+        pytest.param(
+            lambda: [_bar_at(_WEDNESDAY_BEFORE_THANKSGIVING_CLOSE_MS - _MINUTE_MS)],
+            1,
+            _BLACK_FRIDAY_OPEN_MS + 2 * _HOUR_MS,
+            id="an-early-close-session-is-owed-once-half-of-it-has-passed",
         ),
     ],
 )
 def test_warmup_coverage_refuses_a_response_short_of_an_owed_session(
-    make_bars: Callable[[], list[MarketDataBar]], lookback_days: int, now_ms: int
+    make_bars: Callable[[], list[MarketDataBar]], lookback_sessions: int, now_ms: int
 ) -> None:
-    _assert_refused(make_bars(), lookback_days=lookback_days, now_ms=now_ms)
+    _assert_refused(make_bars(), lookback_sessions=lookback_sessions, now_ms=now_ms)
 
 
 @pytest.mark.parametrize(
-    ("make_bars", "lookback_days", "now_ms"),
+    ("make_bars", "lookback_sessions", "now_ms"),
     [
         # Session-level, not minute-level: a symbol that skips minutes (here all
         # but one per session) is ordinary history and must not refuse a start.
         pytest.param(
-            _one_bar_per_owed_session, 7, _NOW_MS, id="one-regular-hours-bar-in-each-owed-session"
+            _one_bar_per_owed_session, 4, _NOW_MS, id="one-regular-hours-bar-in-each-owed-session"
         ),
-        # The same first-date window as above: yesterday's closing bar covers it.
+        # The same one-session window as above: yesterday's closing bar covers it.
         pytest.param(
             lambda: [_bar_at(_YESTERDAY_CLOSE_MS - _MINUTE_MS)],
             1,
             _BEFORE_OPEN_MS,
-            id="review-4090020265-owes-the-session-on-the-window-s-first-date-covered-response",
+            id="review-4090020265-owes-the-last-completed-session-covered-response",
         ),
-        # A one-day lookback at 08:30 on Monday spans Sunday: empty is not a refusal.
         pytest.param(
-            lambda: [],
+            lambda: [_bar_at(_FRIDAY_CLOSE_MS - _MINUTE_MS)],
             1,
-            _OWED_SESSIONS_MS[2][0] - 3_600_000,
-            id="owes-nothing-when-the-window-holds-no-session",
+            _MONDAY_BEFORE_OPEN_MS,
+            id="monday-morning-fridays-closing-bar-covers-the-weekend",
         ),
-        # A few edge minutes can legitimately hold no print; they are not owed.
-        # The session the one-day window mostly spans is, and is covered here.
-        # 15:58: the window holds yesterday's last 2 minutes -- a sliver, not owed.
         pytest.param(
-            lambda: [_bar_at(_TODAY_OPEN_MS)],
+            lambda: [_bar_at(_PRE_LABOR_DAY_FRIDAY_CLOSE_MS - _MINUTE_MS)],
             1,
-            _YESTERDAY_CLOSE_MS + 24 * 3_600_000 - 2 * _MINUTE_MS,
-            id="does-not-owe-a-sliver-window-starts-2min-before-close",
+            _TUESDAY_AFTER_LABOR_DAY_MS,
+            id="tuesday-after-labor-day-the-friday-before-it-covers-the-holiday",
         ),
-        # 09:32: today has 2 minutes elapsed -- a sliver, not owed.
+        # The early close is not owed before half of it has passed: at 10:30 EST
+        # only 60 of its 210 minutes have, so the session before it is enough.
+        pytest.param(
+            lambda: [_bar_at(_WEDNESDAY_BEFORE_THANKSGIVING_CLOSE_MS - _MINUTE_MS)],
+            1,
+            _BLACK_FRIDAY_OPEN_MS + _HOUR_MS,
+            id="an-early-close-session-is-not-owed-before-half-of-it-has-passed",
+        ),
+        # A few opening minutes can legitimately hold no print; they are not
+        # owed. 09:32: today has 2 minutes elapsed -- a sliver.
         pytest.param(
             lambda: [_bar_at(_YESTERDAY_CLOSE_MS - _MINUTE_MS)],
             1,
@@ -338,12 +389,12 @@ def test_warmup_coverage_refuses_a_response_short_of_an_owed_session(
     ],
 )
 def test_warmup_coverage_accepts_a_response_that_covers_what_is_owed(
-    make_bars: Callable[[], list[MarketDataBar]], lookback_days: int, now_ms: int
+    make_bars: Callable[[], list[MarketDataBar]], lookback_sessions: int, now_ms: int
 ) -> None:
-    require_warmup_coverage(make_bars(), lookback_days=lookback_days, now_ms=now_ms)
+    require_warmup_coverage(make_bars(), lookback_sessions=lookback_sessions, now_ms=now_ms)
 
 
-def test_warmup_lookback_days_for_reads_the_seal_over_the_live_registry() -> None:
+def test_warmup_lookback_sessions_for_reads_the_seal_over_the_live_registry() -> None:
     """A sealed instance warms to the window its own seal attests.
 
     Admission has already proven that field against the live registry, so the
@@ -377,7 +428,7 @@ def test_warmup_lookback_days_for_reads_the_seal_over_the_live_registry() -> Non
 
     contract = _STRATEGY_REGISTRY["spy_strategy_a"].signal_program_contract
     assert contract is not None
-    assert seal.configured_signal.clock.warmup_lookback_days == contract.resolved_warmup_lookback_days(_STRATEGY_REGISTRY["spy_strategy_a"].param_schema())
+    assert seal.configured_signal.clock.warmup_lookback_days == contract.resolved_warmup_lookback_sessions(_STRATEGY_REGISTRY["spy_strategy_a"].param_schema())
 
     # The seal is the source: a stale seal keeps its own window rather than
     # silently adopting whatever the registry says today.
@@ -387,8 +438,8 @@ def test_warmup_lookback_days_for_reads_the_seal_over_the_live_registry() -> Non
         update={"sealed_program": seal.model_copy(update={"configured_signal": stale_configured})}
     )
 
-    assert _warmup_lookback_days_for(sealed_binding) == contract.resolved_warmup_lookback_days(_STRATEGY_REGISTRY["spy_strategy_a"].param_schema())
-    assert _warmup_lookback_days_for(stale_binding) == 11
+    assert _warmup_lookback_sessions_for(sealed_binding) == contract.resolved_warmup_lookback_sessions(_STRATEGY_REGISTRY["spy_strategy_a"].param_schema())
+    assert _warmup_lookback_sessions_for(stale_binding) == 11
 
 
 def _sealed_sma_50_200_binding() -> BrokerBotBinding:
@@ -424,9 +475,10 @@ def _sealed_sma_50_200_binding() -> BrokerBotBinding:
 @pytest.mark.asyncio
 async def test_a_sealed_long_period_deploy_warms_on_the_lookback_its_periods_need() -> None:
     """SMA 50/200 needs 200 decision bars before it is ready; the program's
-    default seven days cannot hold them, so the bot started unready and waited
-    on live bars (#2841). Its seal now names the days those periods need, and
-    that is the window the feed is asked for.
+    default three sessions cannot hold them, so the bot started unready and
+    waited on live bars (#2841). Its seal now names the sessions those periods
+    need, and that is the window the feed is asked for -- 9 sessions, where
+    18 calendar days were asked for as if they were sessions (#2849).
     """
     from app.engine.strategy.registry import _STRATEGY_REGISTRY
 
@@ -443,15 +495,14 @@ async def test_a_sealed_long_period_deploy_warms_on_the_lookback_its_periods_nee
 
     contract = _STRATEGY_REGISTRY["sma_crossover"].signal_program_contract
     assert contract is not None
-    assert _warmup_lookback_days_for(sealed_binding) == 18
-    assert feed.recorded_lookback_days == 18 > contract.resolved_warmup_lookback_days(_STRATEGY_REGISTRY["sma_crossover"].param_schema())
+    assert _warmup_lookback_sessions_for(sealed_binding) == 9
+    assert feed.recorded_lookback_sessions == 9 > contract.resolved_warmup_lookback_sessions(_STRATEGY_REGISTRY["sma_crossover"].param_schema())
 
 
-# A start an 18-day window holds the fewest decision bars at, of every minute
-# the lookback sweep covers (tests/engine/strategy/test_signal_program_warmup_lookback.py):
-# one minute after the open on Monday 2025-01-06. The window holds Christmas
-# Eve's early close, Christmas Day and New Year's Day.
-_WORST_18_DAY_START_DATE = date(2025, 1, 6)
+# A start a 9-session window holds few decision bars at: one minute after the
+# open on Monday 2025-01-06. The window holds Christmas Eve's early close and
+# runs back across Christmas Day and New Year's Day.
+_WORST_9_SESSION_START_DATE = date(2025, 1, 6)
 
 
 def _regular_hours_minutes(first: date, last: date) -> list[MarketDataBar]:
@@ -489,7 +540,7 @@ def _regular_hours_minutes(first: date, last: date) -> list[MarketDataBar]:
 class _SyntheticMinuteFeed:
     """One list of minutes: history up to ``start_ms``, the live stream after it.
 
-    ``recent_closed_bars`` returns the closed minutes the ``lookback_days``
+    ``recent_closed_bars`` returns the closed minutes the ``lookback_sessions``
     window holds, by the feed's own definition of that window.
     """
 
@@ -499,9 +550,9 @@ class _SyntheticMinuteFeed:
         self._bars = bars
         self._start_ms = start_ms
 
-    async def recent_closed_bars(self, symbol: str, *, use_rth: bool = True, lookback_days: int = 5) -> list[MarketDataBar]:
+    async def recent_closed_bars(self, symbol: str, *, use_rth: bool = True, lookback_sessions: int = 5) -> list[MarketDataBar]:
         del symbol, use_rth
-        window_start_ms = warmup_window_start_ms(lookback_days, now_ms=self._start_ms)
+        window_start_ms = warmup_window_start_ms(lookback_sessions, now_ms=self._start_ms)
         return [
             bar.model_copy(update={"provenance": "history"})
             for bar in self._bars
@@ -531,9 +582,10 @@ async def test_a_long_period_deploy_is_ready_at_its_first_live_decision_only_on_
     """#2841, through the runner's own path: the real SMA 50/200 program, warmed
     by ``replay_warmup_bars`` on the window its seal names, then fed live minutes.
 
-    On the 18 days the seal now names, the first live decision is ready. On
-    the default seven days every such seal named before, the same decision is
-    not: the bot was running and could not act.
+    On the 9 sessions the seal now names, the first live decision is ready --
+    though the window runs across Christmas Eve's early close. On the default
+    three sessions every such seal named before, the same decision is not: the
+    bot was running and could not act.
     """
     from app.engine.strategy.registry import _STRATEGY_REGISTRY
 
@@ -542,7 +594,7 @@ async def test_a_long_period_deploy_is_ready_at_its_first_live_decision_only_on_
     sealed = _sealed_sma_50_200_binding()
     seal = sealed.sealed_program
     assert seal is not None
-    default_clock = seal.configured_signal.clock.model_copy(update={"warmup_lookback_days": contract.resolved_warmup_lookback_days(_STRATEGY_REGISTRY["sma_crossover"].param_schema())})
+    default_clock = seal.configured_signal.clock.model_copy(update={"warmup_lookback_days": contract.resolved_warmup_lookback_sessions(_STRATEGY_REGISTRY["sma_crossover"].param_schema())})
     sealed_before_2841 = sealed.model_copy(
         update={
             "sealed_program": seal.model_copy(
@@ -550,12 +602,11 @@ async def test_a_long_period_deploy_is_ready_at_its_first_live_decision_only_on_
             )
         }
     )
-    session_open_ms = session_open_ms_utc(_WORST_18_DAY_START_DATE)
+    session_open_ms = session_open_ms_utc(_WORST_9_SESSION_START_DATE)
     start_ms = session_open_ms + _MINUTE_MS
-    lookback_days = _warmup_lookback_days_for(sealed)
-    minutes = _regular_hours_minutes(
-        _WORST_18_DAY_START_DATE - timedelta(days=lookback_days), _WORST_18_DAY_START_DATE
-    )
+    lookback_sessions = _warmup_lookback_sessions_for(sealed)
+    first_session = session_start_for_bar_count(start_ms, target_bars=lookback_sessions, bar_span_ms=None)
+    minutes = _regular_hours_minutes(first_session, _WORST_9_SESSION_START_DATE)
 
     on_sealed_lookback = await _first_live_decision(sealed, _SyntheticMinuteFeed(minutes, start_ms=start_ms))
     on_default_lookback = await _first_live_decision(
@@ -567,7 +618,7 @@ async def test_a_long_period_deploy_is_ready_at_its_first_live_decision_only_on_
     assert on_sealed_lookback.decision_bar_close_ms == first_decision_close_ms
     assert on_default_lookback.decision_bar_close_ms == first_decision_close_ms
     assert on_sealed_lookback.bar.provenance == on_default_lookback.bar.provenance == "realtime"
-    assert (lookback_days, _warmup_lookback_days_for(sealed_before_2841)) == (18, 6)
+    assert (lookback_sessions, _warmup_lookback_sessions_for(sealed_before_2841)) == (9, 3)
     assert on_sealed_lookback.trace.ready is True
     assert on_default_lookback.trace.ready is False
 
@@ -627,8 +678,8 @@ class _HistoryOnlyFeed:
     def __init__(self, bars: list[MarketDataBar]) -> None:
         self._bars = bars
 
-    async def recent_closed_bars(self, symbol: str, *, use_rth: bool = True, lookback_days: int = 5) -> list[MarketDataBar]:
-        del symbol, use_rth, lookback_days
+    async def recent_closed_bars(self, symbol: str, *, use_rth: bool = True, lookback_sessions: int = 5) -> list[MarketDataBar]:
+        del symbol, use_rth, lookback_sessions
         return self._bars
 
     async def stream_bars(self, symbol: str, *, use_rth: bool = True):  # type: ignore[no-untyped-def]

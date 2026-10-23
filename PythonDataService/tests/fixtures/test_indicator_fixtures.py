@@ -3,8 +3,10 @@
 Tests that the canonical indicator classes produce values matching the
 hand-computed oracle stored in each fixture, bar by bar.
 
-EMA and SMA produce values at every bar (warmup is running mean).
-RSI produces None (stored as NaN) for the first period bars, then floats.
+EMA publishes zero before readiness, then its SMA seed. SMA publishes a
+running mean during warmup.
+RSI publishes a value throughout warmup, while readiness starts after the
+first period price deltas.
 
 Run in isolation (no FastAPI app needed):
   python -m pytest tests/fixtures/test_indicator_fixtures.py -v --noconftest
@@ -14,7 +16,7 @@ from __future__ import annotations
 import math
 import sys
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from pathlib import Path
 
 import pyarrow as pa
@@ -125,8 +127,10 @@ class TestIND001EMA:
         for i in range(PERIOD - 1):
             ind.update(_timestamp_ms(i), Decimal("10"))
             assert not ind.is_ready
+            assert ind.current_value == Decimal(0)
         ind.update(_timestamp_ms(PERIOD - 1), Decimal("10"))
         assert ind.is_ready
+        assert ind.current_value == Decimal("10")
 
     def test_ema_monotone_case_exact(self) -> None:
         """For monotone prices, verify EMA seed and first post-warmup value."""
@@ -180,6 +184,35 @@ class TestIND002SMA:
 
 
 class TestIND003RSI:
+    def test_wilder_source_operation_order_at_ready_boundary(self) -> None:
+        """Pin Python Decimal evaluation of the vendored Wilder operation order.
+
+        Reference: LEAN 7986ed0/Indicators/WilderMovingAverage.cs computes
+        sample*k + previous*(1-k), with k=1/period, starting at delta period.
+        These independently transcribed Decimal(precision=28) values catch
+        algebraic reassociation that the strict-float IND-003 oracle allows.
+        This is a Python arithmetic-order pin, not a .NET bit-exact claim.
+        """
+        prices = [
+            "101.06", "101.56", "95.27", "98.02", "107.14", "100.8",
+            "98.13", "104.34", "99.26", "95.88", "90.64", "94.97",
+            "96.06", "106.89", "108.98", "106.97", "109.51",
+        ]
+        expected = [
+            "54.56681811060629797900673665",
+            "56.00728155339805825242718446",
+            "54.22664105750762625692012201",
+            "56.12497021860791360314024994",
+        ]
+        with localcontext() as context:
+            context.prec = 28
+            ind = RelativeStrengthIndex("rsi", 14)
+            for i, price in enumerate(prices):
+                ind.update(_timestamp_ms(i), Decimal(price))
+                assert ind.is_ready == (i >= 14)
+                if i >= 13:
+                    assert ind.current_value == Decimal(expected[i - 13])
+
     def test_rsi_matches_oracle_all_cases(self) -> None:
         inp, out, atol, rtol = _load("IND-003")
         for row in range(len(inp)):
@@ -195,6 +228,33 @@ class TestIND003RSI:
             assert not ind.is_ready
         ind.update(_timestamp_ms(PERIOD), Decimal(str(10 + PERIOD)))
         assert ind.is_ready
+
+    def test_rsi_publishes_lean_warmup_values(self) -> None:
+        ind = RelativeStrengthIndex("rsi", PERIOD)
+        expected = [Decimal(100), Decimal(100), Decimal(50), Decimal(75)]
+        for i, (price, value) in enumerate(zip([50, 52, 50, 54], expected, strict=True)):
+            ind.update(_timestamp_ms(i), Decimal(price))
+            assert ind.current_value == value
+            assert ind.is_ready == (i >= PERIOD)
+
+    def test_rsi_first_loss_flat_series_and_reset(self) -> None:
+        ind = RelativeStrengthIndex("rsi", PERIOD)
+        for i, (price, value) in enumerate(zip([50, 48, 48, 48], [100, 0, 0, 0], strict=True)):
+            ind.update(_timestamp_ms(i), Decimal(price))
+            assert ind.current_value == Decimal(value)
+
+        ind.reset()
+        assert ind.current_value is None
+        for i, (price, value) in enumerate(zip([50, 50, 50], [100, 100, 100], strict=True)):
+            ind.update(_timestamp_ms(i), Decimal(price))
+            assert ind.current_value == Decimal(value)
+
+    def test_rsi_period_one(self) -> None:
+        ind = RelativeStrengthIndex("rsi", 1)
+        for i, (price, value) in enumerate(zip([50, 48, 52], [100, 0, 100], strict=True)):
+            ind.update(_timestamp_ms(i), Decimal(price))
+            assert ind.current_value == Decimal(value)
+            assert ind.is_ready == (i >= 1)
 
     def test_rsi_monotone_increasing_gives_100(self) -> None:
         """All gains → RSI = 100 (avg_loss = 0)."""

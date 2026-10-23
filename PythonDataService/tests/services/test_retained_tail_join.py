@@ -96,11 +96,11 @@ class _HistoryFeed:
         await asyncio.Event().wait()
 
     async def recent_closed_bars(
-        self, symbol: str, *, use_rth: bool = True, lookback_days: int = 5
+        self, symbol: str, *, use_rth: bool = True, lookback_sessions: int = 5
     ) -> list[MarketDataBar]:
         del symbol
         assert use_rth is False  # the ledger retains unfiltered observations
-        self.lookbacks.append(lookback_days)
+        self.lookbacks.append(lookback_sessions)
         return list(self._bars)
 
 
@@ -153,10 +153,12 @@ async def test_join_fills_the_hole_from_history() -> None:
     feed = _HistoryFeed(_regular_bars(_THU, until_end_ms=now_ms))
 
     join = await join_retained_tail(
-        feed, symbol="SPY", session=_RTH, retained_end_ms=_et(_THU, 10, 7), now_ms=now_ms, lookback_days=5
+        feed, symbol="SPY", session=_RTH, retained_end_ms=_et(_THU, 10, 7), now_ms=now_ms, lookback_sessions=5
     )
 
-    assert feed.lookbacks == [1]
+    # Wednesday's session is the last one completed, and reaches back before the
+    # tail; one more is asked for, since the source counts from its own clock.
+    assert feed.lookbacks == [2]
     assert join.filled[0].start_ms == _et(_THU, 10, 7)
     assert join.filled[-1].end_ms == _et(_THU, 13, 0)
     assert len(join.filled) == 173
@@ -164,10 +166,10 @@ async def test_join_fills_the_hole_from_history() -> None:
 
 
 @pytest.mark.parametrize(
-    ("retained_end_ms", "now_ms", "lookback_days"),
+    ("retained_end_ms", "now_ms", "lookback_sessions"),
     [
         pytest.param(_et(_THU, 10, 7), _et(_THU, 10, 7) + 59_000, 5, id="nothing_is_owed"),
-        # Review: Friday close to Monday 08:30 with a one-day lookback is not refused,
+        # Review: Friday close to Monday 08:30 with a one-session lookback is not refused,
         # and -- nothing being owed -- neither fetches nor drops the retained bars.
         pytest.param(
             session_window_for_date(date(2026, 9, 18)).close_ms_utc,
@@ -178,11 +180,11 @@ async def test_join_fills_the_hole_from_history() -> None:
     ],
 )
 @pytest.mark.asyncio
-async def test_join_does_not_fetch_when_nothing_is_owed(retained_end_ms: int, now_ms: int, lookback_days: int) -> None:
+async def test_join_does_not_fetch_when_nothing_is_owed(retained_end_ms: int, now_ms: int, lookback_sessions: int) -> None:
     feed = _HistoryFeed([])
 
     join = await join_retained_tail(
-        feed, symbol="SPY", session=_RTH, retained_end_ms=retained_end_ms, now_ms=now_ms, lookback_days=lookback_days,
+        feed, symbol="SPY", session=_RTH, retained_end_ms=retained_end_ms, now_ms=now_ms, lookback_sessions=lookback_sessions,
     )
 
     assert join.filled == (), "nothing is filled"
@@ -198,17 +200,17 @@ async def test_join_refuses_when_history_misses_an_owed_minute() -> None:
     with pytest.raises(MarketDataFeedError) as refused:
         await join_retained_tail(
             _HistoryFeed(bars), symbol="SPY", session=_RTH,
-            retained_end_ms=_et(_THU, 10, 7), now_ms=now_ms, lookback_days=5,
+            retained_end_ms=_et(_THU, 10, 7), now_ms=now_ms, lookback_sessions=5,
         )
 
     assert refused.value.reason == RESUME_HOLE_UNFILLED
 
 
 @pytest.mark.parametrize(
-    ("retained_end_ms", "now_ms", "lookback_days", "history_until_ms"),
+    ("retained_end_ms", "now_ms", "lookback_sessions", "history_until_ms"),
     [
         pytest.param(_et(_WED, 17, 0), _et(_THU, 10, 0), 5, None, id="an_extended_session_hole"),
-        # Review P1: a week-old extended-hours gap with a one-day lookback was admitted.
+        # Review P1: a week-old extended-hours gap with a one-session lookback was admitted.
         # The refusal is about the hole the bot sat through, not how much warmup replays.
         pytest.param(
             _et(date(2026, 9, 17), 17, 0),
@@ -221,14 +223,14 @@ async def test_join_refuses_when_history_misses_an_owed_minute() -> None:
 )
 @pytest.mark.asyncio
 async def test_join_refuses_an_extended_session_hole_without_fetching(
-    retained_end_ms: int, now_ms: int, lookback_days: int, history_until_ms: int | None
+    retained_end_ms: int, now_ms: int, lookback_sessions: int, history_until_ms: int | None
 ) -> None:
     feed = _HistoryFeed(_regular_bars(_THU, until_end_ms=history_until_ms))
 
     with pytest.raises(MarketDataFeedError) as refused:
         await join_retained_tail(
             feed, symbol="SPY", session=_EXTENDED,
-            retained_end_ms=retained_end_ms, now_ms=now_ms, lookback_days=lookback_days,
+            retained_end_ms=retained_end_ms, now_ms=now_ms, lookback_sessions=lookback_sessions,
         )
 
     assert refused.value.reason == RESUME_HOLE_AFTER_HOURS, "the hole is refused as an after-hours hole"
@@ -237,14 +239,14 @@ async def test_join_refuses_an_extended_session_hole_without_fetching(
 
 @pytest.mark.asyncio
 async def test_a_hole_longer_than_the_lookback_warms_on_the_lookback_history_only() -> None:
-    """A week-old tail is outside a two-day warmup: fetch two days, not the week."""
+    """A week-old tail is outside a two-session warmup: fetch two sessions, not the week."""
     now_ms = _et(_THU, 13, 0) + 30_000
     history = [*_regular_bars(_WED), *_regular_bars(_THU, until_end_ms=now_ms)]
     feed = _HistoryFeed(history)
 
     join = await join_retained_tail(
         feed, symbol="SPY", session=_RTH,
-        retained_end_ms=_et(date(2026, 9, 16), 10, 7), now_ms=now_ms, lookback_days=2,
+        retained_end_ms=_et(date(2026, 9, 16), 10, 7), now_ms=now_ms, lookback_sessions=2,
     )
 
     assert feed.lookbacks == [2]
@@ -253,19 +255,72 @@ async def test_a_hole_longer_than_the_lookback_warms_on_the_lookback_history_onl
 
 
 @pytest.mark.asyncio
-async def test_history_reaching_back_to_the_tail_fills_the_hole_without_a_floor() -> None:
-    """An outrun hole whose fetched history still reaches the retained tail keeps the
-    retained bars: nothing between them is outside what history covers."""
+async def test_a_hole_inside_the_lookback_asks_for_the_sessions_that_reach_the_tail() -> None:
+    """A tail in the last completed session needs that session, and one more for the source's own clock."""
     now_ms = _et(_THU, 13, 0) + 30_000
     history = [*_regular_bars(_WED), *_regular_bars(_THU, until_end_ms=now_ms)]
+    feed = _HistoryFeed(history)
+
+    join = await join_retained_tail(
+        feed, symbol="SPY", session=_RTH, retained_end_ms=_et(_WED, 10, 0), now_ms=now_ms, lookback_sessions=5,
+    )
+
+    assert feed.lookbacks == [2]
+    assert join.warm_from_ms is None
+    assert join.filled[0].start_ms == _et(_WED, 10, 0)
+
+
+@pytest.mark.asyncio
+async def test_a_hole_reaching_the_oldest_session_of_the_lookback_asks_for_no_more_than_the_lookback() -> None:
+    """The extra session is never past the sealed lookback."""
+    now_ms = _et(_THU, 13, 0) + 30_000
+    history = [*_regular_bars(_WED), *_regular_bars(_THU, until_end_ms=now_ms)]
+    feed = _HistoryFeed(history)
+
+    await join_retained_tail(
+        feed, symbol="SPY", session=_RTH, retained_end_ms=_et(_WED, 10, 0), now_ms=now_ms, lookback_sessions=1,
+    )
+
+    assert feed.lookbacks == [1]
+
+
+@pytest.mark.asyncio
+async def test_a_tail_in_the_oldest_session_of_the_lookback_refuses_history_that_starts_after_it() -> None:
+    """The tail is inside the lookback, so history starting after it is a truncated answer, not an
+    outrun hole: the resume refuses rather than warming past the minutes it skipped (#2849 review)."""
+    now_ms = _et(_THU, 13, 0) + 30_000
+    tuesday = date(2026, 9, 22)
+    history = [
+        *[bar for bar in _regular_bars(tuesday) if bar.start_ms >= _et(tuesday, 10, 2)],
+        *_regular_bars(_WED),
+        *_regular_bars(_THU, until_end_ms=now_ms),
+    ]
+    feed = _HistoryFeed(history)
+
+    with pytest.raises(MarketDataFeedError) as refused:
+        await join_retained_tail(
+            feed, symbol="SPY", session=_RTH, retained_end_ms=_et(tuesday, 10, 0), now_ms=now_ms, lookback_sessions=2,
+        )
+
+    assert refused.value.reason == RESUME_HOLE_UNFILLED
+    assert feed.lookbacks == [2]
+
+
+@pytest.mark.asyncio
+async def test_history_reaching_back_to_the_tail_fills_the_hole_without_a_floor() -> None:
+    """A source that serves more than the lookback (a harness's pinned warmup) can return history
+    that reaches a tail outside it: nothing between them is outside what history covers, so the
+    retained bars are kept."""
+    now_ms = _et(_THU, 13, 0) + 30_000
+    history = [*_regular_bars(date(2026, 9, 22)), *_regular_bars(_WED), *_regular_bars(_THU, until_end_ms=now_ms)]
 
     join = await join_retained_tail(
         _HistoryFeed(history), symbol="SPY", session=_RTH,
-        retained_end_ms=_et(_WED, 10, 0), now_ms=now_ms, lookback_days=1,
+        retained_end_ms=_et(date(2026, 9, 22), 10, 0), now_ms=now_ms, lookback_sessions=1,
     )
 
     assert join.warm_from_ms is None
-    assert join.filled[0].start_ms == _et(_WED, 10, 0)
+    assert join.filled[0].start_ms == _et(date(2026, 9, 22), 10, 0)
 
 
 # ── _RetainedSourceBarFeed (the resumed run's warmup) ───────────────────────
@@ -393,7 +448,7 @@ async def test_a_hole_past_the_lookback_drops_the_stale_retained_bars_from_warmu
             _HistoryFeed(history, live_from_ms=_minute_open(now_ms)), ledger, run_id="run-2", session=_RTH
         )
 
-        warmup = await feed.recent_closed_bars("SPY", use_rth=True, lookback_days=2)
+        warmup = await feed.recent_closed_bars("SPY", use_rth=True, lookback_sessions=2)
 
         assert warmup[0].start_ms == history[0].start_ms
         join = ledger.warmup_join(run_id="run-2")
@@ -491,12 +546,12 @@ async def test_a_later_resume_inherits_the_warm_floor_of_an_outrun_hole(
         _pin_clock(monkeypatch, now_ms)
         await _RetainedSourceBarFeed(
             _HistoryFeed(history, live_from_ms=_minute_open(now_ms)), ledger, run_id="run-2", session=_RTH
-        ).recent_closed_bars("SPY", use_rth=True, lookback_days=2)
+        ).recent_closed_bars("SPY", use_rth=True, lookback_sessions=2)
 
         _pin_clock(monkeypatch, now_ms + 10_000)
         warmup = await _RetainedSourceBarFeed(
             _HistoryFeed([], live_from_ms=_minute_open(now_ms)), ledger, run_id="run-3", session=_RTH
-        ).recent_closed_bars("SPY", use_rth=True, lookback_days=2)
+        ).recent_closed_bars("SPY", use_rth=True, lookback_sessions=2)
 
         assert warmup[0].start_ms == history[0].start_ms
         assert ledger.warm_floor_ms(run_id="run-3") == history[0].start_ms
@@ -543,8 +598,8 @@ async def test_history_buckets_are_never_flagged_as_crash_candidates() -> None:
     class _Feed:
         feed_id = "ibkr"
 
-        async def recent_closed_bars(self, symbol: str, *, use_rth: bool, lookback_days: int) -> list[MarketDataBar]:
-            del symbol, use_rth, lookback_days
+        async def recent_closed_bars(self, symbol: str, *, use_rth: bool, lookback_sessions: int) -> list[MarketDataBar]:
+            del symbol, use_rth, lookback_sessions
             return [filled, live]
 
     uncaptured = await replay_warmup_bars(
