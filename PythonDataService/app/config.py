@@ -413,7 +413,7 @@ class Settings(BaseSettings):
     OPTION_ARCHIVE_STAGING_MAX_BYTES: int = Field(default=1024**3, ge=1)
     # Option vendor requests one process keeps in flight (option_lake.vendor_request_gate). The paid plan has no
     # per-minute cap and each request mostly waits on the vendor, so more in flight is faster until it pushes back.
-    OPTION_VENDOR_REQUESTS_IN_FLIGHT: int = Field(default=4, ge=1, le=32)
+    OPTION_VENDOR_REQUESTS_IN_FLIGHT: int = Field(default=4, ge=1, le=64)
     # Root identity (#1876, PR A of #1861): the physical lake root this
     # deployment is configured to treat as active. Empty means "the legacy
     # single root" — active_root_id() below falls back to LEGACY_ROOT_ID,
