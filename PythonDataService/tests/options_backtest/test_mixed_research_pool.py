@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -75,7 +76,7 @@ async def test_real_mixed_owners_advance_and_options_backtests_and_studies_share
     async def receipt(root, mode, path, digest, size):
         return seeded_lake_catalog.get((root, mode, path)) == (digest, size)
 
-    async def receipts(requests):
+    async def receipts(requests: Sequence[tuple[UUID, str, str, str, int]]) -> frozenset[int]:
         # The parent's admission batcher asks the set-based form; ``fake_catalog``
         # replaces it with answers from its own rows, which hold no Signal lake.
         return frozenset([index for index, request in enumerate(requests) if await receipt(*request)])
