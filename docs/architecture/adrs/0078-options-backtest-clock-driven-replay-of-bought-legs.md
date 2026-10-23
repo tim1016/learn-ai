@@ -271,6 +271,8 @@ A day another request is fetching right now is not a failure. A run's capture wa
 
 Why. Two runs at once must not double the rate the vendor sees, and nothing should be asked of the vendor twice.
 
+**Configurable limit amendment (#3479, #3480; owner, 2026-10-22).** The one limit is now the deployment setting `OPTION_VENDOR_REQUESTS_IN_FLIGHT`: default four, at most 64. It still bounds the whole process through the same gate. The owner raised it on the archive machine to capture the two-year option backlog faster. Each request mostly waits on the vendor, and the paid plan has no per-minute cap. At 32 in flight the vendor answered every request without throttling. A vendor 429 puts that session back on retry, so a vendor that throttles slows the archive without stalling it.
+
 ### 17. A stored day that cannot be read, or holds a bar that cannot be placed, is refused whole
 
 *Whose:* made for the owner. It applies the fail-fast rule of the temporal-rigor rules.
