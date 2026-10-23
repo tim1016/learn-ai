@@ -34,7 +34,16 @@ class OptionsCandidateSampling(BaseModel):
     explanation: str
 
 
-class OptionsCandidateCoverage(BaseModel):
+class OptionsHeldMarkRule(BaseModel):
+    """The held-minute mark rule an evaluation was valued under, and the marks that rule carried (ADR 0080)."""
+
+    mark_rule: str
+    carried_held_marks: int = Field(ge=0)
+    carried_share_percent: str
+    longest_carried_run: int = Field(ge=0)
+
+
+class OptionsCandidateCoverage(OptionsHeldMarkRule):
     scheduled_sessions: int
     replayed_sessions: int
     traded_sessions: int

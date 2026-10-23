@@ -17,6 +17,7 @@ from app.options_backtest.run import run_sessions
 from app.options_bots.golden_proof import setup_sha256
 from app.research.options_golden_search import approval, identity
 from app.research.options_golden_search.evaluator import evaluate_setup
+from app.research.options_golden_search.marks import MARK_RULE_V2
 from app.research.options_golden_search.planning import freeze_protocol
 from app.research.options_golden_search.protocol import Knob, Window
 from app.research.persistence.fence import StaleAttemptError
@@ -206,3 +207,31 @@ def test_owner_exception_persists_exact_acknowledged_gate_ids_in_manifest_and_go
     assert manifest["failed_rules"][0]["gate_id"] == "final:exposure"
     assert publication.records[0].evidence["waived_gate_ids"] == ["final:exposure"]
     assert publication.records[0].evidence["verdict"] == "owner_exception"
+
+
+def test_a_v1_manifest_names_no_mark_rule_so_its_hash_is_as_it_always_was(publication: SimpleNamespace) -> None:
+    import json
+
+    publication.run()
+    manifest = json.loads(publication.manifests[0][2])
+    assert "mark_rule" not in manifest and "carried_marks" not in manifest
+    assert "mark_rule" not in manifest["protocol"]
+
+
+def test_a_v2_manifest_records_the_rule_and_the_approved_evaluations_carried_marks(publication: SimpleNamespace) -> None:
+    import json
+
+    written, data = scene((WED,), exits=("2",), missing_minute=7)
+    window = Window.model_validate(publication.request_row["protocol"]["final"])
+    window = window.model_copy(update={"end_ms": publication.scored.sessions[-1].session_close_ms + 1, "session_ms": (open_ms(WED),)})
+    publication.scored = evaluate_setup(written, window, data, mark_rule=MARK_RULE_V2)
+    publication.request_row["protocol"] = {**publication.request_row["protocol"], "mark_rule": MARK_RULE_V2}
+    publication.run()
+    manifest = json.loads(publication.manifests[0][2])
+    assert manifest["mark_rule"] == manifest["protocol"]["mark_rule"] == MARK_RULE_V2
+    # Minutes 6 to 60 hold one leg: 55 required marks, one of them (minute 7) carried from minute 6's close.
+    assert manifest["carried_marks"] == {
+        "required_held_marks": 55, "carried_held_marks": 1,
+        "carried_share_of_required_held_marks": "0.0" + "18" * 25,
+        "longest_carried_run": 1,
+    }

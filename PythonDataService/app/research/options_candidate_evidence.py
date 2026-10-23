@@ -8,9 +8,11 @@ from __future__ import annotations
 import asyncio
 from collections import OrderedDict
 from dataclasses import dataclass
+from decimal import Decimal, localcontext
 from threading import Lock
 from typing import Any, Literal
 
+from app.options_backtest import fills
 from app.options_backtest.describe import describe_setup, leg_sentences
 from app.options_backtest.phrases import distance
 from app.options_backtest.session_clock import full_session_clock
@@ -19,6 +21,7 @@ from app.options_bots.golden_proof import setup_sha256
 from app.research.golden_search.proof import BlobStore
 from app.research.options_golden_search import repository as repo
 from app.research.options_golden_search.evaluator import EvaluationResult
+from app.research.options_golden_search.marks import value_session
 from app.research.options_golden_search.policy import classify
 from app.research.options_golden_search.projections import candidate
 from app.research.options_golden_search.protocol import OptionsSearchProtocol, Window, materialize
@@ -88,6 +91,15 @@ def resolve(row: dict[str, Any], digest: str, scope: Scope) -> tuple[OptionsSear
     return protocol, setup, window, hash_payload(identity)
 
 
+def mark_rule_disclosure(result: EvaluationResult) -> dict[str, Any]:
+    """The mark rule and the carried marks one retained evaluation discloses; a v1 evaluation carried none (ADR 0080)."""
+    metrics = result.metrics
+    with localcontext(fills.EXACT):
+        percent = str((metrics.carried_share_of_required_held_marks or Decimal(0)) * 100)
+    return {"mark_rule": metrics.mark_rule, "carried_held_marks": metrics.carried_held_marks or 0,
+        "carried_share_percent": percent, "longest_carried_run": metrics.longest_carried_run or 0}
+
+
 def label(setup: OptionsBacktestSetup, original: bool) -> str:
     legs = " / ".join(" ".join(leg_sentences(leg)) for leg in setup.legs)
     timing = f"Entry {distance(setup.entry)}; exit {distance(setup.exit)}."
@@ -153,7 +165,8 @@ def project(evidence: RetainedOptionsEvidence, *, session_offset: int = 0, sessi
     description = describe_setup(setup, full_session=full_session_clock(as_of_ms=window.start_ms))
     # The legacy display subset omits unknown valuations. Restore explicit break
     # markers without changing its financial values or recomputing any gate.
-    missing = {point.at_ms for session in result.sessions for point in session.observations if point.equity_usd is None}
+    missing = {point.at_ms for session in result.sessions
+        for point in value_session(session.observations, result.mark_rule).observations if point.equity_usd is None}
     by_time = {point["timestamp_ms"]: point for point in projected["equity"]}
     by_time.update({at: {"timestamp_ms": at, "equity_usd": None, "drawdown_usd": None} for at in missing})
     curve_available = len(by_time) <= MAX_CURVE_POINTS
@@ -166,7 +179,8 @@ def project(evidence: RetainedOptionsEvidence, *, session_offset: int = 0, sessi
             *description.square_off, *description.costs, *description.notices], candidate=Candidate.model_validate(projected),
         coverage=OptionsCandidateCoverage(scheduled_sessions=len(window.session_ms), replayed_sessions=len(result.sessions),
             traded_sessions=result.metrics.completed_traded_sessions, required_held_marks=result.metrics.required_held_marks,
-            missing_held_marks=result.metrics.missing_held_marks, complete=complete and not result.metrics.technical_failures),
+            missing_held_marks=result.metrics.missing_held_marks, complete=complete and not result.metrics.technical_failures,
+            **mark_rule_disclosure(result)),
         sampling=OptionsCandidateSampling(state="available" if curve_available else "unavailable",
             raw_observations=sum(len(s.observations) for s in result.sessions), displayed_observations=len(projected["equity"]),
             explanation="Retained display subset with every missing valuation preserved as a gap. Full retained evidence determines metrics."

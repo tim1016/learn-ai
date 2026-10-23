@@ -15,6 +15,7 @@ from app.research.options_golden_search import repository as repo
 from app.research.options_golden_search.dispatch import pins_from_wire, pins_to_wire
 from app.research.options_golden_search.evaluator import EvaluationResult, evaluate_setup, with_input_failures
 from app.research.options_golden_search.identity import execution_identity
+from app.research.options_golden_search.marks import MARK_RULE_V1
 from app.research.options_golden_search.metrics import (
     evidence_from_json,
     evidence_to_json,
@@ -54,10 +55,12 @@ type Projection = Callable[[Any, Window, str, EvaluationResult], Callable[[dict[
 
 _SCALAR_METRICS = ("net_profit_usd", "max_drawdown_fraction", "sharpe", "sharpe_unavailable_reason",
     "daily_observation_count", "completed_traded_sessions", "max_recovery_sessions", "ongoing_recovery", "technical_failures")
+_MARK_RULE_METRICS = ("mark_rule", "carried_held_marks", "carried_share_of_required_held_marks", "longest_carried_run")
 
 
 def metric_summary(metrics: Any) -> dict[str, Any]:
-    return {name: exact_data(getattr(metrics, name)) for name in _SCALAR_METRICS}
+    names = _SCALAR_METRICS if metrics.mark_rule == MARK_RULE_V1 else (*_SCALAR_METRICS, *_MARK_RULE_METRICS)
+    return {name: exact_data(getattr(metrics, name)) for name in names}
 
 
 def summary_metrics(summary: dict[str, Any]) -> SimpleNamespace:
@@ -132,13 +135,14 @@ class StudyEvaluator:
         payload = json.loads(self.blobs.get(stored["evidence_blob"]))
         sessions = tuple(evidence_from_json(s) for s in payload["sessions"])
         metrics = summarize_evidence(sessions,starting_capital_usd=self.protocol.setup.starting_cash_usd,
-            annualization_sessions=window.annualization_sessions,risk_free_daily_return=self.protocol.policy.risk_free_daily_return)
+            annualization_sessions=window.annualization_sessions,risk_free_daily_return=self.protocol.policy.risk_free_daily_return,
+            mark_rule=self.protocol.mark_rule)
         input_failures = tuple(payload.get("input_failures", ()))
         metrics = with_input_failures(metrics, input_failures)
         if hash_payload(exact_data(metrics)) != stored["metrics_sha256"] or metric_summary(metrics) != stored["metrics"]:
             raise ValueError("Retained trace no longer reproduces its recorded qualification metrics.")
         pins = pins_from_wire(payload["pins"])
-        return EvaluationResult(sessions,pins,metrics,len(window.session_ms),input_failures)
+        return EvaluationResult(sessions,pins,metrics,len(window.session_ms),input_failures,self.protocol.mark_rule)
 
     def __call__(self, setup, window: Window, scenario: str) -> Evaluation:
         return self.evaluate_batch([(setup,window,scenario)])[0]
@@ -237,7 +241,8 @@ class StudyEvaluator:
                     payload={"setup": stressed.model_dump(mode="json"), "window": window_wires[window.key],
                         "snapshot": snapshot_wire, "blob_root": str(self.blobs.root),
                         "identity": self.protocol.identities, "risk_free_daily_return": self.protocol.policy.risk_free_daily_return,
-                        "fee_multiplier": str(scenario_policy.effective_fee_multiplier)}, begin=begin, on_generation=advance))
+                        "fee_multiplier": str(scenario_policy.effective_fee_multiplier),
+                        "mark_rule": self.protocol.mark_rule}, begin=begin, on_generation=advance))
             try:
                 for delivery in dispatch(items):
                     self.check()
@@ -255,7 +260,8 @@ class StudyEvaluator:
                 from app.engine.run_gate import one_backtest_in_flight
                 with one_backtest_in_flight(while_waiting=self.check):
                     result = evaluate_setup(stressed, window, data, risk_free_daily_return=self.protocol.policy.risk_free_daily_return,
-                        fee_multiplier=scenario_policy.effective_fee_multiplier, should_stop=self.check, on_progress=self.work_progress)
+                        fee_multiplier=scenario_policy.effective_fee_multiplier, mark_rule=self.protocol.mark_rule,
+                        should_stop=self.check, on_progress=self.work_progress)
                 persist(key, result, sorted(data.actual_reads), task_gen)
                 del result
 
@@ -352,7 +358,8 @@ def research(row: dict[str, Any], evaluator: StudyEvaluator) -> dict[str, Any]:
         pooled = stitch_fold_evidence(forward_evidence,starting_capital_usd=protocol.setup.starting_cash_usd)
         window = pooled_window(protocol)
         metrics = summarize_evidence(pooled,starting_capital_usd=protocol.setup.starting_cash_usd,
-            annualization_sessions=window.annualization_sessions,risk_free_daily_return=protocol.policy.risk_free_daily_return)
+            annualization_sessions=window.annualization_sessions,risk_free_daily_return=protocol.policy.risk_free_daily_return,
+            mark_rule=protocol.mark_rule)
         outcomes.extend(gates(classify(metrics,protocol.policy,window,"pooled_forward")))
     else:
         outcomes.append({"gate_id":"pooled_forward:coverage","status":"not_enough_evidence","actual":str(len(forward_evidence)),"required":str(len(protocol.folds)),"reason":"Procedure evidence requires every declared forward fold."})

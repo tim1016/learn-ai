@@ -16,6 +16,7 @@ from app.options_bots.golden_proof import setup_sha256
 from app.research.options_candidate_evidence import RetainedOptionsEvidence, project
 from app.research.options_golden_search.approval import verify_recorded_study
 from app.research.options_golden_search.evaluator import EvaluationResult, evaluate_setup
+from app.research.options_golden_search.marks import MARK_RULE_V1, MARK_RULE_V2
 from app.research.options_golden_search.planning import freeze_protocol
 from app.research.options_golden_search.policy import Metrics, classify
 from app.research.options_golden_search.protocol import CostScenario, Knob, OptionsSearchProtocol, Policy, Window
@@ -57,7 +58,7 @@ class ReplayEvaluator:
         if key not in self.results:
             if self.verify_only:
                 raise ValueError("Retained evaluation is missing; verification cannot authorize replay")
-            self.results[key] = evaluate_setup(written, window, self.data)
+            self.results[key] = evaluate_setup(written, window, self.data, mark_rule=self.protocol.mark_rule)
         result = self.results[key]
         scope = "training" if window.key.startswith("training_") else "forward" if window.key.startswith("forward_") else window.key
         verdict = classify(result.metrics, self.protocol.policy, window, scope)
@@ -84,14 +85,15 @@ class StageHistory(FakeRunData):
         return 0
 
 
-@pytest.fixture(scope="module")
-def experiment() -> tuple[OptionsSearchProtocol, FakeRunData]:
+def _experiment(*, silent_minute: int | None = None) -> tuple[OptionsSearchProtocol, FakeRunData]:
     days = tuple(expected_sessions(date(2024, 1, 1), date(2024, 5, 31)))
     options = {}
     for index, day in enumerate(days):
         exit_price = "2" if index % 2 == 0 else "3"
         # 10% stop loses $10 at minute 8; 20% stop survives the .85 dip and wins $100/$200.
         bars = {**flat("1", 5, 60), 7: ("1", "0.85"), 8: ("0.9", "1"), 61: (exit_price, exit_price)}
+        if silent_minute is not None:
+            del bars[silent_minute]  # the held contract prints nothing this minute
         options[(contract_on(day, "call", "500"), day)] = option_bars(day, bars)
     written = setup(leg(stop=("percent", "10")))
     policy = Policy(min_sharpe=0, min_activity_per_year=1, min_daily_observations=2,
@@ -102,6 +104,11 @@ def experiment() -> tuple[OptionsSearchProtocol, FakeRunData]:
     data = StageHistory(underlying={day: underlying_bars(day, steady("500")) for day in days},
                        listings={day: listing_on(day) for day in days}, options=options)
     return protocol, data
+
+
+@pytest.fixture(scope="module")
+def experiment() -> tuple[OptionsSearchProtocol, FakeRunData]:
+    return _experiment()
 
 
 def _row(protocol: OptionsSearchProtocol) -> dict[str, Any]:
@@ -268,3 +275,68 @@ def test_rejected_diagnostics_are_bounded_but_keep_the_total(experiment, monkeyp
     row = research(_row(plan), ReplayEvaluator(plan, data))
     assert len([item for item in row["candidates"] if not item["is_original"]]) == 1
     assert row["rejected_candidate_count"] == 3
+
+
+@pytest.fixture(scope="module")
+def silent_minute_study() -> tuple[dict[str, Any], ReplayEvaluator]:
+    """A mark rule v2 study whose held contract prints nothing at minute 20 of every session."""
+    original, data = _experiment(silent_minute=20)
+    protocol = original.model_copy(update={"mark_rule": MARK_RULE_V2})
+    evaluator = ReplayEvaluator(protocol, data)
+    row = research(_row(protocol), evaluator)
+    row.update(phase="final", finalists=[candidate["candidate_hash"] for candidate in row["candidates"]])
+    return final(row, evaluator), evaluator
+
+
+def _rows(candidate: dict[str, Any]) -> dict[str, str]:
+    return {item["label"]: item["value"] for item in candidate["evidence"]}
+
+
+def test_a_v2_study_qualifies_through_a_silent_minute_and_discloses_the_marks_it_carried(
+    silent_minute_study: tuple[dict[str, Any], ReplayEvaluator],
+) -> None:
+    row, evaluator = silent_minute_study
+    protocol = evaluator.protocol
+    assert protocol.protocol_hash == row["protocol_hash"] and protocol.model_dump(mode="json")["mark_rule"] == MARK_RULE_V2
+    assert all(outcome["status"] == "meets_rules" for outcome in row["gate_outcomes"])
+    winner = next(candidate for candidate in row["candidates"] if not candidate["is_original"])
+    original = next(candidate for candidate in row["candidates"] if candidate["is_original"])
+    assert winner["verdict"] == "meets_rules"
+    # The 20% stop holds through minute 20 in every session; the 10% stop is out at minute 8.
+    assert _rows(winner)["mark rule"] == MARK_RULE_V2
+    assert _rows(winner)["carried held marks"] == str(len(protocol.development.session_ms))
+    assert _rows(winner)["longest carried run"] == "1"
+    assert _rows(original)["carried held marks"] == "0"
+    final_winner = next(candidate for candidate in row["final_results"] if not candidate["is_original"])
+    assert final_winner["verdict"] == "meets_rules"
+    assert _rows(final_winner)["carried held marks"] == str(len(protocol.final.session_ms))
+
+
+def test_a_v2_study_reconstructs_from_its_retained_replays_without_new_reads(
+    silent_minute_study: tuple[dict[str, Any], ReplayEvaluator],
+) -> None:
+    row, evaluator = silent_minute_study
+    before, reads = copy.deepcopy(row), len(evaluator.data.asked)
+    verify_recorded_study(row, evaluator)
+    assert row == before and len(evaluator.data.asked) == reads
+
+
+def test_rejected_diagnostics_of_a_v2_study_also_name_their_rule_and_carried_marks() -> None:
+    original, data = _experiment(silent_minute=20)
+    protocol = original.model_copy(update={"mark_rule": MARK_RULE_V2,
+        "policy": original.policy.model_copy(update={"min_sharpe": 1e9})})
+    row = research(_row(protocol), ReplayEvaluator(protocol, data))
+    rejected = [candidate for candidate in row["candidates"] if not candidate["is_original"]]
+    assert rejected
+    assert all(_rows(candidate)["mark rule"] == MARK_RULE_V2 and "carried held marks" in _rows(candidate) for candidate in rejected)
+
+
+def test_the_original_rule_still_stops_the_same_silent_history_and_shows_no_mark_rule_rows() -> None:
+    protocol, data = _experiment(silent_minute=20)
+    assert protocol.mark_rule == MARK_RULE_V1
+    row = research(_row(protocol), ReplayEvaluator(protocol, data))
+    # The 20% stop is still held at the silent minute; the original 10% stop is out at minute 8 and has no gap.
+    held_through_it = [candidate for candidate in row["candidates"] if not candidate["is_original"]]
+    assert held_through_it and all(candidate["verdict"] == "could_not_evaluate" for candidate in held_through_it)
+    assert any("missing_held_mark" in gate["reason"] for candidate in held_through_it for gate in candidate["gate_outcomes"])
+    assert not any(label == "mark rule" or label.startswith("carried") for candidate in row["candidates"] for label in _rows(candidate))

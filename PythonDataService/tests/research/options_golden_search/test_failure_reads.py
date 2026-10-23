@@ -20,12 +20,13 @@ from app.research.golden_search.proof import BlobStore
 from app.research.options_golden_search import repository as repo
 from app.research.options_golden_search import stages
 from app.research.options_golden_search.evaluator import evaluate_setup
-from app.research.options_golden_search.protocol import Window
+from app.research.options_golden_search.marks import MARK_RULE_V1, MARK_RULE_V2
+from app.research.options_golden_search.protocol import OptionsSearchProtocol, Window
 from app.research.options_golden_search.snapshots import Snapshot
 from app.routers.options_failure_evidence import router
 from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import ny_datetime
-from tests.research.options_golden_search._evidence import scene
+from tests.research.options_golden_search._evidence import as_a_new_linked_study_under_mark_rule_v2, scene
 
 FIXTURES = Path(__file__).parents[2] / "fixtures" / "options_evidence"
 
@@ -52,6 +53,27 @@ def test_real_missing_marks_remain_unknown_despite_actual_closing_fill(retained:
     assert view.items[0].contract == "SPY241106P00588000"
     assert "Cause not established" in view.items[0].explanation
     assert view.items[0].expected_input_sha256 is not None
+
+
+def test_v2_values_the_real_gaps_so_no_missing_mark_event_remains_and_the_carried_marks_are_disclosed(
+    retained: tuple, tmp_path: Path,
+) -> None:
+    _evidence, row, blobs = retained
+    data = json.loads((FIXTURES / "development-evidence.json").read_text())
+    linked, record = as_a_new_linked_study_under_mark_rule_v2(row, data["record"], blobs)
+    digest = reader.setup_sha256(OptionsSearchProtocol.model_validate(row["protocol"]).setup)
+    evidence = reader.load_record(linked, record, digest, "development", blobs=blobs)
+    view = failures.project(evidence, linked)
+    assert (view.mark_rule, view.carried_held_marks, view.longest_carried_run) == (MARK_RULE_V2, 2, 1)
+    assert (view.required_held_marks, view.present_held_marks, view.missing_held_marks) == (599, 597, 0)
+    assert view.present_held_marks + view.carried_held_marks + view.missing_held_marks == view.required_held_marks
+    assert view.items == [] and view.total == 0
+    assert not any("missing_held_mark" in reason for reason in view.technical_failures)
+    with pytest.raises(LookupError, match="not in the retained evaluation"):
+        failures.inspect_record(evidence, linked, evidence.result.sessions[-1].session_open_ms, 1730925480000, "put_atm")
+    # The original study still reports its two gaps as missing under its own rule.
+    original = failures.project(reader.load_record(row, data["record"], digest, "development", blobs=blobs), row)
+    assert (original.mark_rule, original.carried_held_marks, original.missing_held_marks) == (MARK_RULE_V1, 0, 2)
 
 
 def test_unclosed_position_is_not_a_closing_fill(retained: tuple) -> None:

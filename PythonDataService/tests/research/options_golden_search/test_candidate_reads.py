@@ -13,10 +13,12 @@ from app.research import options_candidate_evidence as reader
 from app.research.golden_search.proof import BlobStore, ProofMismatchError
 from app.research.options_golden_search import repository as repo
 from app.research.options_golden_search import stages
+from app.research.options_golden_search.marks import MARK_RULE_V1, MARK_RULE_V2
 from app.research.options_golden_search.protocol import OptionsSearchProtocol, materialize
 from app.research.runs.hashing import hash_payload
 from app.routers.options_golden_search import router
 from app.schemas.options_golden_search import StudyDetail
+from tests.research.options_golden_search._evidence import as_a_new_linked_study_under_mark_rule_v2
 
 FIXTURES = Path(__file__).parents[2] / "fixtures" / "options_evidence"
 
@@ -53,6 +55,40 @@ def test_rejected_candidate_restores_null_gaps_and_partial_scope_from_retained_b
     assert result.candidate.sessions[0].net_profit_usd == "0"
     assert any("entry is read" in line for line in result.settings_description)
     assert any("exit is read" in line for line in result.settings_description)
+
+
+def test_the_retained_study_keeps_its_original_identities_and_reads_under_mark_rule_v1(retained: tuple) -> None:
+    row, record, blobs = retained
+    protocol = OptionsSearchProtocol.model_validate(row["protocol"])
+    digest = reader.setup_sha256(protocol.setup)
+    assert protocol.mark_rule == MARK_RULE_V1
+    assert protocol.model_dump(mode="json") == row["protocol"], "a protocol frozen before the rule names none and re-serializes as written"
+    assert protocol.protocol_hash == row["protocol_hash"] == hash_payload(row["protocol"])
+    assert reader.resolve(row, digest, "development")[3] == record["key"], "the retained evaluation identity is unmoved"
+    result = reader.project(reader.load_record(row, record, digest, "development", blobs=blobs))
+    assert result.coverage.mark_rule == MARK_RULE_V1
+    assert (result.coverage.carried_held_marks, result.coverage.longest_carried_run) == (0, 0)
+    assert result.coverage.carried_share_percent == "0"
+    assert not any("carried" in item.label or item.label == "mark rule" for item in result.candidate.evidence)
+
+
+def test_a_new_linked_study_values_the_same_retained_bytes_under_v2_and_discloses_the_carried_marks(retained: tuple) -> None:
+    row, record, blobs = retained
+    linked, linked_record = as_a_new_linked_study_under_mark_rule_v2(row, record, blobs)
+    assert linked["protocol_hash"] != row["protocol_hash"] and linked_record["key"] != record["key"]
+    assert linked["protocol"]["mark_rule"] == MARK_RULE_V2
+    digest = reader.setup_sha256(OptionsSearchProtocol.model_validate(row["protocol"]).setup)
+    result = reader.project(reader.load_record(linked, linked_record, digest, "development", blobs=blobs), session_offset=2, session_limit=2)
+    coverage = result.coverage
+    assert (coverage.mark_rule, coverage.required_held_marks, coverage.missing_held_marks) == (MARK_RULE_V2, 599, 0)
+    assert (coverage.carried_held_marks, coverage.longest_carried_run) == (2, 1)
+    assert coverage.carried_share_percent.startswith("0.333889816360601001669449")  # 200 / 599
+    assert [p.timestamp_ms for p in result.candidate.equity if p.equity_usd is None] == [], "a carried minute is valued, not a gap"
+    assert {item.label: item.value for item in result.candidate.evidence}["carried held marks"] == "2"
+    assert {item.label: item.value for item in result.candidate.evidence}["mark rule"] == MARK_RULE_V2
+    assert result.candidate.net_profit_usd == "-339.60", "net profit still comes from the actual fills"
+    technical = next(gate for gate in result.candidate.gate_outcomes if gate.gate_id.endswith("technical_validity"))
+    assert "missing_held_mark" not in (technical.reason or ""), "a carried minute is no longer a technical failure"
 
 
 def test_unopened_final_undeclared_point_and_changed_evaluation_identity_are_refused(retained: tuple) -> None:

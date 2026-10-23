@@ -10,6 +10,7 @@ from app.options_backtest import fills, saved_setups
 from app.options_bots.golden_proof import setup_sha256
 from app.research.options_golden_search import repository as repo
 from app.research.options_golden_search.identity import execution_identity
+from app.research.options_golden_search.marks import MARK_RULE_V1, MARK_RULE_V2
 from app.research.options_golden_search.planning import budget_plan, freeze_protocol
 from app.research.options_golden_search.protocol import OptionsSearchProtocol, Policy, declared_knobs, materialize
 from app.research.persistence import lifecycle
@@ -82,7 +83,7 @@ def build_protocol(request: PlanRequest, setup: Any) -> OptionsSearchProtocol:
     with localcontext(fills.EXACT):
         policy["max_drawdown_fraction"] = request.policy.max_drawdown_percent / 100
     return freeze_protocol(setup, request.knobs, **request.history.model_dump(), policy=Policy(**policy),
-        identities=execution_identity(), candidate_identity_version=2, method=request.method, budget=request.budget, finalist_count=request.finalist_count,
+        identities=execution_identity(), candidate_identity_version=2, mark_rule=MARK_RULE_V2, method=request.method, budget=request.budget, finalist_count=request.finalist_count,
         stress=request.stress, zoom=request.zoom, pair_audits=request.pair_audits)
 
 
@@ -135,7 +136,9 @@ async def prepare(request: PlanRequest) -> tuple[Preflight, OptionsSearchProtoco
         required_evaluations=budget.unique_upper_bound if budget else 0,
         reserved_evaluations=budget.mandatory_downstream if budget else 0,
         estimated_setup_sessions=budget.replay_session_upper_bound if budget else 0,
-        mark_coverage="Pinned artifact inventory; held-minute coverage is verified separately for each candidate.",
+        mark_coverage="Pinned artifact inventory; held-minute coverage is verified separately for each candidate."
+            + ("" if protocol is None or protocol.mark_rule == MARK_RULE_V1 else
+               f" Mark rule {protocol.mark_rule}: a held contract with no bar in a minute is valued at its previous same-session close and the carried marks are disclosed."),
         exposure=classification, identity=protocol.identities["selection"] if protocol else "unavailable",
         windows=[{"label": w.key, "start_ms": w.start_ms,"end_ms": w.end_ms,"scheduled_sessions":len(w.session_ms),"required_traded_sessions":w.activity_floor} for w in windows]), protocol, snapshot
 
@@ -265,6 +268,7 @@ def protocol_summary(protocol: OptionsSearchProtocol) -> list[dict[str, str]]:
     for knob in protocol.knobs:
         rows.append({"label": knob.path, "value": f"{knob.mode}; order {knob.priority}; values " + repo.dumps(knob.model_dump(mode="json")["values"])})
     rows.extend({"label": "Policy " + key.replace("_", " "), "value": str(value)} for key, value in protocol.policy.model_dump(mode="json").items())
+    rows.append({"label": "Held-minute mark rule", "value": protocol.mark_rule})
     for window in [protocol.development, *[w for fold in protocol.folds for w in (fold.training, fold.forward)], protocol.final]:
         rows.append({"label": window.key, "value": f"{window.start_ms} to {window.end_ms} UTC ms; {len(window.session_ms)} sessions; activity floor {window.activity_floor}"})
     rows.extend([{"label": "Snapshot", "value": protocol.snapshot_id}, {"label": "Executable identity", "value": repo.dumps(protocol.identities)},

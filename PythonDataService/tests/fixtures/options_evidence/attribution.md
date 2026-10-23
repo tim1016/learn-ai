@@ -60,3 +60,10 @@ capture, replay, approval or configuration command was issued to capture them.
 Regeneration requires the same source records and explicitly reviewing any
 changed evidence. `capture.py` writes a new capture to a chosen directory;
 it never overwrites these checked-in fixtures implicitly.
+
+`failure-development.json` and `candidate-development.json` were regenerated
+offline on 2026-10-23 for [#3405](https://github.com/tim1016/learn-ai/issues/3405)
+from the same retained `study-record.json` and `development-evidence.json` bytes,
+through the same read projections. The API shape gained four mark-rule disclosure
+fields (the study is read under `options-held-minute-close-v1`, so they report
+zero carried marks); every earlier field is unchanged.

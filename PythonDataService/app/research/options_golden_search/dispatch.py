@@ -24,6 +24,7 @@ from app.research.golden_search.shared_pool import (
 )
 from app.research.golden_search.worker import WorkerDispatchContext
 from app.research.options_golden_search.evaluator import EvaluationResult, with_input_failures
+from app.research.options_golden_search.marks import MARK_RULE_V1
 from app.research.options_golden_search.metrics import evidence_from_json, evidence_to_json, summarize_evidence
 from app.research.options_golden_search.protocol import Window
 
@@ -70,11 +71,13 @@ class ReadyOptions:
         window = Window.model_validate(self.payload["window"])
         sessions = tuple(evidence_from_json(row) for row in wire["sessions"])
         pins = pins_from_wire(wire["pins"])
+        mark_rule = self.payload.get("mark_rule", MARK_RULE_V1)
         metrics = summarize_evidence(sessions, starting_capital_usd=setup.starting_cash_usd,
             annualization_sessions=window.annualization_sessions,
-            risk_free_daily_return=float(self.payload.get("risk_free_daily_return", 0)))
+            risk_free_daily_return=float(self.payload.get("risk_free_daily_return", 0)), mark_rule=mark_rule)
         input_failures = tuple(wire.get("input_failures", ()))
-        result = EvaluationResult(sessions, pins, with_input_failures(metrics, input_failures), len(window.session_ms), input_failures)
+        result = EvaluationResult(sessions, pins, with_input_failures(metrics, input_failures), len(window.session_ms),
+            input_failures, mark_rule)
         return OptionsDelivery(self.key, self.attempt, self.task_gen, result, tuple(wire["actual_reads"]))
 
 
@@ -151,6 +154,7 @@ def run_options_task(task: Mapping[str, Any], *, out: Any,
         result = evaluate_setup(setup, window, data,
             fee_multiplier=Decimal(payload.get("fee_multiplier", "1")),
             risk_free_daily_return=float(payload.get("risk_free_daily_return", 0)),
+            mark_rule=payload.get("mark_rule", MARK_RULE_V1),
             should_stop=cancel_flag.is_set,
             on_progress=lambda cursor: checkpoint("search", cursor_kind="processed_bars", cursor=cursor) if cursor % 60 == 0 else None)
         state["completed"] = int(state.get("completed", 0)) + 1

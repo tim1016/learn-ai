@@ -5,6 +5,7 @@ import asyncio
 import json
 import time
 from collections.abc import Callable
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -17,9 +18,11 @@ from app.options_backtest.setup import OptionsBacktestSetup
 from app.options_bots.golden_proof import input_manifest
 from app.research.golden_search.proof import BlobStore
 from app.research.golden_search.worker import ResearchWorker, WorkerDispatchContext
-from app.research.options_golden_search.dispatch import ReadyOptions
+from app.research.options_golden_search.dispatch import ReadyOptions, pins_to_wire
 from app.research.options_golden_search.evaluator import evaluate_setup
 from app.research.options_golden_search.identity import execution_identity
+from app.research.options_golden_search.marks import MARK_RULE_V1, MARK_RULE_V2
+from app.research.options_golden_search.metrics import evidence_to_json
 from app.research.options_golden_search.protocol import Window
 from app.research.options_golden_search.snapshots import Snapshot, SnapshotRunData
 from tests._helpers.fake_lake_catalog import FakeCatalog
@@ -38,6 +41,65 @@ from tests.options_backtest._lake import fake_catalog as fake_catalog
 from tests.options_backtest._lake import the_clock_is_fixed as the_clock_is_fixed
 from tests.options_backtest._lake import tmp_lake as tmp_lake
 from tests.options_bots.test_golden_proof import _run
+
+
+@pytest.mark.parametrize(("frozen", "carried", "missing"), [(MARK_RULE_V2, 1, 0), (MARK_RULE_V1, 0, 1), (None, 0, 1)])
+def test_the_parent_values_a_workers_raw_evidence_under_the_frozen_mark_rule(
+    frozen: str | None, carried: int, missing: int,
+) -> None:
+    from app.lean_sidecar.trading_calendar import session_window_for_date
+    from tests.research.options_golden_search._evidence import scene
+
+    day = date(2026, 10, 7)
+    written, data = scene((day,), exits=("2",), missing_minute=7)
+    clock = session_window_for_date(day)
+    window = Window(key="development", start_ms=clock.open_ms_utc, end_ms=clock.close_ms_utc + 1,
+                    session_ms=(clock.open_ms_utc,), annualization_sessions=251, activity_floor=1)
+    raw = evaluate_setup(written, window, data, mark_rule=MARK_RULE_V2)
+    payload = {"setup": written.model_dump(mode="json"), "window": window.model_dump(mode="json")}
+    if frozen is not None:
+        payload["mark_rule"] = frozen
+    item = ReadyOptions(key="b" * 64, attempt=1, task_gen=1, payload=payload)
+    message = {"key": item.key, "options_result": {"sessions": [evidence_to_json(s) for s in raw.sessions],
+        "pins": pins_to_wire(raw.pins), "input_failures": [], "actual_reads": []}}
+    delivered = item.outcome_of(message).result
+    # A payload that names no rule is a study frozen before the rule existed: it means v1.
+    assert delivered.mark_rule == (frozen or MARK_RULE_V1)
+    assert (delivered.metrics.carried_held_marks or 0, delivered.metrics.missing_held_marks) == (carried, missing)
+
+
+@pytest.mark.parametrize(("frozen", "expected"), [(MARK_RULE_V2, MARK_RULE_V2), (None, MARK_RULE_V1)])
+def test_a_worker_replays_under_the_mark_rule_the_study_froze(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, frozen: str | None, expected: str,
+) -> None:
+    import threading
+    from types import SimpleNamespace
+
+    from app.research.options_golden_search import evaluator
+    from app.research.options_golden_search.dispatch import run_options_task
+    from tests.research.options_golden_search._evidence import scene
+
+    written, _data = scene((date(2026, 10, 7),), exits=("2",))
+    window = Window(key="development", start_ms=FRIDAY_OPEN_MS, end_ms=FRIDAY_OPEN_MS + 86_400_000,
+                    session_ms=(FRIDAY_OPEN_MS,), annualization_sessions=251, activity_floor=1)
+    seen: dict[str, object] = {}
+
+    def spy(*_args: object, **kwargs: object) -> SimpleNamespace:
+        seen.update(kwargs)
+        return SimpleNamespace(sessions=(), pins=(), input_failures=())
+
+    messages: list[dict[str, object]] = []
+    monkeypatch.setattr(evaluator, "evaluate_setup", spy)
+    payload = {"setup": written.model_dump(mode="json"), "window": window.model_dump(mode="json"),
+        "snapshot": Snapshot(manifest={}, absent=(), retained_bytes=0).model_dump(mode="json"),
+        "blob_root": str(tmp_path), "identity": execution_identity()}
+    if frozen is not None:
+        payload["mark_rule"] = frozen
+    run_options_task({"key": "k", "options": payload}, out=SimpleNamespace(write=messages.append),
+        ask_admission=lambda _path: b"", cancel_flag=threading.Event(),
+        state={"decoded_cache": SimpleNamespace(take_residency_delta=lambda: ([], []))})
+    assert [message["type"] for message in messages if message["type"] != "checkpoint"] == ["result"]
+    assert seen["mark_rule"] == expected
 
 
 @pytest.mark.parametrize(("width", "reason"), [(3, "must be 1, 2, 4 or 8"), (4, "exceeds the current operator profile")])

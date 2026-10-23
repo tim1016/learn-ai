@@ -25898,8 +25898,16 @@ export interface components {
         };
         /** OptionsCandidateCoverage */
         OptionsCandidateCoverage: {
+            /** Carried Held Marks */
+            carried_held_marks: number;
+            /** Carried Share Percent */
+            carried_share_percent: string;
             /** Complete */
             complete: boolean;
+            /** Longest Carried Run */
+            longest_carried_run: number;
+            /** Mark Rule */
+            mark_rule: string;
             /** Missing Held Marks */
             missing_held_marks: number;
             /** Replayed Sessions */
@@ -26472,6 +26480,10 @@ export interface components {
         OptionsFailureEvidence: {
             /** Candidate Hash */
             candidate_hash: string;
+            /** Carried Held Marks */
+            carried_held_marks: number;
+            /** Carried Share Percent */
+            carried_share_percent: string;
             /** Eligible Fold Winners */
             eligible_fold_winners: number;
             /** End Ms */
@@ -26491,6 +26503,10 @@ export interface components {
             items: components["schemas"]["OptionsFailureEvent"][];
             /** Limit */
             limit: number;
+            /** Longest Carried Run */
+            longest_carried_run: number;
+            /** Mark Rule */
+            mark_rule: string;
             /** Missing Held Marks */
             missing_held_marks: number;
             /** Offset */

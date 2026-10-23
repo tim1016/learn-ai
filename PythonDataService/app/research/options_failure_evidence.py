@@ -14,6 +14,7 @@ from app.options_backtest.results import Fill
 from app.research import options_candidate_evidence as reader
 from app.research.golden_search.proof import BlobStore, ProofMismatchError
 from app.research.options_golden_search import repository as repo
+from app.research.options_golden_search.marks import value_session
 from app.research.options_golden_search.metrics import SessionEvidence
 from app.research.options_golden_search.snapshots import Snapshot, SnapshotRunData
 from app.research.options_golden_search.stages import default_blob_store
@@ -41,7 +42,8 @@ def event(evidence: reader.RetainedOptionsEvidence, session: SessionEvidence, ma
 def events(evidence: reader.RetainedOptionsEvidence) -> list[OptionsFailureEvent]:
     items = []
     for session in evidence.result.sessions:
-        for point in session.observations:
+        # Under mark rule v2 a carried minute is valued, so only a position that has traded nothing is still missing.
+        for point in value_session(session.observations, evidence.result.mark_rule).observations:
             items.extend(event(evidence, session, mark, point.at_ms, "missing_held_mark") for mark in point.held if mark.close is None)
         if session.observations:
             last = session.observations[-1]
@@ -61,8 +63,9 @@ def project(evidence: reader.RetainedOptionsEvidence, row: dict[str, Any], *, of
         start_ms=evidence.window.start_ms, end_ms=evidence.window.end_ms,
         scheduled_sessions=len(evidence.window.session_ms), replayed_sessions=len(evidence.result.sessions),
         traded_sessions=metrics.completed_traded_sessions, required_held_marks=metrics.required_held_marks,
-        present_held_marks=metrics.required_held_marks - metrics.missing_held_marks,
+        present_held_marks=metrics.required_held_marks - metrics.missing_held_marks - (metrics.carried_held_marks or 0),
         missing_held_marks=metrics.missing_held_marks, forward_fold_count=len(evidence.protocol.folds),
+        **reader.mark_rule_disclosure(evidence.result),
         eligible_fold_winners=sum(bool(fold.get("winner_hash")) for fold in folds), final_exposure=final_state,
         risk_complete=not metrics.technical_failures and len(evidence.result.sessions) == len(evidence.window.session_ms),
         technical_failures=list(metrics.technical_failures), items=items[offset:offset + limit],
@@ -72,7 +75,8 @@ def project(evidence: reader.RetainedOptionsEvidence, row: dict[str, Any], *, of
 def inspect_record(evidence: reader.RetainedOptionsEvidence, row: dict[str, Any], session_open_ms: int,
                    at_ms: int, leg_id: str, *, blobs: BlobStore | None = None) -> OptionsFailureInspection:
     session = next((session for session in evidence.result.sessions if session.session_open_ms == session_open_ms), None)
-    point = next((point for point in session.observations if point.at_ms == at_ms), None) if session else None
+    valued = value_session(session.observations, evidence.result.mark_rule).observations if session else ()
+    point = next((point for point in valued if point.at_ms == at_ms), None)
     mark = next((mark for mark in point.held if mark.leg_id == leg_id and mark.close is None), None) if point else None
     if session is None or mark is None:
         raise LookupError("This exact missing held mark is not in the retained evaluation.")

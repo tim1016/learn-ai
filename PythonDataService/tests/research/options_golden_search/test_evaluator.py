@@ -9,12 +9,14 @@ from decimal import Decimal
 import pytest
 
 from app.lean_sidecar.trading_calendar import session_window_for_date
+from app.options_backtest.results import Fill
 from app.options_backtest.run import RunStopped, run_sessions
 from app.options_backtest.setup import OptionsBacktestSetup
 from app.research.options_golden_search.evaluator import evaluate_setup
+from app.research.options_golden_search.marks import MARK_RULE_V1, MARK_RULE_V2
 from app.research.options_golden_search.policy import classify
 from app.research.options_golden_search.protocol import Policy, Window
-from tests.options_backtest._run_data import FRI, THU, WED, open_ms
+from tests.options_backtest._run_data import FRI, THU, WED, open_ms, steady, underlying_bars
 from tests.research.options_golden_search._evidence import scene
 
 D = Decimal
@@ -88,6 +90,45 @@ def test_missing_held_mark_or_marked_session_stops_before_reading_or_funding_nex
         assert any("incomplete_session" in reason for reason in result.metrics.technical_failures)
 
 
+def test_v2_continues_through_a_closed_session_with_a_gap_and_matches_the_ordinary_run_exactly() -> None:
+    setup, ordinary_data = scene((WED, THU), exits=("2", "3"), missing_minute=7)
+    ordinary = run_sessions(setup, (WED, THU), ordinary_data, slippage_ladder=(), cash_ladder=())
+    original = evaluate_setup(setup, _window((WED, THU)), scene((WED, THU), exits=("2", "3"), missing_minute=7)[1])
+    _, data = scene((WED, THU), exits=("2", "3"), missing_minute=7)
+    carried = evaluate_setup(setup, _window((WED, THU)), data, mark_rule=MARK_RULE_V2)
+    assert len(original.sessions) == 1 and original.metrics.technical_failures, "the original rule stops at the gap"
+    assert len(carried.sessions) == 2 and not carried.metrics.technical_failures
+    assert carried.sessions[0] == original.sessions[0], "the first session is replayed and observed identically"
+    assert [session.outcome for session in carried.sessions] == [session.outcome for session in ordinary.sessions]
+    assert [session.cash_before_usd for session in carried.sessions] == [D("10000"), D("10100")]
+    assert carried.metrics.net_profit_usd == ordinary.summary.net_profit_usd == 300
+    assert (carried.metrics.mark_rule, carried.metrics.carried_held_marks, carried.metrics.longest_carried_run) == (MARK_RULE_V2, 2, 1)
+    assert any(call[1] == THU for call in data.asked), "the next session is read once the first is complete"
+
+
+def test_v2_still_stops_before_funding_the_next_day_when_a_leg_is_left_held_at_the_close() -> None:
+    setup, data = scene((WED, THU), exits=("2", "3"), missing_minute=61)
+    result = evaluate_setup(setup, _window((WED, THU)), data, mark_rule=MARK_RULE_V2)
+    assert len(result.sessions) == 1
+    assert any("incomplete_session" in reason for reason in result.metrics.technical_failures)
+    assert not any("missing_held_mark" in reason for reason in result.metrics.technical_failures), "the gap itself is valued"
+    outcome = result.sessions[0].outcome
+    assert outcome.trades[0].exit_reason.value == "marked_not_sold", "a carried price is never a fill or a settlement"
+    assert not isinstance(outcome.trades[0].exit, Fill)
+    assert outcome.cash_change_usd == D("-100"), "the entry paid out and nothing came back: no cash from the carried price"
+    assert all(call[1] == WED for call in data.asked)
+
+
+@pytest.mark.parametrize("mark_rule", [MARK_RULE_V1, MARK_RULE_V2])
+def test_an_underlying_that_did_not_trade_stops_research_under_either_rule(mark_rule: str) -> None:
+    setup, data = scene((WED, THU), exits=("2", "3"))
+    data._underlying[WED] = underlying_bars(WED, steady("500", first=10))
+    result = evaluate_setup(setup, _window((WED, THU)), data, mark_rule=mark_rule)
+    assert len(result.sessions) == 1
+    assert any("missing_entry_underlying" in reason for reason in result.metrics.technical_failures)
+    assert all(call[1] == WED for call in data.asked)
+
+
 @pytest.mark.parametrize("fee_policy", [{"kind": "per_contract", "per_contract_usd": "1"}, {"kind": "estimated"}])
 def test_fee_stress_scales_canonical_per_fill_policy_output_including_estimated_tiers(fee_policy: dict[str, str]) -> None:
     setup, data = scene((FRI,), exits=("2",))
@@ -101,13 +142,14 @@ def test_fee_stress_scales_canonical_per_fill_policy_output_including_estimated_
     assert not stressed.metrics.technical_failures
 
 
-def test_unfunded_close_stops_qualification_and_preserves_unclamped_loss() -> None:
+@pytest.mark.parametrize("mark_rule", [MARK_RULE_V1, MARK_RULE_V2])
+def test_unfunded_close_stops_qualification_and_preserves_unclamped_loss(mark_rule: str) -> None:
     setup, data = scene((WED, THU), exits=("0.001", "3"))
     setup = OptionsBacktestSetup.model_validate({
         **setup.model_dump(mode="python"), "starting_cash_usd": "200",
         "fees": {"kind": "per_contract", "per_contract_usd": "100"},
     })
-    result = evaluate_setup(setup, _window((WED, THU)), data)
+    result = evaluate_setup(setup, _window((WED, THU)), data, mark_rule=mark_rule)
     assert len(result.sessions) == 1
     assert result.metrics.net_profit_usd == -300
     assert result.metrics.max_drawdown_fraction == D("1.5")

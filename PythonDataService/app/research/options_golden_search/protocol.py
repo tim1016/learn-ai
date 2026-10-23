@@ -14,6 +14,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer, model_validator
 
 from app.options_backtest.setup import OptionsBacktestSetup
+from app.research.options_golden_search.marks import MARK_RULE_V1, MarkRule
 from app.research.runs.hashing import hash_payload
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
@@ -117,12 +118,16 @@ class Fold(FrozenModel):
 class OptionsSearchProtocol(FrozenModel):
     version: Literal[1] = 1
     candidate_identity_version: Literal[1, 2] = 1
+    # A protocol frozen before mark rule v2 names no rule and means v1, with its identity unchanged (ADR 0080, #3405).
+    mark_rule: MarkRule = MARK_RULE_V1
 
     @model_serializer(mode="wrap")
     def serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         data = handler(self)
         if self.candidate_identity_version == 1:
             data.pop("candidate_identity_version", None)
+        if self.mark_rule == MARK_RULE_V1:
+            data.pop("mark_rule", None)
         return data
 
     setup: OptionsBacktestSetup
