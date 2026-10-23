@@ -128,40 +128,30 @@ class _SymbolLiveness:
 
 
 
-def _owed_warmup_sessions(lookback_days: int, *, now_ms: int) -> list[tuple[int, int]]:
-    """The regular sessions a ``lookback_days`` warmup must cover, as ``(open_ms, close_ms)``.
+def _owed_warmup_sessions(lookback_sessions: int, *, now_ms: int) -> list[tuple[int, int]]:
+    """The regular sessions a ``lookback_sessions`` warmup must cover, as ``(open_ms, close_ms)``.
 
-    The window is the ``lookback_days`` calendar days ending at ``now_ms``.
-    Every NYSE session it touches is a candidate, from the canonical
-    calendar (half-days keep their early close). A session is **owed** when
-    the window holds at least half of it -- measured on the part that has
-    already happened, so today's session is owed only once half of it has
-    elapsed:
-
-    * a session wholly inside the window is always owed, including one on
-      the window's first ET date (a one-day warmup at 08:30 owes all of the
-      previous session);
-    * at the window's two edges, a session the window holds most of is
-      owed, and a thin sliver is not. A sliver can legitimately come back
-      bar-free -- the few minutes before a close the window starts in, or
-      the first minutes of a session that just opened -- while a response
-      holding no bar of a session the window mostly spans is truncated, not
-      sparse. For a one-day warmup the two edge sessions together span one
-      session, so one of them is always owed while the market is open.
+    The window is the ``lookback_sessions`` most recent completed sessions and
+    whatever follows them (:func:`warmup_window_start_ms`); its sessions come
+    from the canonical calendar, so a half-day keeps its early close and a
+    holiday is no session. A session is **owed** when at least half of it has
+    already happened, so a completed session always is, and today's session
+    only once half of it has elapsed: a response holding no bar of a session
+    that far gone is truncated, while the first minutes of one that just
+    opened can legitimately come back bar-free.
     """
-    window_start_ms = warmup_window_start_ms(lookback_days, now_ms=now_ms)
+    window_start_ms = warmup_window_start_ms(lookback_sessions, now_ms=now_ms)
     owed: list[tuple[int, int]] = []
     for session in expected_sessions(et_date_at_ms(window_start_ms), et_date_at_ms(now_ms)):
         open_ms = session_open_ms_utc(session)
         close_ms = session_close_ms_utc(session)
-        held_ms = min(close_ms, now_ms) - max(open_ms, window_start_ms)
-        if 2 * held_ms >= close_ms - open_ms:
+        if 2 * (min(close_ms, now_ms) - open_ms) >= close_ms - open_ms:
             owed.append((open_ms, close_ms))
     return owed
 
 
 def require_warmup_coverage(
-    bars: Sequence[MarketDataBar], *, lookback_days: int, now_ms: int
+    bars: Sequence[MarketDataBar], *, lookback_sessions: int, now_ms: int
 ) -> None:
     """Refuse fetched warmup history that does not cover its lookback window (#2365).
 
@@ -196,13 +186,13 @@ def require_warmup_coverage(
     rth_starts = sorted(bar.start_ms for bar in bars if bar.session_phase == "RTH")
     uncovered = [
         (open_ms, close_ms)
-        for open_ms, close_ms in _owed_warmup_sessions(lookback_days, now_ms=now_ms)
+        for open_ms, close_ms in _owed_warmup_sessions(lookback_sessions, now_ms=now_ms)
         if bisect_left(rth_starts, open_ms) == bisect_left(rth_starts, close_ms)
     ]
     if not uncovered:
         return
     raise MarketDataFeedError(
-        f"the {lookback_days}-day warmup history holds no regular-hours bar for "
+        f"the {lookback_sessions}-session warmup history holds no regular-hours bar for "
         f"{len(uncovered)} owed session(s), the earliest opening at {uncovered[0][0]} "
         f"(regular-hours bars: {len(rth_starts)}, bars: {len(bars)})",
         reason=WARMUP_HISTORY_UNAVAILABLE,
@@ -497,10 +487,10 @@ class IbkrMarketDataFeed:
         symbol: str,
         *,
         use_rth: bool = True,
-        lookback_days: int = 5,
+        lookback_sessions: int = 5,
     ) -> list[MarketDataBar]:
-        """Return closed 1-minute bars from the trailing ``lookback_days``
-        calendar days, oldest first, via IBKR's read-only historical-data
+        """Return closed 1-minute bars from the trailing ``lookback_sessions``
+        regular sessions, oldest first, via IBKR's read-only historical-data
         endpoint.
 
         Used only to warm up a strategy's indicator state before live
@@ -509,7 +499,7 @@ class IbkrMarketDataFeed:
         itself treated as a decision.
 
         A fetch failure -- or a fetch that leaves a session the
-        ``lookback_days`` window owes without a regular-hours bar (see
+        ``lookback_sessions`` window owes without a regular-hours bar (see
         :func:`require_warmup_coverage`) --
         raises ``MarketDataFeedError`` with reason
         ``WARMUP_HISTORY_UNAVAILABLE`` (#2365). Both used to let the run
@@ -518,23 +508,27 @@ class IbkrMarketDataFeed:
         placed. A run that cannot warm up as sealed does not start; the
         runner records the refusal under that reason.
         """
+        if lookback_sessions < 1:
+            raise ValueError(f"a warmup lookback is at least one session, got {lookback_sessions}")
         normalized_symbol = symbol.upper()
         # Anchor the closed-bar cutoff before broker I/O. A request that starts
         # just before a minute boundary can finish just after it; sampling the
         # clock after the await would then misclassify IBKR's partial snapshot
         # of that minute as closed.
         requested_at_ms = now_ms_utc()
+        request_sessions = lookback_sessions + 1
         try:
             historical = await fetch_historical_minute_bars(
                 self._client,
                 normalized_symbol,
-                # IBKR counts calendar dates including today, rather than a
-                # trailing 24-hour window. Include its first date, then trim
-                # to the sealed window below so warmup never grows.
-                duration=f"{lookback_days + 1} D",
+                # IBKR reads ``N D`` as the N most recent trading sessions, the one
+                # in progress counted (probe 2026-10-03, #2849): ask for the
+                # completed sessions the window owes and the one now running,
+                # then trim to the sealed window below so warmup never grows.
+                duration=f"{request_sessions} D",
                 use_rth=use_rth,
                 # A long lookback takes IBKR longer to serve (#2841).
-                timeout_s=historical_bars_timeout_s(lookback_days + 1),
+                timeout_s=historical_bars_timeout_s(request_sessions),
             )
         except IBKRImpossibleBarError as exc:
             # A bar that cannot be real is corruption the retry cannot cure, so
@@ -546,12 +540,12 @@ class IbkrMarketDataFeed:
                     "action": "warmup_impossible_bar",
                     "feed_id": self.feed_id,
                     "symbol": normalized_symbol,
-                    "lookback_days": lookback_days,
+                    "lookback_sessions": lookback_sessions,
                     "error": str(exc),
                 },
             )
             raise MarketDataFeedError(
-                f"the {lookback_days}-day warmup history for {normalized_symbol} holds "
+                f"the {lookback_sessions}-session warmup history for {normalized_symbol} holds "
                 f"a bar that cannot be real: {exc}",
                 reason=IMPOSSIBLE_SOURCE_BAR,
             ) from exc
@@ -564,12 +558,12 @@ class IbkrMarketDataFeed:
                     "action": "warmup_bars_unavailable",
                     "feed_id": self.feed_id,
                     "symbol": normalized_symbol,
-                    "lookback_days": lookback_days,
+                    "lookback_sessions": lookback_sessions,
                     "error": str(exc),
                 },
             )
             raise MarketDataFeedError(
-                f"the {lookback_days}-day warmup history for {normalized_symbol} "
+                f"the {lookback_sessions}-session warmup history for {normalized_symbol} "
                 f"could not be fetched: {exc}",
                 reason=WARMUP_HISTORY_UNAVAILABLE,
             ) from exc
@@ -590,10 +584,10 @@ class IbkrMarketDataFeed:
                     "dropped": len(bars) - len(closed),
                 },
             )
-        window_start_ms = warmup_window_start_ms(lookback_days, now_ms=requested_at_ms)
+        window_start_ms = warmup_window_start_ms(lookback_sessions, now_ms=requested_at_ms)
         closed = [bar for bar in closed if bar.start_ms >= window_start_ms]
         try:
-            require_warmup_coverage(closed, lookback_days=lookback_days, now_ms=requested_at_ms)
+            require_warmup_coverage(closed, lookback_sessions=lookback_sessions, now_ms=requested_at_ms)
         except MarketDataFeedError as exc:
             logger.error(
                 "Historical warmup bars do not cover the sealed lookback; refusing to start the run cold",
@@ -601,7 +595,7 @@ class IbkrMarketDataFeed:
                     "action": "warmup_bars_short",
                     "feed_id": self.feed_id,
                     "symbol": normalized_symbol,
-                    "lookback_days": lookback_days,
+                    "lookback_sessions": lookback_sessions,
                     "bars": len(closed),
                     "error": str(exc),
                 },

@@ -168,9 +168,9 @@ class _StaticWarmupFeed:
         symbol: str,
         *,
         use_rth: bool = True,
-        lookback_days: int = 5,
+        lookback_sessions: int = 5,
     ) -> list[MarketDataBar]:
-        del symbol, use_rth, lookback_days
+        del symbol, use_rth, lookback_sessions
         return list(self._bars)
 
 

@@ -63,8 +63,8 @@ def _ordinary_session_minutes() -> int:
 
 
 @pytest.mark.parametrize("key", SEALED_KEYS)
-def test_declared_warmup_is_at_least_one_day(key: str) -> None:
-    """``warmup_lookback_days`` is not only for indicators: a fresh deploy
+def test_declared_warmup_is_at_least_one_session(key: str) -> None:
+    """The sealed warmup lookback is not only for indicators: a fresh deploy
     warms on it, and a Resume reaches no further back to fill the hole since
     its last run (#2314). At 0 the runtime built an invalid broker duration,
     the failure was swallowed, and a Resume after a crash replayed nothing --
@@ -72,9 +72,9 @@ def test_declared_warmup_is_at_least_one_day(key: str) -> None:
     discussed indicators (#1734). Never again."""
     contract = _STRATEGY_REGISTRY[key].signal_program_contract
     assert contract is not None
-    assert contract.resolved_warmup_lookback_days(_STRATEGY_REGISTRY[key].param_schema()) >= 1, (
-        f"'{key}' declares warmup_lookback_days={contract.resolved_warmup_lookback_days(_STRATEGY_REGISTRY[key].param_schema())}; "
-        "0 silently disables FR-016 crash replay"
+    lookback_sessions = contract.resolved_warmup_lookback_sessions(_STRATEGY_REGISTRY[key].param_schema())
+    assert lookback_sessions >= 1, (
+        f"'{key}' declares a warmup lookback of {lookback_sessions} sessions; 0 silently disables FR-016 crash replay"
     )
 
 
@@ -85,13 +85,13 @@ def test_source_bar_stream_covers_warmup_plus_one_open_cycle(key: str, overrides
     assert contract is not None
     params = registration.param_schema(**{**contract.validated_settings, **overrides})
     # What a seal of these parameters records, which is what the runner warms on (#2841).
-    lookback_days = contract.resolved_warmup_lookback_days(params)
+    lookback_sessions = contract.resolved_warmup_lookback_sessions(params)
     session_minutes = _ordinary_session_minutes()
-    sessions_needed = lookback_days + 1  # +1: the open cycle, bounded by one session
+    sessions_needed = lookback_sessions + 1  # +1: the open cycle, bounded by one session
 
     bars_needed = sessions_needed * session_minutes
     assert bars_needed <= SOURCE_BAR_STREAM_CAPACITY, (
-        f"'{key}' needs {bars_needed} retained minute bars for warmup ({lookback_days}d) "
+        f"'{key}' needs {bars_needed} retained minute bars for warmup ({lookback_sessions} sessions) "
         f"plus one open session, but the source-bar stream caps at {SOURCE_BAR_STREAM_CAPACITY}"
     )
 

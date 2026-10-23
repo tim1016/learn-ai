@@ -348,7 +348,7 @@ async def warm_through_seam(
     run_id: str,
     session: RunDecisionSession,
     symbol: str,
-    lookback_days: int,
+    lookback_sessions: int,
 ) -> list[MarketDataBar]:
     """Wait for the stream to join, then warm exactly through its seam; every step is stamped.
 
@@ -377,7 +377,7 @@ async def warm_through_seam(
                     session=session,
                     retained_end_ms=retained[-1].end_ms,
                     now_ms=seam.live_from_ms,
-                    lookback_days=lookback_days,
+                    lookback_sessions=lookback_sessions,
                     joined_minute_start_ms=seam.joined_minute_start_ms,
                 ),
                 symbol=symbol,
@@ -393,7 +393,7 @@ async def warm_through_seam(
                     session=session,
                     live_from_ms=seam.live_from_ms,
                     joined_minute_start_ms=seam.joined_minute_start_ms,
-                    lookback_days=lookback_days,
+                    lookback_sessions=lookback_sessions,
                 ),
                 symbol=symbol,
                 abort=live.raise_if_failed,

@@ -241,9 +241,10 @@ def build_start_program_seal(
         ),
         clock=SignalClockContract(
             use_rth=binding.use_rth,
-            # Resolved for these parameters too: the history the longest
-            # series they build needs, up to the history cap (#2857).
-            warmup_lookback_days=contract.resolved_warmup_lookback_days(validated),
+            # Resolved for these parameters too: the sessions of history the
+            # longest series they build needs, up to the history cap (#2857).
+            # The field keeps its stored name; it counts sessions since #2849.
+            warmup_lookback_days=contract.resolved_warmup_lookback_sessions(validated),
         ),
         # Copied straight from the registry contract — the same objects, not
         # a re-derivation — so these can never fall out of sync with it.
@@ -839,10 +840,11 @@ def _seal_checks(
         _SealCheck(
             "clock.warmup_lookback_days",
             sealed_params is not None
-            and configured.clock.warmup_lookback_days == contract.resolved_warmup_lookback_days(sealed_params),
+            and configured.clock.warmup_lookback_days == contract.resolved_warmup_lookback_sessions(sealed_params),
             "The sealed warmup requirement no longer matches the registered contract.",
-            # A seal from before #2841 names the default days for periods that
-            # now resolve more; qualifying the code again cannot change a seal.
+            # A seal from before #2849 counts calendar days, and one from before
+            # #2841 names the default days for periods that now resolve more;
+            # qualifying the code again cannot change a seal.
             next_step="Deploy the bot again.",
         ),
         # `parameters_match_validated_settings` is deliberately not a row here.

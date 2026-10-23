@@ -165,8 +165,8 @@ def _recording_policy(*, trigger_ms: int) -> tuple[ContinuityPolicy, list[FeedCo
 def _serving_warmup(bars: list[MarketDataBar]) -> Callable[..., Awaitable[list[MarketDataBar]]]:
     """Replace ``_FakeFeed.recent_closed_bars``, which serves no warmup by default."""
 
-    async def _recent(symbol: str, *, use_rth: bool = True, lookback_days: int = 5) -> list[MarketDataBar]:
-        del symbol, use_rth, lookback_days
+    async def _recent(symbol: str, *, use_rth: bool = True, lookback_sessions: int = 5) -> list[MarketDataBar]:
+        del symbol, use_rth, lookback_sessions
         return list(bars)
 
     return _recent

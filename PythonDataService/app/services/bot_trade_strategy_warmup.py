@@ -54,8 +54,8 @@ receipt's outcome, and not commit-worthy, so a replay discards it too.
 """
 
 
-def _warmup_lookback_days_for(binding: BrokerBotBinding) -> int:
-    """Resolve the trailing calendar-day warmup window for this binding.
+def _warmup_lookback_sessions_for(binding: BrokerBotBinding) -> int:
+    """Resolve the trailing warmup window, in completed sessions, for this binding.
 
     Prefers the value on the instance's own seal. A sealed program has
     already had that field proven against the live registry at Start/Resume
@@ -64,7 +64,7 @@ def _warmup_lookback_days_for(binding: BrokerBotBinding) -> int:
     whereas reading the registry directly would let an edit between sealing
     and Resume silently change how far back the bot warms. The sealed value
     is the one the instance's own periods resolved (#2841), so a long-period
-    deploy warms on more than its program's default days.
+    deploy warms on more than its program's default sessions.
 
     An unsealed replay resolves the same requirement from its configured
     program. There is no separate legacy floor (#2857).
@@ -77,7 +77,7 @@ def _warmup_lookback_days_for(binding: BrokerBotBinding) -> int:
     if contract is None:
         raise ValueError("Warmup requires a registered Signal Program")
     params = registration.param_schema.model_validate({**(binding.strategy_params or {}), "symbol": binding.symbol})
-    return contract.resolved_warmup_lookback_days(params)
+    return contract.resolved_warmup_lookback_sessions(params)
 
 
 async def replay_warmup_bars(
@@ -183,7 +183,7 @@ async def replay_warmup_bars(
     FR-016 reads receipts as exactly that.
     """
     warmup_bars = await feed.recent_closed_bars(
-        binding.symbol, use_rth=binding.use_rth, lookback_days=_warmup_lookback_days_for(binding)
+        binding.symbol, use_rth=binding.use_rth, lookback_sessions=_warmup_lookback_sessions_for(binding)
     )
     captured = (
         captured_decisions

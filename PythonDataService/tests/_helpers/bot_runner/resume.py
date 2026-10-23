@@ -90,9 +90,9 @@ class _ResumeFeed:
         _symbol: str,
         *,
         use_rth: bool = True,
-        lookback_days: int = 5,
+        lookback_sessions: int = 5,
     ) -> list[MarketDataBar]:
-        del use_rth, lookback_days
+        del use_rth, lookback_sessions
         return []
 
     def health(self, _symbol: str | None = None) -> FeedHealth:

@@ -161,13 +161,15 @@ def test_deploy_refuses_exactly_the_macd_periods_the_indicator_cannot_build(
         resolve_deploy_strategy_params(strategy_key, _SYMBOL, overrides)
 
 
-@pytest.mark.parametrize(("long_window", "lookback_days"), [(200, 18), (258, 20), (259, 20), (500, 20)])
-def test_deploy_caps_history_and_accepts_long_periods(long_window: int, lookback_days: int) -> None:
+@pytest.mark.parametrize(
+    ("long_window", "lookback_sessions"), [(200, 9), (260, 11), (442, 19), (443, 19), (500, 19)]
+)
+def test_deploy_caps_history_and_accepts_long_periods(long_window: int, lookback_sessions: int) -> None:
     registration = _STRATEGY_REGISTRY["sma_crossover"]
     contract = registration.signal_program_contract
     assert contract is not None
     overrides = {"short_window": 50, "long_window": long_window}
-    assert contract.resolved_warmup_lookback_days(registration.param_schema(**overrides)) == lookback_days
+    assert contract.resolved_warmup_lookback_sessions(registration.param_schema(**overrides)) == lookback_sessions
     assert resolve_deploy_strategy_params("sma_crossover", _SYMBOL, overrides).effective["long_window"] == long_window
 
 
