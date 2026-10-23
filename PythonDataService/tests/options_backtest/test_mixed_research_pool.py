@@ -75,12 +75,18 @@ async def test_real_mixed_owners_advance_and_options_backtests_and_studies_share
     async def receipt(root, mode, path, digest, size):
         return seeded_lake_catalog.get((root, mode, path)) == (digest, size)
 
+    async def receipts(requests):
+        # The parent's admission batcher asks the set-based form; ``fake_catalog``
+        # replaces it with answers from its own rows, which hold no Signal lake.
+        return frozenset([index for index, request in enumerate(requests) if await receipt(*request)])
+
     async def init_fixture_pool(**kwargs) -> None:
         # The receipt fixture supplies the catalog boundary for this test.
         return None
 
     monkeypatch.setattr(catalog_client, "init_pool", init_fixture_pool)
     monkeypatch.setattr(catalog_client, "has_committed_file_receipt", receipt)
+    monkeypatch.setattr(catalog_client, "has_committed_file_receipts", receipts)
     expected_signal = await asyncio.to_thread(_serial_answer, signal_manifest)
     assert expected_signal.status == "completed", expected_signal.error
     monkeypatch.setattr(settings, "RESEARCH_WORKER_COUNT", 2)
