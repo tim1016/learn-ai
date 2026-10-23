@@ -494,7 +494,7 @@ _EMA_LENGTHS_PROVENANCE = NumericalProvenanceContract(
     tolerance_atol=1e-9,
     tolerance_rtol=0.0,
     parity_fixture_ids=(
-        "tests/fixtures/golden/ema-signal-session/v1/trace-corpus.json",
+        "tests/fixtures/golden/ema-signal-session/v2/trace-corpus.json",
         "tests/fixtures/golden/cross-engine-studies/cells/SPY_W3mo_2026-02-02_to_2026-04-30",
         "tests/fixtures/golden/cross-engine-studies/cells/QQQ_W3mo_2026-02-02_to_2026-04-30",
         "tests/fixtures/golden/cross-engine-studies/cells/SPY_W6mo_2025-11-03_to_2026-04-30",
@@ -917,7 +917,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # The default point's version; `parameter_schema_version_for` resolves a seal's own.
             parameter_schema_version=EmaCrossoverSignalParams.REFERENCE_PARAMETER_SCHEMA_VERSION,
             parameter_schema_version_for=_ema_parameter_schema_version_for,
-            golden_trace_root="7dcd8350134c0a436005a8a8bda52519ab22c88bee2c56634175cd56282f2ac3",
+            golden_trace_root="0adde56fcdb6e5b33f65e03e0a673f0768d6a40f7e33165171dba9230d00b06c",
             provider="polygon",
             base_timeframe_ms=60_000,
             decision_timeframe_ms=15 * 60_000,
@@ -964,7 +964,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # 2026-09-17 with the accepted Golden review and the registered
             # LEAN-parity defaults, so the UI and runtime corpus authorize the
             # same exact parameter point. See ADR 0054 and
-            # tests/fixtures/golden/ema-signal-session/v1/attribution.md
+            # tests/fixtures/golden/ema-signal-session/v2/attribution.md
             # ("Regeneration 2026-09-17") for the reconciliation record.
             # The 5/10/5 lengths are the qualified point too (#2696); a
             # parameter dump omits them while they sit there, which
@@ -1020,7 +1020,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             program_version=EMA_PREVIOUS_CROSSOVER_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=EmaPreviousCrossoverParams.PARAMETER_SCHEMA_VERSION,
-            golden_trace_root="cea93a45ee4ec4a8b8fc467e6a6379226ac355af728cef446c2f0bbf919db419",
+            golden_trace_root="4f0a798aa372e24d029dd20782d73972881b97bf06c0bf1a78d4ae509097e566",
             provider="polygon",
             base_timeframe_ms=60_000,
             decision_timeframe_ms=15 * 60_000,
@@ -1071,7 +1071,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 tolerance_atol=1e-6,
                 tolerance_rtol=0.0,
                 parity_fixture_ids=(
-                    "tests/fixtures/golden/ema-previous-crossover-signal/v1/trace-corpus.json",
+                    "tests/fixtures/golden/ema-previous-crossover-signal/v2/trace-corpus.json",
                     "tests/fixtures/golden/strategy-parity/ENG-010/v1/output.json",
                 ),
             ),
@@ -1237,7 +1237,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             program_version=RSI_MEAN_REVERSION_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=RsiMeanReversionParams.PARAMETER_SCHEMA_VERSION,
-            golden_trace_root="0052b457a0aebbd554079ee1b348b1e4547efac32a0b83cbbe26b26318e20747",
+            golden_trace_root="d74241c83f7d94edb07bc0804da18795f16f0f6890fab65bffc82ebb63c3512d",
             provider="polygon",
             base_timeframe_ms=60_000,
             # The cadence this contract is qualified at, and the fallback
@@ -1445,7 +1445,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             program_version=SPY_STRATEGY_A_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=RsiRangeStrategyAParams.PARAMETER_SCHEMA_VERSION,
-            golden_trace_root="f36e4e7e14e8ee12949cf323042cf07b2866aa7b0091f66bfdd85d2e22b39b28",
+            golden_trace_root="f788e66f45abc69622835fe04ef30ac5393afa8eee3548504213222a0b4b5cd0",
             provider="polygon",
             base_timeframe_ms=60_000,
             # The cadence this contract is qualified at, and the fallback
@@ -1559,7 +1559,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             program_version=SPY_STRATEGY_B_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=RsiRangeStrategyBParams.PARAMETER_SCHEMA_VERSION,
-            golden_trace_root="25550bb301f73739606453e8b73b3a491acd093346666f550b57fcc919bd6ea9",
+            golden_trace_root="7ad7d30d404d16a88a70bf7fc37b70a91ad359a2f8e90eed54fe6c88fcb2e29b",
             provider="polygon",
             base_timeframe_ms=60_000,
             # The cadence this contract is qualified at, and the fallback
@@ -1670,7 +1670,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             program_version=SPY_C_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=RsiRangeStrategyCParams.PARAMETER_SCHEMA_VERSION,
-            golden_trace_root="dfe2071255b57f835af687cfe1bbefc9d0bec2e742934fe343fc22d1b915493c",
+            golden_trace_root="54c1fd8f0fdd3cfc23c5a043c39ade9ccd4b91cb3770a178b4096bc0f12e440f",
             provider="polygon",
             base_timeframe_ms=60_000,
             # The cadence this contract is qualified at, and the fallback

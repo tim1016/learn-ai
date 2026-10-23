@@ -1,0 +1,18 @@
+{
+  "published_dsr": [
+    0.9004,
+    0.9505,
+    0.9505
+  ],
+  "published_null_max_100": 0.1132,
+  "grid": {
+    "raw_sharpe": 0.33947592320962083,
+    "trial_sharpe_std": 0.14915039902873997,
+    "mean_trial_correlation": -0.27772529924499806,
+    "effective_trials": 4,
+    "skewness": -0.14572624996315434,
+    "kurtosis": 2.226860202260559,
+    "expected_max_under_null": 0.15692453905507903,
+    "dsr_probability": 0.6785758028666002
+  }
+}

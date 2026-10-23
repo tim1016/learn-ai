@@ -3,7 +3,7 @@
 Formula: SMA(n) = (1/n) · Σ x_{t-i}, i ∈ [0, n-1]
 Reference: references/lean/7986ed0aade3ae5de06121682409f05984e32ff7/Indicators/SimpleMovingAverage.cs
 Canonical implementation: this file.
-Validated against: PythonDataService/tests/test_indicator_parity.py
+Validated against: PythonDataService/tests/fixtures/test_indicator_fixtures.py::TestIND002SMA
 
 Mirrors LEAN's Indicators/SimpleMovingAverage.cs. The indicator becomes
 ``is_ready`` once ``period`` samples have been received, at which point

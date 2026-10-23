@@ -2,21 +2,21 @@
 
 > **Canonical reference** for Research Lab → Signal Engine. Covers the
 > statistical methodology (z-score signal construction, walk-forward validation,
-> Newey-West Sharpe inference, deflated Sharpe, graduation ladder) and the
+> HAC Sharpe inference, measured-grid Deflated Sharpe Ratio,
+> graduation ladder) and the
 > execution model used in backtests.
 >
 > **Audience:** graduate-level reader with light finance and statistics
 > background. The page is written so that someone who has seen Sharpe ratios
 > and linear regression can read every panel; the deeper machinery
-> (Newey-West, DSR, block bootstrap) is documented here once and referenced
+> (effective-sample heuristic, HAC interval, measured-grid DSR, planned block bootstrap) is documented here once and referenced
 > by tooltip from the UI.
 >
 > **Owner:** the engineer editing `PythonDataService/app/research/signal/`.
 > If you change the math in that directory, update the matching section here
 > *in the same PR* and bump **Last reviewed**.
 >
-> **Last reviewed:** 2026-04-30 (initial authority — companion to the Stage 0
-> kill-switch and graduation-ladder redesign).
+> **Last reviewed:** 2026-10-23 (Sharpe and selection-score attribution corrected).
 
 ---
 
@@ -30,8 +30,8 @@
   - [4.3 Backtest kernel (no-lookahead PnL)](#43-backtest-kernel-no-lookahead-pnl)
   - [4.4 Annualized Sharpe ratio](#44-annualized-sharpe-ratio)
   - [4.5 Effective sample size (Neff)](#45-effective-sample-size-neff)
-  - [4.6 Sharpe confidence interval (Newey-West)](#46-sharpe-confidence-interval-newey-west)
-  - [4.7 Deflated Sharpe Ratio (DSR)](#47-deflated-sharpe-ratio-dsr)
+  - [4.6 Sharpe confidence interval (Lo HAC)](#46-sharpe-confidence-interval-lo-hac)
+  - [4.7 Deflated Sharpe Ratio (measured grid)](#47-deflated-sharpe-ratio-measured-grid)
   - [4.8 Walk-forward validation](#48-walk-forward-validation)
   - [4.9 Alpha-decay test (with power guard)](#49-alpha-decay-test-with-power-guard)
   - [4.10 Parameter stability](#410-parameter-stability)
@@ -63,7 +63,7 @@ described here.
 **In scope**
 - Single-asset signal validation against forward log returns.
 - Walk-forward Sharpe estimation with per-fold parameter selection.
-- Statistical inference (Newey-West Sharpe SE, deflated Sharpe).
+- HAC Sharpe interval and measured-grid DSR.
 - The graduation ladder (Stage 0 / 1 / 2 / 3) and its kill-switch logic.
 
 **Out of scope (handled elsewhere)**
@@ -93,7 +93,7 @@ described here.
 | `S` | annualized Sharpe ratio of `n_t` |
 | `N` | raw bar count |
 | `N_eff` | autocorrelation-adjusted effective sample size (§ 4.5) |
-| `DSR` | Deflated Sharpe Ratio (§ 4.7) |
+| `DSR` | Deflated Sharpe Ratio; scope and assumptions in § 4.7 |
 | `K_folds` | number of walk-forward folds |
 
 Conventions:
@@ -181,58 +181,43 @@ metric; gross Sharpe is shown only for diagnostic comparison.
 
 Net bar returns are autocorrelated whenever the signal holds the same
 position across bars. The raw count `N` overstates the number of
-independent observations; we use the Newey-West-style truncation:
+independent observations; we use a positive-autocorrelation heuristic:
 
 $$ N_{\text{eff}} = \frac{N}{1 + 2 \sum_{k=1}^{K} \hat{\rho}_k} $$
 
-where the summation is truncated at the first lag `K` where `|ρ̂_k| < 0.05`
-(or at a maximum of 14, whichever comes first). Implemented in
+where summation stops before the first lag with `ρ̂_k < 0.05`, or after
+`min(⌊√N⌋, ⌊N/3⌋)` lags. This is not a Newey–West covariance estimator.
+Implemented in
 [`signal/diagnostics.py`](https://github.com/tim1016/learn-ai/blob/master/PythonDataService/app/research/signal/diagnostics.py)
 (`compute_effective_sample_size`).
 
 The lag-1 autocorrelation and cumulative `ρ` are surfaced in the *Data
 Sufficiency* card so the reader can sanity-check the truncation.
 
-### 4.6 Sharpe confidence interval (Newey-West)
+### 4.6 Sharpe confidence interval (Lo HAC)
 
-**Status:** implemented (Phase 1, 2026-04-30) —
-[`compute_sharpe_ci`](https://github.com/tim1016/learn-ai/blob/master/PythonDataService/app/research/signal/diagnostics.py).
+**Status:** implemented 2026-10-23 in `signal/sharpe.py::compute_sharpe_ci`.
 
-The standard error of the annualised Sharpe under autocorrelation is
+Lo (2002), Eq. 14–15 gives `SE = sqrt(g′Ωg/T)` for the joint mean/variance estimator. We estimate Ω with Bartlett-weighted lag covariance. Both the point and SE are multiplied by `sqrt((T−1)/T)` to match sample-standard-deviation Sharpe, then by `sqrt(B)` for the displayed per-bar Sharpe scale. This is not the Sharpe of annual aggregated returns. The 95% interval is `point ± 1.959964 × SE`.
 
-$$ \operatorname{SE}(S) \approx \sqrt{\frac{1 + \tfrac{1}{2} S^2}{N_{\text{eff}}}} \cdot \sqrt{B} $$
+The lag is the existing IC bandwidth policy with an additional floor of `horizon−1`, covering overlap in forward targets. Lag products stay inside contiguous observations, split at missing targets, missing timestamps, and fold boundaries; cross-segment covariance is assumed zero. The panel reports sample size, lag, and segment count. Unsupported samples show the reason instead of a band.
 
-(Lo, 2002, *The Statistics of Sharpe Ratios*, eq. 18 with autocorrelation
-correction folded into `N_eff`.) The 95 % CI is `S ± 1.96 · SE(S)`.
+The point is the combined-OOS return-series Sharpe, distinct from the ladder's mean of fold Sharpes. HAC requires stable moments and weak dependence; it does not correct strategy selection. RP-007 checks independent scalar equation fixtures. Older saved reports retain their approximate IID/N_eff method label. Policy and rationale: ADR 0073, decision 5.
 
-We report the CI on the combined-OOS Sharpe of the walk-forward run
-(§ 4.8). A signal whose 95 % CI for OOS Sharpe straddles zero is, by this
-metric, indistinguishable from noise.
+### 4.7 Deflated Sharpe Ratio (measured grid)
 
-### 4.7 Deflated Sharpe Ratio (DSR)
+**Status:** implemented 2026-10-23 in `signal/sharpe.py::compute_deflated_sharpe`.
 
-**Status:** implemented (Phase 1, 2026-04-30) —
-[`compute_deflated_sharpe`](https://github.com/tim1016/learn-ai/blob/master/PythonDataService/app/research/signal/diagnostics.py).
+The complete threshold × cost search is evaluated on aligned training observations, excluding forward targets that cross the training boundary. DSR uses the sample standard deviation of these trials' per-bar Sharpes. The independent-trial estimate is `N = ρ̄ + (1−ρ̄)M` (paper Appendix 3, Eq. 9), capped at M when average correlation is negative.
 
-The in-sample grid (4 thresholds × 4 cost levels = 16 cells) selects the
-maximum net Sharpe. With many trials, the maximum is upward-biased even
-under the null hypothesis of zero true Sharpe. Bailey & López de Prado
-(2014) propose:
+With Euler's constant γ, the null maximum is:
 
-$$ \widehat{\text{DSR}} = \Phi\!\left( \frac{(\widehat{S} - S_0)\sqrt{N_{\text{eff}}-1}}{\sqrt{1 - \gamma_3 \widehat{S} + \tfrac{\gamma_4 - 1}{4} \widehat{S}^2}} \right) $$
+    SR0 = trial_SD × [(1−γ)Φ⁻¹(1−1/N) + γΦ⁻¹(1−1/(Ne))]
+    DSR = Φ((SR−SR0)√(T−1) / √(1−skew·SR+(kurtosis−1)SR²/4))
 
-where:
-- `Ŝ` is the selected (maximum) Sharpe.
-- `S_0` is the expected maximum Sharpe under the null:
-  `S_0 = √(2 · ln(N_trials)) − γ_E / √(2 · ln(N_trials))` for `N_trials ≥ 2`,
-  with `γ_E ≈ 0.5772` (Euler-Mascheroni).
-- `γ_3`, `γ_4` are skewness and kurtosis of the bar returns under the
-  selected configuration.
-- `Φ` is the standard normal CDF; DSR is a probability.
+All calculations use per-bar units and raw T. The displayed raw Sharpe and null maximum are scaled by √B. Skew and Pearson kurtosis use bias-corrected sample estimators. N=1 has null maximum zero. Fractional 1<N<2 is unavailable because the extreme-value approximation is unstable there. Constant-return trials make the complete-grid estimate unavailable; no trials are silently discarded.
 
-DSR is reported **only on the IS grid headline**. The walk-forward Sharpe
-already absorbs selection within each fold (§ 4.8) and does not need
-deflation across folds in the current setup.
+RP-008 checks the authors' published numerical example and an independent measured-grid fixture. DSR covers this grid only, not prior feature/research searches. Its equation does not correct serially dependent overlapping returns, so calibration for this intraday setting remains unestablished. It is not a posterior probability of profitability. Historical saved scores retain the selection-proxy label. DSR is informative only; graduation gates remain those in ADR 0073.
 
 ### 4.8 Walk-forward validation
 
@@ -372,9 +357,9 @@ Stage 1 the page enables:
 
 ### 5.3 Stage 2 — research candidate
 
-At Stage 2 the page enables:
-- Block-bootstrap Sharpe CI (preserves autocorrelation).
-- Cross-asset validation runner (defer; wired in roadmap).
+Planned Stage 2 additions, not implemented:
+- Block-bootstrap Sharpe interval, pending a method decision and fixture.
+- Cross-asset validation runner.
 
 **Advance to Stage 3 if all of:**
 
@@ -387,7 +372,8 @@ At Stage 2 the page enables:
 ### 5.4 Stage 3 — promotion candidate
 
 At Stage 3 the page would (eventually) enable:
-- Deflated Sharpe `> 0.5` requirement on the IS grid headline.
+- A paper-equivalent Deflated Sharpe gate, after trial dispersion and
+  independent-trial count are measured.
 - Cross-asset confirmation.
 - Plausible turnover-vs-edge economics.
 - Hansen SPA / White's Reality Check on the grid.

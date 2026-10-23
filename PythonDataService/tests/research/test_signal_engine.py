@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from app.research.signal.backtest import BacktestResult, run_backtest
+from app.research.signal.backtest import BacktestResult, run_backtest, run_backtest_grid
 from app.research.signal.config import SignalConfig
 from app.research.signal.diagnostics import (
     compute_data_sufficiency,
@@ -88,6 +88,60 @@ class TestRollingZScore:
         z_flipped = compute_train_zscore(feature, train_mask, flip_sign=True)
 
         np.testing.assert_array_almost_equal(z_normal.values, -z_flipped.values)
+
+
+def test_training_grid_excludes_test_returns_and_split_crossing_targets():
+    rng = np.random.default_rng(62)
+    feature = pd.Series(rng.normal(size=100))
+    returns = pd.Series(rng.normal(0, .01, size=100))
+    train_mask = pd.Series(np.arange(100) < 70)
+    kwargs = dict(feature=feature, regime_gate=None, train_mask=train_mask,
+                  flip_sign=False, thresholds=(.5, 1.0), cost_bps_options=(0., 2.), horizon=5)
+    original = run_backtest_grid(forward_returns=returns, **kwargs)
+    altered = returns.copy()
+    altered.iloc[65:] = 1000.
+    changed = run_backtest_grid(forward_returns=altered, **kwargs)
+    np.testing.assert_array_equal(original.trial_returns, changed.trial_returns)
+    assert original.trial_returns.shape == (4, 65)
+    for row, result in zip(original.trial_returns, original.results, strict=True):
+        np.testing.assert_allclose(result.net_sharpe, row.mean()/row.std(ddof=1)*np.sqrt(98280), atol=1e-12, rtol=0)
+
+
+def test_walk_forward_hac_segments_break_at_missing_timestamps():
+    bars = _generate_multi_month_bars(n_months=3)
+    # One absent minute in the OOS month; the target's overshoot tolerance
+    # can leave nearby forward returns finite despite that missing row.
+    missing_timestamp = bars[2 * 20 * 50 + 20]["timestamp"]
+    bars = [bar for bar in bars if bar["timestamp"] != missing_timestamp]
+    config = SignalConfig(walk_forward_train_months=2, walk_forward_test_months=1,
+                          min_bars_for_signal=100, regime_gate_enabled=False)
+    result = run_walk_forward(bars, "momentum_5m", config)
+    lengths = [length for window in result.windows for length in window.oos_segment_lengths]
+    assert sum(lengths) == len(result.combined_oos_bar_returns)
+    assert len(lengths) == 21  # 20 sessions plus the absent intraday minute.
+
+
+def test_walk_forward_skips_single_observation_fold(monkeypatch):
+    from app.research.signal import walk_forward
+
+    original = walk_forward.compute_15min_forward_return
+
+    def sparse_first_test_month(bars, horizon):
+        returns = original(bars, horizon)
+        months = pd.to_datetime([bar["timestamp"] for bar in bars], unit="ms", utc=True).month
+        if months.max() == 3:
+            march = np.flatnonzero(months == 3)
+            returns.iloc[march] = np.nan
+            returns.iloc[march[20]] = .01
+        return returns
+
+    monkeypatch.setattr(walk_forward, "compute_15min_forward_return", sparse_first_test_month)
+    config = SignalConfig(walk_forward_train_months=2, walk_forward_test_months=1,
+                          min_bars_for_signal=100, regime_gate_enabled=False)
+    result = run_walk_forward(_generate_multi_month_bars(n_months=4), "momentum_5m", config)
+    assert len(result.windows) == 1
+    assert result.windows[0].test_start.startswith("2024-04")
+    assert sum(result.windows[0].oos_segment_lengths) == len(result.combined_oos_bar_returns)
 
 
 class TestThresholdFilter:
@@ -184,11 +238,12 @@ class TestWalkForward:
 
         assert len(result.windows) == 0
 
-    def test_walk_forward_windows_do_not_overlap_and_aggregate_consistently(self) -> None:
+    @pytest.mark.parametrize("test_months", [1, 2])
+    def test_walk_forward_windows_do_not_overlap_and_aggregate_consistently(self, test_months: int) -> None:
         bars = _generate_multi_month_bars(n_months=8, bars_per_day=50)
         config = SignalConfig(
             walk_forward_train_months=3,
-            walk_forward_test_months=1,
+            walk_forward_test_months=test_months,
             min_bars_for_signal=100,
         )
 

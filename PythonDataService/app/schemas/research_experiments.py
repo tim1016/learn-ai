@@ -143,6 +143,7 @@ class SignalReportWalkForwardWindow(_StoredReportModel):
     oos_total_trades: int = 0
     oos_dates: list[str] = []
     oos_cumulative_returns: list[float] = []
+    oos_segment_lengths: list[int] = []
 
 
 class SignalReportAlphaDecay(_StoredReportModel):
@@ -275,6 +276,11 @@ class SignalReportBehavior(_StoredReportModel):
 
 
 class SignalReportSharpeCi(_StoredReportModel):
+    method: str = "legacy_neff"
+    sample_size: int = 0
+    hac_lag: int = 0
+    segment_count: int = 0
+    unavailable_reason: str = ""
     point: float = 0.0
     se: float = 0.0
     ci_lower: float = 0.0
@@ -285,6 +291,12 @@ class SignalReportSharpeCi(_StoredReportModel):
 
 
 class SignalReportDeflatedSharpe(_StoredReportModel):
+    method: str = "legacy_proxy"
+    effective_trials: float = 0.0
+    trial_sharpe_std: float = 0.0
+    mean_trial_correlation: float = 0.0
+    sample_size: int = 0
+    unavailable_reason: str = ""
     raw_sharpe: float = 0.0
     expected_max_under_null: float = 0.0
     dsr_probability: float = 0.0

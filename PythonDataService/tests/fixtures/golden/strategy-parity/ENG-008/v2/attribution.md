@@ -36,3 +36,19 @@ Run from the `PythonDataService` directory. Rerun only when Strategy A/B/C's mat
 Generated: 2026-08-20
 Oracle: internal_regression — Strategy A/B/C's own current trade_log output
 Script: scripts/fixture_generators/strategy_abc_self_equivalence.py
+
+## Comparison-policy amendment — 2026-10-23, PR #3484
+
+The input/output fixture bytes and original generation provenance remain
+unchanged. RSI now follows the pinned LEAN Wilder multiplication/addition
+order instead of the historical reassociated recurrence. Across all 55
+stored trades the maximum RSI differences are 3e-26 (A), 2e-26 (B), and
+2e-26 (C). This is classified as precision drift; timestamps, prices,
+quantities, P&L, trade reasons and all other indicator values remain exact.
+
+The test therefore uses an RSI-only absolute Decimal tolerance of 1e-24,
+with zero relative tolerance. This provides a small accumulated-rounding
+margin while remaining fifteen orders tighter than the default indicator
+tolerance. Every other field retains atol=0, rtol=0. It is a comparison
+policy for a historical regression fixture, not an external validation
+claim or a tolerance on sealed Signal Program trace hashes.

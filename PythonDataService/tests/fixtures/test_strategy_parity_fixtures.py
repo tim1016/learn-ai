@@ -3,10 +3,12 @@
 Runs Strategy A/B/C fresh through ``BacktestEngine`` against the fixture's
 pinned bar series and diffs the resulting public ``trade_log`` — not the
 private ``_entry_extra_checks`` gates ``app/engine/tests/test_strategies_abc.py``
-drives — against the committed pre-port trade log, bit-exact
-(``atol=0, rtol=0`` per the manifest). This is the S3 intent port's
-refactor-neutrality receipt: a failure here means the port changed a trade,
-not that the port is "wrong" in some external sense.
+drives — against the committed pre-port trade log. Trade fields and other
+indicators remain bit-exact (``atol=0, rtol=0``). RSI alone allows
+``atol=1e-24, rtol=0`` after PR #3484 restored LEAN's operation order:
+measured maxima over all 55 trades are 3e-26 (A), 2e-26 (B), 2e-26 (C).
+The bound covers accumulated Decimal rounding, stays far below the standard
+1e-9 indicator tolerance, and never permits a different trade or P&L.
 
 Run in isolation (no FastAPI app needed):
   python -m pytest tests/fixtures/test_strategy_parity_fixtures.py -v --noconftest
@@ -103,7 +105,12 @@ def test_strategy_trade_log_matches_pinned_pre_port_receipt(strategy_key: str) -
         if fresh.is_synthetic_exit != oracle["is_synthetic_exit"]:
             problems.append(f"is_synthetic_exit {fresh.is_synthetic_exit} != {oracle['is_synthetic_exit']}")
         fresh_indicators = {name: str(value) for name, value in fresh.indicators.items()}
-        if fresh_indicators != oracle["indicators"]:
-            problems.append(f"indicators {fresh_indicators} != {oracle['indicators']}")
+        expected_indicators = dict(oracle["indicators"])
+        fresh_rsi = Decimal(fresh_indicators.pop("rsi"))
+        expected_rsi = Decimal(expected_indicators.pop("rsi"))
+        if abs(fresh_rsi - expected_rsi) > Decimal("1e-24"):
+            problems.append(f"RSI precision drift {fresh_rsi} != {expected_rsi} (atol=1e-24, rtol=0)")
+        if fresh_indicators != expected_indicators:
+            problems.append(f"indicators {fresh_indicators} != {expected_indicators}")
         if problems:
             raise AssertionError(f"{strategy_key}: trade #{i + 1} mismatch\n  - " + "\n  - ".join(problems))

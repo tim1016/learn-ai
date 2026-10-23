@@ -68,7 +68,23 @@ previously tracked items (issues #1655, #1671, #1672, #1674, #1677, #1664,
 ## 5. Numerical-rigor & frontend debt (deferred, P2)
 
 - **Golden-fixture coverage gap** — most canonical math still lacks a registered
-  golden fixture. *(was F-0026)*
+  golden fixture. In the signal, validation, and options research subpackages,
+  eight modules still declare `Validated against: NONE` as of 2026-10-23:
+  `signal/{walk_forward,graduation,engine,regime,diagnostics}.py`,
+  `validation/robustness.py`, and `options/{contract_finder,iv_builder}.py`.
+  `signal/sharpe.py` has source-attributed IID, HAC, and DSR fixtures;
+  the separate data-sufficiency heuristics remain unvalidated. `signal/backtest.py` has a hand-calculated
+  internal-policy fixture for lag, costs, and drawdown, but no external
+  engine parity. The remaining platform-defined selection, regime, and
+  graduation policies need explicit hand-calculated fixtures instead of
+  thematic paper citations. Behavior tests alone do not establish
+  independent numerical equivalence. *(was F-0026)*
+- **Sharpe inference scope** — the measured-grid DSR does not account for
+  prior feature/research searches or correct serial dependence in overlapping
+  forward returns. HAC assumes zero covariance across separated OOS segments
+  and stable moments within the inference sample. Numerical equation fixtures
+  do not establish finite-sample interval coverage or DSR calibration for this
+  intraday setting. Graduation gates remain independent of these diagnostics.
 - **Temporal wire/storage contracts outside Alpaca V2 remain non-numeric
   (medium).** The 2026-08-18 census confirmed 4 Pydantic, 29 C# (since removed
   with the C# backend, ADR 0081), and 22 real

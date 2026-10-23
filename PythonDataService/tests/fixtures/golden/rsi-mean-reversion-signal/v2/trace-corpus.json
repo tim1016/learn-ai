@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "program_key": "rsi_mean_reversion",
+  "program_version": "rsi-mean-reversion/v2",
+  "entries": [
+    {"cell": "AAPL_W6mo_2025-11-03_to_2026-04-30", "settings": {"overbought": "70.0", "oversold": "30.0", "resolution_minutes": "15", "symbol": "AAPL", "window": "14"}, "trace_count": 2576, "trace_root": "111adc58a0f921a8cba6883bf0368afc16cc57b8135d87d8321f5dfc708b181e"},
+    {"cell": "AAPL_W12mo_2025-05-01_to_2026-04-30", "settings": {"overbought": "70.0", "oversold": "30.0", "resolution_minutes": "15", "symbol": "AAPL", "window": "14"}, "trace_count": 5892, "trace_root": "6e9e412bdbcfd3ad0f968510364a95c766e6ecc28aae32d3df63067ff6dfc0a9"},
+    {"cell": "QQQ_W3mo_2026-02-02_to_2026-04-30", "settings": {"overbought": "70.0", "oversold": "30.0", "resolution_minutes": "15", "symbol": "QQQ", "window": "14"}, "trace_count": 1014, "trace_root": "2dc25fffb4b5b54e607501695e825e8b4adcf050d0e1e0976ca8d439e3b8f605"},
+    {"cell": "QQQ_W6mo_2025-11-03_to_2026-04-30", "settings": {"overbought": "70.0", "oversold": "30.0", "resolution_minutes": "15", "symbol": "QQQ", "window": "14"}, "trace_count": 2576, "trace_root": "2b1f3f92b56b696d07946469e018a124d94e6897f8463d749f0b019c788f49e5"},
+    {"cell": "QQQ_W12mo_2025-05-01_to_2026-04-30", "settings": {"overbought": "70.0", "oversold": "30.0", "resolution_minutes": "15", "symbol": "QQQ", "window": "14"}, "trace_count": 5892, "trace_root": "0d47dbcceb88ca82611ae84b27480ae1eee854db6a4840ce940ee92acc4ecc71"},
+    {"cell": "SPY_W3mo_2026-02-02_to_2026-04-30", "settings": {"overbought": "70.0", "oversold": "30.0", "resolution_minutes": "15", "symbol": "SPY", "window": "14"}, "trace_count": 1014, "trace_root": "8688d28bf440fb5260afc5ca494207f856e46f3b0b35326aea3f0f6f64da26e7"},
+    {"cell": "SPY_W6mo_2025-11-03_to_2026-04-30", "settings": {"overbought": "70.0", "oversold": "30.0", "resolution_minutes": "15", "symbol": "SPY", "window": "14"}, "trace_count": 2576, "trace_root": "9f469c135cff5876256d46326152c4a7ba46b4bab8a71a68a86a40242a30f1c4"},
+    {"cell": "SPY_W12mo_2025-05-01_to_2026-04-30", "settings": {"overbought": "70.0", "oversold": "30.0", "resolution_minutes": "15", "symbol": "SPY", "window": "14"}, "trace_count": 5892, "trace_root": "cfd9710e661be28abdd973c207f3241053bb8fb2ec454551b6052ca8b9bd8c62"},
+    {"cell": "TSLA_W6mo_2025-11-03_to_2026-04-30", "settings": {"overbought": "70.0", "oversold": "30.0", "resolution_minutes": "15", "symbol": "TSLA", "window": "14"}, "trace_count": 2576, "trace_root": "a493e374faf87694a918eeaceb3d11b41c12843e7f86d4003726898a346e8336"},
+    {"cell": "TSLA_W12mo_2025-05-01_to_2026-04-30", "settings": {"overbought": "70.0", "oversold": "30.0", "resolution_minutes": "15", "symbol": "TSLA", "window": "14"}, "trace_count": 5892, "trace_root": "563461405c1b49d6d188451b3798bc387fd7f1ece84653bc8ae511a6a37df0c6"}
+  ],
+  "trace_root": "d74241c83f7d94edb07bc0804da18795f16f0f6890fab65bffc82ebb63c3512d"
+}

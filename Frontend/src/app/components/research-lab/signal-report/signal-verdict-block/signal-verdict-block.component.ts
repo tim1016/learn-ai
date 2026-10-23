@@ -64,9 +64,10 @@ export class SignalVerdictBlockComponent {
     return wf !== null && wf.windows.length > 0;
   });
 
-  readonly headlineSharpe = computed<number>(
-    () => this.result().walkForward?.meanOosSharpe ?? 0,
-  );
+  readonly headlineSharpe = computed<number>(() => {
+    const ci = this.sharpeCi();
+    return ci?.valid ? ci.point : (this.result().walkForward?.meanOosSharpe ?? 0);
+  });
 
   /** "0.27 ± 0.18" or just "0.27" when the CI was not computed.
    *  Guards against sparse responses where ``valid: true`` arrives
@@ -85,7 +86,7 @@ export class SignalVerdictBlockComponent {
   readonly ciIntervalDisplay = computed<string | null>(() => {
     const ci = this.sharpeCi();
     if (!ci?.valid || ci.ciLower == null || ci.ciUpper == null) return null;
-    return `95% CI [${ci.ciLower.toFixed(2)}, ${ci.ciUpper.toFixed(2)}]`;
+    return `${ci.method === 'lo_hac' ? 'HAC' : 'Approx.'} 95% interval [${ci.ciLower.toFixed(2)}, ${ci.ciUpper.toFixed(2)}]`;
   });
 
   readonly ciStraddlesZero = computed<boolean>(() => {
@@ -127,7 +128,7 @@ export class SignalVerdictBlockComponent {
       case 2:
         return 'Run cross-sectional validation on related tickers and rerun with block-bootstrap CIs.';
       case 3:
-        return 'Compute Deflated Sharpe on the in-sample grid headline and run capacity / impact modelling before paper-trading.';
+        return 'Review the grid Deflated Sharpe result and its limitations, and run capacity / impact modelling before paper-trading.';
       default:
         return '';
     }

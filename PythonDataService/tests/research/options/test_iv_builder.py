@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 
+import pytest
+
 from app.research.options.iv_builder import (
     TARGET_DTE,
     _get_option_price,
@@ -52,6 +54,10 @@ class TestInterpolateIv:
         # Interpolated IV should be between the two bracket IVs.
         iv = _interpolate_iv(iv_low=0.15, dte_low=20, iv_high=0.35, dte_high=45)
         assert 0.15 <= iv <= 0.35, "result is bounded by the bracket IVs"
+
+    def test_interpolate_iv_rejects_unbracketed_maturities(self):
+        with pytest.raises(ValueError, match="not in"):
+            _interpolate_iv(iv_low=0.20, dte_low=35, iv_high=0.30, dte_high=45)
 
 
 class TestNormalizeIvFallback:

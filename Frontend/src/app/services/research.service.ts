@@ -385,6 +385,11 @@ export interface AlphaDecayStats {
 }
 
 export interface SharpeCi {
+  method: string;
+  sampleSize: number;
+  hacLag: number;
+  segmentCount: number;
+  unavailableReason: string;
   point: number;
   se: number;
   ciLower: number;
@@ -395,6 +400,12 @@ export interface SharpeCi {
 }
 
 export interface DeflatedSharpe {
+  method: string;
+  sampleSize: number;
+  effectiveTrials: number;
+  trialSharpeStd: number;
+  meanTrialCorrelation: number;
+  unavailableReason: string;
   rawSharpe: number;
   expectedMaxUnderNull: number;
   dsrProbability: number;
