@@ -43,9 +43,11 @@ from tests._helpers.golden_qualification import (
 from tests._helpers.lean_store import seed_store_day
 
 BASE = "/api/research/golden-qualifications"
+# Five warmup sessions (130 fifteen-minute decision bars) converge the EMA
+# program's 109-bar requirement (#2857); three sessions are scored.
 WINDOW = ProofWindow(
-    start_ms=et_midnight_ms(date(2025, 2, 4)),
-    end_ms=et_midnight_ms(date(2025, 2, 7)),
+    start_ms=et_midnight_ms(date(2025, 2, 10)),
+    end_ms=et_midnight_ms(date(2025, 2, 13)),
     warmup_from_ms=et_midnight_ms(date(2025, 2, 3)),
 )
 

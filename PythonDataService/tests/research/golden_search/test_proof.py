@@ -22,6 +22,8 @@ from app.engine.engine import EvaluationBoundaryError
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.lean_sidecar.trading_calendar import expected_sessions
 from app.research.golden_search import proof as proof_module
+from app.research.golden_search.evaluator import warmup_session
+from app.research.golden_search.planning import _sessions_needed
 from app.research.golden_search.proof import (
     BlobStore,
     ProofMismatchError,
@@ -35,6 +37,7 @@ from app.research.golden_search.proof import (
     stage_proof_inputs,
 )
 from app.research.sweep.snapshot import DataSnapshot, capture_data_snapshot
+from app.research.sweep.warmup import probe_warmup_samples
 from app.schemas.signal_program_seal import semantic_payload_hash
 from app.utils.session_anchors import et_midnight_ms
 from tests._helpers.lean_store import seed_store_day
@@ -319,6 +322,22 @@ def test_decision_trace_refuses_a_cold_start_at_the_window(snapshot: DataSnapsho
 
     with pytest.raises(EvaluationBoundaryError, match="not converged at the evaluation start"):
         decision_trace(PROGRAM, SYMBOL, VALIDATED, cold, roots=[lake], manifest=snapshot.artifacts)
+
+
+def test_the_run_up_the_planner_sizes_is_the_least_that_primes_the_program(snapshot: DataSnapshot, lake: Path) -> None:
+    # Golden Search sizes a study's run-up from the registry's convergence requirement (#2857); the
+    # engine's evaluation boundary is the gate that run-up must clear (#3483).
+    probe = probe_warmup_samples(PROGRAM, {**VALIDATED, "symbol": SYMBOL})
+    sessions = _sessions_needed(WINDOW.start_ms, probe.required_samples, probe.bar_span_ms)
+
+    def trace_after(run_up_sessions: int) -> TraceProof:
+        warmup_from = warmup_session(WINDOW.start_ms, run_up_sessions)
+        window = dataclasses.replace(WINDOW, warmup_from_ms=et_midnight_ms(warmup_from))
+        return decision_trace(PROGRAM, SYMBOL, VALIDATED, window, roots=[lake], manifest=snapshot.artifacts)
+
+    assert trace_after(sessions).trace_count > 0
+    with pytest.raises(EvaluationBoundaryError, match="not converged at the evaluation start"):
+        trace_after(sessions - 1)
 
 
 def test_decision_trace_refuses_a_window_without_a_decision(lake: Path) -> None:
