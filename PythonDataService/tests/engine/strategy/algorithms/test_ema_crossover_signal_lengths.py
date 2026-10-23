@@ -43,6 +43,7 @@ from tests._helpers.signal_program import (
     RecordingExecutor,
     bind_strategy_context,
     bucket,
+    committed_trace_corpus_path,
     indexed_bucket,
     mark_bar_arrival,
 )
@@ -314,7 +315,7 @@ def _replay(params: EmaCrossoverSignalParams, minute_bars: list[TradeBar]) -> li
 
 
 def test_non_default_lengths_decide_differently_on_the_same_bars_and_hold_their_own_count() -> None:
-    corpus = json.loads((_GOLDEN / "ema-signal-session/v1/trace-corpus.json").read_text(encoding="utf-8"))
+    corpus = json.loads(committed_trace_corpus_path("ema_crossover_signal").read_text(encoding="utf-8"))
     pinned = next(entry for entry in corpus["entries"] if entry["cell"] == _CELL)
     minute_bars = _cell_minute_bars(_CELL, "SPY")
     variant_params = EmaCrossoverSignalParams(symbol="SPY", fast_period=3, slow_period=20, hold_bars=8)

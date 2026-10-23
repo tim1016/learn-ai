@@ -1,6 +1,6 @@
 """RelativeStrengthIndex with Wilders smoothing.
 
-Formula: RSI = 100 - 100/(1 + RS), where RS = avg_gain / avg_loss; Wilders smoothing avg_new = (avg_old·(period-1) + sample) / period.
+Formula: RSI = 100 - 100/(1 + RS), where RS = avg_gain / avg_loss; Wilders smoothing avg_new = sample·k + avg_old·(1-k), k = 1/period.
 Reference: references/lean/7986ed0aade3ae5de06121682409f05984e32ff7/Indicators/RelativeStrengthIndex.cs and WilderMovingAverage.cs, selected by MovingAverageTypeExtensions.cs
 Canonical implementation: this file.
 Validated against: PythonDataService/tests/fixtures/test_indicator_fixtures.py::TestIND003RSI
@@ -15,12 +15,18 @@ Critical reproducibility details:
     else 0.
   * The gain/loss Wilder averages publish a running SMA for the first
     ``period - 1`` deltas. On the ``period``-th delta, they apply
-    ``avg_new = (avg_old * (period - 1) + sample_new) / period``.
+    ``avg_new = sample_new * k + avg_old * (1 - k)``, with ``k = 1/period``
+    precomputed in Decimal, preserving the pinned source's operation order.
   * Warmup: ``is_ready`` when ``samples >= period + 1`` (one extra sample
     for the first delta). LEAN publishes RSI throughout warmup, starting
     with 100 on the first price sample, when both averages are still zero.
   * Edge case: if ``round(avg_loss, 10) == 0``, RSI = 100.
   * Formula: ``RS = avg_gain / avg_loss``; ``RSI = 100 - 100 / (1 + RS)``.
+Historical ENG-008 receipts used a reassociated recurrence. Matching LEAN's
+operation order changes their RSI by at most 3e-26; that regression test
+accepts RSI-only precision drift at atol=1e-24, rtol=0, retaining exact
+trade and other indicator comparisons. Signal Program trace identity stays
+byte-exact and is versioned for this arithmetic correction (PR #3484).
 Convergence counts bound recursive seed memory (ADR 0083). They do not
 guarantee the same relative bound for ratios or cancelling output terms.
 Measured twin evidence: tests/engine/indicators/test_convergence_twins.py.
@@ -41,8 +47,7 @@ class RelativeStrengthIndex(Indicator):
     def __init__(self, name: str, period: int) -> None:
         # Readiness requires one extra price sample for the first delta.
         super().__init__(name, period)
-        self._period_dec = Decimal(period)
-        self._period_minus_1 = Decimal(period - 1)
+        self._k = Decimal(1) / Decimal(period)
         self._prev_input: Decimal | None = None
         self._avg_gain = Decimal(0)
         self._avg_loss = Decimal(0)
@@ -87,8 +92,8 @@ class RelativeStrengthIndex(Indicator):
             self._avg_loss = self._loss_sum / count
         else:
             # The period-th delta is already on the Wilder recurrence path.
-            self._avg_gain = (self._avg_gain * self._period_minus_1 + gain) / self._period_dec
-            self._avg_loss = (self._avg_loss * self._period_minus_1 + loss) / self._period_dec
+            self._avg_gain = gain * self._k + self._avg_gain * (1 - self._k)
+            self._avg_loss = loss * self._k + self._avg_loss * (1 - self._k)
 
         # Compute RSI from the current averages.
         # LEAN's edge case: if rounded-to-10 avg_loss is zero, RSI is 100.

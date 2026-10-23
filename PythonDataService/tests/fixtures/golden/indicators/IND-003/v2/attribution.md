@@ -13,7 +13,13 @@ The factory maps `MovingAverageType.Wilders` to `WilderMovingAverage`.
 The RSI emits a value even before its child averages are ready.
 
 **Layer 3 — Independent numerical oracle:** Pure-Python Wilder RSI formula without
-calling `RelativeStrengthIndex` class.
+calling `RelativeStrengthIndex` class. The oracle uses the algebraically
+rearranged recurrence below in binary float; canonical Decimal arithmetic
+preserves LEAN's `sample*k + previous*(1-k)` order with `k=1/period`.
+The fixture proves strict-float equivalence, not identical Decimal strings.
+The period-14 arithmetic-order regression is
+`TestIND003RSI.test_wilder_source_operation_order_at_ready_boundary` in
+`tests/fixtures/test_indicator_fixtures.py`.
 
 ## Formula
 

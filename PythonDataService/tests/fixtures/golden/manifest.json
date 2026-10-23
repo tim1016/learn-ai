@@ -712,7 +712,8 @@
           },
           "file_sha256": {
             "input.arrow": "7e9925b83bcaaecb77ed9027dd272013b35c2a9ae129efad5be713fe9be3573e",
-            "output.arrow": "0dd332c55a2ac657fc90fc8b0668133e33749c12482c370f4351872d3bf8d5d0"
+            "output.arrow": "0dd332c55a2ac657fc90fc8b0668133e33749c12482c370f4351872d3bf8d5d0",
+            "attribution.md": "bfa393bb9ff1965d27461595f2974d6eba55a472c9bc34391d2df76f257ea59e"
           }
         }
       },
@@ -2589,7 +2590,7 @@
       "tolerance": {
         "atol": 0.0,
         "rtol": 0.0,
-        "note": "Bit-exact. All LoggedTrade fields are Decimal, int, str, or bool produced by exact Decimal arithmetic (no float division) replayed against the same pinned input; any divergence, even at the last Decimal digit, is exactly the signal the S3 intent port must explain rather than silently tolerate."
+        "note": "Exact trade fields and other indicators (atol=0, rtol=0). RSI alone allows atol=1e-24, rtol=0 after PR #3484 restored pinned LEAN operation order; measured maxima over all 55 historical trades are 3e-26 (A), 2e-26 (B), 2e-26 (C). Original fixture inputs/outputs remain unchanged; see the attribution comparison-policy amendment."
       },
       "active_version": 2,
       "versions": {
@@ -2618,7 +2619,7 @@
           "file_sha256": {
             "input.arrow": "68eedbcf7f878759cda41b60efb1c643b2fb0142174ca705c710ce0d1a2ae3bb",
             "output.json": "44143ce6f471961465e296d6d82c1cd7c60fc3eac1b92f523730266ed67d1420",
-            "attribution.md": "07c6dfb21bb7473d25a8ffd1a7d8711d2e78be3d413ae9d6647942f7ae6b69ba"
+            "attribution.md": "4f320780646049d4f6078418cd7effd3a533191bd5fd06a4d7a1a947a20ae45f"
           }
         }
       },

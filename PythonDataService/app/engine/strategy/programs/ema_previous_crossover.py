@@ -117,7 +117,7 @@ class EmaPreviousCrossoverParams(EmaCrossoverParams):
 
 
 EMA_PREVIOUS_CROSSOVER_PROGRAM_KEY = "ema_previous_crossover"
-EMA_PREVIOUS_CROSSOVER_PROGRAM_VERSION = "ema-previous-crossover/v2"
+EMA_PREVIOUS_CROSSOVER_PROGRAM_VERSION = "ema-previous-crossover/v3"
 
 
 def build_ema_previous_crossover_program(params: StrategyParamsBase) -> SignalProgram:

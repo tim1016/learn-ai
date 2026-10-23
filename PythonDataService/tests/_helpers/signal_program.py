@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import ast
 import inspect
+import json
 import textwrap
 from datetime import date, timedelta
 from decimal import Decimal
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from app.engine.data.trade_bar import TradeBar
@@ -49,6 +51,21 @@ def sealed_programs() -> list[tuple[str, StrategyRegistration]]:
 
 SEALED_KEYS: tuple[str, ...] = tuple(key for key, _ in sealed_programs())
 """Parametrization source for every per-sealed-program test in this suite."""
+
+
+def committed_trace_corpus_path(program_key: str) -> Path:
+    """Select the current program's corpus, retaining older versions for audit."""
+    contract = _STRATEGY_REGISTRY[program_key].signal_program_contract
+    assert contract is not None
+    fixtures = Path(__file__).resolve().parents[1] / "fixtures/golden"
+    matches = []
+    for path in fixtures.glob("*/v*/trace-corpus.json"):
+        corpus = json.loads(path.read_text(encoding="utf-8"))
+        if (corpus.get("program_key"), corpus.get("program_version")) == (program_key, contract.program_version):
+            matches.append(path)
+    assert len(matches) == 1, f"expected one corpus for {program_key}@{contract.program_version}, found {len(matches)}"
+    return matches[0]
+
 
 OFF_VALIDATED_PERIODS: dict[str, dict[str, int]] = {
     "ema_crossover_signal": {"fast_period": 7, "slow_period": 20},

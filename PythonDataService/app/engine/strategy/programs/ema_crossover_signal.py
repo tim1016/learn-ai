@@ -149,7 +149,7 @@ class EmaCrossoverSignalParams(EmaCrossoverParams):
 
 
 EMA_SIGNAL_PROGRAM_KEY = "ema_crossover_signal"
-EMA_SIGNAL_PROGRAM_VERSION = "ema-crossover-signal/v1"
+EMA_SIGNAL_PROGRAM_VERSION = "ema-crossover-signal/v2"
 
 
 def build_ema_crossover_signal_program(params: StrategyParamsBase) -> SignalProgram:
