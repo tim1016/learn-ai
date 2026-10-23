@@ -2715,6 +2715,51 @@
       "validated_by": [
         "tests/marketdata/shared/test_mark_parity.py"
       ]
+    },
+    {
+      "id": "CFEE-001",
+      "name": "Paper BTC outside fills reconciled by recorded quantity fees",
+      "category": "broker-fees",
+      "canonical_module": "PythonDataService/app/broker/alpaca/clerk/outside_reconciliation.py",
+      "canonical_callable": "reconcile_outside_quantities",
+      "reference": {
+        "kind": "external_reference",
+        "oracle": "Alpaca Paper activity and position API capture; exact decimal sum",
+        "citation": "https://docs.alpaca.markets/docs/crypto-fees; Paper capture 2026-10-22; issue #3311"
+      },
+      "market_input": {
+        "source": "vendored",
+        "vendor": "Alpaca Paper",
+        "generated_by": "PythonDataService/scripts/fixture_generators/outside_crypto_fees.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 0.0,
+        "rtol": 0.0,
+        "note": "Exact decimal quantity equality; never a dust tolerance."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.json": "37f1d705cd2bbcf51f77775de948ccff721fad8bfdbd771ac6d5b2d2c1de63d0",
+            "output.json": "0418884b7d6c9a17658a7cd71d44b39895efc81ed1f823a09a73ef108e585485",
+            "attribution.md": "00f37cf5c078bb069f8e0d9966afaf7e8d0cbb8d6543053c4c0861e533c79579"
+          },
+          "file_sha256": {
+            "input.json": "28f03f297d8f4ed2ce529c449c34750e255ec3aa7aeb024ecb4f4c304e196186",
+            "output.json": "b12af5a2988a8a54c3d828314430a2858422ff1c333e2961ee179ac24cdc97cb",
+            "attribution.md": "00f37cf5c078bb069f8e0d9966afaf7e8d0cbb8d6543053c4c0861e533c79579"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/broker/alpaca/clerk/test_outside_reconciliation.py"
+      ]
     }
   ]
 }

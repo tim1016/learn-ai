@@ -12,6 +12,10 @@
   @if (readyFacts(); as view) {
     @if (bar(); as money) {
       @if (money.state === 'ready') {
+        <app-outside-reconciliation [rows]="money.outside_reconciliations" />
+        @if (money.broker_position_disagreement; as difference) {
+          <p class="money-step__refusal" role="note">{{ difference }}</p>
+        }
         <app-money-bar
           [segments]="money.segments ?? []"
           size="detail"

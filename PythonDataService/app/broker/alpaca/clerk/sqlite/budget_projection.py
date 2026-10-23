@@ -9,7 +9,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
@@ -35,6 +35,7 @@ from app.broker.alpaca.clerk.budgets import (
 from app.broker.alpaca.clerk.fifo_pnl import LotWriteOff, OpenLot, compute_fifo_pnl
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.money import ZERO, MoneyInputError, money_context, normalize_money, notional
+from app.broker.alpaca.clerk.outside_reconciliation import OutsideReconciliation, reconcile_outside_quantities
 from app.broker.alpaca.clerk.sqlite.custody_subjects import BOT_SUBJECT_PREFIX, bot_subject_id
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
     EconomicProjectionError,
@@ -58,7 +59,7 @@ from app.broker.alpaca.clerk.sqlite.order_projection import (
 )
 from app.broker.alpaca.clerk.sqlite.reads import external_orders
 from app.broker.alpaca.regulatory_fees import RateNotPinnedError
-from app.broker.contract.models import OrderSide
+from app.broker.contract.models import BrokerActivity, OrderSide
 
 if TYPE_CHECKING:
     from app.services.alpaca_fee_attribution import FeeFill
@@ -75,6 +76,9 @@ class BudgetFees(Protocol):
 
     @property
     def external_fills(self) -> tuple[FeeFill, ...]: ...
+
+    @property
+    def external_quantity_fees(self) -> tuple[BrokerActivity, ...]: ...
 
     @property
     def pre_custody_quantities(self) -> Mapping[str, Decimal]: ...
@@ -199,7 +203,9 @@ def project_account_money(
                 position_cost=_long_cost(fifo.open_lots),
                 pending_orders=pending.get(sid, ZERO) if sid is not None else ZERO,
             ))
-        external, unpriced = _external_holdings(conn, fees)
+        external, unpriced, reconciliations = _external_holdings(
+            conn, fees, owned_symbols={record.symbol for record in projected.records},
+        )
         holdings += external
         unvalued += unpriced
         # Net of a reported fee, exactly as an unseen purchase is its cost
@@ -212,10 +218,10 @@ def project_account_money(
             notional(fill.quantity, fill.price, multiplier=fill.multiplier) for fill in fees.external_fills
             if fill.side is OrderSide.SELL and fill.observed_at_ms >= seen_before_ms
         ), ZERO)
-    return account_money(
+    return replace(account_money(
         projected.budget, unseen_fills=projected.unseen_fills, unseen_sales=unseen_sales,
         holdings=holdings, registration_order=order, unvalued=unvalued,
-    )
+    ), outside_reconciliations=reconciliations)
 
 
 def _long_cost(lots: Iterable[OpenLot]) -> Decimal:
@@ -235,7 +241,9 @@ def _shorts(lots: Iterable[OpenLot], *, holder: str) -> list[str]:
     return [f"{holdings_text(short)} sold short by {holder}"] if short else []
 
 
-def _external_holdings(conn: sqlite3.Connection, fees: BudgetFees) -> tuple[list[Holding], list[str]]:
+def _external_holdings(
+    conn: sqlite3.Connection, fees: BudgetFees, *, owned_symbols: set[str],
+) -> tuple[list[Holding], list[str], tuple[OutsideReconciliation, ...]]:
     """Shares or contracts bought outside every bot, at FIFO cost, one holding per symbol.
 
     The execution population is the custody-era one ``_external_cash_claim``
@@ -250,7 +258,8 @@ def _external_holdings(conn: sqlite3.Connection, fees: BudgetFees) -> tuple[list
     Reference: ADR 0076 option multiplier and account-money decision.
     Canonical implementation: clerk.fifo_pnl.compute_fifo_pnl over FillRecord
       with the multiplier from fee evidence.
-    Validated against: sqlite/test_fee_evidence.py::test_paper_credit_spread_outside_fills_need_both_recorded_contract_references.
+    Validated against: sqlite/test_fee_evidence.py::test_paper_credit_spread_outside_fills_need_both_recorded_contract_references
+      and tests/broker/v2panel/test_budget_deploy.py::test_crypto_quantity_fees_resolve_broker_flat_residual_on_every_money_read.
     """
     symbols = {order.broker_order_id: order.symbol for order in external_orders(conn)}
     records: list[FillRecord] = []
@@ -268,14 +277,22 @@ def _external_holdings(conn: sqlite3.Connection, fees: BudgetFees) -> tuple[list
             native_order_id=fill.native_order_id, recorded_at_ms=fill.observed_at_ms,
             multiplier=fill.multiplier,
         ))
-    fifo = compute_fifo_pnl(sorted(records, key=lambda record: (record.filled_at_ms, record.event_key)))
+    excluded = owned_symbols | {symbols[order] for order in fees.pre_custody_quantities if order in symbols}
+    if unpriced:
+        excluded.update(record.symbol for record in records)
+    reconciliations = reconcile_outside_quantities(records, fees.external_quantity_fees, excluded_symbols=excluded)
+    resolved = {row.symbol for row in reconciliations if row.state == "resolved"}
+    fifo = compute_fifo_pnl(sorted(
+        (record for record in records if record.symbol not in resolved),
+        key=lambda record: (record.filled_at_ms, record.event_key),
+    ))
     held: dict[str, Decimal] = {}
     for lot in fifo.open_lots:
         if lot.side is OrderSide.BUY:
             held[lot.symbol] = held.get(lot.symbol, ZERO) + lot.exact_cost_basis
     named = [f"{quantity_text(qty)} shares from outside order {order}" for order, qty in unpriced.items()]
     named += _shorts(fifo.open_lots, holder="outside orders")
-    return [Holding(f"external:{symbol}", None, cost, ZERO) for symbol, cost in sorted(held.items())], named
+    return [Holding(f"external:{symbol}", None, cost, ZERO) for symbol, cost in sorted(held.items())], named, reconciliations
 
 
 def bots_holding_money(conn: sqlite3.Connection) -> frozenset[str]:

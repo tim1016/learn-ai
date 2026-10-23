@@ -4,6 +4,7 @@ import { RouterLink } from '@angular/router';
 import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { AccountPictureComponent } from '../../broker/account-picture/account-picture.component';
 import { MoneyBarComponent } from '../../broker/money-bar/money-bar.component';
+import { OutsideReconciliationComponent } from '../../broker/money-bar/outside-reconciliation.component';
 import type { AccountMoneyState } from '../../broker/v2-panel/lib/account-money-state';
 
 /**
@@ -25,7 +26,7 @@ import type { AccountMoneyState } from '../../broker/v2-panel/lib/account-money-
 @Component({
   selector: 'app-home-money',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AccountPictureComponent, AuthoredUsdPipe, MoneyBarComponent, RouterLink],
+  imports: [AccountPictureComponent, AuthoredUsdPipe, MoneyBarComponent, OutsideReconciliationComponent, RouterLink],
   templateUrl: './home-money.component.html',
   styleUrl: './home-money.component.scss',
 })

@@ -3,7 +3,7 @@ import { fireEvent, render, screen, within } from '@testing-library/angular';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { resourceTarget } from '../../../fleet/resource-target';
-import { fakeAccountMoney } from '../../../testing/account-money-fixtures';
+import { fakeAccountMoney, reconciledOutsideFills } from '../../../testing/account-money-fixtures';
 import {
   BrokerV2PanelService,
   type AccountMoneyView,
@@ -71,6 +71,14 @@ function legend(): HTMLElement {
 
 describe('Deploy step 3, Money', () => {
   afterEach(() => vi.useRealTimers());
+
+  it('renders the shared outside-fill resolution from its account preview', async () => {
+    await setup(vi.fn().mockResolvedValue({
+      ...FACTS, money_after: fakeAccountMoney({ outside_reconciliations: reconciledOutsideFills }),
+    }));
+    expect(screen.getByText('Outside fills reconciled.')).toBeTruthy();
+    expect(screen.queryByText('Outside fills unresolved.')).toBeNull();
+  });
 
   it('draws the account as it stands, then a NEW slice only once the typed amount’s preview answers', async () => {
     const answer = deferred<DeploymentBudgetPreview>();

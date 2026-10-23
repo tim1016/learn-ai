@@ -19,6 +19,9 @@
   </header>
 
   @let accountMoney = money();
+  @if (accountMoney.kind === 'ready') {
+    <app-outside-reconciliation [rows]="accountMoney.view.outside_reconciliations" />
+  }
   @if (accountMoney.kind === 'ready' && accountMoney.view.broker_position_disagreement; as difference) {
     <p class="activity__difference" role="note"><strong>Broker and Clerk records disagree.</strong> {{ difference }}</p>
   }

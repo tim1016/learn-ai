@@ -869,6 +869,19 @@ def custody_fee_attribution(
             observed += results[0].observed_total
     if not population_complete:
         unresolved.append("Account fill coverage is incomplete. Reconcile account executions before deploying.")
+    quantity_fees = tuple(
+        row for rows in by_date.values() for row in rows.values()
+        if row.activity_type == "CFEE" and (row.quantity is not None or row.symbol is not None)
+    )
+    if any(
+        row.activity_type == "CFEE" and (row.occurred_at_ms is None or floor.admits(et_date_at_ms(row.occurred_at_ms)))
+        for copies in collapsed.conflicts.values() for row in copies
+    ):
+        unresolved.append("Conflicting crypto fee evidence. Reconcile account activities.")
+    if any(row.activity_type == "CFEE" and row.occurred_at_ms is None for row in collapsed.unique.values()):
+        unresolved.append("A crypto fee has no economic date. Reconcile account activities.")
+    if floor.began_at_ms is not None and any(row.occurred_at_ms < floor.began_at_ms for row in quantity_fees):
+        unresolved.append("Crypto fee evidence overlaps the start of custody. Reconcile the complete outside history.")
     return FeeAttribution(
         tuple(shares),
         unattributed,
@@ -876,6 +889,7 @@ def custody_fee_attribution(
         observed if observed_known else None,
         predicted if predicted_known else None,
         external_fills=tuple(external_fills),
+        external_quantity_fees=quantity_fees,
         pre_custody_quantities=dict(pre_custody_quantities),
         unattributed_charges=tuple(unattributed_charges),
     )

@@ -171,6 +171,8 @@ class FeeAttribution:
     # shared with the cash projection. Its notional is never charged to a
     # bot's fee or P&L.
     external_fills: tuple[FeeFill, ...] = ()
+    # Quantity-denominated CFEE evidence is not a USD cash charge or a sale.
+    external_quantity_fees: tuple[BrokerActivity, ...] = ()
     # Tracked outside orders' executions from before custody began (H35), as
     # filled quantity per broker order id and nothing else: their shares and
     # cash are inside the account custody started from, so they only complete

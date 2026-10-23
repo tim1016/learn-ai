@@ -24,7 +24,7 @@ import {
   type LaneAttentionState,
 } from '../../../services/lane-attention.service';
 import type { ResourceTarget } from '../../../fleet/resource-target';
-import { fakeAccountMoney, fakeAccountPicture, unavailableAccountMoney } from '../../../testing/account-money-fixtures';
+import { fakeAccountMoney, fakeAccountPicture, reconciledOutsideFills, unavailableAccountMoney } from '../../../testing/account-money-fixtures';
 import { fakeBotPanelView, fakeCatalogBot, fakeSqliteBotActions } from '../../../testing/bot-panel-fixtures';
 import { GalleryLiveStore } from '../../broker/v2-panel/gallery/lib/gallery-live-store.service';
 import { BrokerV2PanelService, type AccountMoneyView } from '../../broker/v2-panel/lib/broker-v2-panel.service';
@@ -291,6 +291,13 @@ describe('AlpacaHomeComponent', () => {
       'the Dry Run group shows its simulated starting cash',
     ).toBeTruthy();
     expect.soft(within(dryRun).getByText('today, simulated'), 'the Dry Run group marks today as simulated').toBeTruthy();
+  });
+
+  it('shows the shared resolved outside-fill status without a broker disagreement', async () => {
+    await renderHome({ money: fakeAccountMoney({ account_id: TEST_ACCOUNT_ID, outside_reconciliations: reconciledOutsideFills }) });
+    const money = screen.getByRole('region', { name: 'Where the money is' });
+    expect(within(money).getByText('Outside fills reconciled.')).toBeTruthy();
+    expect(within(money).queryByText('Broker and Clerk records disagree.')).toBeNull();
   });
 
   it('shows a broker-flat book difference with working review and refresh actions', async () => {

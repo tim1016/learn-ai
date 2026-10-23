@@ -1,5 +1,11 @@
 import type { AccountMoneyView, AccountPictureView } from '../components/broker/v2-panel/lib/broker-v2-panel.service';
 
+export const reconciledOutsideFills: AccountMoneyView['outside_reconciliations'] = [{
+  symbol: 'BTC/USD', state: 'resolved',
+  detail: 'Recorded crypto fees account for the historical BTC residual. Original fills and fee records are retained.',
+  next_action: null, evidence_ids: ['recorded-btc-fee'],
+}];
+
 /** One ready account-money read, exactly as the backend authors it (every
  * dollar string and width below was produced by
  * `app/broker/alpaca/clerk/account_money.py` for a $100,000 Paper account

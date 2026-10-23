@@ -301,6 +301,14 @@
             ],
             "title": "Outside Bots Usd"
           },
+          "outside_reconciliations": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/OutsideReconciliation"
+            },
+            "title": "Outside Reconciliations",
+            "type": "array"
+          },
           "picture": {
             "anyOf": [
               {
@@ -49258,6 +49266,53 @@
         ],
         "title": "OrderSide",
         "type": "string"
+      },
+      "OutsideReconciliation": {
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "evidence_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "next_action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Action"
+          },
+          "state": {
+            "enum": [
+              "resolved",
+              "unresolved"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "state",
+          "detail",
+          "next_action",
+          "evidence_ids"
+        ],
+        "title": "OutsideReconciliation",
+        "type": "object"
       },
       "OwnedView": {
         "additionalProperties": false,

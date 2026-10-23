@@ -569,12 +569,3 @@ re-arms the server-authored timeframe auto-correct, and numeric
   `DECISION_BAR_MISSED` after IB Gateway's nightly blackout -- leaves the
   position held. It is not silent: Start refuses with
   `START_REQUIRES_FLAT_CUSTODY`, and the dead-run warning and Flatten apply.
-
-## Paper outside-fill reconciliation — verified 2026-10-15
-
-- **P2: Alpaca reports no Paper positions while the Clerk retains $2.68 of
-  outside BTC purchase cost (#3311).** The historical BTC fill population
-  leaves a net recorded residual of 0.000032112 BTC, but the broker positions
-  read is empty. The account-money bar now labels that amount as unconfirmed
-  and shows the disagreement; the underlying ledger difference is unresolved.
-  Reconcile exact fill and position evidence before appending a correction.

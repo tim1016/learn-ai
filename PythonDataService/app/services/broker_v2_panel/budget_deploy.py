@@ -1144,6 +1144,7 @@ def _money_view(
         account_shortfall_usd=_shortfall_usd(bar.shortfall_cents), stopped_holding_count=bar.count_of("stopped"),
         open_pnl_usd=open_pnl, open_pnl_detail=open_pnl_detail,
         broker_position_disagreement=disagreement,
+        outside_reconciliations=money.outside_reconciliations,
         segments=tuple(
             _segment_view(segment, held).model_copy(update={"label": "outside fills not confirmed by Alpaca"})
             if outside_disagrees and segment.kind == "outside" else _segment_view(segment, held)
