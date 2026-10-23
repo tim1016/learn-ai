@@ -250,20 +250,18 @@ async def join_retained_tail(
         # the wall-clock gap -- no fetch, and no floor that would drop them.
         return unfilled
     warm_from_ms: int | None = None
-    reaching = (
-        warmup_sessions_reaching(retained_end_ms, now_ms=now_ms, at_most=lookback_sessions)
-        if retained_end_ms >= warmup_window_start_ms(lookback_sessions, now_ms=now_ms)
-        else lookback_sessions
-    )
-    if reaching < lookback_sessions:
+    if retained_end_ms >= warmup_window_start_ms(lookback_sessions, now_ms=now_ms):
         # The fewest sessions reaching back to the tail, and one more: the source
         # counts its window from its own clock, which can pass a session close
-        # after ``now_ms`` and move the window's start up by a session.
-        history = await source.recent_closed_bars(symbol, use_rth=False, lookback_sessions=reaching + 1)
+        # after ``now_ms`` and move the window's start up by a session. Never
+        # past the lookback. A tail in its oldest session gets no spare, and
+        # history that then starts after the tail is refused, never warmed past:
+        # a truncated answer looks the same.
+        reaching = warmup_sessions_reaching(retained_end_ms, now_ms=now_ms, at_most=lookback_sessions)
+        history = await source.recent_closed_bars(
+            symbol, use_rth=False, lookback_sessions=min(reaching + 1, lookback_sessions)
+        )
     else:
-        # A tail outside the lookback, or in its oldest session, where no spare
-        # session fits under it: history that starts after the tail is warmed on
-        # from its first bar, as a fresh deploy would.
         history = await source.recent_closed_bars(symbol, use_rth=False, lookback_sessions=lookback_sessions)
         first_start_ms = min((bar.start_ms for bar in history), default=now_ms)
         if first_start_ms > retained_end_ms:
