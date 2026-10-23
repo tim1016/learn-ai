@@ -28,6 +28,7 @@ from app.research.golden_search.worker import WorkerDispatchContext
 from app.research.options_golden_search.dispatch import OptionsDispatch, ReadyOptions
 from app.research.options_golden_search.evaluator import evaluate_setup
 from app.research.options_golden_search.identity import execution_identity
+from app.research.options_golden_search.marks import MARK_RULE_V2
 from app.research.options_golden_search.protocol import Window
 from app.research.options_golden_search.snapshots import Snapshot, SnapshotRunData
 from tests.options_backtest._lake import FRIDAY, FRIDAY_OPEN_MS, raw_root
@@ -61,9 +62,10 @@ async def test_real_mixed_owners_advance_and_options_backtests_and_studies_share
     snapshot = Snapshot(manifest=manifest, absent=(), retained_bytes=retained)
     window = Window(key="development", start_ms=FRIDAY_OPEN_MS, end_ms=FRIDAY_OPEN_MS + 86_400_000,
                     session_ms=(FRIDAY_OPEN_MS,), annualization_sessions=251, activity_floor=1)
-    expected_study = evaluate_setup(source.setup, window, SnapshotRunData("SPY", snapshot, blobs))
+    expected_study = evaluate_setup(source.setup, window, SnapshotRunData("SPY", snapshot, blobs), mark_rule=MARK_RULE_V2)
     study_payload = {"setup": source.setup.model_dump(mode="json"), "window": window.model_dump(mode="json"),
-        "snapshot": snapshot.model_dump(mode="json"), "blob_root": str(blobs.root), "identity": execution_identity()}
+        "snapshot": snapshot.model_dump(mode="json"), "blob_root": str(blobs.root), "identity": execution_identity(),
+        "mark_rule": MARK_RULE_V2}
 
     # Retained Options workers need no lake/catalog. Signal still exercises
     # its parent admission proxy against the exact fixture receipts.

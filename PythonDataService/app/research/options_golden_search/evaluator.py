@@ -41,7 +41,10 @@ class EvaluationResult:
     metrics: QualificationMetrics
     scheduled_sessions: int
     input_failures: tuple[str, ...] = ()
-    mark_rule: str = MARK_RULE_V1
+
+    @property
+    def mark_rule(self) -> str:
+        return self.metrics.mark_rule
 
     @property
     def complete(self) -> bool:
@@ -117,6 +120,4 @@ def evaluate_setup(
         annualization_sessions=window.annualization_sessions, risk_free_daily_return=risk_free_daily_return,
         mark_rule=mark_rule,
     )
-    return EvaluationResult(
-        tuple(kept), tuple(pins), with_input_failures(metrics, input_failures), len(days), input_failures, mark_rule,
-    )
+    return EvaluationResult(tuple(kept), tuple(pins), with_input_failures(metrics, input_failures), len(days), input_failures)

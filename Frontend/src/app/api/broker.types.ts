@@ -25906,8 +25906,11 @@ export interface components {
             complete: boolean;
             /** Longest Carried Run */
             longest_carried_run: number;
-            /** Mark Rule */
-            mark_rule: string;
+            /**
+             * Mark Rule
+             * @enum {string}
+             */
+            mark_rule: "options-held-minute-close-v1" | "options-held-minute-close-v2";
             /** Missing Held Marks */
             missing_held_marks: number;
             /** Replayed Sessions */
@@ -26505,8 +26508,11 @@ export interface components {
             limit: number;
             /** Longest Carried Run */
             longest_carried_run: number;
-            /** Mark Rule */
-            mark_rule: string;
+            /**
+             * Mark Rule
+             * @enum {string}
+             */
+            mark_rule: "options-held-minute-close-v1" | "options-held-minute-close-v2";
             /** Missing Held Marks */
             missing_held_marks: number;
             /** Offset */

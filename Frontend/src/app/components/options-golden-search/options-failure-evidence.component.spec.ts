@@ -18,6 +18,8 @@ it('shows partial scope and real close, and inspects retained input only on requ
   const inspectFailure = vi.fn(async () => inspection());
   await render(OptionsFailureEvidenceComponent, { inputs: { studyId: FIXTURE.study_id, digest: FIXTURE.candidate_hash }, providers: [provideRouter([]), { provide: OptionsGoldenSearchService, useValue: { failurePage: async () => FIXTURE, inspectFailure } }] });
   await screen.findByText('597 / 599 required held marks present; 2 missing.');
+  expect(screen.getByText('options-held-minute-close-v1')).toBeTruthy();
+  expect(screen.queryByText(/valued at the previous same-session traded close/)).toBeNull();
   expect(screen.getByText('0 / 6 eligible forward-fold winners. Final test: Not Opened.')).toBeTruthy();
   expect(screen.getAllByText(/Cause not established/)).toHaveLength(2);
   expect(screen.getAllByText(/Real closing fill:/)).toHaveLength(2);

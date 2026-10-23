@@ -142,7 +142,7 @@ class StudyEvaluator:
         if hash_payload(exact_data(metrics)) != stored["metrics_sha256"] or metric_summary(metrics) != stored["metrics"]:
             raise ValueError("Retained trace no longer reproduces its recorded qualification metrics.")
         pins = pins_from_wire(payload["pins"])
-        return EvaluationResult(sessions,pins,metrics,len(window.session_ms),input_failures,self.protocol.mark_rule)
+        return EvaluationResult(sessions,pins,metrics,len(window.session_ms),input_failures)
 
     def __call__(self, setup, window: Window, scenario: str) -> Evaluation:
         return self.evaluate_batch([(setup,window,scenario)])[0]

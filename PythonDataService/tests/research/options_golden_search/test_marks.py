@@ -145,10 +145,6 @@ def test_a_position_that_traded_nothing_is_still_a_technical_failure_under_v2() 
     assert (carried.missing_held_marks, carried.carried_held_marks, carried.technical_failures) == (0, 1, ())
 
 
-def test_mark_rule_identifiers_are_the_owner_decided_spellings() -> None:
-    assert (MARK_RULE_V1, MARK_RULE_V2) == ("options-held-minute-close-v1", "options-held-minute-close-v2")
-
-
 # --- one canonical replay, valued under both rules ---------------------------------------------------------------
 
 
@@ -178,6 +174,7 @@ def test_carried_drawdown_peak_and_recovery_are_exact_over_the_carried_values_an
     assert metrics.net_profit_usd == D("50")
     assert metrics.max_drawdown_usd == D("100")
     assert metrics.max_drawdown_fraction == D("0.01")
+    assert metrics.peak_relative_drawdown_fraction == D("0.01"), "100 below a 10000 peak, over the carried minutes 8 and 9"
     assert metrics.max_recovery_sessions == 1 and not metrics.ongoing_recovery
     assert [(spell.peak_at_ms, spell.recovered_at_ms, spell.below_peak_sessions) for spell in metrics.recoveries] == [
         (open_ms(WED) + 6 * 60_000, open_ms(WED) + 61 * 60_000, 1),
@@ -196,6 +193,7 @@ def test_carried_drawdown_peak_and_recovery_are_exact_over_the_carried_values_an
     assert v1.mark_rule == MARK_RULE_V1 and v1.carried_held_marks is None
     assert v1.missing_held_marks == 4
     assert v1.max_drawdown_usd == D("90")
+    assert v1.peak_relative_drawdown_fraction == D("0.009")
     assert [failure.split(":", 1)[1] for failure in v1.technical_failures] == [
         "missing_held_mark:call", "missing_held_mark:call,put", "missing_held_mark:put",
     ]

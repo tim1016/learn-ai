@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from app.options_backtest.setup import OptionsBacktestSetup
+from app.research.options_golden_search.marks import MarkRule
 from app.schemas.options_golden_search import Candidate
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
@@ -37,7 +38,7 @@ class OptionsCandidateSampling(BaseModel):
 class OptionsHeldMarkRule(BaseModel):
     """The held-minute mark rule an evaluation was valued under, and the marks that rule carried (ADR 0080)."""
 
-    mark_rule: str
+    mark_rule: MarkRule
     carried_held_marks: int = Field(ge=0)
     carried_share_percent: str
     longest_carried_run: int = Field(ge=0)

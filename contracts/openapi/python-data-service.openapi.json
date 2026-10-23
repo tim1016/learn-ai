@@ -46490,6 +46490,10 @@
             "type": "integer"
           },
           "mark_rule": {
+            "enum": [
+              "options-held-minute-close-v1",
+              "options-held-minute-close-v2"
+            ],
             "title": "Mark Rule",
             "type": "string"
           },
@@ -48009,6 +48013,10 @@
             "type": "integer"
           },
           "mark_rule": {
+            "enum": [
+              "options-held-minute-close-v1",
+              "options-held-minute-close-v2"
+            ],
             "title": "Mark Rule",
             "type": "string"
           },
