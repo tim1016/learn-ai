@@ -1554,7 +1554,9 @@ async def test_catalog_spawning_preserves_trouble_and_unreadable_states(
         fills_today=0, realized_pnl_today=0, open_pnl=0, day_pnl=0, last_activity_at_ms=None,
         needs_attention=needs_attention, group='running', world_label='Paper',
     )
-    binding = SimpleNamespace(strategy_instance_id='spawn', mode='trade')
+    binding = SimpleNamespace(strategy_instance_id='spawn', mode='trade', run_id='run-1')
+    progress = IndicatorProgress(bars_done=20, bars_needed=109, converged=False, decision_timeframe_ms=900000)
+    ledger = SimpleNamespace(indicator_progress=lambda *, run_id: progress if run_id == 'run-1' else None)
     registry = SimpleNamespace(bindings_for_broker=lambda broker: [binding])
 
     async def catalog(broker: str, account: str):
@@ -1563,9 +1565,7 @@ async def test_catalog_spawning_preserves_trouble_and_unreadable_states(
     monkeypatch.setattr(panel_data_source, 'validate_account', _resolved_account)
     monkeypatch.setattr(panel_data_source, 'get_bot_task_registry', lambda: registry)
     monkeypatch.setattr(panel_data_source, 'read_sqlite_catalog', catalog)
-    monkeypatch.setattr(panel_data_source, '_run_source_evidence_for', lambda binding: SimpleNamespace(
-        indicator_progress=IndicatorProgress(bars_done=20, bars_needed=109, converged=False, decision_timeframe_ms=900000),
-    ))
+    monkeypatch.setattr(panel_data_source, 'read_run_ledger', lambda binding, read, *, unavailable_action: read(ledger))
     [listed] = await panel_data_source.get_catalog('alpaca', 'paper-account')
     if needs_attention or exposure is None:
         assert listed.status_label == label

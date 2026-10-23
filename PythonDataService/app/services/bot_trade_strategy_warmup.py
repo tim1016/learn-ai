@@ -236,7 +236,7 @@ async def replay_warmup_bars(
                 if (
                     names_next
                     and stage.decision.intent is not None
-                    and stage.decision.converged
+                    and stage.trace.converged
                     and market_bar.provenance != "history"
                     and captured.covers(stage.trace.bar_close_ms)
                 ):

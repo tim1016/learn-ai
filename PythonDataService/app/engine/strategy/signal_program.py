@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field
 from datetime import timedelta
 from enum import StrEnum
 from typing import Any, Protocol
@@ -131,7 +131,6 @@ class SignalDecision:
     # What this decision saw, for the owner (#2639). ``_build_trace`` never
     # copies it, so it can grow without moving any trace digest or root.
     explanation: DecisionExplanation | None = None
-    converged: bool = False
 
 
 class SignalProgramStrategy(Protocol):
@@ -225,12 +224,12 @@ class SignalSession:
         if self._last_bar_close_ms is not None and bar.end_ms <= self._last_bar_close_ms:
             return self._quarantine(bar, StageStatus.REJECTED_BAR, "NON_MONOTONIC_DECISION_CLOCK")
         decision = self._strategy.evaluate_signal_bar(bar)
-        decision = replace(decision, converged=self.converged)
-        spawning = require_convergence and not decision.converged
+        converged = self.converged
+        spawning = require_convergence and not converged
         if spawning:
             mode = EvaluationMode.OBSERVE_ONLY
         intents = () if decision.intent is None else (decision.intent,)
-        trace = self._build_trace(bar=bar, decision=decision, mode=mode, spawning=spawning)
+        trace = self._build_trace(bar=bar, decision=decision, mode=mode, converged=converged, spawning=spawning)
         stage = EvaluationStage(bar=bar, trace=trace, intents=intents, decision=decision)
         self._active_stage = stage
         self._last_bar_close_ms = bar.end_ms
@@ -291,6 +290,7 @@ class SignalSession:
         bar: TradeBar,
         decision: SignalDecision,
         mode: EvaluationMode,
+        converged: bool,
         spawning: bool,
     ) -> EvaluationTrace:
         settings = self._strategy.signal_program_settings()
@@ -310,7 +310,7 @@ class SignalSession:
             bar_qualified=True,
             bucket_closed=True,
             ready=decision.ready,
-            converged=decision.converged,
+            converged=converged,
             convergence_bars_done=self.convergence_bars_done,
             convergence_bars_needed=self.convergence_bars_needed,
             spawning=spawning,

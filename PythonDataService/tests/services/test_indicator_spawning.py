@@ -56,3 +56,20 @@ def test_bot_status_says_spawning_only_while_indicators_are_pending(running: boo
         assert '20 of 109' in view.explanation
     else:
         assert status.label != 'Spawning'
+
+
+def test_a_ledger_that_cannot_take_progress_does_not_end_the_run(caplog: pytest.LogCaptureFixture) -> None:
+    import sqlite3
+
+    from app.services.bot_trade_strategy import _convergence_recorder
+
+    def locked(*, run_id: str, progress: IndicatorProgress) -> None:
+        raise sqlite3.OperationalError('database is locked')
+
+    ledger = SimpleNamespace(record_indicator_progress=locked)
+    binding = SimpleNamespace(run_id='run-1', strategy_instance_id='spawn')
+    record = _convergence_recorder(ledger, binding)
+    assert record is not None
+    record(progress())
+    assert [r.action for r in caplog.records] == ['bot_indicator_progress_unsaved']
+    assert _convergence_recorder(None, binding) is None

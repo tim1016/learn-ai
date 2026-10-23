@@ -91,6 +91,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 BeforeStartSink = Callable[[Sequence[DecisionExplanationRecord]], None]
+ConvergenceSink = Callable[[IndicatorProgress], None]
 
 _EFFECT_PURPOSE_BY_INTENT = {
     SignalIntentKind.ENTER: EffectPurpose.ENTER,
@@ -657,7 +658,7 @@ async def _signal_strategy_evaluations(
     captured_decisions: CapturedDecisions | None,
     quarantine_receipts: QuarantineReceiptSink | None,
     record_before_start: BeforeStartSink | None = None,
-    record_convergence: Callable[[IndicatorProgress], None] | None = None,
+    record_convergence: ConvergenceSink | None = None,
 ) -> AsyncIterator[StrategyEvaluation]:
     """Run one canonical signal-intent strategy on the production minute stream."""
     runtime = _build_signal_strategy(
@@ -790,7 +791,7 @@ async def strategy_evaluations(
     quarantine_receipts: QuarantineReceiptSink | None = None,
     session: RunDecisionSession | None = None,
     record_before_start: BeforeStartSink | None = None,
-    record_convergence: Callable[[IndicatorProgress], None] | None = None,
+    record_convergence: ConvergenceSink | None = None,
 ) -> AsyncIterator[StrategyEvaluation]:
     """Stream one strategy's evaluations.
 
@@ -977,7 +978,7 @@ async def run_trade_bot(
             quarantine_receipts=decision_receipts,
             session=session,
             record_before_start=_before_start_recorder(source_bars, binding),
-            record_convergence=(None if source_bars is None else lambda progress: source_bars.record_indicator_progress(run_id=binding.run_id, progress=progress)),
+            record_convergence=_convergence_recorder(source_bars, binding),
         ):
             if len(evaluation.intents) > 1:
                 raise RuntimeError("A supported trade strategy emitted multiple intents for one closed bar.")
@@ -1183,6 +1184,32 @@ def _before_start_recorder(
 
     return record
 
+
+def _convergence_recorder(source_bars: SourceBarLedger | None, binding: BrokerBotBinding) -> ConvergenceSink | None:
+    """Save this run's latest indicator progress, behind its Spawning status (#2857).
+
+    Display evidence like the before-start evaluations: a ledger that cannot
+    take it is logged and the run goes on, since losing it must never cost
+    the bot a decision.
+    """
+    if source_bars is None:
+        return None
+
+    def record(progress: IndicatorProgress) -> None:
+        try:
+            source_bars.record_indicator_progress(run_id=binding.run_id, progress=progress)
+        except (sqlite3.Error, OSError) as exc:
+            logger.warning(
+                "Indicator progress was not saved",
+                extra={
+                    "action": "bot_indicator_progress_unsaved",
+                    "strategy_instance_id": binding.strategy_instance_id,
+                    "run_id": binding.run_id,
+                    "reason": str(exc),
+                },
+            )
+
+    return record
 
 _PROTECTED_RETENTION_CLASS_BY_OUTCOME: dict[str, str] = {
     "blocked": "protected_refusal",
@@ -2082,7 +2109,7 @@ async def run_dry_run_bot(
             quarantine_receipts=decision_receipts,
             session=session,
             record_before_start=_before_start_recorder(source_bars, binding),
-            record_convergence=(None if source_bars is None else lambda progress: source_bars.record_indicator_progress(run_id=binding.run_id, progress=progress)),
+            record_convergence=_convergence_recorder(source_bars, binding),
         ):
             if len(evaluation.intents) > 1:
                 raise RuntimeError("A supported Dry Run strategy emitted multiple intents for one closed bar.")

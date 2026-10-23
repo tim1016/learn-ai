@@ -525,8 +525,8 @@ async def test_history_buckets_are_never_flagged_as_crash_candidates() -> None:
         def replay_closed_bar(self, context: object, bar: MarketDataBar, *, mode: object) -> None:
             del context, mode
             self._stage = SimpleNamespace(
-                trace=SimpleNamespace(evaluation_id=f"ev-{bar.start_ms}", bar_close_ms=bar.end_ms),
-                decision=SimpleNamespace(intent="ENTER", converged=True),
+                trace=SimpleNamespace(evaluation_id=f"ev-{bar.start_ms}", bar_close_ms=bar.end_ms, converged=True),
+                decision=SimpleNamespace(intent="ENTER"),
                 settlement=None,
             )
 

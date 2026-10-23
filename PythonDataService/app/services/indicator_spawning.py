@@ -12,14 +12,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from app.engine.strategy.params import decision_timeframe_ms_for
-from app.engine.strategy.registry import _STRATEGY_REGISTRY, _regular_session_ms, _warmup_lookback_days_holding
-from app.marketdata.feed import MAX_WARMUP_LOOKBACK_DAYS
+from app.engine.strategy.registry import _STRATEGY_REGISTRY, bars_per_regular_session
 from app.schemas.indicator_convergence import IndicatorProgress, SpawningView
 
 
 def _remaining_words(bars: int, timeframe_ms: int) -> tuple[str, int | None]:
-    per_session = _regular_session_ms() // timeframe_ms
+    per_session = bars_per_regular_session(timeframe_ms)
     if not per_session:
         return f"needs {bars} more bars of {timeframe_ms // 60_000} minutes before it decides", None
     sessions = -(-bars // per_session)
@@ -42,19 +40,8 @@ def deploy_spawn_estimate(strategy_key: str, params: Mapping[str, object]) -> st
     if contract is None:
         raise ValueError("A convergence estimate requires a Signal Program")
     validated = registration.param_schema.model_validate(params)
-    needed = max((item.bars_to_converge or 0 for item in contract.resolved_signals(validated)), default=0)
-    width = decision_timeframe_ms_for(validated, qualified_ms=contract.decision_timeframe_ms)
-    # Invert the same sealed history guarantee, without a second calendar formula.
-    lower, upper = 0, needed
-    while lower < upper:
-        middle = (lower + upper + 1) // 2
-        days = _warmup_lookback_days_holding(middle, width)
-        if days is not None and days <= MAX_WARMUP_LOOKBACK_DAYS:
-            lower = middle
-        else:
-            upper = middle - 1
-    remaining = needed - lower
+    remaining = contract.live_convergence_bars(validated)
     if not remaining:
         return "Ready to decide at start when history is complete."
-    words, _ = _remaining_words(remaining, width)
+    words, _ = _remaining_words(remaining, contract.resolved_decision_timeframe_ms(validated))
     return f"Spawning: {words}. Spawn progress is lost if the bot stops."

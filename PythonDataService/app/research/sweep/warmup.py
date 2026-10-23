@@ -19,7 +19,6 @@ from itertools import product
 from pathlib import Path
 
 from app.engine.data.availability import Resolution, check_availability
-from app.engine.strategy.params import decision_timeframe_ms_for
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.lean_sidecar.trading_calendar import (
     session_open_ms_utc,
@@ -138,12 +137,11 @@ def _probe_cached(strategy_key: str, assignment: tuple[tuple[str, object], ...])
     if contract is None:
         raise WarmupProbeError(f"strategy {strategy_key!r} registers no signal program and cannot be swept")
     validated = registration.param_schema.model_validate(params)
-    series = contract.resolved_signals(validated)
     return WarmupProbe(
         strategy_key=strategy_key,
-        first_ready_sample=max((item.warmup_bars for item in series), default=1),
-        required_samples=max(1, max((item.bars_to_converge or 0 for item in series), default=0)),
-        bar_span_ms=decision_timeframe_ms_for(validated, qualified_ms=contract.decision_timeframe_ms),
+        first_ready_sample=max((item.warmup_bars for item in contract.resolved_signals(validated)), default=1),
+        required_samples=max(1, contract.convergence_bars(validated)),
+        bar_span_ms=contract.resolved_decision_timeframe_ms(validated),
     )
 
 

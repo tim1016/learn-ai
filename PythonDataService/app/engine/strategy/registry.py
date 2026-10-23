@@ -139,6 +139,11 @@ def _regular_session_ms() -> int:
     return max(window.close_ms_utc - window.open_ms_utc for window in session_windows_ms_utc(first, last))
 
 
+def bars_per_regular_session(decision_timeframe_ms: int) -> int:
+    """Whole decision bars one regular session holds; zero when the bar is longer than a session."""
+    return _regular_session_ms() // decision_timeframe_ms
+
+
 def _warmup_lookback_days_holding(bars: int, decision_timeframe_ms: int) -> int | None:
     """The calendar days of lookback that hold ``bars`` whole decision bars, whenever the run starts.
 
@@ -179,7 +184,7 @@ def _warmup_lookback_days_holding(bars: int, decision_timeframe_ms: int) -> int 
     """
     if bars <= 0:
         return 0
-    bars_per_session = _regular_session_ms() // decision_timeframe_ms
+    bars_per_session = bars_per_regular_session(decision_timeframe_ms)
     if bars_per_session == 0:
         return None
     sessions = -(-(bars + _WINDOW_EDGE_BARS) // bars_per_session)
@@ -281,12 +286,36 @@ class SignalProgramContract:
             return self.numerical_provenance
         return self.numerical_provenance_for(params)
 
+    def resolved_decision_timeframe_ms(self, params: StrategyParamsBase) -> int:
+        """The decision bar width a program built from ``params`` runs at."""
+        return decision_timeframe_ms_for(params, qualified_ms=self.decision_timeframe_ms)
+
+    def convergence_bars(self, params: StrategyParamsBase) -> int:
+        """Decision bars until every indicator ``params`` build has converged (#2857)."""
+        return max((series.bars_to_converge or 0 for series in self.resolved_signals(params)), default=0)
+
     def resolved_warmup_lookback_days(self, params: StrategyParamsBase) -> int:
         """History is capped at twenty days; remaining convergence happens live (#2857)."""
-        bars = max((series.bars_to_converge or 0 for series in self.resolved_signals(params)), default=0)
-        decision_ms = decision_timeframe_ms_for(params, qualified_ms=self.decision_timeframe_ms)
-        days = _warmup_lookback_days_holding(bars, decision_ms)
+        days = _warmup_lookback_days_holding(self.convergence_bars(params), self.resolved_decision_timeframe_ms(params))
         return MAX_WARMUP_LOOKBACK_DAYS if days is None else min(MAX_WARMUP_LOOKBACK_DAYS, max(1, days))
+
+    def live_convergence_bars(self, params: StrategyParamsBase) -> int:
+        """Convergence bars the capped history cannot guarantee, so the bot spawns on live ones (#2857).
+
+        Inverts the same history guarantee the seal's lookback is sized by,
+        never a second calendar formula.
+        """
+        needed = self.convergence_bars(params)
+        decision_ms = self.resolved_decision_timeframe_ms(params)
+        held, unheld = 0, needed + 1
+        while unheld - held > 1:
+            middle = (held + unheld) // 2
+            days = _warmup_lookback_days_holding(middle, decision_ms)
+            if days is not None and days <= MAX_WARMUP_LOOKBACK_DAYS:
+                held = middle
+            else:
+                unheld = middle
+        return needed - held
 
     def __post_init__(self) -> None:
         # An empty wiring list is the dangerous shape, not a harmless one: it
@@ -423,8 +452,6 @@ def _macd_periods_refusal(params: StrategyParamsBase) -> str | None:
     return f"macd_fast ({params.macd_fast}) must be less than macd_slow ({params.macd_slow})."
 
 
-
-
 def _ema_exit_eligibility_for(params: StrategyParamsBase) -> ExitEligibilityContract:
     """The countdown ``commit_signal_decision`` arms at entry: ``hold_bars`` decision clocks."""
     assert isinstance(params, EmaCrossoverSignalParams | EmaPreviousCrossoverParams)
@@ -514,22 +541,6 @@ def _ema_parameter_schema_version_for(params: StrategyParamsBase) -> str:
 # its ``initialize()`` builds for these parameters, in the static tuple's
 # order. ``warmup_bars`` is each indicator's own ``is_ready`` threshold
 # (app/engine/indicators/).
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # Strategy C's formula names its periods outright, so it holds only while both
@@ -893,7 +904,6 @@ _SPY_STRATEGY_C_VIEW = StrategyView(
     ),
     default_gate=_RSI_RANGE_GATE,
 )
-
 
 
 _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {

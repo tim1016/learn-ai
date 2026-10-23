@@ -38,7 +38,6 @@ def test_program_and_seal_converge_at_the_slowest_indicator(key: str, overrides:
         stage = program.session.advance(bar, mode=EvaluationMode.DECIDE, require_convergence=True)
         assert isinstance(stage, EvaluationStage)
         assert stage.trace.converged is (sample == required)
-        assert stage.decision.converged is stage.trace.converged
         assert stage.trace.spawning is (sample < required)
         if sample < required:
             assert stage.trace.evaluation_mode is EvaluationMode.OBSERVE_ONLY

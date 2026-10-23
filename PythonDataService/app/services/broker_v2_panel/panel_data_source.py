@@ -276,7 +276,7 @@ class RunSourceEvidence:
     events: list[RetainedContinuityEvent]
     warmup_join: RetainedWarmupJoin | None
     startup_join: RetainedStartupJoin | None
-    indicator_progress: IndicatorProgress | None = None
+    indicator_progress: IndicatorProgress | None
 
 
 def _run_source_evidence_for(binding: BrokerBotBinding) -> RunSourceEvidence | None:
@@ -451,18 +451,30 @@ async def get_catalog(broker: str, account_id: str, *, home: bool = False) -> li
         if home and facade is not None
         else []
     )
-    rows = [*sqlite_catalog, *synthetic_rows, *rehearsal_rows]
     by_sid = {binding.strategy_instance_id: binding for binding in bindings}
-    result = []
-    for row in rows:
-        binding = by_sid.get(row.strategy_instance_id)
-        if row.running and not row.needs_attention and row.exposure is not None and binding is not None and row.bot_kind == "signal":
-            evidence = _run_source_evidence_for(binding)
-            view = spawning_view(None if evidence is None else evidence.indicator_progress, running=True)
-            if view is not None:
-                row = row.model_copy(update={"status_label": view.label, "status_explanation": f"{view.label}: {view.explanation}"})
-        result.append(row)
-    return result
+    return [
+        _with_spawning_status(row, by_sid.get(row.strategy_instance_id))
+        for row in (*sqlite_catalog, *synthetic_rows, *rehearsal_rows)
+    ]
+
+
+def _with_spawning_status(row: BotCatalogView, binding: BrokerBotBinding | None) -> BotCatalogView:
+    """Say Spawning on a running Signal bot whose indicators are still settling (#2857).
+
+    An attention label wins, and so does an unreadable Dry Run's (its
+    ``exposure`` is unknown). Only the run's retained progress row is read.
+    """
+    if binding is None or row.bot_kind != "signal" or not row.running or row.needs_attention or row.exposure is None:
+        return row
+    progress = read_run_ledger(
+        binding,
+        lambda ledger: ledger.indicator_progress(run_id=binding.run_id),
+        unavailable_action="catalog_indicator_progress_unavailable",
+    )
+    view = spawning_view(progress, running=True)
+    if view is None:
+        return row
+    return row.model_copy(update={"status_label": view.label, "status_explanation": f"{view.label}: {view.explanation}"})
 
 
 async def _get_panel_with_entries_from_authority(
