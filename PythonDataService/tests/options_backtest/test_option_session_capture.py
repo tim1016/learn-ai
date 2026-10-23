@@ -203,14 +203,19 @@ async def test_explicit_transient_retry_budget_and_planned_pause(fake_catalog, t
 
 @pytest.mark.parametrize("lost", [httpx.ReadTimeout("slow"),
                                   httpx.RemoteProtocolError("Server disconnected without sending a response."),
-                                  httpx.ReadError("Connection reset by peer")],
-                         ids=["timed_out", "server_disconnected", "connection_reset"])
+                                  httpx.ReadError("Connection reset by peer"),
+                                  httpx.Response(502, text="Bad Gateway"),
+                                  httpx.Response(503, text="Service Unavailable"),
+                                  httpx.Response(504, text="Gateway Timeout")],
+                         ids=["timed_out", "server_disconnected", "connection_reset", "bad_gateway",
+                              "service_unavailable", "gateway_timeout"])
 @respx.mock
 async def test_a_contract_request_the_vendor_does_not_answer_is_asked_again_and_the_session_completes(
         fake_catalog, tmp_lake, lost):
     """One lost answer used to fail the whole session until the archive's next pass, days later.
 
-    A dropped connection put three sessions on retry overnight on 2026-10-23, after timeouts were already asked again.
+    A dropped connection put three sessions on retry overnight on 2026-10-23, after timeouts were already asked again,
+    and two 502 Bad Gateway answers put two more on retry that morning.
     """
     await prepare(fake_catalog, tmp_lake, CALL, PUT)
     respx.get(url(CALL)).mock(return_value=no_trades(CALL.occ_symbol))
