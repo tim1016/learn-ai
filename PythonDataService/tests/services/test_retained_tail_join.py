@@ -526,7 +526,8 @@ async def test_history_buckets_are_never_flagged_as_crash_candidates() -> None:
             del context, mode
             self._stage = SimpleNamespace(
                 trace=SimpleNamespace(evaluation_id=f"ev-{bar.start_ms}", bar_close_ms=bar.end_ms),
-                decision=SimpleNamespace(intent="ENTER"),
+                decision=SimpleNamespace(intent="ENTER", converged=True),
+                settlement=None,
             )
 
         def active_stage(self) -> SimpleNamespace | None:

@@ -21,7 +21,7 @@ from app.data_lake.path_policy import lake_subpath
 from app.data_lake.types import polygon_mode_for
 from app.engine.data.trade_bar import TradeBar
 from app.engine.strategy.registry import strategy_program_version
-from app.lean_sidecar.trading_calendar import next_trading_day, session_open_ms_utc
+from app.lean_sidecar.trading_calendar import next_trading_day, session_open_ms_utc, session_windows_ms_utc
 from app.research.backtest_runs.evidence_provenance import RunEvidenceProvenance
 from app.research.backtest_runs.records import persisted_execution_configuration
 from app.research.backtest_runs.repository import REPORT_TRADE_LIMIT, RunDetail, TradeRow
@@ -45,7 +45,9 @@ from tests._helpers.lake_fixture import seed_lake_daily, seed_lake_minute_day
 pytestmark = pytest.mark.usefixtures("seeded_lake_catalog")
 
 WARMUP_DAY = date(2026, 1, 5)
-EVALUATED_DAY = next_trading_day(WARMUP_DAY)
+# Five full sessions provide 130 decision bars, beyond the 109-bar convergence requirement.
+WARMUP_DAYS = [window.session_date for window in session_windows_ms_utc(WARMUP_DAY, date(2026, 1, 9))]
+EVALUATED_DAY = next_trading_day(WARMUP_DAYS[-1])
 PARAMS = {"symbol": "SPY", "rsi_min": 45, "rsi_max": 75}
 # The lake state the saved run recorded, and that its window materializes against again.
 RECEIPT = "a" * 64
@@ -62,18 +64,18 @@ def lake_receipt(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
 
 
 @pytest.fixture
-def two_day_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Two seeded SPY sessions: the run's warmup day, then its one evaluated day."""
+def primed_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Seed enough SPY history to converge before the one evaluated session."""
     write_root = tmp_path / "lean-data-writer"
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
     adjusted_root = write_root / lake_subpath(polygon_mode_for(True))
-    for day in (WARMUP_DAY, EVALUATED_DAY):
+    for day in (*WARMUP_DAYS, EVALUATED_DAY):
         seed_lake_minute_day(adjusted_root, "SPY", day)
-    seed_lake_daily(adjusted_root, "SPY", [WARMUP_DAY, EVALUATED_DAY])
+    seed_lake_daily(adjusted_root, "SPY", [*WARMUP_DAYS, EVALUATED_DAY])
 
 
 @pytest.fixture
-def saved_run(two_day_store: None) -> RunDetail:
+def saved_run(primed_store: None) -> RunDetail:
     """A primed engine run, as the run history stores it."""
     request = EngineBacktestRequest(
         strategy_name="ema_crossover_signal",
@@ -162,13 +164,13 @@ def test_a_saved_runs_view_replays_its_own_decisions_behind_its_warmup(saved_run
     view = build_backtest_run_strategy_view(saved_run)
 
     phases = [candle.phase for candle in view.candles]
-    assert phases == ["before_start"] * 26 + ["decision"] * 26
-    assert all(candle.bar_close_ms <= saved_run.start_ms for candle in view.candles[:26])
+    assert phases == ["before_start"] * 130 + ["decision"] * 26
+    assert all(candle.bar_close_ms <= saved_run.start_ms for candle in view.candles[:130])
     assert view.run_started_at_ms == session_open_ms_utc(EVALUATED_DAY)
     assert view.run_id == "backtest-run:7"
     # The run's deployed band labels the default gate.
     assert view.declaration.gates[0].label == "RSI in 45–75"
-    assert {candle.outcome for candle in view.candles[26:]} <= {"no_action", "enter_intent", "exit_intent"}
+    assert {candle.outcome for candle in view.candles[130:]} <= {"no_action", "enter_intent", "exit_intent"}
 
 
 # The three sessions before the run's warmup day (2026-01-01 is a holiday).
@@ -209,7 +211,7 @@ def test_the_lead_in_is_the_decision_bars_the_run_would_have_staged_had_it_start
         for bar in before_the_run
     ]
     # The candles are the run's own, as before: the lead-in adds none.
-    assert [candle.phase for candle in view.candles] == ["before_start"] * 26 + ["decision"] * 26
+    assert [candle.phase for candle in view.candles] == ["before_start"] * 130 + ["decision"] * 26
 
 
 def test_a_lead_in_read_never_looks_back_past_its_session_bound(
@@ -296,7 +298,7 @@ def test_the_bars_the_candle_cap_leaves_out_become_lead_in(
         (candle.bar_close_ms, candle.open, candle.high, candle.low, candle.close, candle.volume)
         for candle in whole.candles[:-30]
     ]
-    assert capped.notices == ["This run has 52 decision bars; the latest 30 are shown."]
+    assert capped.notices == ["This run has 156 decision bars; the latest 30 are shown."]
 
 
 def test_a_replay_that_does_not_reproduce_the_runs_trades_is_refused(saved_run: RunDetail) -> None:
