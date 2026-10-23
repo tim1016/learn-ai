@@ -1211,6 +1211,7 @@ def _convergence_recorder(source_bars: SourceBarLedger | None, binding: BrokerBo
 
     return record
 
+
 _PROTECTED_RETENTION_CLASS_BY_OUTCOME: dict[str, str] = {
     "blocked": "protected_refusal",
     # FR-016 / AC #9: crash-window evidence must survive the tail

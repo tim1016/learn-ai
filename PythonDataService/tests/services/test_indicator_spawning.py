@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from app.schemas.indicator_convergence import IndicatorProgress
+from app.services.bot_trade_strategy import _convergence_recorder
 from app.services.broker_v2_panel.bot_page_projection import bot_own_status
 from app.services.indicator_spawning import deploy_spawn_estimate, spawning_view
 from app.services.source_bar_ledger import SourceBarLedger
@@ -59,10 +61,6 @@ def test_bot_status_says_spawning_only_while_indicators_are_pending(running: boo
 
 
 def test_a_ledger_that_cannot_take_progress_does_not_end_the_run(caplog: pytest.LogCaptureFixture) -> None:
-    import sqlite3
-
-    from app.services.bot_trade_strategy import _convergence_recorder
-
     def locked(*, run_id: str, progress: IndicatorProgress) -> None:
         raise sqlite3.OperationalError('database is locked')
 
