@@ -84,6 +84,7 @@ from pathlib import Path, PurePosixPath
 from typing import Literal
 from uuid import uuid4
 
+from app.config import settings
 from app.data_lake import catalog_client
 from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
 from app.data_lake.atomic import ArtifactLeaseLostError, AtomicRenameUnsafeError, publish_artifact
@@ -687,11 +688,11 @@ def stock_day_is_asked_again(state: catalog_client.ArtifactClaimState, trading_d
     )
 
 
-#: The most vendor requests for option data one process has in flight at once, however many runs it is serving.
-#: Callers that fetch many contract days (a run's download, the past chain's) hold :func:`vendor_request_gate`
-#: around each capture, so the limit is the process's and never one run's. The capture functions do not take it
-#: themselves: a single ask is never delayed by other people's batches.
-MAX_VENDOR_REQUESTS_IN_FLIGHT = 4
+#: The most vendor requests for option data one process has in flight at once, however many runs it is serving
+#: (``OPTION_VENDOR_REQUESTS_IN_FLIGHT``, default 4). Callers that fetch many contract days (a run's download, the
+#: past chain's) hold :func:`vendor_request_gate` around each capture, so the limit is the process's and never one
+#: run's. The capture functions do not take it themselves: a single ask is never delayed by other people's batches.
+MAX_VENDOR_REQUESTS_IN_FLIGHT = settings.OPTION_VENDOR_REQUESTS_IN_FLIGHT
 
 _request_gates: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, OptionRequestGate] = weakref.WeakKeyDictionary()
 
@@ -702,13 +703,13 @@ def vendor_request_gate() -> OptionRequestGate:
     Every caller of the process shares the background loop (:mod:`app.utils.background_loop`), so they share one
     semaphore of ``MAX_VENDOR_REQUESTS_IN_FLIGHT``. A semaphore belongs to the loop that first waits on it, so it is
     made on that loop and dropped with it. Called from a coroutine running on the background loop; on any other loop
-    it raises ``RuntimeError``, since a gate made there would be a second limit of four beside the first.
+    it raises ``RuntimeError``, since a gate made there would be a second limit beside the first.
     """
     loop = asyncio.get_running_loop()
     if loop is not background_loop():
         raise RuntimeError(
             "the vendor request gate belongs to the process's background loop; asked for on another loop it would "
-            "make a second limit of four. Hand the work to that loop (app.utils.background_loop) and ask there."
+            "make a second limit beside the first. Hand the work to that loop (app.utils.background_loop) and ask there."
         )
     gate = _request_gates.get(loop)
     if gate is None:
