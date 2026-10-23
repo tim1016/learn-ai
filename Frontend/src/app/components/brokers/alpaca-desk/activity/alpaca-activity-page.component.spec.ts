@@ -15,7 +15,7 @@ import type {
 import type { components } from '../../../../api/broker.types';
 import { resourceTarget } from '../../../../fleet/resource-target';
 import { BrokersService } from '../../../../services/brokers.service';
-import { fakeAccountMoney } from '../../../../testing/account-money-fixtures';
+import { fakeAccountMoney, reconciledOutsideFills } from '../../../../testing/account-money-fixtures';
 import { AlpacaDeskAccountDataService } from '../alpaca-desk-account-data.service';
 import { ALPACA_PORTFOLIO_HISTORY_CHART_FACTORY } from '../alpaca-portfolio-history-chart.component';
 import { AlpacaActivityPageComponent } from './alpaca-activity-page.component';
@@ -135,6 +135,7 @@ async function renderActivity(options: {
   query?: Record<string, string>;
   broker?: ReturnType<typeof brokers>;
   disagreement?: string;
+  resolved?: boolean;
 } = {}) {
   const broker = options.broker ?? brokers();
   const queryParamMap = convertToParamMap(options.query ?? {});
@@ -149,7 +150,9 @@ async function renderActivity(options: {
           target: () => TARGET,
           accountId: () => 'PA1',
           fence: () => FENCE,
-          moneyState: () => options.disagreement
+          moneyState: () => options.resolved
+            ? { kind: 'ready', view: fakeAccountMoney({ outside_reconciliations: reconciledOutsideFills }) }
+            : options.disagreement
             ? { kind: 'ready', view: fakeAccountMoney({ broker_position_disagreement: options.disagreement }) }
             : { kind: 'loading', text: 'Reading account money…', nextStep: null },
           clerkStatus: {
@@ -367,6 +370,12 @@ describe('AlpacaActivityPageComponent', () => {
       'Order records and recovery',
     ]);
     expect.soft(screen.queryAllByRole('heading', { level: 3 }), 'gives no section a lower heading level').toEqual([]);
+  });
+
+  it('shows the same outside-fill resolution as the account money view', async () => {
+    await renderActivity({ resolved: true });
+    expect(screen.getByText('Outside fills reconciled.')).toBeTruthy();
+    expect(screen.queryByText('Broker and Clerk records disagree.')).toBeNull();
   });
 
   it('opens historical records from Home while keeping the position difference visible', async () => {

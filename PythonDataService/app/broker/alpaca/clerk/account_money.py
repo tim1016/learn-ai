@@ -81,6 +81,7 @@ from app.broker.alpaca.clerk.money import (
     money_context,
     normalize_money,
 )
+from app.broker.alpaca.clerk.outside_reconciliation import OutsideReconciliation
 
 FULL_BAR_BPS = 10_000
 _SHARE_STEP = Decimal("1e-9")
@@ -191,6 +192,7 @@ class AccountMoney:
     total: Decimal
     palette: Mapping[str, int]
     unvalued: tuple[str, ...] = ()
+    outside_reconciliations: tuple[OutsideReconciliation, ...] = ()
 
     @property
     def holds_positions(self) -> bool:

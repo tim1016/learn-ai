@@ -792,6 +792,45 @@ async def test_broker_flat_outside_fill_is_shown_as_a_record_difference(authorit
     ]
 
 
+async def test_crypto_quantity_fees_resolve_broker_flat_residual_on_every_money_read(authority: tuple) -> None:
+    from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
+    from tests.broker.alpaca.clerk.sqlite.test_budget_claims import _external_fill, _external_order
+
+    repo, runtime, _ = authority
+    activities = []
+    for side, quantity in (("buy", 0.0002), ("sell", 0.000167888)):
+        order_id = f"btc-{side}"
+        observe_external_order(repo, order=_external_order(state="filled", filled=quantity).model_copy(update={
+            "order_id": order_id, "symbol": "BTC/USD", "side": side,
+            "quantity": quantity, "filled_avg_price": 83500,
+        }))
+        activities.append(_external_fill(quantity=quantity, observed_at=NOON - 10_000).model_copy(update={
+            "activity_id": order_id, "native_order_id": order_id, "symbol": "BTC/USD", "side": side,
+            "price": 83500, "occurred_at_ms": NOON,
+        }))
+    record_fee_evidence(repo, activities, checked_at_ms=NOON, history_complete=True)
+    runtime.envelope_sync.reading = replace(runtime.envelope_sync.reading, position_count=0)
+    before = await budget_deploy.account_money_view(repo.account_id)
+    assert before.outside_bots_usd == "2.68" and before.broker_position_disagreement
+
+    fee = activities[0].model_copy(update={
+        "activity_id": "btc-fee", "native_order_id": None, "activity_type": "CFEE",
+        "category": "non_trade_activity", "symbol": "BTCUSD", "side": None,
+        "quantity": -0.000032112, "net_amount": 0, "occurred_at_ms": NOON,
+    })
+    record_fee_evidence(repo, [fee], checked_at_ms=NOON, history_complete=True)
+    view = await budget_deploy.account_money_view(repo.account_id)
+    assert view.outside_bots_usd == "0.00"
+    assert view.total_usd == view.cash_usd == "1000.00"
+    assert view.free_to_deploy_usd == before.free_to_deploy_usd
+    assert view.broker_position_disagreement is None
+    preview = budget_deploy.preview_budget(repo.account_id, _request(), resolved_parameters={})
+    assert preview.money_after is not None
+    assert preview.money_after.outside_bots_usd == view.outside_bots_usd
+    assert preview.money_after.outside_reconciliations == view.outside_reconciliations
+    assert view.outside_reconciliations[0].state == "resolved"
+
+
 async def test_the_deploy_preview_draws_the_accounts_bar_and_carves_a_new_slice_only_for_an_amount_it_admits(
     authority: tuple,
 ) -> None:

@@ -938,8 +938,8 @@ async def test_paper_credit_spread_outside_fills_need_both_recorded_contract_ref
 
         with monkeypatch.context() as patch:
             patch.setattr(budget_projection, "external_orders", lambda _conn: outside_orders)
-            holdings, unvalued = budget_projection._external_holdings(
-                repo._conn, replace(result, external_fills=opening_fills)
+            holdings, unvalued, _ = budget_projection._external_holdings(
+                repo._conn, replace(result, external_fills=opening_fills), owned_symbols=set(),
             )
         assert [(holding.subject_id, holding.position_cost) for holding in holdings] == [
             ("external:SPY261016C00777000", Decimal("46.00"))

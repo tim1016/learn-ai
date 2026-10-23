@@ -20,6 +20,7 @@ import { BrokersService, sqliteTimelineQueryFromParams } from '../../../../servi
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp';
 import { FeeAttributionComponent } from '../../../broker/fee-attribution/fee-attribution.component';
+import { OutsideReconciliationComponent } from '../../../broker/money-bar/outside-reconciliation.component';
 import { AlpacaDeskAccountDataService } from '../alpaca-desk-account-data.service';
 import { AlpacaPortfolioHistoryChartComponent } from '../alpaca-portfolio-history-chart.component';
 import { AlpacaPortfolioReconciliationProofComponent } from '../alpaca-portfolio-reconciliation-proof.component';
@@ -72,6 +73,7 @@ interface OlderActivity {
     AlpacaPortfolioReconciliationProofComponent,
     AlpacaTraderActivityTableComponent,
     FeeAttributionComponent,
+    OutsideReconciliationComponent,
     ReceiptLabelPipe,
     TimestampDisplayComponent,
   ],

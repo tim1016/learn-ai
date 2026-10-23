@@ -19,6 +19,7 @@ from app.broker.alpaca.clerk.account_picture import AccountPicture, SpokenForKin
 from app.broker.alpaca.clerk.funding import EntryNeed, Figure, FundingAnswer, Term
 from app.broker.alpaca.clerk.models import EpochMs
 from app.broker.alpaca.clerk.money import consent_cents, dollars
+from app.broker.alpaca.clerk.outside_reconciliation import OutsideReconciliation
 from app.schemas.account_authority import AuthorityKind
 from app.schemas.option_deploy import OptionDeployReview
 from app.schemas.option_preview import OptionContractView
@@ -183,6 +184,7 @@ class AccountMoneyView(BaseModel):
     # A broker-flat reading can disagree with historical outside fills. Keep
     # the book amount visible, but do not present it as a confirmed holding.
     broker_position_disagreement: str | None = None
+    outside_reconciliations: tuple[OutsideReconciliation, ...] = ()
     segments: tuple[MoneySegment, ...] = ()
     # Why Deploy would refuse a new bot on this account's money right now
     # (a missing daily loss limit, a loss hold, no fresh reading), in the

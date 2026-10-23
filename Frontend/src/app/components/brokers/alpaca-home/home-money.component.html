@@ -9,6 +9,7 @@
   </header>
 
   @if (money.kind === 'ready') {
+    <app-outside-reconciliation [rows]="money.view.outside_reconciliations" />
     @if (money.view.broker_position_disagreement; as disagreement) {
       <div class="home-money__refusal" role="note">
         <p><strong>Broker and Clerk records disagree.</strong> {{ disagreement }}</p>

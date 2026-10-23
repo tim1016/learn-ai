@@ -8010,6 +8010,11 @@ export interface components {
             open_pnl_usd?: string | null;
             /** Outside Bots Usd */
             outside_bots_usd?: string | null;
+            /**
+             * Outside Reconciliations
+             * @default []
+             */
+            outside_reconciliations?: components["schemas"]["OutsideReconciliation"][];
             picture?: components["schemas"]["AccountPictureView"] | null;
             /** Picture Detail */
             picture_detail?: string | null;
@@ -26878,6 +26883,22 @@ export interface components {
          * @enum {string}
          */
         OrderSide: "buy" | "sell";
+        /** OutsideReconciliation */
+        OutsideReconciliation: {
+            /** Detail */
+            detail: string;
+            /** Evidence Ids */
+            evidence_ids: string[];
+            /** Next Action */
+            next_action: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "resolved" | "unresolved";
+            /** Symbol */
+            symbol: string;
+        };
         /**
          * OwnedView
          * @description What the account owns: its cash and its marked equity, two figures that are never read as one.

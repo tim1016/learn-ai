@@ -22,6 +22,7 @@ import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import { FundingAnswerComponent } from '../funding-answer/funding-answer.component';
 import { MoneyBarComponent } from '../money-bar/money-bar.component';
+import { OutsideReconciliationComponent } from '../money-bar/outside-reconciliation.component';
 import {
   BrokerV2PanelService,
   type DeployBotBody,
@@ -99,6 +100,7 @@ const AMOUNT_PATTERN = /^(?=.*[1-9])\d+(\.\d{1,2})?$/;
     FormField,
     FundingAnswerComponent,
     MoneyBarComponent,
+    OutsideReconciliationComponent,
     TimestampDisplayComponent,
     TooltipModule,
   ],
