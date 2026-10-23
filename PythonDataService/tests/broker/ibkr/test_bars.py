@@ -27,6 +27,7 @@ from app.broker.ibkr.minute_assembler import (
     LiveBarCounters,
     aggregate_realtime_bar,
 )
+from app.marketdata.feed import MAX_WARMUP_LOOKBACK_SESSIONS
 
 
 def _bar(second: int, open_: str, high: str, low: str, close: str, volume: int):
@@ -665,15 +666,20 @@ async def test_fetch_historical_minute_bars_refuses_an_impossible_bar(
 
 
 @pytest.mark.parametrize(
-    ("lookback_days", "timeout_s"),
-    [(1, 15.0), (5, 15.0), (10, 15.0), (11, 75.0), (18, 75.0), (20, 75.0)],
+    ("sessions", "timeout_s"),
+    [(1, 15.0), (5, 15.0), (6, 75.0), (10, 75.0), (15, 75.0), (20, 75.0)],
 )
-def test_historical_bars_timeout_is_longer_only_past_ten_days(lookback_days: int, timeout_s: float) -> None:
-    """#2841: IBKR took 48 s to serve 20 days of 1-minute history, so a long
-    lookback is given 75 s. Nothing between 10 and 20 days is measured, so
-    every lookback past ten gets the same. Ten days or fewer -- every bot
-    running a default lookback -- keep the 15 s they have always had."""
-    assert historical_bars_timeout_s(lookback_days) == pytest.approx(timeout_s, abs=1e-9, rel=0)
+def test_historical_bars_timeout_is_longer_only_past_five_sessions(sessions: int, timeout_s: float) -> None:
+    """#2849: IBKR read ``N D`` as N sessions and took 1.4-1.6 s to serve 5 of
+    1-minute history, 33.9 s for 10, 32.0 s for 15 and 56.2 s for 20, so a
+    request past five is given 75 s. Nothing between 5 and 10 is measured, so
+    every request past five gets the same."""
+    assert historical_bars_timeout_s(sessions) == pytest.approx(timeout_s, abs=1e-9, rel=0)
+
+
+def test_the_long_timeout_outlasts_the_slowest_measured_request() -> None:
+    """The 56.2 s that 20 sessions took (2026-10-03) is the slowest request measured."""
+    assert historical_bars_timeout_s(MAX_WARMUP_LOOKBACK_SESSIONS + 1) > 56.2
 
 
 @pytest.mark.asyncio

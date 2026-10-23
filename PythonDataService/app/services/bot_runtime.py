@@ -85,9 +85,9 @@ class DecisionFenceFeed:
         symbol: str,
         *,
         use_rth: bool = True,
-        lookback_days: int = 5,
+        lookback_sessions: int = 5,
     ) -> list[MarketDataBar]:
-        return await self._source.recent_closed_bars(symbol, use_rth=use_rth, lookback_days=lookback_days)
+        return await self._source.recent_closed_bars(symbol, use_rth=use_rth, lookback_sessions=lookback_sessions)
 
     def health(self, symbol: str | None = None) -> FeedHealth:
         return self._source.health(symbol)

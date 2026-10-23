@@ -284,6 +284,9 @@ class SignalClockContract(BaseModel):
     session_timezone: Literal["America/New_York"] = "America/New_York"
     use_rth: bool
     early_close_policy: Literal["calendar_session_close"] = "calendar_session_close"
+    # Completed regular sessions of history the warmup asks for (#2849); sealed
+    # as calendar days before that. The stored payload and the hashes over it
+    # name the field, so the name stays.
     warmup_lookback_days: int = Field(ge=0)
     pause_policy: Literal["OBSERVE_ONLY"] = "OBSERVE_ONLY"
     # The complete legal evaluation-mode set (readiness and DECIDE

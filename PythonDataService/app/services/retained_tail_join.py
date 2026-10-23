@@ -46,6 +46,7 @@ from app.marketdata.feed import (
     MarketDataFeedError,
     WarmupMinutesMissing,
     WarmupRefusalReason,
+    warmup_sessions_reaching,
     warmup_window_start_ms,
 )
 from app.services.decision_session import RunDecisionSession
@@ -54,7 +55,6 @@ from app.services.source_bar_ledger import RetainedSourceBar, RetainedWarmupJoin
 from app.utils.session_anchors import et_date_at_ms
 
 _MINUTE_MS = 60_000
-_DAY_MS = 86_400_000
 
 
 @dataclass(frozen=True)
@@ -151,7 +151,7 @@ async def join_fresh_warmup(
     session: RunDecisionSession,
     live_from_ms: int,
     joined_minute_start_ms: int | None,
-    lookback_days: int,
+    lookback_sessions: int,
 ) -> list[MarketDataBar]:
     """One attempt at a fresh run's warmup: the sealed lookback, through the seam and no further.
 
@@ -166,7 +166,7 @@ async def join_fresh_warmup(
     and the startup deadline asks again. The rest of the lookback answers to
     the source's own coverage rule, exactly as before.
     """
-    history = await source.recent_closed_bars(symbol, use_rth=False, lookback_days=lookback_days)
+    history = await source.recent_closed_bars(symbol, use_rth=False, lookback_sessions=lookback_sessions)
     bars = [bar for bar in history if bar.end_ms <= live_from_ms]
     require_owed_minutes(
         bars,
@@ -185,7 +185,7 @@ async def join_retained_tail(
     session: RunDecisionSession,
     retained_end_ms: int,
     now_ms: int,
-    lookback_days: int,
+    lookback_sessions: int,
     joined_minute_start_ms: int | None = None,
 ) -> RetainedTailJoin:
     """Fill the hole after ``retained_end_ms`` from IBKR history, or refuse the run.
@@ -199,9 +199,8 @@ async def join_retained_tail(
     window (``warmup_window_start_ms``, the same window the fresh-warmup
     coverage rule owes) is fetched and owed from the retained tail. A longer one warms like a fresh
     deploy: the lookback's history is fetched under the source's own warmup
-    coverage rule (the canonical one a fresh deploy obeys, which is also why
-    an empty lookback with no owed session is admitted), warmup starts at its
-    first bar (``warm_from_ms``), and only minutes after that are owed.
+    coverage rule (the canonical one a fresh deploy obeys), warmup starts at
+    its first bar (``warm_from_ms``), and only minutes after that are owed.
 
     ``RESUME_HOLE_UNFILLED`` refuses when history is missing an owed regular
     minute; the source's ``WARMUP_HISTORY_UNAVAILABLE`` propagates. Requiring
@@ -251,18 +250,22 @@ async def join_retained_tail(
         # the wall-clock gap -- no fetch, and no floor that would drop them.
         return unfilled
     warm_from_ms: int | None = None
-    if retained_end_ms >= warmup_window_start_ms(lookback_days, now_ms=now_ms):
-        # The smallest window reaching back to the tail; never past the lookback.
-        hole_days = -(-(now_ms - retained_end_ms) // _DAY_MS)
-        history = await source.recent_closed_bars(symbol, use_rth=False, lookback_days=hole_days)
+    if retained_end_ms >= warmup_window_start_ms(lookback_sessions, now_ms=now_ms):
+        # The fewest sessions reaching back to the tail, and one more: the source
+        # counts its window from its own clock, which can pass a session close
+        # after ``now_ms`` and move the window's start up by a session. Never
+        # past the lookback.
+        reaching = warmup_sessions_reaching(retained_end_ms, now_ms=now_ms, at_most=lookback_sessions)
+        hole_sessions = min(reaching + 1, lookback_sessions)
+        history = await source.recent_closed_bars(symbol, use_rth=False, lookback_sessions=hole_sessions)
     else:
-        history = await source.recent_closed_bars(symbol, use_rth=False, lookback_days=lookback_days)
+        history = await source.recent_closed_bars(symbol, use_rth=False, lookback_sessions=lookback_sessions)
         first_start_ms = min((bar.start_ms for bar in history), default=now_ms)
         if first_start_ms > retained_end_ms:
             # History starts after the tail, so the stretch between them is
             # outside the lookback: warm from history alone, as a fresh deploy
-            # would, and owe only what follows it. An empty lookback passed the
-            # source's coverage rule, so it owes no session and warms from now.
+            # would, and owe only what follows it. A source that serves its warmup
+            # by design may return none, which warms from now.
             warm_from_ms = first_start_ms
             owed = tuple(end_ms for end_ms in owed if end_ms > first_start_ms)
         # Otherwise history reaches back to the tail and fills the whole hole.

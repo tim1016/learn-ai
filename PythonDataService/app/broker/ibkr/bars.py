@@ -66,8 +66,10 @@ NO_BAR_WARNING_MAX_INTERVAL_S = 300.0
 # phase opened is not a stall and cannot kill the run or re-request the line.
 REALTIME_BAR_STALL_TIMEOUT_S = 60.0
 _HISTORICAL_BARS_TIMEOUT_S = 15.0
-# Two measurements, nothing between them: 10 days of 1-minute history in 0.6 s, 20 days in 48 s (#2841).
-_HISTORICAL_BARS_SHORT_REQUEST_MAX_DAYS = 10
+# IBKR reads ``N D`` as N trading sessions. Extended-hours 1-minute history for SPY,
+# 2026-10-03: 5 sessions in 1.4-1.6 s, 10 in 33.9 s, 15 in 32.0 s, 20 in 56.2 s. Nothing
+# between 5 and 10 is measured, so only a request up to 5 sessions gets the short timeout (#2849).
+_HISTORICAL_BARS_SHORT_REQUEST_MAX_SESSIONS = 5
 _HISTORICAL_BARS_LONG_REQUEST_TIMEOUT_S = 75.0
 _REALTIME_BAR_MAX_NEW_REQUESTS = 60
 _REALTIME_BAR_REQUEST_WINDOW_S = 600.0
@@ -813,13 +815,14 @@ def _contract_venue(contract: object) -> str | None:
     return venue or None
 
 
-def historical_bars_timeout_s(lookback_days: int) -> float:
-    """How long a ``lookback_days`` request for 1-minute history is given to answer.
+def historical_bars_timeout_s(sessions: int) -> float:
+    """How long a request for ``sessions`` sessions of 1-minute history is given to answer.
 
-    The short timeout up to ten days, the longest request measured to return
-    at once; the long one for every request past that.
+    The short timeout up to five sessions, the longest request measured to
+    return at once; the long one for every request past that, which covers
+    the longest measured (20 sessions, 56.2 s).
     """
-    if lookback_days <= _HISTORICAL_BARS_SHORT_REQUEST_MAX_DAYS:
+    if sessions <= _HISTORICAL_BARS_SHORT_REQUEST_MAX_SESSIONS:
         return _HISTORICAL_BARS_TIMEOUT_S
     return _HISTORICAL_BARS_LONG_REQUEST_TIMEOUT_S
 

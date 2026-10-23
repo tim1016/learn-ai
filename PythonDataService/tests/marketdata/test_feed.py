@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import aclosing
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
@@ -28,8 +28,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.broker.ibkr import bars as bars_module
+from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.marketdata import ibkr_feed as feed_module
 from app.marketdata.feed import (
+    MAX_WARMUP_LOOKBACK_SESSIONS,
     ContinuityEventRef,
     ContinuityPolicy,
     FeedContinuityEvent,
@@ -724,20 +726,23 @@ async def test_recent_closed_bars_refuses_loudly_when_history_is_unavailable(
     feed = IbkrMarketDataFeed(_fake_connected_client())
 
     with pytest.raises(MarketDataFeedError) as refused:
-        await feed.recent_closed_bars("SPY", use_rth=False, lookback_days=7)
+        await feed.recent_closed_bars("SPY", use_rth=False, lookback_sessions=7)
 
     assert refused.value.reason == reason, "the refusal carries the reason for this kind of failure"
     assert refused.value.__cause__ is failure, "the refusal is chained from the original failure"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("lookback_days", "timeout_s"), [(1, 15.0), (5, 15.0), (10, 75.0), (18, 75.0), (20, 75.0)])
-async def test_recent_closed_bars_gives_a_long_lookback_longer_to_answer(
-    monkeypatch: pytest.MonkeyPatch, lookback_days: int, timeout_s: float
+@pytest.mark.parametrize(
+    ("lookback_sessions", "timeout_s"), [(1, 15.0), (4, 15.0), (5, 75.0), (9, 75.0), (MAX_WARMUP_LOOKBACK_SESSIONS, 75.0)]
+)
+async def test_recent_closed_bars_asks_for_the_sessions_it_owes_and_the_one_running(
+    monkeypatch: pytest.MonkeyPatch, lookback_sessions: int, timeout_s: float
 ) -> None:
-    """#2841: an 18-day warmup (SMA 50/200) asks IBKR for history that takes
-    longer than 15 s to serve, so its fetch waits longer. A 5-day one waits
-    the 15 s it always has."""
+    """#2849: IBKR reads ``N D`` as N trading sessions, the one in progress
+    counted, so a lookback of N completed sessions asks for ``N+1 D``. A
+    request past five sessions takes IBKR longer than 15 s to serve (#2841),
+    so its fetch waits longer."""
     asked: dict[str, Any] = {}
 
     async def _fake_history(*_args: Any, **kwargs: Any) -> list[SimpleNamespace]:
@@ -750,10 +755,19 @@ async def test_recent_closed_bars_gives_a_long_lookback_longer_to_answer(
     _skip_warmup_coverage(monkeypatch)
 
     feed = IbkrMarketDataFeed(_fake_connected_client())
-    await feed.recent_closed_bars("SPY", use_rth=False, lookback_days=lookback_days)
+    await feed.recent_closed_bars("SPY", use_rth=False, lookback_sessions=lookback_sessions)
 
     assert asked["timeout_s"] == pytest.approx(timeout_s, abs=1e-9, rel=0)
-    assert asked["duration"] == f"{lookback_days + 1} D"
+    assert asked["duration"] == f"{lookback_sessions + 1} D"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lookback_sessions", [0, -1])
+async def test_recent_closed_bars_refuses_a_lookback_of_no_session(lookback_sessions: int) -> None:
+    feed = IbkrMarketDataFeed(_fake_connected_client())
+
+    with pytest.raises(ValueError, match="at least one session"):
+        await feed.recent_closed_bars("SPY", use_rth=False, lookback_sessions=lookback_sessions)
 
 
 # ---------------------------------------------------------------------------
@@ -938,12 +952,78 @@ async def test_an_impossible_minute_is_refused_not_decided(
     assert excinfo.value.reason == "IMPOSSIBLE_SOURCE_BAR"
 
 
+def _probe_response(*session_dates: date, forming_start_ms: int | None = None) -> list[SimpleNamespace]:
+    """What IBKR returned for the owner's ``5 D`` probe, thinned to one regular-hours bar a session.
+
+    The probe (SPY, extended hours, 2026-10-03) returned five sessions ending at
+    Monday 2026-09-28 09:31 ET: Tuesday 22 to Friday 25 in full, and Monday 28
+    to 09:30.
+    """
+    starts = [session_open_ms_utc(day) + 60_000 for day in session_dates]
+    if forming_start_ms is not None:
+        starts.append(forming_start_ms)
+    return [_make_ibkr_bar("SPY", start_ms=start) for start in starts]
+
+
 @pytest.mark.asyncio
-async def test_warmup_fetch_covers_trailing_day_across_ibkr_calendar_dates(monkeypatch: pytest.MonkeyPatch) -> None:
-    """IBKR 1 D at Oct 8 morning holds only Oct 8; the sealed window owes Oct 7."""
-    now = 1_791_468_000_000  # 2026-10-08 14:00 UTC
-    previous = now - 86_400_000 + 60_000
-    before_window = previous - 120_000
+async def test_warmup_covers_the_owner_probe_s_five_sessions_with_four_completed_and_the_one_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2849: four completed sessions ask for ``5 D``, which is exactly the probe's response, and it covers them."""
+    monday = date(2026, 9, 28)
+    now = session_open_ms_utc(monday) + 60_000
+    asked: dict[str, Any] = {}
+
+    async def history(*_args: Any, **kwargs: Any) -> list[SimpleNamespace]:
+        asked.update(kwargs)
+        return _probe_response(
+            date(2026, 9, 22), date(2026, 9, 23), date(2026, 9, 24), date(2026, 9, 25), forming_start_ms=session_open_ms_utc(monday)
+        )
+
+    monkeypatch.setattr("app.marketdata.ibkr_feed.now_ms_utc", lambda: now)
+    monkeypatch.setattr("app.marketdata.ibkr_feed.fetch_historical_minute_bars", history)
+
+    bars = await IbkrMarketDataFeed(_fake_connected_client()).recent_closed_bars("SPY", use_rth=False, lookback_sessions=4)
+
+    assert asked["duration"] == "5 D"
+    assert [bar.start_ms for bar in bars] == [
+        *(session_open_ms_utc(day) + 60_000 for day in (date(2026, 9, 22), date(2026, 9, 23), date(2026, 9, 24), date(2026, 9, 25))),
+        session_open_ms_utc(monday),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_warmup_refuses_an_answer_that_is_a_session_short_of_the_ones_it_owes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A response without Tuesday 22 (error 162 ended it early) is short, however many bars it holds."""
+    monday = date(2026, 9, 28)
+    now = session_open_ms_utc(monday) + 60_000
+
+    async def history(*_args: Any, **_kwargs: Any) -> list[SimpleNamespace]:
+        return _probe_response(date(2026, 9, 23), date(2026, 9, 24), date(2026, 9, 25))
+
+    monkeypatch.setattr("app.marketdata.ibkr_feed.now_ms_utc", lambda: now)
+    monkeypatch.setattr("app.marketdata.ibkr_feed.fetch_historical_minute_bars", history)
+
+    with pytest.raises(MarketDataFeedError) as refused:
+        await IbkrMarketDataFeed(_fake_connected_client()).recent_closed_bars("SPY", use_rth=False, lookback_sessions=4)
+
+    assert refused.value.reason == "WARMUP_HISTORY_UNAVAILABLE"
+    assert "1 owed session" in str(refused.value)
+
+
+@pytest.mark.asyncio
+async def test_warmup_fetch_covers_the_last_completed_session_and_the_one_running(monkeypatch: pytest.MonkeyPatch) -> None:
+    """IBKR ``1 D`` at Oct 8 morning holds only Oct 8; the sealed window owes Oct 7, so ``2 D`` is asked for.
+
+    Oct 7 is the one completed session; the window starts at its open, so the
+    pre-open minute IBKR also returns is trimmed.
+    """
+    now = 1_791_468_000_000  # 2026-10-08 14:00 UTC, 10:00 ET
+    oct_7_open = session_open_ms_utc(date(2026, 10, 7))
+    before_window = oct_7_open - 60_000
+    previous = oct_7_open + 60_000
     today = now - 60_000
     monkeypatch.setattr("app.marketdata.ibkr_feed.now_ms_utc", lambda: now)
 
@@ -952,5 +1032,5 @@ async def test_warmup_fetch_covers_trailing_day_across_ibkr_calendar_dates(monke
         return [_make_ibkr_bar("SPY", start_ms=start) for start in starts]
 
     monkeypatch.setattr("app.marketdata.ibkr_feed.fetch_historical_minute_bars", history)
-    bars = await IbkrMarketDataFeed(_fake_connected_client()).recent_closed_bars("SPY", lookback_days=1)
+    bars = await IbkrMarketDataFeed(_fake_connected_client()).recent_closed_bars("SPY", lookback_sessions=1)
     assert [bar.start_ms for bar in bars] == [previous, today]

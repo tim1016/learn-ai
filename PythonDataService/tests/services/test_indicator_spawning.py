@@ -23,7 +23,7 @@ def test_deploy_estimate_distinguishes_history_sessions_and_long_bars() -> None:
     assert deploy_spawn_estimate('rsi_mean_reversion', {}) == 'Ready to decide at start when history is complete.'
     assert deploy_spawn_estimate('deployment_validation', {}) == 'Ready to decide at start when history is complete.'
     sessions = deploy_spawn_estimate('sma_crossover', {'long_window': 500})
-    assert sessions == 'Spawning: needs about 10 more trading sessions of live bars before it decides. Spawn progress is lost if the bot stops.'
+    assert sessions == 'Spawning: needs about 3 more trading sessions of live bars before it decides. Spawn progress is lost if the bot stops.'
     long_bars = deploy_spawn_estimate('sma_crossover', {'resolution_minutes': 1440})
     assert long_bars == 'Spawning: needs 30 more bars of 1440 minutes before it decides. Spawn progress is lost if the bot stops.'
 

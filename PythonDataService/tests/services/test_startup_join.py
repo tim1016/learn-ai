@@ -126,9 +126,9 @@ class _JoiningFeed:
         await asyncio.Event().wait()
 
     async def recent_closed_bars(
-        self, symbol: str, *, use_rth: bool = True, lookback_days: int = 5
+        self, symbol: str, *, use_rth: bool = True, lookback_sessions: int = 5
     ) -> list[MarketDataBar]:
-        del symbol, use_rth, lookback_days
+        del symbol, use_rth, lookback_sessions
         answer = self._history[min(self.fetches, len(self._history) - 1)]
         self.fetches += 1
         return [bar for bar in answer if bar.end_ms <= self.clock_ms]
