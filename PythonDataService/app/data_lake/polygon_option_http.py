@@ -63,6 +63,10 @@ def _sendable_key(api_key: str) -> str:
     return key
 
 
+class PolygonTimeoutError(PolygonFetchError):
+    """The vendor did not answer within the request timeout; asking again may succeed."""
+
+
 class PolygonOutsidePlanError(PolygonEntitlementError):
     """403 whose body says the plan does not include this data timeframe.
 
@@ -92,7 +96,7 @@ async def get_json_object(
     try:
         resp = await client.get(url, params=params, headers={"Authorization": f"Bearer {key}"})
     except httpx.TimeoutException as exc:
-        raise PolygonFetchError(f"Polygon request timed out for {label}: {exc}", status_code=None) from exc
+        raise PolygonTimeoutError(f"Polygon request timed out for {label}: {exc}", status_code=None) from exc
     except (httpx.RequestError, httpx.InvalidURL) as exc:
         raise PolygonFetchError(f"Polygon transport error for {label}: {exc}", status_code=None) from exc
     if resp.status_code == 403:
