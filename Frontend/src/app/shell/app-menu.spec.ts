@@ -79,7 +79,7 @@ describe('app menu projections', () => {
   });
 
   it('marks the group but no entry for a page the menu does not list', () => {
-    const groups = menuItemsFor('/options-evidence/run/run-7');
+    const groups = menuItemsFor('/options-setups/analysis');
     const options = groups.find((group) => group.label === 'Options setups');
 
     expect(options?.styleClass).toBe(ACTIVE_GROUP_CLASS);
@@ -108,7 +108,8 @@ describe('app menu projections', () => {
   });
 
   it('titles the window Page · Group, and an account page by its group alone', () => {
-    expect.soft(windowTitleFor('/options-backtest'), 'Options Backtest sits in Options setups').toBe('Options Backtest · Options setups');
+    expect.soft(windowTitleFor('/options-setups'), 'the Options setups list sits in its own group').toBe('Options setups');
+    expect.soft(windowTitleFor('/options-setups/SPY%200DTE/define'), 'one setup is titled by its name, its tab and the group').toBe('SPY 0DTE · Define · Options setups');
     expect.soft(windowTitleFor('/markets'), 'the Markets list is titled by its menu label, once').toBe('Markets');
     expect.soft(windowTitleFor('/brokers/alpaca?deploy='), 'the account list says Accounts once').toBe('Accounts');
     expect.soft(windowTitleFor('/unlisted-page'), 'a page outside every group has no menu title').toBeNull();
@@ -124,7 +125,6 @@ describe('app menu projections', () => {
     ['/markets/SPY/chart', 'Markets', 'Markets'],
     ['/markets/SPY/chart/news', 'Markets', 'Markets'],
     ['/markets/SPY/data/build', 'Markets', 'Markets'],
-    ['/options-lab/strategy-finder', 'Markets', 'Options Lab'],
     // A spec run is Research evidence at its native address, never a registry strategy's.
     ['/research/history/spec-run/run-42', 'Research', 'History'],
     ['/research', 'Research', 'Studies'],
@@ -145,10 +145,13 @@ describe('app menu projections', () => {
     ['/signal-strategies/ema_crossover_signal/golden/configuration', 'Signal strategies', 'Signal strategies'],
     ['/signal-strategies/ema_crossover_signal/proof', 'Signal strategies', 'Signal strategies'],
     ['/signal-strategies/evidence/run/91', 'Signal strategies', 'Signal strategies'],
-    ['/options-golden-search/study-9', 'Options setups', 'Options Golden Search'],
-    // The analytical builder is an Options Lab tab, filed under Options setups (R32).
-    ['/options-lab/strategy-builder', 'Options setups', 'Strategy Builder'],
-    ['/options-evidence/run/run-7', 'Options setups', 'Options evidence'],
+    ['/options-setups/SPY%200DTE/golden', 'Options setups', 'Options setups'],
+    ['/options-setups/evidence/study/study-9', 'Options setups', 'Options setups'],
+    // The analytical views are not setups: the list links to them and the menu does not (#3516).
+    ['/options-setups/analysis', 'Options setups', 'Strategy Builder'],
+    ['/options-setups/analysis/finder', 'Options setups', 'Strategy Finder (not available)'],
+    ['/options-setups/evidence/run/run-7', 'Options setups', 'Options setups'],
+    ['/options-setups/SPY%200DTE/overview', 'Options setups', 'Options setups'],
     // Data checks: each check is a page of the one Data checks tab.
     ['/operations/data-checks/tradingview', 'Operations', 'Data checks'],
     ['/operations/data-checks/divergence', 'Operations', 'Data checks'],

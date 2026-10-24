@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { reads } from '../testing/page-actions';
 import { renderHistoryTab } from '../testing/render-history';
-import { fakeService } from '../testing/render-page';
+import { fakeService } from '../testing/fake-service';
 import { runItem } from '../testing/run-fixtures';
 
 /**

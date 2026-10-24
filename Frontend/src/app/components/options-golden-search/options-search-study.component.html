@@ -3,7 +3,7 @@
   <p>{{ study().phase | receiptLabel }} · {{ study().status | receiptLabel }}</p>
   <p>Exposure: {{ study().exposure.classification | receiptLabel }}. {{ study().exposure.explanation }}</p>
   @if (study().failure_reason; as reason) { <p class="problem">{{ reason }}</p> }
-  <a routerLink="/options-golden-search" [queryParams]="{ setup_name: study().setup_name, parent_study_id: study().id }">Fork a linked plan from this saved setup</a>
+  <a [routerLink]="planRoute()" [queryParams]="{ parent_study_id: study().id }">Fork a linked plan from this saved setup</a>
 </section>
 <app-options-study-overview [study]="study()" />
 <details class="card"><summary>Locked plan receipt</summary><p>These exact settings were frozen before research. Fork a linked plan to change them.</p>

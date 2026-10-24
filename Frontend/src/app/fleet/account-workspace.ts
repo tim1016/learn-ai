@@ -20,6 +20,7 @@
 
 import type { components } from '../api/broker.types';
 import { defineWorkspaceTabs, type WorkspaceTabDescriptor } from '../shared/workspace/workspace-tabs';
+import { OPTIONS_SETUP_QUERY_PARAM } from './options-setup-handoff';
 
 /** The workspace's tabs, in the order they are presented. Home is the
  * account's money and its bots: Overview, Bots and Gallery merged (D1, D3).
@@ -298,7 +299,7 @@ export function accountWorkspaceDeployAgainRoute(
 ): AccountWorkspaceLink {
   return {
     commands: [...workspaceRoute(account), 'deploy'],
-    queryParams: optionsSetupId ? { options_setup: optionsSetupId } : { [DEPLOY_AGAIN_QUERY_PARAM]: sid },
+    queryParams: optionsSetupId ? { [OPTIONS_SETUP_QUERY_PARAM]: optionsSetupId } : { [DEPLOY_AGAIN_QUERY_PARAM]: sid },
   };
 }
 

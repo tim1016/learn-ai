@@ -20,6 +20,12 @@ describe('Options search evidence and approval', () => {
     expect(screen.queryByRole('button', { name: 'Approve exact golden version' })).toBeNull();
   });
 
+  it('forks a linked plan from the Golden tab of the saved setup the study started from, carrying the study', async () => {
+    await render(OptionsSearchStudyComponent, { inputs: { study: study({ id: 'study-9', setup_name: 'Saved two-leg setup' }), step: 3 }, providers: [provideRouter([])] });
+
+    expect(screen.getByRole('link', { name: 'Fork a linked plan from this saved setup' }).getAttribute('href')).toBe('/options-setups/Saved%20two-leg%20setup/golden?parent_study_id=study-9');
+  });
+
   it.each([{ final_results: [] }, { final_results: [candidate({ verdict: 'not_enough_evidence' })] }])('resumes an interrupted final batch with its completed outcomes visible', async ({ final_results }) => {
     const action = vi.fn();
     await render(OptionsSearchStudyComponent, { inputs: { study: study({ phase: 'final', status: 'interrupted', final_results, allowed_commands: ['resume', 'keep_original'] }), step: 5 }, on: { action }, providers: [provideRouter([])] });

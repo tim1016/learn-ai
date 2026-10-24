@@ -32,7 +32,6 @@ from app.schemas.options_golden_search import (
     Preflight,
     SessionResult,
     StudyDetail,
-    StudySummary,
 )
 from app.security.data_plane_control import require_data_plane_control_secret
 from app.utils.background_loop import CallerStoppedWaitingError
@@ -138,11 +137,6 @@ async def create(body: LockRequest,api=Depends(get_service)) -> StudyDetail:
         return await api.create(body)
     except (ValueError,LookupError) as exc:
         raise refusal(exc) from exc
-
-
-@router.get("/studies",response_model=list[StudySummary])
-async def history() -> list[StudySummary]:
-    return [StudySummary.model_validate(row) for row in await with_connection(repo.summaries)]
 
 
 @router.get("/studies/{study_id}",response_model=StudyDetail)

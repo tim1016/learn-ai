@@ -33203,6 +33203,261 @@
         "title": "IbkrStrikeList",
         "type": "object"
       },
+      "IndexedApproval": {
+        "properties": {
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "id": {
+            "pattern": "^ogs_[a-f0-9]{32}(?:[a-f0-9]{8})?$",
+            "title": "Id",
+            "type": "string"
+          },
+          "origin": {
+            "enum": [
+              "backtest",
+              "search",
+              "not_recorded"
+            ],
+            "title": "Origin",
+            "type": "string"
+          },
+          "recorded_name": {
+            "title": "Recorded Name",
+            "type": "string"
+          },
+          "setup_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Setup Sha256",
+            "type": "string"
+          },
+          "source_run_id": {
+            "maximum": 9007199254740991.0,
+            "minimum": 1.0,
+            "title": "Source Run Id",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "stale",
+              "revoked"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "study_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Study Id"
+          },
+          "underlying": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Underlying"
+          }
+        },
+        "required": [
+          "id",
+          "recorded_name",
+          "setup_sha256",
+          "source_run_id",
+          "origin",
+          "status",
+          "created_at_ms"
+        ],
+        "title": "IndexedApproval",
+        "type": "object"
+      },
+      "IndexedRun": {
+        "properties": {
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "first_session_open_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "First Session Open Ms",
+            "type": "integer"
+          },
+          "id": {
+            "maximum": 9007199254740991.0,
+            "minimum": 1.0,
+            "title": "Id",
+            "type": "integer"
+          },
+          "last_session_open_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Last Session Open Ms",
+            "type": "integer"
+          },
+          "net_profit_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Net Profit Usd"
+          },
+          "recorded_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recorded Name"
+          },
+          "sessions_requested": {
+            "title": "Sessions Requested",
+            "type": "integer"
+          },
+          "setup_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Setup Sha256"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "complete",
+              "failed",
+              "cancelled",
+              "interrupted"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "underlying": {
+            "title": "Underlying",
+            "type": "string"
+          },
+          "unreadable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unreadable Reason"
+          }
+        },
+        "required": [
+          "id",
+          "underlying",
+          "created_at_ms",
+          "status",
+          "first_session_open_ms",
+          "last_session_open_ms",
+          "sessions_requested"
+        ],
+        "title": "IndexedRun",
+        "type": "object"
+      },
+      "IndexedStudy": {
+        "properties": {
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "id": {
+            "pattern": "^os_[a-f0-9]{40}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "recorded_name": {
+            "title": "Recorded Name",
+            "type": "string"
+          },
+          "setup_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Setup Sha256"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "underlying": {
+            "title": "Underlying",
+            "type": "string"
+          },
+          "unreadable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unreadable Reason"
+          },
+          "updated_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Updated At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "recorded_name",
+          "underlying",
+          "created_at_ms",
+          "updated_at_ms",
+          "phase",
+          "status"
+        ],
+        "title": "IndexedStudy",
+        "type": "object"
+      },
       "IndicatorBetween": {
         "additionalProperties": false,
         "properties": {
@@ -50162,6 +50417,64 @@
         "title": "OptionsRobustnessMetrics",
         "type": "object"
       },
+      "OptionsSetupIndexResponse": {
+        "description": "Newest first within each list. A list shorter than its ``*_total`` was cut, and the page says so.",
+        "properties": {
+          "approvals": {
+            "items": {
+              "$ref": "#/components/schemas/IndexedApproval"
+            },
+            "title": "Approvals",
+            "type": "array"
+          },
+          "approvals_total": {
+            "minimum": 0.0,
+            "title": "Approvals Total",
+            "type": "integer"
+          },
+          "read_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Read At Ms",
+            "type": "integer"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/IndexedRun"
+            },
+            "title": "Runs",
+            "type": "array"
+          },
+          "runs_total": {
+            "minimum": 0.0,
+            "title": "Runs Total",
+            "type": "integer"
+          },
+          "studies": {
+            "items": {
+              "$ref": "#/components/schemas/IndexedStudy"
+            },
+            "title": "Studies",
+            "type": "array"
+          },
+          "studies_total": {
+            "minimum": 0.0,
+            "title": "Studies Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "read_at_ms",
+          "runs",
+          "runs_total",
+          "studies",
+          "studies_total",
+          "approvals",
+          "approvals_total"
+        ],
+        "title": "OptionsSetupIndexResponse",
+        "type": "object"
+      },
       "OptionsWatchedPremiumView": {
         "properties": {
           "close_ms": {
@@ -58854,44 +59167,6 @@
             "title": "Example",
             "type": "boolean"
           },
-          "golden_setup_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Golden Setup Id"
-          },
-          "golden_status": {
-            "anyOf": [
-              {
-                "enum": [
-                  "ready",
-                  "stale",
-                  "revoked"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Golden Status"
-          },
-          "golden_status_explanation": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Golden Status Explanation"
-          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -58918,6 +59193,19 @@
                 "type": "null"
               }
             ]
+          },
+          "setup_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The exact identity of the setup's content, present when the setup is. A run, a search or an approved version is matched to a saved setup by an equal hash and never by name: a name can be edited, deleted and reused, and two names with identical content share one hash.",
+            "title": "Setup Sha256"
           }
         },
         "required": [
@@ -65628,45 +65916,6 @@
           "detail"
         ],
         "title": "StudyRecordRefusalBody",
-        "type": "object"
-      },
-      "StudySummary": {
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "title": "Id",
-            "type": "string"
-          },
-          "phase": {
-            "title": "Phase",
-            "type": "string"
-          },
-          "setup_name": {
-            "title": "Setup Name",
-            "type": "string"
-          },
-          "status": {
-            "title": "Status",
-            "type": "string"
-          },
-          "underlying": {
-            "title": "Underlying",
-            "type": "string"
-          },
-          "updated_at_ms": {
-            "title": "Updated At Ms",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "id",
-          "setup_name",
-          "underlying",
-          "phase",
-          "status",
-          "updated_at_ms"
-        ],
-        "title": "StudySummary",
         "type": "object"
       },
       "Subtract-Input": {
@@ -96277,9 +96526,41 @@
         ]
       }
     },
+    "/api/research/options-backtest/setup-index": {
+      "get": {
+        "description": "The saved setups and all Options evidence in one read, each with its exact content hash; nothing is joined by name.",
+        "operationId": "get_setup_index_api_research_options_backtest_setup_index_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsSetupIndexResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestRefusalBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Get Setup Index",
+        "tags": [
+          "research-options-backtest"
+        ]
+      }
+    },
     "/api/research/options-backtest/setups": {
       "get": {
-        "description": "The two shipped examples, then the saved setups, newest first. One that cannot be opened says why.",
+        "description": "The two shipped examples, then the saved setups, newest first. One that cannot be opened says why.\n\nEach setup carries the hash of its content. Evidence is matched to a setup by an equal hash, so this lists no\napproved version and picks none for a name (``GET /setup-index`` lists the evidence).",
         "operationId": "list_setups_api_research_options_backtest_setups_get",
         "responses": {
           "200": {
@@ -96647,57 +96928,6 @@
       }
     },
     "/api/research/options-golden-search/studies": {
-      "get": {
-        "operationId": "history_api_research_options_golden_search_studies_get",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/StudySummary"
-                  },
-                  "title": "Response History Api Research Options Golden Search Studies Get",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "History",
-        "tags": [
-          "research-options-golden-search"
-        ]
-      },
       "post": {
         "operationId": "create_api_research_options_golden_search_studies_post",
         "parameters": [

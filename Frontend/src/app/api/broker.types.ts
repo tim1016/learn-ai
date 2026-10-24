@@ -6806,6 +6806,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/options-backtest/setup-index": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Setup Index
+         * @description The saved setups and all Options evidence in one read, each with its exact content hash; nothing is joined by name.
+         */
+        get: operations["get_setup_index_api_research_options_backtest_setup_index_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/options-backtest/setups": {
         parameters: {
             query?: never;
@@ -6816,6 +6836,9 @@ export interface paths {
         /**
          * List Setups
          * @description The two shipped examples, then the saved setups, newest first. One that cannot be opened says why.
+         *
+         *     Each setup carries the hash of its content. Evidence is matched to a setup by an equal hash, so this lists no
+         *     approved version and picks none for a name (``GET /setup-index`` lists the evidence).
          */
         get: operations["list_setups_api_research_options_backtest_setups_get"];
         put?: never;
@@ -6928,8 +6951,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** History */
-        get: operations["history_api_research_options_golden_search_studies_get"];
+        get?: never;
         put?: never;
         /** Create */
         post: operations["create_api_research_options_golden_search_studies_post"];
@@ -20931,6 +20953,82 @@ export interface components {
             /** Symbol */
             symbol: string;
         };
+        /** IndexedApproval */
+        IndexedApproval: {
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Id */
+            id: string;
+            /**
+             * Origin
+             * @enum {string}
+             */
+            origin: "backtest" | "search" | "not_recorded";
+            /** Recorded Name */
+            recorded_name: string;
+            /** Setup Sha256 */
+            setup_sha256: string;
+            /** Source Run Id */
+            source_run_id: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ready" | "stale" | "revoked";
+            /** Study Id */
+            study_id?: string | null;
+            /** Underlying */
+            underlying?: string | null;
+        };
+        /** IndexedRun */
+        IndexedRun: {
+            /** Created At Ms */
+            created_at_ms: number;
+            /** First Session Open Ms */
+            first_session_open_ms: number;
+            /** Id */
+            id: number;
+            /** Last Session Open Ms */
+            last_session_open_ms: number;
+            /** Net Profit Usd */
+            net_profit_usd?: string | null;
+            /** Recorded Name */
+            recorded_name?: string | null;
+            /** Sessions Requested */
+            sessions_requested: number;
+            /** Setup Sha256 */
+            setup_sha256?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "complete" | "failed" | "cancelled" | "interrupted";
+            /** Underlying */
+            underlying: string;
+            /** Unreadable Reason */
+            unreadable_reason?: string | null;
+        };
+        /** IndexedStudy */
+        IndexedStudy: {
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Id */
+            id: string;
+            /** Phase */
+            phase: string;
+            /** Recorded Name */
+            recorded_name: string;
+            /** Setup Sha256 */
+            setup_sha256?: string | null;
+            /** Status */
+            status: string;
+            /** Underlying */
+            underlying: string;
+            /** Unreadable Reason */
+            unreadable_reason?: string | null;
+            /** Updated At Ms */
+            updated_at_ms: number;
+        };
         /** IndicatorBetween */
         IndicatorBetween: {
             /** Hi */
@@ -27305,6 +27403,26 @@ export interface components {
             /** Winning Sessions */
             winning_sessions: number;
         };
+        /**
+         * OptionsSetupIndexResponse
+         * @description Newest first within each list. A list shorter than its ``*_total`` was cut, and the page says so.
+         */
+        OptionsSetupIndexResponse: {
+            /** Approvals */
+            approvals: components["schemas"]["IndexedApproval"][];
+            /** Approvals Total */
+            approvals_total: number;
+            /** Read At Ms */
+            read_at_ms: number;
+            /** Runs */
+            runs: components["schemas"]["IndexedRun"][];
+            /** Runs Total */
+            runs_total: number;
+            /** Studies */
+            studies: components["schemas"]["IndexedStudy"][];
+            /** Studies Total */
+            studies_total: number;
+        };
         /** OptionsWatchedPremiumView */
         OptionsWatchedPremiumView: {
             /** Close Ms */
@@ -30647,17 +30765,16 @@ export interface components {
             cannot_open_reason?: string | null;
             /** Example */
             example: boolean;
-            /** Golden Setup Id */
-            golden_setup_id?: string | null;
-            /** Golden Status */
-            golden_status?: ("ready" | "stale" | "revoked") | null;
-            /** Golden Status Explanation */
-            golden_status_explanation?: string | null;
             /** Name */
             name: string;
             /** Saved At Ms */
             saved_at_ms?: number | null;
             setup?: components["schemas"]["OptionsBacktestSetup-Output"] | null;
+            /**
+             * Setup Sha256
+             * @description The exact identity of the setup's content, present when the setup is. A run, a search or an approved version is matched to a saved setup by an equal hash and never by name: a name can be edited, deleted and reused, and two names with identical content share one hash.
+             */
+            setup_sha256?: string | null;
         };
         /** ScopedHealthResponse */
         ScopedHealthResponse: {
@@ -33745,21 +33862,6 @@ export interface components {
          */
         StudyRecordRefusalBody: {
             detail: components["schemas"]["StudyRecordRefusal"];
-        };
-        /** StudySummary */
-        StudySummary: {
-            /** Id */
-            id: string;
-            /** Phase */
-            phase: string;
-            /** Setup Name */
-            setup_name: string;
-            /** Status */
-            status: string;
-            /** Underlying */
-            underlying: string;
-            /** Updated At Ms */
-            updated_at_ms: number;
         };
         /** Subtract */
         "Subtract-Input": {
@@ -48837,6 +48939,35 @@ export interface operations {
             };
         };
     };
+    get_setup_index_api_research_options_backtest_setup_index_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsSetupIndexResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+        };
+    };
     list_setups_api_research_options_backtest_setups_get: {
         parameters: {
             query?: never;
@@ -49073,37 +49204,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Preflight"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    history_api_research_options_golden_search_studies_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StudySummary"][];
                 };
             };
             /** @description Validation Error */

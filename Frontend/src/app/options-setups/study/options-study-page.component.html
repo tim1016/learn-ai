@@ -1,0 +1,13 @@
+<main class="workspace">
+  <app-breadcrumb heading="Options search study" />
+  <nav class="return">@if (botReturn(); as path) { <a [routerLink]="path">Back to bot</a> }<a routerLink="/options-setups">Options setups</a></nav>
+  <nav class="views" aria-label="Study views">
+    <a [routerLink]="address()" [queryParams]="studyQuery()" [class.active]="!lineage()" [attr.aria-current]="lineage() ? null : 'page'">Study</a>
+    <a [routerLink]="address()" [queryParams]="lineageQuery()" [class.active]="lineage()" [attr.aria-current]="lineage() ? 'page' : null">Research lineage</a>
+  </nav>
+  @if (lineage()) {
+    <app-options-evidence-view kind="study" [subjectId]="studyId()" view="lineage" [inspected_study_id]="inspected_study_id()" [comparator_run_id]="comparator_run_id()" [botReturn]="botReturn()" [embedded]="true" />
+  } @else {
+    <app-options-study-workbench [studyId]="studyId()" />
+  }
+</main>

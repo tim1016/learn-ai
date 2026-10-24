@@ -3,17 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from decimal import Decimal
 
 import asyncpg
 import pytest
 
 from app.options_backtest.saved_runs import DeleteOutcome, NewRun, complete_run, create_run, delete_run
-from app.options_backtest.saved_setups import save_setup
 from app.options_bots import golden_repository as repository
 from app.options_bots.golden_proof import proof_sha256, setup_sha256
 from app.options_bots.golden_repository import CommandConflict, GoldenEvent, GoldenRecord
-from app.routers.options_backtest import _listed_setups
 from tests.options_backtest._a_run import a_busy_run
 from tests.research.conftest import conn as conn
 from tests.research.conftest import unique as unique
@@ -53,14 +50,6 @@ async def test_qualification_retains_source_evidence_and_commands_cannot_be_repu
         assert revoked.id == retry_event.id
         assert await repository.events_for(conn, (record.id,)) == (revoked,)
         assert (await repository.get_record(conn, record.id)).proof == proof
-        await save_setup(conn, "setup-" + unique, result.setup, saved_at_ms=3)
-        listed = await _listed_setups(conn)
-        matching = next(item for item in listed if item.name == "setup-" + unique)
-        assert matching.golden_setup_id == record.id
-        assert matching.golden_status == "revoked"
-        await save_setup(conn, "setup-" + unique, result.setup.model_copy(update={"starting_cash_usd": Decimal(25000)}), saved_at_ms=5)
-        edited = next(item for item in await _listed_setups(conn) if item.name == "setup-" + unique)
-        assert edited.golden_setup_id is None
         with pytest.raises(CommandConflict):
             await repository.insert_event(conn, replace(event, reason="Changed reason", command_sha256="revoke-b"))
         with pytest.raises(ValueError, match="revoked"):
@@ -71,4 +60,3 @@ async def test_qualification_retains_source_evidence_and_commands_cannot_be_repu
         await conn.execute("DELETE FROM research_golden_option_setup_events WHERE qualification_id=$1", record.id)
         await conn.execute("DELETE FROM research_golden_option_setups WHERE id=$1", record.id)
         await conn.execute("DELETE FROM research_options_backtest_runs WHERE id=$1", run_id)
-        await conn.execute("DELETE FROM research_options_backtest_setups WHERE name=$1", "setup-" + unique)

@@ -9,12 +9,13 @@ import { RecordPoller } from '../../../shared/research-record/record-poller';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import { extractServerMessage } from '../../broker/operation-error';
 import { SetupSentencesComponent } from '../cards/setup-sentences.component';
+import { optionsExploreQuery } from '../../../options-setups/options-setups.address';
 import { OptionsBacktestService, RunRefusedError } from '../options-backtest.service';
 import type { RunDetail, RunListItem, ServedSetup, SetupSummary } from '../options-backtest.types';
 import { RUN_POLL_MS } from '../run-poll';
 import { progressView } from '../run-words';
 import { JobProgressComponent } from './job-progress.component';
-import { GoldenSetupApprovalComponent } from './golden-setup-approval.component';
+import type { GoldenOffer } from './golden-offer';
 import { RunFailureComponent } from './run-failure.component';
 import { RunResultComponent } from './run-result.component';
 
@@ -25,9 +26,10 @@ import { RunResultComponent } from './run-result.component';
  * stream only decorates it (the phase, the count, the latest line) and says
  * sooner when the job is over. What the record says decides what is shown: the
  * result, why it failed, or that it was cancelled and nothing was saved. A run
- * opened from History can also show the setup it ran, and offer it back to the
- * form. Each read of the run carries a generation, so an answer to an earlier
- * read never replaces a later one.
+ * opened from History can also show the setup it ran, and offer it back as a
+ * new draft. A complete run can be taken to Golden, which carries its id and
+ * approves nothing. Each read of the run carries a generation, so an answer to
+ * an earlier read never replaces a later one.
  */
 @Component({
   selector: 'app-options-backtest-run-panel',
@@ -39,7 +41,6 @@ import { RunResultComponent } from './run-result.component';
     TimestampDisplayComponent,
     SetupSentencesComponent,
     JobProgressComponent,
-    GoldenSetupApprovalComponent,
     RunFailureComponent,
     RunResultComponent,
   ],
@@ -58,8 +59,12 @@ export class RunPanelComponent {
   readonly run = input.required<RunListItem>();
   /** Show the sentences of the setup this run used, and offer Use this setup (a run opened from History). */
   readonly showSetup = input(false);
-  /** Why the form cannot take a setup just now, in words (the session clock is unread); null when it can. */
+  /** Why a setup cannot be taken just now, in words (the session clock is unread); null when it can. */
   readonly setupBlockedWhy = input<string | null>(null);
+  /** Where a complete run's performance and research lineage are shown: the address of that page. Null: they are not offered. */
+  readonly exploreRoute = input<readonly string[] | null>(null);
+  /** What a complete run may be taken to Golden as: a link, or why not. Null: Golden is not offered from here. */
+  readonly goldenOffer = input<GoldenOffer | null>(null);
   /** The run was read again and its status is not the one it was given. */
   readonly updated = output<RunDetail>();
   readonly useSetup = output<ServedSetup>();
@@ -68,7 +73,8 @@ export class RunPanelComponent {
   private readonly readFailure = signal<string | null>(null);
   private generation = 0;
   protected readonly detail = this.record.asReadonly();
-  protected readonly goldenReviewRun = signal<number | null>(null);
+  protected readonly performanceQuery = (id: number) => optionsExploreQuery('performance', id);
+  protected readonly goldenQuery = (id: number) => ({ run: String(id) });
   protected readonly readProblem = this.readFailure.asReadonly();
   /** What the run is: the record read last, or the record it was given until one has been read. */
   protected readonly status = computed(() => this.detail()?.status ?? this.run().status);

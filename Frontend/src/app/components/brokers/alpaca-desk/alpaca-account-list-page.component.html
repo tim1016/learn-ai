@@ -5,7 +5,9 @@
     <span class="account-list__count">{{ accounts().length }} registered</span>
   </header>
 
-  @if (goldenHandoff()) {
+  @if (optionsHandoff()) {
+    <app-alpaca-options-deploy-intent [optionsSetupId]="optionsSetupId()" />
+  } @else if (goldenHandoff()) {
     <app-alpaca-deploy-intent [qualificationId]="pinnedVersion()" [strategyKey]="strategyKey()" />
   } @else if (deployIntent()) {
     <p class="account-list__state" role="status">
