@@ -115,6 +115,48 @@ export interface TargetMetadata {
   invalidReasonCounts: InvalidReasonCount[];
 }
 
+/** Distinct-session counts from the lake admission for one group (the window, or its warmup). */
+export interface StudyCoverageGroup {
+  expectedSessions: number;
+  /** Ready before this run began. */
+  reused: number;
+  /** Made ready by this run. */
+  added: number;
+  /** Not held and not fetched. */
+  missing: number;
+  /** `building + corrupt + unavailableFromProvider`. */
+  failed: number;
+  building: number;
+  corrupt: number;
+  unavailableFromProvider: number;
+}
+
+/** Where a Feature study's bars came from and what admission did to get them (#3521). */
+export interface FeatureStudyDataSource {
+  kind: 'lake';
+  provider: string;
+  priceAdjustmentMode: string;
+  barMinutes: number;
+  /** `extended` is every bar the provider served for the day; `regular` is the scheduled session. */
+  sessionPolicy: 'extended' | 'regular';
+  /** The requested window's bounds, `int64 ms UTC` at ET midnight. */
+  windowStartMs: number;
+  windowEndMs: number;
+  warmupSessions: number;
+  lookForwardMinutes: number;
+  /** sha256 of every byte read; changes when the lake is repaired under the same request. */
+  snapshotDigest: string | null;
+  identityDigest: string | null;
+  calculationVersion: string;
+  coverage: {
+    window: StudyCoverageGroup;
+    warmup: StudyCoverageGroup;
+    artifacts: { fetched: number; reused: number; refreshed: number };
+  } | null;
+  barsUsed: number | null;
+  cache: { hit: boolean; cachedAtMs: number | null };
+}
+
 export interface IcCi {
   point: number;
   se: number;
@@ -225,6 +267,8 @@ export interface ResearchResult {
   /** Audit trail of what the target pipeline actually computed. */
   targetMetadata?: TargetMetadata | null;
   validationVerdict?: FeatureValidationVerdict | null;
+  /** The lake source and admission counts behind this result. */
+  dataSource?: FeatureStudyDataSource | null;
   error?: string;
 }
 

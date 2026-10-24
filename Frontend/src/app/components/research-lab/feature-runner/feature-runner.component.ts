@@ -26,6 +26,8 @@ import {
   IcCi,
   FeatureStageInfo,
   FeatureStageCriterion,
+  FeatureStudyDataSource,
+  StudyCoverageGroup,
 } from '../../../services/research.service';
 import { JobsService, JobState } from '../../../services/jobs.service';
 import {
@@ -72,6 +74,41 @@ interface FeatureResearchTargetRaw {
   invalid_reason_counts: { reason: string; count: number }[];
 }
 
+/** Session counts for one group, as the lake admission reports them. */
+interface StudyCoverageGroupRaw {
+  expected_sessions: number;
+  reused: number;
+  added: number;
+  missing: number;
+  failed: number;
+  building: number;
+  corrupt: number;
+  unavailable_from_provider: number;
+}
+
+/** The ``data_source`` block of a Feature study result (``feature_study_service.data_source_block``). */
+interface FeatureStudyDataSourceRaw {
+  kind: 'lake';
+  provider: string;
+  price_adjustment_mode: string;
+  bar_minutes: number;
+  session_policy: 'extended' | 'regular';
+  window_start_ms: number;
+  window_end_ms: number;
+  warmup_sessions: number;
+  look_forward_minutes: number;
+  snapshot_digest: string | null;
+  identity_digest: string | null;
+  calculation_version: string;
+  coverage: {
+    window: StudyCoverageGroupRaw;
+    warmup: StudyCoverageGroupRaw;
+    artifacts: { fetched: number; reused: number; refreshed: number };
+  } | null;
+  bars_used: number | null;
+  cache: { hit: boolean; cached_at_ms: number | null };
+}
+
 /** Snake-case shape returned by /api/jobs-internal/feature-research worker. */
 interface FeatureResearchJobResultRaw {
   success: boolean;
@@ -98,6 +135,7 @@ interface FeatureResearchJobResultRaw {
   feature_spec: unknown;
   validation_verdict: unknown;
   target?: FeatureResearchTargetRaw | null;
+  data_source?: FeatureStudyDataSourceRaw | null;
   passed_validation: boolean;
   error: string | null;
 }
@@ -485,7 +523,44 @@ export class FeatureRunnerComponent {
             invalidReasonCounts: raw.target.invalid_reason_counts,
           }
         : null,
+      dataSource: raw.data_source ? this.mapDataSource(raw.data_source) : null,
       error: raw.error ?? undefined,
+    };
+  }
+
+  private mapDataSource(raw: FeatureStudyDataSourceRaw): FeatureStudyDataSource {
+    const group = (g: StudyCoverageGroupRaw): StudyCoverageGroup => ({
+      expectedSessions: g.expected_sessions,
+      reused: g.reused,
+      added: g.added,
+      missing: g.missing,
+      failed: g.failed,
+      building: g.building,
+      corrupt: g.corrupt,
+      unavailableFromProvider: g.unavailable_from_provider,
+    });
+    return {
+      kind: raw.kind,
+      provider: raw.provider,
+      priceAdjustmentMode: raw.price_adjustment_mode,
+      barMinutes: raw.bar_minutes,
+      sessionPolicy: raw.session_policy,
+      windowStartMs: raw.window_start_ms,
+      windowEndMs: raw.window_end_ms,
+      warmupSessions: raw.warmup_sessions,
+      lookForwardMinutes: raw.look_forward_minutes,
+      snapshotDigest: raw.snapshot_digest,
+      identityDigest: raw.identity_digest,
+      calculationVersion: raw.calculation_version,
+      coverage: raw.coverage
+        ? {
+            window: group(raw.coverage.window),
+            warmup: group(raw.coverage.warmup),
+            artifacts: raw.coverage.artifacts,
+          }
+        : null,
+      barsUsed: raw.bars_used,
+      cache: { hit: raw.cache.hit, cachedAtMs: raw.cache.cached_at_ms },
     };
   }
 

@@ -170,6 +170,77 @@ describe('FeatureRunnerComponent', () => {
     expect(component.jobId()).toBeNull();
   });
 
+  it('carries the lake data source and its coverage counts from a completed run into the result', async () => {
+    const group = (over: Record<string, number>) => ({
+      expected_sessions: 10, reused: 0, added: 10, missing: 0, failed: 0,
+      building: 0, corrupt: 0, unavailable_from_provider: 0, ...over,
+    });
+    jobsServiceMock.fetchResult.mockResolvedValueOnce({
+      success: true,
+      ticker: 'SPY',
+      feature_name: 'rsi_14',
+      start_date: '2024-03-04',
+      end_date: '2024-03-15',
+      bars_used: 1920,
+      data_source: {
+        kind: 'lake',
+        provider: 'polygon',
+        price_adjustment_mode: 'polygon_split_adjusted',
+        bar_minutes: 5,
+        session_policy: 'extended',
+        window_start_ms: 1709528400000,
+        window_end_ms: 1710478800000,
+        warmup_sessions: 0,
+        look_forward_minutes: 15,
+        snapshot_digest: 'abc',
+        identity_digest: 'def',
+        calculation_version: 'feature-study/1',
+        coverage: {
+          window: group({ reused: 7, added: 3 }),
+          warmup: group({ expected_sessions: 0, added: 0 }),
+          artifacts: { fetched: 5, reused: 7, refreshed: 0 },
+        },
+        bars_used: 1920,
+        cache: { hit: false, cached_at_ms: null },
+      },
+      error: null,
+    });
+    component.jobId.set('job-id-1');
+    jobsByIdSignal.set(
+      new Map<string, JobState>([
+        ['job-id-1', { id: 'job-id-1', type: 'feature_research', status: 'completed', recentLogs: [], logSeq: 0 }],
+      ]),
+    );
+
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    const source = component.result()?.dataSource;
+    expect(source?.sessionPolicy).toBe('extended');
+    expect(source?.coverage?.window).toMatchObject({ expectedSessions: 10, reused: 7, added: 3, unavailableFromProvider: 0 });
+    expect(source?.coverage?.artifacts).toEqual({ fetched: 5, reused: 7, refreshed: 0 });
+    expect(source?.cache).toEqual({ hit: false, cachedAtMs: null });
+  });
+
+  it('shows a refusal reason the failed job carries instead of an opaque failure', () => {
+    component.jobId.set('job-id-1');
+    jobsByIdSignal.set(
+      new Map<string, JobState>([
+        [
+          'job-id-1',
+          {
+            id: 'job-id-1', type: 'feature_research', status: 'failed', recentLogs: [], logSeq: 0,
+            errorMessage: '60-minute bars do not divide the 15-minute forward target.',
+          },
+        ],
+      ]),
+    );
+
+    fixture.detectChanges();
+
+    expect(component.error()).toBe('60-minute bars do not divide the 15-minute forward target.');
+  });
+
   describe('indicator catalog load', () => {
     const catalogUrl = `${environment.pythonServiceUrl}/api/dataset/available`;
 
