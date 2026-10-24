@@ -67,15 +67,22 @@ export function goldenLocation(url: string): GoldenLocation | null {
 }
 
 /**
- * What "Use in Deploy" carries to the account list (`/brokers/alpaca`): the
- * strategy the version was approved for and the exact version, under Deploy's
- * own `strategy` and `golden_qualification` keys. Deploy applies the version's
- * strategy, symbol and settings from the version itself; the account is still the
- * owner's choice there, and nothing is ever picked for them.
+ * What a handoff to Deploy carries to the account list (`/brokers/alpaca`),
+ * under Deploy's own query keys.
+ *
+ * - **A version** (`qualificationId` given): the strategy the version was
+ *   approved for and the exact version, as `strategy` and `golden_qualification`.
+ *   Deploy applies the version's strategy, symbol and settings from the version
+ *   itself, and only while it is ready.
+ * - **No version** (`null`): the strategy alone, with `deploy` marking the
+ *   intent so the list carries it. Deploy opens on that strategy at the
+ *   symbol and settings it registers, and applies no saved version.
+ *
+ * Either way the account is the owner's choice there: nothing is ever picked
+ * for them, and navigation sends no command.
  */
 export function deployHandoffQuery(strategyKey: string, qualificationId: string | null): Record<string, string> {
-  return {
-    strategy: strategyKey,
-    ...(qualificationId === null ? {} : { [GOLDEN_QUALIFICATION_QUERY_PARAM]: qualificationId }),
-  };
+  return qualificationId === null
+    ? { deploy: '', strategy: strategyKey }
+    : { strategy: strategyKey, [GOLDEN_QUALIFICATION_QUERY_PARAM]: qualificationId };
 }

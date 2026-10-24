@@ -32,8 +32,8 @@ describe('Golden’s addresses', () => {
     expect(proofRoute('ema')).toEqual(['/signal-strategies', 'ema', 'proof']);
   });
 
-  it('hands Deploy the strategy and the exact version under its own query keys, and no version when there is none', () => {
+  it('hands Deploy the strategy and the exact version under its own query keys, and the strategy alone as a deploy intent when there is none', () => {
     expect(deployHandoffQuery('ema', 'gq-1')).toEqual({ strategy: 'ema', golden_qualification: 'gq-1' });
-    expect(deployHandoffQuery('ema', null)).toEqual({ strategy: 'ema' });
+    expect(deployHandoffQuery('ema', null)).toEqual({ deploy: '', strategy: 'ema' });
   });
 });

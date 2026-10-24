@@ -6,7 +6,7 @@ import type { StrategyValidationDetail, StrategyValidationSummary } from '../../
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { WorkspaceStateBlockComponent } from '../../shared/workspace/workspace-state-block.component';
 import { exploreTabRoute } from '../explore/explore-tabs';
-import { goldenTabRoute } from '../golden/golden-tabs';
+import { deployHandoffQuery, goldenTabRoute } from '../golden/golden-tabs';
 import { readStateOf } from '../read-state';
 import { PROOF_TONES, proofSummaryOf } from '../signal-strategy-evidence';
 import { SignalStrategyChipComponent } from '../signal-strategy-chip.component';
@@ -77,7 +77,7 @@ export class ProofDetailComponent {
   }
 
   protected deployQueryParams(detail: StrategyValidationDetail): Record<string, string> {
-    return { deploy: '', strategy: detail.strategy_key };
+    return deployHandoffQuery(detail.strategy_key, null);
   }
 
   protected configurationRoute(detail: StrategyValidationDetail): readonly string[] {

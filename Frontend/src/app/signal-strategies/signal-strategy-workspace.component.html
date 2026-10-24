@@ -1,7 +1,7 @@
 @let state = store.entry();
 @if (state.kind === 'found') {
   @let strategy = state.entry;
-  <app-workspace-header [title]="title()" [breadcrumb]="breadcrumb()" [secondaryActions]="actions()">
+  <app-workspace-header [title]="title()" [breadcrumb]="breadcrumb()" [secondaryActions]="actions()" (actionTriggered)="onAction($event)">
     @if (activeTab() === 'define') {
       <app-how-this-works workspaceHelp route="/strategy-docs" />
     } @else if (activeTab() === 'golden') {
@@ -31,6 +31,10 @@
 
   @if (strategy.experimental_notice; as notice) {
     <div class="notice"><app-experimental-notice [notice]="notice" /></div>
+  }
+
+  @if (deployOpen()) {
+    <div class="notice"><app-signal-strategy-deploy (closed)="closeDeploy()" /></div>
   }
 
   <app-workspace-tab-list [tabs]="tabs()" [activeId]="activeTab()" label="Strategy sections" />

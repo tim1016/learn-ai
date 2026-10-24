@@ -1,5 +1,5 @@
 import { LowerCasePipe } from '@angular/common';
-import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 
 import { CurrentUrlService } from '../shell/current-url.service';
 import { HowThisWorksLinkComponent } from '../shared/help/how-this-works-link.component';
@@ -10,6 +10,7 @@ import { WorkspaceHeaderComponent, type WorkspaceBreadcrumbItem } from '../share
 import type { WorkspaceStateContent } from '../shared/workspace/workspace-state';
 import { WorkspaceStateBlockComponent } from '../shared/workspace/workspace-state-block.component';
 import { WorkspaceTabListComponent, type WorkspaceTabItem } from '../shared/workspace/workspace-tab-list.component';
+import { SignalStrategyDeployComponent } from './deploy/signal-strategy-deploy.component';
 import { ExploreScopeComponent } from './explore/explore-scope.component';
 import { PROOF_TONES, proofSummaryOf } from './signal-strategy-evidence';
 import { goldenLocation } from './golden/golden-tabs';
@@ -41,6 +42,7 @@ import { SignalStrategyWorkspaceStore } from './signal-strategy-workspace.store'
     LowerCasePipe,
     ReceiptLabelPipe,
     SignalStrategyChipComponent,
+    SignalStrategyDeployComponent,
     WorkspaceHeaderComponent,
     WorkspaceStateBlockComponent,
     WorkspaceTabListComponent,
@@ -74,18 +76,29 @@ export class SignalStrategyWorkspaceComponent {
     { label: this.title() },
   ]);
 
-  /** A Recency Chart filtered to this strategy, offered where the registry lets it be swept. */
+  /** The strategy whose "Deploy a bot" choice is open, so another strategy's address never shows it. */
+  private readonly deployOpenFor = signal<string | null>(null);
+  protected readonly deployOpen = computed(() => this.deployOpenFor() === this.store.key());
+
+  /**
+   * A Recency Chart filtered to this strategy, offered where the registry lets it be
+   * swept, and "Deploy a bot": the choice of what to take to the account list. Both are
+   * secondary beside the active task's own action (PRD #3490 R03).
+   */
   protected readonly actions = computed<readonly WorkspaceAction[]>(() => {
     const state = this.store.entry();
-    if (state.kind !== 'found' || !state.entry.capabilities.sweep.supported) return [];
-    return [
-      {
-        id: 'recency',
-        label: 'Recency chart',
-        route: [SIGNAL_STRATEGIES_RECENCY_ROUTE],
-        queryParams: { strategy: state.entry.strategy_key },
-      },
-    ];
+    if (state.kind !== 'found') return [];
+    const sweepable: readonly WorkspaceAction[] = state.entry.capabilities.sweep.supported
+      ? [
+          {
+            id: 'recency',
+            label: 'Recency chart',
+            route: [SIGNAL_STRATEGIES_RECENCY_ROUTE],
+            queryParams: { strategy: state.entry.strategy_key },
+          },
+        ]
+      : [];
+    return [...sweepable, { id: 'deploy', label: 'Deploy a bot' }];
   });
 
   protected readonly tabs = computed<readonly WorkspaceTabItem[]>(() =>
@@ -123,5 +136,14 @@ export class SignalStrategyWorkspaceComponent {
 
   protected onAction(actionId: string): void {
     if (actionId === 'retry') this.store.retry('registry');
+    else if (actionId === 'deploy') this.toggleDeploy();
+  }
+
+  protected closeDeploy(): void {
+    this.deployOpenFor.set(null);
+  }
+
+  private toggleDeploy(): void {
+    this.deployOpenFor.update((open) => (open === this.store.key() ? null : this.store.key()));
   }
 }
