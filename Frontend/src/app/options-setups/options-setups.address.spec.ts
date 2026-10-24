@@ -83,7 +83,7 @@ describe('the Options setups address', () => {
   });
 
   it('declares the views of Explore once, in the order the owner works through them', () => {
-    expect(OPTIONS_EXPLORE_VIEWS.tabs.map((view) => view.label)).toEqual(['Backtest', 'History', 'Past chain', 'Performance', 'Research lineage', 'Historical comparison']);
+    expect(OPTIONS_EXPLORE_VIEWS.tabs.map((view) => view.label)).toEqual(['Backtest', 'History', 'Performance', 'Research lineage', 'Historical comparison']);
     expect(OPTIONS_EXPLORE_VIEWS.tabs.every((view) => isOptionsExploreView(view.id))).toBe(true);
     expect(isOptionsExploreView('chart')).toBe(false);
   });

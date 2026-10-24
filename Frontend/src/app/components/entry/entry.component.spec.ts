@@ -8,15 +8,15 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { EntryComponent } from './entry.component';
 
-@Component({ template: '<p>Data Lab</p>', changeDetection: ChangeDetectionStrategy.OnPush })
-class DataLabStubComponent {}
+@Component({ template: '<p>Markets</p>', changeDetection: ChangeDetectionStrategy.OnPush })
+class MarketsStubComponent {}
 
 // jsdom has no WebGL and never loads pictures, so these run the page the way a
 // browser without WebGL shows it: the plain painting with the button over it.
 describe('EntryComponent', () => {
   const renderEntry = () =>
     render(EntryComponent, {
-      providers: [provideRouter([{ path: 'data-lab', component: DataLabStubComponent }])],
+      providers: [provideRouter([{ path: 'markets', component: MarketsStubComponent }])],
     });
 
   it.each<[string, () => Promise<void>]>([
@@ -31,13 +31,13 @@ describe('EntryComponent', () => {
         await userEvent.keyboard('{Enter}');
       },
     ],
-  ])('opens Data Lab when %s', async (_name, act) => {
+  ])('opens Markets when %s', async (_name, act) => {
     await renderEntry();
     const router = TestBed.inject(Router);
 
     await act();
 
-    await vi.waitFor(() => expect(router.url).toBe('/data-lab'));
+    await vi.waitFor(() => expect(router.url).toBe('/markets'));
   });
 
   it('describes the painting to people who cannot see it, and has no detectable accessibility violations', async () => {

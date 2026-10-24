@@ -1576,7 +1576,7 @@ Decision record: ADR 0062.
 
 ## Session-segmented returns (resolved 2026-09-14)
 
-**Lineage: live.** Vocabulary for the Return Distribution study (`/data-lab/returns`, `POST /api/research/return-distribution`); method note in `docs/references/return-distribution.md`.
+**Lineage: live.** Vocabulary for the Return Distribution study (`/markets/:symbol/returns`, `POST /api/research/return-distribution`); method note in `docs/references/return-distribution.md`.
 
 - **Return kinds** — the three answers to "what did the day do": *close-to-close* (previous scheduled RTH close → this RTH close; the headline number), *session* (RTH open → RTH close), and *overnight gap* (previous RTH close → RTH open). Close-to-close decomposes as overnight + session exactly in log space.
 - **Session segments** — the full-24h drill-down of one day's move: overnight gap, pre-market, morning (open → 12:00 ET), afternoon (12:00 ET → scheduled close), after-hours. Half-days segment against their scheduled close, never a 16:00 literal. A segment with no traded bars reports "no data", never zero.
@@ -1619,8 +1619,25 @@ these are the others.
 
 - **Instrument place** — one symbol, opened from Markets, with its tabs: Chart,
   Returns, Options and Data. Its identity is the symbol, not a page that happens to
-  show it. Build dataset is an action on it, not a tab.
+  show it. Build dataset and Saved setups are actions on it, not tabs.
   _Avoid_: stock page, ticker page, symbol workspace.
+- **Instrument context** — what an instrument's tabs share: the window, the bar
+  timeframe and the session. It lives in the address (`?from=&to=&timeframe=&session=`),
+  and a picker commits it by moving the address, so Back, Forward and a reload keep
+  it. A complete, distinct context loads once; the same one again loads nothing.
+  _Avoid_: scope, draft scope, Apply, Refresh.
+- **Chain mode** — how an instrument's Options chain is asked: **Now · Snapshot**
+  (the provider's current snapshot, with the time it arrived and whether the provider
+  labels it delayed), **Now · Live IBKR** (the retained read-only IBKR feed: it shows the
+  connection, what is known of entitlement and the subscription, subscribes only when Start is
+  pressed, and compares IBKR's delta with the engine's per contract; it is unavailable, with the
+  data plane's reason, when no Gateway session is held), **Past · Archive** (what the data lake's archive held on a session date
+  and instant) and **Past · Live IBKR**, which does not exist: IBKR streams the present
+  only, so a past date is never read from it and today's chain is never shown under
+  one. A mode that is not available stays on the strip, disabled, with its reason. The
+  mode, the expiry, and for the past the session date and instant live in the address
+  (`?source=&expiry=&date=&at=`), apart from the instrument context's window.
+  _Avoid_: live/historical toggle, source switch.
 - **Signal strategy** — one registry-selected Signal Program as a place, with its
   tabs: Overview, Define, Explore, Golden and Proof. Its identity is the registry
   key; the exact program version, symbol and parameters identify evidence inside
@@ -1643,7 +1660,8 @@ these are the others.
   _Avoid_: options strategy, option signal.
 - **Explore (an options setup's)** — the tab where a saved setup is replayed over
   past dates (Backtest) and its runs are read: History, Performance, Research
-  lineage and Historical comparison, with the Past chain beside them. A backtest
+  lineage and Historical comparison, with a link beside them to the setup's
+  underlying on the instrument's Past · Archive chain. A backtest
   tests the setup **as last saved**, never the draft being edited in Define, and is
   recorded under the saved name, so an edit that is not saved changes nothing a run
   tested. A run keeps the setup it froze; an opened run has its own address
@@ -2155,7 +2173,8 @@ backtest still stands (Option structures).
   listed on one trading date. The past chain is what the past-chain routes give of
   it: every listed expiry with its series, and, for one expiry at one instant of
   that session, the calls and puts around the money with the price each last
-  traded at. It reads only what the lake holds and fills in nothing.
+  traded at. It reads only what the lake holds and fills in nothing. It is shown as the
+  **Past · Archive** chain mode of an instrument's Options tab.
   _Avoid_: chain for the live set of quoted contracts, contract listing (the
   broker's reference, Option structures).
 - **Price state (past chain)** — for a contract: **traded** (the close of the last

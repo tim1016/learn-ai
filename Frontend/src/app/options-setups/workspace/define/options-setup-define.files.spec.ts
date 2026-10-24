@@ -5,7 +5,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { SetupInvalidError } from '../../../components/options-backtest/options-backtest.service';
 import type { SavedSetup, SetupRequest, SetupSummary } from '../../../components/options-backtest/options-backtest.types';
-import { deferred } from '../../../components/options-backtest/past-chain/testing/deferred';
+import { deferred } from '../../../components/options-backtest/testing/deferred';
 import { EXAMPLE_ONE_REENTRY, exampleBody, readBackOf, servedExamples, servedSaved, summaryFor } from '../../../components/options-backtest/testing/fixtures';
 import { lettingGo, press, typeInto } from '../../../components/options-backtest/testing/page-actions';
 import { fakeService, sentencesFor } from '../../../components/options-backtest/testing/fake-service';

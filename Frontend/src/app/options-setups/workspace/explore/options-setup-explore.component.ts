@@ -7,10 +7,10 @@ import { LaunchNoticeComponent } from '../../../components/options-backtest/card
 import { RunActionsComponent } from '../../../components/options-backtest/cards/run-actions.component';
 import { SetupSentencesComponent } from '../../../components/options-backtest/cards/setup-sentences.component';
 import { HistoryTabComponent, type RunPair } from '../../../components/options-backtest/history/history-tab.component';
-import { PastChainTabComponent } from '../../../components/options-backtest/past-chain/past-chain-tab.component';
 import type { RunDetail } from '../../../components/options-backtest/options-backtest.types';
 import { RunPanelComponent } from '../../../components/options-backtest/run/run-panel.component';
 import { OptionsEvidenceViewComponent } from '../../../components/options-evidence/options-evidence-view.component';
+import { archiveChainLink } from '../../../markets/options/options-address';
 import { HealthNoticeComponent } from '../../../shared/scoped-health/health-notice.component';
 import { HEALTH_NEEDS } from '../../../shared/scoped-health/scoped-health';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
@@ -40,8 +40,9 @@ function runIdOf(text: string | undefined): number | null {
 /**
  * Explore (PRD #3490 R22): what a saved options setup did over past dates.
  * Backtest runs the setup as last saved, over dates the owner picks; History
- * lists every run; Past chain reads a historical chain; and Performance,
- * Research lineage and Historical comparison read one run's retained evidence.
+ * lists every run; and Performance, Research lineage and Historical
+ * comparison read one run's retained evidence. A historical chain is the
+ * instrument's, so Explore links to it (Options, Past · Archive) and holds none.
  *
  * The view and the run it is about are in the address, so an opened run has a
  * URL. A backtest tests the saved setup and not the draft in Define, so edits
@@ -63,7 +64,6 @@ function runIdOf(text: string | undefined): number | null {
     LaunchNoticeComponent,
     RunPanelComponent,
     HistoryTabComponent,
-    PastChainTabComponent,
     OptionsEvidenceViewComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -115,12 +115,11 @@ export class OptionsSetupExploreComponent {
   });
   protected readonly runQuery = computed(() => ({ run: String(this.runId() ?? '') }));
 
-  /** Past chain is made when first opened and then kept, so leaving it and coming back finds the date, the expiry and the chain where they were. */
-  protected readonly chainOpened = linkedSignal<OptionsExploreView, boolean>({
-    source: this.activeView,
-    computation: (view, previous) => view === 'chain' || (previous?.value ?? false),
+  /** The setup's underlying on the instrument's chain, Past · Archive. Absent while the underlying is blank. */
+  protected readonly pastChain = computed(() => {
+    const underlying = (this.explore.saved()?.underlying ?? this.setup.draft().underlying).trim().toUpperCase();
+    return underlying === '' ? null : archiveChainLink(underlying);
   });
-  protected readonly chainUnderlying = computed(() => this.explore.saved()?.underlying ?? this.setup.draft().underlying);
 
   /** Why Backtest has nothing to test, or what it is waiting for, in the domain's words. Absent: there is a saved setup. */
   protected readonly backtestState = computed<WorkspaceStateContent | null>(() => {
@@ -144,7 +143,7 @@ export class OptionsSetupExploreComponent {
       return {
         kind: 'unavailable',
         happened: `“${this.view()}” is not a view of Explore.`,
-        why: 'Explore has Backtest, History, Past chain, Performance, Research lineage and Historical comparison.',
+        why: 'Explore has Backtest, History, Performance, Research lineage and Historical comparison.',
         next: 'Choose one of them.',
         actions: [{ id: 'backtest', label: 'Backtest', route: this.address() }],
       };

@@ -20,13 +20,22 @@ const url = () => decodeURIComponent(TestBed.inject(Router).url);
 const COMPLETE = runItem({ id: 30, job_id: 'job-30', status: 'complete', setup_name: 'Straddle', headline: { sessions_tested: 10, sessions_traded: 8, trades: 12, trades_won: 7, net_profit_usd: '1234.56', ending_cash_usd: '11234.56' } });
 
 describe('the views', () => {
-  it('are Backtest, History, Past chain, and the three that are about one run, and Backtest is the one shown', async () => {
+  it('are Backtest, History, and the three that are about one run, and Backtest is the one shown', async () => {
     await renderExplore(fakeService(vi), EXAMPLE_ONE_REENTRY);
 
     const nav = within(screen.getByRole('navigation', { name: 'Explore views' }));
-    expect(nav.getAllByRole('link').map((each) => each.textContent?.trim())).toEqual(['Backtest', 'History', 'Past chain', 'Performance', 'Research lineage', 'Historical comparison']);
+    expect(nav.getAllByRole('link').map((each) => each.textContent?.trim())).toEqual(['Backtest', 'History', 'Performance', 'Research lineage', 'Historical comparison', 'Past chain in Markets']);
     expect(nav.getByRole('link', { name: 'Backtest' }).getAttribute('aria-current')).toBe('page');
     expect(screen.getByRole('heading', { name: 'Duration' })).toBeTruthy();
+  });
+
+  it('hold no historical chain: the Past chain link leaves for the setup\'s underlying on the instrument\'s chain, Past · Archive', async () => {
+    await renderExplore(fakeService(vi), EXAMPLE_ONE_REENTRY);
+
+    const link = within(screen.getByRole('navigation', { name: 'Explore views' })).getByRole('link', { name: 'Past chain in Markets' });
+    expect(link.getAttribute('href')).toBe('/markets/SPY/options/chain?source=archive');
+    expect(link.getAttribute('aria-current')).toBeNull();
+    expect(document.querySelector('app-options-backtest-past-chain')).toBeNull();
   });
 
   it('do not make History, nor read its runs, until it is shown, and read them each time it is', async () => {

@@ -1,0 +1,7 @@
+:host { display: grid; gap: var(--space-3); min-width: 0; }
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
+.action { padding: var(--space-1) var(--space-4); border: 1px solid var(--border-light); border-radius: var(--radius); background: var(--bg-elevated); color: var(--text-primary); font: inherit; font-size: var(--fs-sm); cursor: pointer; }
+.action:hover:not(:disabled) { background: var(--bg-hover); }
+.action:disabled { opacity: 0.5; cursor: not-allowed; }
+.action.primary { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-text); }
+.words { color: var(--text-secondary); font-size: var(--fs-xs); }

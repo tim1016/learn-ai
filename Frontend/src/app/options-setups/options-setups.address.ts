@@ -50,11 +50,11 @@ export const OPTIONS_CHOOSE_GOLDEN = 'golden';
  * that opens when the address names none. Performance, Research lineage and Historical comparison are about one run,
  * the `run` of the address.
  */
-export type OptionsExploreView = 'backtest' | 'history' | 'chain' | 'performance' | 'lineage' | 'comparison';
+export type OptionsExploreView = 'backtest' | 'history' | 'performance' | 'lineage' | 'comparison';
 
 export const OPTIONS_EXPLORE_VIEWS = defineWorkspaceTabs<OptionsExploreView>(
-  { backtest: 'Backtest', history: 'History', chain: 'Past chain', performance: 'Performance', lineage: 'Research lineage', comparison: 'Historical comparison' },
-  ['backtest', 'history', 'chain', 'performance', 'lineage', 'comparison'],
+  { backtest: 'Backtest', history: 'History', performance: 'Performance', lineage: 'Research lineage', comparison: 'Historical comparison' },
+  ['backtest', 'history', 'performance', 'lineage', 'comparison'],
 );
 
 export const OPTIONS_EXPLORE_DEFAULT_VIEW: OptionsExploreView = 'backtest';

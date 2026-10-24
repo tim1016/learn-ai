@@ -15,6 +15,7 @@ import {
   redirectOptionsStrategyFinder,
 } from "./options-setups/options-setups.redirects";
 import { redirectKeepingState } from "./shell/route-redirects";
+import { redirectToOptionsView } from "./markets/options/options-address";
 
 const loadBrokerLaneUnavailable = () =>
   import('./fleet/broker-lane-unavailable.component').then(
@@ -99,7 +100,7 @@ const RETIRED_IBKR_NAVIGATION_ROUTES: Routes = [
 
 export const routes: Routes = [
   {
-    // The app opens on the entry painting, whose "I'm In" leads to Data Lab.
+    // The app opens on the entry painting, whose "I'm In" leads to Markets.
     // There is no sign-in behind it: every other address still opens directly.
     // Loaded with the app, not lazily: the shell learns a page is chromeless
     // only once its route is active, so a lazy chunk would leave the top bar
@@ -128,22 +129,16 @@ export const routes: Routes = [
     pathMatch: "full",
   },
   {
+    // The Options Lab is gone: its chain moved into an instrument's Options tab,
+    // and the symbol and the expiry go with the link.
     path: "options-lab",
-    data: { fullBleed: true },
-    loadComponent: () =>
-      import("./components/options-lab/options-lab.component").then(
-        (m) => m.OptionsLabComponent
-      ),
-    children: [
-      { path: "", redirectTo: "chain", pathMatch: "full" },
-      {
-        path: "chain",
-        loadComponent: () =>
-          import(
-            "./components/options-lab/chain/options-lab-chain.component"
-          ).then((m) => m.OptionsLabChainComponent),
-      },
-    ],
+    redirectTo: redirectToOptionsView("chain"),
+    pathMatch: "full",
+  },
+  {
+    path: "options-lab/chain",
+    redirectTo: redirectToOptionsView("chain"),
+    pathMatch: "full",
   },
   {
     path: "spec-strategy",
@@ -153,11 +148,10 @@ export const routes: Routes = [
       ).then((m) => m.SpecStrategyRunnerComponent),
   },
   {
+    // Moved into an instrument's Options tab; the symbol and the expiry go with it.
     path: "pricing-lab",
-    loadComponent: () =>
-      import("./components/pricing-lab/pricing-lab.component").then(
-        (m) => m.PricingLabComponent
-      ),
+    redirectTo: redirectToOptionsView("pricing"),
+    pathMatch: "full",
   },
   {
     path: "indicator-docs",
@@ -165,9 +159,14 @@ export const routes: Routes = [
     pathMatch: "full",
   },
   {
-    // Data Lab shell (explore / export / returns child routes). The route
-    // config owns the component-scoped workspace store — see
-    // components/data-lab/data-lab.routes.ts.
+    // Markets and an instrument's place (ADR 0084); see markets/markets.routes.ts.
+    path: "markets",
+    loadChildren: () =>
+      import("./markets/markets.routes").then((m) => m.MARKETS_ROUTES),
+  },
+  {
+    // The Data Lab is gone: its addresses redirect to the instrument place its
+    // pages moved to — see components/data-lab/data-lab.routes.ts.
     path: "data-lab",
     loadChildren: () =>
       import("./components/data-lab/data-lab.routes").then(
@@ -566,18 +565,17 @@ export const routes: Routes = [
     loadComponent: loadBrokerLaneUnavailable,
   },
   {
+    // Moved into an instrument's Options tab; the symbol and the expiry go with it. This page was
+    // the IBKR feed, so it opens the chain on Now · Live IBKR unless its address names a source.
     path: "broker/options-chain",
-    loadComponent: () =>
-      import(
-        "./components/broker/broker-options-chain/broker-options-chain.component"
-      ).then((m) => m.BrokerOptionsChainComponent),
+    redirectTo: redirectToOptionsView("chain", { source: "live" }),
+    pathMatch: "full",
   },
   {
+    // Moved into an instrument's Options tab; the symbol and the expiry go with it.
     path: "broker/options-surface",
-    loadComponent: () =>
-      import(
-        "./components/broker/broker-options-surface/broker-options-surface.component"
-      ).then((m) => m.BrokerOptionsSurfaceComponent),
+    redirectTo: redirectToOptionsView("surface"),
+    pathMatch: "full",
   },
   ...RETIRED_IBKR_NAVIGATION_ROUTES,
   {

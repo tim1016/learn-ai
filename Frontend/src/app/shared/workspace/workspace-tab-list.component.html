@@ -6,9 +6,10 @@
         [class.is-active]="tab.id === activeId()"
         [attr.aria-current]="tab.id === activeId() ? 'page' : null"
         [routerLink]="route"
+        [queryParams]="tab.queryParams"
       >{{ tab.label }}</a>
     } @else {
-      <span class="workspace-tab workspace-tab--unavailable" aria-disabled="true">
+      <span class="workspace-tab workspace-tab--unavailable" aria-disabled="true" [attr.title]="tab.unavailableReason ?? null">
         {{ tab.label }}
         @if (tab.unavailableReason; as reason) {
           <span class="workspace-tab__reason"> — {{ reason }}</span>

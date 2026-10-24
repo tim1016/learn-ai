@@ -105,13 +105,11 @@ export class OptionsSetupExploreStore {
   readonly check = this.checkFlow.state;
   readonly pricesFromMs = this.checkFlow.pricesFromMs;
   readonly rangeProblem = computed(() => this.checkFlow.refusal() ?? this.launch.refusal());
-  /** How many downloads on the Past chain view may have changed what is stored. */
-  private readonly chainDownloads = signal(0);
-  /** What a check would be asked with now, and a stamp to tell whether an answer still describes it: the saved setup, the dates, and how many backtests have started and chain downloads have come back since. */
+  /** What a check would be asked with now, and a stamp to tell whether an answer still describes it: the saved setup, the dates, and how many backtests have started since. */
   private readonly asking = computed(() => {
     const setup = this.setupToRun();
     const range = this.instants();
-    return setup === null || range === null ? null : { setup, range, stamp: JSON.stringify([setup, range, this.launch.runsStarted(), this.chainDownloads()]) };
+    return setup === null || range === null ? null : { setup, range, stamp: JSON.stringify([setup, range, this.launch.runsStarted()]) };
   });
   readonly checkIsStale = computed(() => {
     const state = this.check();
@@ -171,11 +169,6 @@ export class OptionsSetupExploreStore {
     const asking = this.asking();
     if (asking === null || !this.canStart()) return;
     await this.launch.start({ setup: asking.setup, start_ms: asking.range.start_ms, end_ms: asking.range.end_ms, setup_name: this.name() });
-  }
-
-  /** A download on the Past chain view came back: what is stored for an underlying and a date may have changed, so an answer of Check data is stale. */
-  chainDownloaded(): void {
-    this.chainDownloads.update((count) => count + 1);
   }
 
   /** A run's record said something new (it ended), or a run was deleted: the evidence is read again, so a run can be taken to Golden, or no longer is. */

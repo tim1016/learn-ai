@@ -4,6 +4,9 @@
     @for (link of viewLinks(); track link.id) {
       <a [routerLink]="address()" [queryParams]="link.query" [class.is-active]="viewKnown() && link.id === activeView()" [attr.aria-current]="viewKnown() && link.id === activeView() ? 'page' : null">{{ link.label }}</a>
     }
+    @if (pastChain(); as chain) {
+      <a class="elsewhere" [routerLink]="chain.commands" [queryParams]="chain.queryParams">Past chain in Markets</a>
+    }
   </nav>
 
   @if (addressState(); as why) {
@@ -56,11 +59,5 @@
       <app-options-evidence-view
         kind="run" [subjectId]="id.toString()" [view]="activeView()" [comparator_run_id]="comparator_run_id()" [route]="address()" [keep]="runQuery()" [embedded]="true" [goldenOffer]="offerFor(id)" />
     }
-  }
-
-  @if (chainOpened()) {
-    <div class="chain" [hidden]="activeView() !== 'chain' || !viewKnown()">
-      <app-options-backtest-past-chain [startingUnderlying]="chainUnderlying()" [limits]="setup.limits()" (downloaded)="explore.chainDownloaded()" />
-    </div>
   }
 </section>

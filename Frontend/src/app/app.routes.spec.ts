@@ -95,11 +95,8 @@ describe('routes', () => {
     expect(router.routerState.snapshot.root.firstChild?.component).toBe(EntryComponent);
   });
 
-  it.each([
-    'options-lab',
-    'strategy-lab',
-  ])('marks %s as an intentionally full-bleed workspace', (path) => {
-    expect(routes.find((route) => route.path === path)?.data).toMatchObject({ fullBleed: true });
+  it('marks strategy-lab as an intentionally full-bleed workspace', () => {
+    expect(routes.find((route) => route.path === 'strategy-lab')?.data).toMatchObject({ fullBleed: true });
   });
 
   it.each([

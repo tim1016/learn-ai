@@ -7,7 +7,6 @@ import type { Mock } from 'vitest';
 import { GoldenOptionSetupsService } from '../../components/options-backtest/golden-option-setups.service';
 import { OptionsBacktestService } from '../../components/options-backtest/options-backtest.service';
 import type { SavedSetup } from '../../components/options-backtest/options-backtest.types';
-import { PastChainService } from '../../components/options-backtest/past-chain/past-chain.service';
 import { OptionsEvidenceService } from '../../components/options-evidence/options-evidence.service';
 import { OptionsGoldenSearchService } from '../../components/options-golden-search/options-golden-search.service';
 import { PositionPreviewService } from '../../components/options-backtest/position/position-preview.service';
@@ -69,8 +68,6 @@ interface RenderOptions {
   jobs?: FakeJobs;
   /** What the run's detail reads answer, for the views that show a run's days, trades and comparison. */
   detail?: FakeRunDetail;
-  /** The Past chain's own service, replaced the way the setup's service is. */
-  chain?: object;
   /** What the retained-evidence service answers, for the views that read one run's evidence. */
   evidence?: object;
   /** What the approved versions' own service answers, for the Golden tab. */
@@ -123,7 +120,6 @@ async function renderPlace(placeService: FakeService, url: string, download: Fak
       { provide: OptionsBacktestService, useValue: service },
       { provide: JobsService, useValue: (options.jobs ?? fakeJobs()).service },
       { provide: RunDetailService, useValue: options.detail ?? inertRunDetail() },
-      ...(options.chain === undefined ? [] : [{ provide: PastChainService, useValue: options.chain }]),
       ...(options.evidence === undefined ? [] : [{ provide: OptionsEvidenceService, useValue: options.evidence }]),
       ...(options.golden === undefined ? [] : [{ provide: GoldenOptionSetupsService, useValue: options.golden }]),
       ...(options.search === undefined ? [] : [{ provide: OptionsGoldenSearchService, useValue: options.search }]),

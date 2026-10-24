@@ -1,0 +1,63 @@
+@use '../../styles/tokens' as *;
+
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.data-summary__verdict {
+  margin: 0 0 0.75rem;
+  font-weight: 600;
+  color: $text-primary;
+
+  &[data-readable='true'] {
+    color: $bull;
+  }
+
+  &[data-readable='false'] {
+    color: $warn;
+  }
+}
+
+.data-summary__tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.5rem;
+  margin: 0 0 0.75rem;
+}
+
+.data-summary__tile {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid $border-light;
+  border-radius: $radius-md;
+  background: $bg-surface;
+
+  dt {
+    color: $text-secondary;
+    font-size: 0.8125rem;
+  }
+
+  dd {
+    margin: 0;
+    color: $text-primary;
+    font-size: 1.5rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  span {
+    color: $text-subtle;
+    font-size: 0.75rem;
+    overflow-wrap: anywhere;
+  }
+}
+
+.data-summary__line {
+  margin: 0 0 0.4rem;
+  color: $text-secondary;
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
