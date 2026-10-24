@@ -277,6 +277,20 @@ def test_a_symbol_whose_history_starts_inside_the_lead_in_runs_on_the_sessions_i
 
 
 @respx.mock
+def test_a_window_that_opens_on_the_symbols_first_session_runs_with_no_lead_in_and_says_so(world):
+    window = MARCH[4:]
+    mock_vendor("SPY", tape_for(window, regular_keep=1.0))  # the provider has nothing before the window
+
+    study = admit(params(window, **EMA_200))
+
+    warmup = study.warmup
+    assert (warmup.requested_sessions, warmup.admitted_sessions, warmup.admitted_bars) == (3, 0, 0)
+    assert warmup.shortened and warmup.cause == "symbol_history_starts" and warmup.shortfall_bars == 1000
+    assert counts(study.data_source()["coverage"]["warmup"]) == (0, 0, 0, 0)
+    assert study.frame["timestamp"].min() >= study.window_start_ms
+
+
+@respx.mock
 def test_require_full_refuses_that_lead_in_names_it_as_the_warmups_and_is_a_different_identity_from_the_shorter_run(world):
     window = MARCH[4:]
     lead = lead_in_sessions(window[0], 3)
