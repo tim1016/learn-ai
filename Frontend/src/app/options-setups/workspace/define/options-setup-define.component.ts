@@ -35,6 +35,9 @@ export class OptionsSetupDefineComponent {
   protected readonly store = inject(OptionsSetupWorkspaceStore);
   private readonly injector = inject(Injector);
 
+  /** The archive and its backups matter to this page; the live feed and stock bars do not. */
+  protected readonly healthNeeds = HEALTH_NEEDS.archivedOptions;
+
   protected readonly standing = computed(() => describeStanding(this.store.standing()));
   private readonly legsCard = viewChild(LegsCardComponent);
   private readonly readBackPane = viewChild<ElementRef<HTMLElement>>('readBackPane');

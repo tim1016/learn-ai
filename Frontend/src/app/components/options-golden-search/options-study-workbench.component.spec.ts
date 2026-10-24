@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
+import { fakeScopedHealth, healthItem, projection } from '../../shared/scoped-health/testing/scoped-health-fixtures';
 import { OptionsGoldenSearchService } from './options-golden-search.service';
 import { OptionsStudyWorkbenchComponent } from './options-study-workbench.component';
 import { study } from './testing';
@@ -16,6 +17,19 @@ async function workbench(fake = service(), studyId = 'study-1') {
 }
 
 describe('One golden search study', () => {
+  it('tells the operator what the data plane says of the archived history a study replays', async () => {
+    const health = fakeScopedHealth(
+      projection(healthItem({ kind: 'option_archive', instrument: 'QQQ', severity: 'critical', explanation: 'QQQ: capture is failing.', link: { tab: 'option-archive', query: {}, fragment: 'option-archive-QQQ' } })),
+    );
+
+    await render(OptionsStudyWorkbenchComponent, { inputs: { studyId: 'study-1' }, providers: [{ provide: OptionsGoldenSearchService, useValue: service() }, health.provider] });
+
+    expect(await screen.findByText(/QQQ: capture is failing/)).toBeTruthy();
+    expect(health.read).toHaveBeenCalledWith({ operations: ['options_history', 'recovery'], instrument: null });
+    expect(screen.getByRole('link', { name: 'Open Option archive' }).getAttribute('href')).toBe('/operations/option-archive#option-archive-QQQ');
+    expect(await screen.findByRole('button', { name: 'Run research' })).toBeTruthy();
+  });
+
   it('reopens a frozen final batch on the final step before its first result', async () => {
     const fake = service();
     fake.get.mockResolvedValue(study({ phase: 'final', status: 'interrupted', final_results: [], allowed_commands: ['resume', 'keep_original'] }));

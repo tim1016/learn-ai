@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { JobState } from '../../services/jobs.service';
 import { provideFakeDateWorld } from '../../shared/date-picker/testing/fake-trading-calendar';
+import { fakeScopedHealth, healthItem, projection } from '../../shared/scoped-health/testing/scoped-health-fixtures';
 import { OptionsSearchDispatchError, OptionsGoldenSearchService } from './options-golden-search.service';
 import type { HistoryGuidanceRequest, PlanRequest } from './options-golden-search.types';
 import { OptionsSearchPlanComponent } from './options-search-plan.component';
@@ -53,6 +54,21 @@ async function preparePlan(fake = service(), inputs: { parentStudyId?: string } 
 }
 
 describe('Start a golden search', () => {
+  it('tells the operator what the data plane says of the archived history a search replays', async () => {
+    const health = fakeScopedHealth(
+      projection(healthItem({ kind: 'option_archive', instrument: 'QQQ', severity: 'critical', explanation: 'QQQ: capture is failing.', link: { tab: 'option-archive', query: {}, fragment: 'option-archive-QQQ' } })),
+    );
+
+    await render(OptionsSearchPlanComponent, {
+      inputs: { setupName: SETUP },
+      providers: [provideRouter([]), ...provideFakeDateWorld(), { provide: OptionsGoldenSearchService, useValue: service() }, health.provider],
+    });
+
+    expect(await screen.findByText(/QQQ: capture is failing/)).toBeTruthy();
+    expect(health.read).toHaveBeenCalledWith({ operations: ['options_history', 'recovery'], instrument: null });
+    expect(screen.getByRole('link', { name: 'Open Option archive' }).getAttribute('href')).toBe('/operations/option-archive#option-archive-QQQ');
+  });
+
   it('reads the saved setup by its name, and says it is edited in Define and searched as last saved', async () => {
     const { fake } = await plan();
 
