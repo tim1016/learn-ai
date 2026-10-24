@@ -233,6 +233,7 @@ async def get_coverage(
                 status="missing" if row is None else "needs_rebuild" if gap is not None else row.status,
                 artifact_id=row.artifact_id if row is not None else None,
                 rebuild_reason=gap,
+                failure_reason=row.last_error if row is not None and row.status == "failed" else None,
             )
         )
     return CoverageResponse(

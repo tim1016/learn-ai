@@ -1,6 +1,9 @@
 :host {
   display: block;
   min-width: 0;
+  // The run dock is position:fixed at the bottom; reserve what it occupies
+  // so the last controls scroll clear of it instead of hiding underneath.
+  padding-bottom: var(--run-dock-height, 0px);
 }
 
 .instrument-facts {

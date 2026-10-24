@@ -1,8 +1,8 @@
 import { Routes } from '@angular/router';
 
+import { redirectToInstrument } from '../../markets/instrument-address';
 import { dataCheckRoute } from '../../operations/data-checks/data-checks';
 import { redirectKeepingState } from '../../shell/route-redirects';
-import { redirectToInstrument } from '../../markets/instrument-address';
 
 export const researchLabRoutes: Routes = [
   // Detail routes retain focused content while inheriting the root application

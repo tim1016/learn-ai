@@ -167,9 +167,8 @@ export const routes: Routes = [
       import("./markets/markets.routes").then((m) => m.MARKETS_ROUTES),
   },
   {
-    // Data Lab shell (export / validate / returns child routes; the chart moved
-    // to the instrument place). The route config owns the component-scoped
-    // workspace store — see components/data-lab/data-lab.routes.ts.
+    // The Data Lab is gone: its addresses redirect to the instrument place its
+    // pages moved to — see components/data-lab/data-lab.routes.ts.
     path: "data-lab",
     loadChildren: () =>
       import("./components/data-lab/data-lab.routes").then(

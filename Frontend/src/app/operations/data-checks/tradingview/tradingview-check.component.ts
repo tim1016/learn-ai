@@ -4,6 +4,7 @@ import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 
 import { environment } from '../../../../environments/environment';
+import { instrumentCommands } from '../../../markets/instrument-address';
 import { ProviderBoundsService } from '../../../shared/date-picker';
 import { parseIsoDate } from '../../../shared/date/iso-date';
 import { TickerRangePickerComponent } from '../../../shared/ticker-range-picker/ticker-range-picker.component';
@@ -81,6 +82,8 @@ export class TradingviewCheckComponent {
     to: parseIsoDate(this.to() ?? '') ?? '',
     resolution: 'daily',
   }));
+  /** Where Build dataset is for the instrument the picker holds. */
+  protected readonly buildDataset = computed(() => instrumentCommands(this.range().symbol || 'SPY', 'data', ['build']));
   /** Any calendar day from the provider's oldest: a check may cover the session still forming. */
   protected readonly dateBounds = inject(ProviderBoundsService).openEnded;
 

@@ -4497,6 +4497,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/data-lake/instrument-data": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Instrument Data
+         * @description Per scheduled session in the window: ready, or why not, and whether a Fill can close it.
+         *
+         *     ``price_adjustment_mode`` has no default, for the reason ``/coverage``
+         *     gives, and names only the trees the fetch pipeline writes. The window is
+         *     two ``int64 ms UTC`` instants inside the first and last ET day wanted.
+         *     A window the coverage read refuses (too wide, reversed, a symbol the lake
+         *     cannot hold) is refused with its typed reason; it is never cut short.
+         */
+        get: operations["get_instrument_data_api_data_lake_instrument_data_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/data-lake/run-readiness": {
         parameters: {
             query?: never;
@@ -12452,6 +12478,8 @@ export interface components {
         CoverageDay: {
             /** Artifact Id */
             artifact_id?: number | null;
+            /** Failure Reason */
+            failure_reason?: string | null;
             /** Rebuild Reason */
             rebuild_reason?: ("price_file_missing" | "adjustment_record_missing" | "adjustment_record_rejected") | null;
             /** Status */
@@ -12753,6 +12781,19 @@ export interface components {
              * @enum {string}
              */
             sign: "gt" | "lt";
+        };
+        /**
+         * DailyRollup
+         * @description The symbol's derived daily file in this tree. It is symbol-wide, not scoped to the window.
+         */
+        DailyRollup: {
+            /** Reason */
+            reason?: ("sources_changed" | "adjustment_evidence_invalid") | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "current" | "stale" | "not_built";
         };
         /** DataAvailabilityResult */
         DataAvailabilityResult: {
@@ -15222,6 +15263,16 @@ export interface components {
              * @default []
              */
             terms?: components["schemas"]["FigureTermView"][];
+        };
+        /**
+         * FillWindow
+         * @description The span a Fill asks the admission for: first through last fetchable session.
+         */
+        FillWindow: {
+            /** End Trading Date Ms */
+            end_trading_date_ms: number;
+            /** Start Trading Date Ms */
+            start_trading_date_ms: number;
         };
         /** FinalScenarioOutcome */
         FinalScenarioOutcome: {
@@ -21141,6 +21192,70 @@ export interface components {
             /** Warnings */
             warnings?: string[];
         };
+        /** InstrumentDataResponse */
+        InstrumentDataResponse: {
+            /** As Of Ms */
+            as_of_ms: number;
+            daily_rollup: components["schemas"]["DailyRollup"];
+            /**
+             * Data Root Id
+             * Format: uuid
+             */
+            data_root_id: string;
+            /**
+             * Data Type
+             * @default trade
+             * @constant
+             */
+            data_type?: "trade";
+            fill_window?: components["schemas"]["FillWindow"] | null;
+            /** Market */
+            market: string;
+            /** Price Adjustment Mode */
+            price_adjustment_mode: string;
+            /** Provider History Start Ms */
+            provider_history_start_ms: number;
+            /**
+             * Resolution
+             * @default minute
+             * @constant
+             */
+            resolution?: "minute";
+            /** Sessions */
+            sessions: components["schemas"]["InstrumentSession"][];
+            summary: components["schemas"]["InstrumentDataSummary"];
+            /** Symbol */
+            symbol: string;
+        };
+        /** InstrumentDataSummary */
+        InstrumentDataSummary: {
+            /** Before Provider History */
+            before_provider_history: number;
+            /** Building */
+            building: number;
+            /** Calendar Day Count */
+            calendar_day_count: number;
+            /** Failed */
+            failed: number;
+            /** Fetchable */
+            fetchable: number;
+            /** Forming */
+            forming: number;
+            /** Missing */
+            missing: number;
+            /** Needs Rebuild */
+            needs_rebuild: number;
+            /** Provider No Data */
+            provider_no_data: number;
+            /** Ready */
+            ready: number;
+            /** Run Readable */
+            run_readable: boolean;
+            /** Session Count */
+            session_count: number;
+            /** Upcoming */
+            upcoming: number;
+        };
         /** InstrumentFacts */
         InstrumentFacts: {
             /** @description Null for an underlying the archive does not track. */
@@ -21162,6 +21277,27 @@ export interface components {
             facts: components["schemas"]["InstrumentFacts"][];
             /** Generated Ms */
             generated_ms: number;
+        };
+        /** InstrumentSession */
+        InstrumentSession: {
+            /** Artifact Id */
+            artifact_id?: number | null;
+            /** Blocked By */
+            blocked_by?: ("before_provider_history" | "provider_no_data") | null;
+            /**
+             * Fetchable
+             * @default false
+             */
+            fetchable?: boolean;
+            /** Reason */
+            reason?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "ready" | "building" | "needs_rebuild" | "missing" | "failed" | "forming" | "upcoming";
+            /** Trading Date Ms */
+            trading_date_ms: number;
         };
         /**
          * InsufficientCoverageDetail
@@ -43856,6 +43992,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DataAvailabilityResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_instrument_data_api_data_lake_instrument_data_get: {
+        parameters: {
+            query: {
+                symbol: string;
+                start_trading_date_ms: number;
+                end_trading_date_ms: number;
+                price_adjustment_mode: "raw" | "polygon_split_adjusted";
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstrumentDataResponse"];
                 };
             };
             /** @description Validation Error */

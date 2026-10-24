@@ -34,6 +34,28 @@ export interface InstrumentContext {
 /** The query keys the context owns. Any other key in the address is left alone. */
 export const CONTEXT_QUERY_KEYS = ['from', 'to', 'timeframe', 'session'] as const;
 
+/**
+ * The key that names a saved setup to open under the instrument (a link from
+ * the old Data Lab keeps it). It is spent on arrival: the setup's own window,
+ * timeframe and session take its place in the address.
+ */
+export const SETUP_QUERY_KEY = 'sessionId';
+
+/** The Data tab's lake tree (`adjustment=raw`; absent reads the split-adjusted tree). */
+export const ADJUSTMENT_QUERY_KEY = 'adjustment';
+
+/**
+ * Every query key the Chart, Returns and Data tabs read. A key outside this
+ * list is one those tabs ignore, and the place says so; a tab that starts
+ * reading another key declares it here.
+ */
+const READ_QUERY_KEYS: ReadonlySet<string> = new Set([...CONTEXT_QUERY_KEYS, SETUP_QUERY_KEY, ADJUSTMENT_QUERY_KEY]);
+
+/** The keys of an address the Chart, Returns and Data tabs do not read, in the order the address carries them. */
+export function unreadQueryKeys(keys: readonly string[]): readonly string[] {
+  return [...new Set(keys)].filter((key) => !READ_QUERY_KEYS.has(key));
+}
+
 /** What an address says about its context. */
 export type ContextRead =
   /** A complete, ordered window with a timeframe and a session the place offers. */

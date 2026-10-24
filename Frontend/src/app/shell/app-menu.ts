@@ -69,15 +69,11 @@ export const APP_MENU: readonly AppMenuGroup[] = [
     icon: 'pi pi-chart-line',
     items: [
       { title: 'Markets', route: '/markets' },
-      { title: 'Return Distribution', route: '/data-lab/returns' },
       { title: 'Options Lab', route: '/options-lab' },
       { title: 'Options Chain (Live)', route: '/broker/options-chain' },
       { title: 'Options Surface (3D)', route: '/broker/options-surface' },
       { title: 'Pricing Lab', route: '/pricing-lab' },
     ],
-    // The dataset builder: a tab the Data Lab shell still hosts until the
-    // instrument place does.
-    pages: [{ title: 'Build dataset', route: '/data-lab/export' }],
   },
   {
     id: 'research',

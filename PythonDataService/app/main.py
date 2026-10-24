@@ -95,6 +95,9 @@ from app.routers import (
 from app.routers import (
     data_lake as data_lake_router,
 )
+from app.routers import (
+    instrument_data as instrument_data_router,
+)
 from app.routers.fleet_qualification import (
     is_qualification_coordinator_lane_from_environment,
     polygon_api_key_is_qualification_safe,
@@ -1607,6 +1610,7 @@ if _ROLE_RUNS_CLERK:
 # from the flag-dark slice that first registered the router.
 if _ROLE_RUNS_DATA_PLANE_CORE:
     app.include_router(data_lake_router.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
+    app.include_router(instrument_data_router.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 
 
 if _FLEET_COORDINATOR_SURFACE:

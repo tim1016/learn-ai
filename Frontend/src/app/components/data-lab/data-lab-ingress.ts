@@ -1,69 +1,56 @@
 import { inject } from '@angular/core';
 import { Router, type RedirectFunction } from '@angular/router';
 
+import { legacyInstrumentTarget } from '../../markets/instrument-address';
+import type { InstrumentTab } from '../../markets/instrument-tabs';
 import { dataCheckRoute } from '../../operations/data-checks/data-checks';
 import { operationsTabRoute, type OperationsTab } from '../../operations/operations-tabs';
-import { legacyInstrumentTarget } from '../../markets/instrument-address';
+import { redirectKeepingState } from '../../shell/route-redirects';
 
-/* Legacy Data Lab URL ingress.
+/* Legacy Data Lab addresses.
  *
- * The router owns which page a legacy address opens: `redirectLegacyDataLab`
- * sends `/data-lab` straight to the child its `mode` names (a chart goes to
- * the instrument place it moved to; Validate to the Operations check it moved
- * to), and on a canonical child the path wins. What is left for the shell is
- * the workspace state the bookmark carried, which `resolveLegacyDataLabUrl`
- * validates into a string-only param bag, and the notes on what it ignored:
- * unknown keys, a `mode` the path already answers, invalid values (bad mode,
- * non-UUID sessionId, empty scope). Ignored keys stay in the URL, which is why
- * they are reported as ignored rather than dropped. Resolved state may
- * populate the workspace but never auto-fetches — that decision lives in the
- * shell, not here.
+ * The Data Lab is gone: its chart, Returns study, dataset builder and saved
+ * setups live under the instrument they are for, and its Validate page and
+ * option-archive card live in Operations (ADR 0084). What is left of
+ * `/data-lab` is the addresses people saved, and `redirectLegacyDataLab` sends
+ * each straight to where its page went, in the navigation the router is
+ * already making: the instrument its `ticker` names with its window and
+ * `trading-session` (now `session`), or the Markets list when it names none. It
+ * never opens a default instrument.
  *
- * Indicator recipe params are treated opaquely for now (Phase 1): known keys
- * are kept verbatim, everything else is ignored with a note. */
+ * Everything else the bookmark carried goes with it — the query and the
+ * fragment — so nothing is dropped unsaid: a key the instrument's tabs do not
+ * read is named by the place in its "Migrated link" notice, and a `sessionId`
+ * opens that saved setup under its own instrument. */
 
-export type DataLabRoute = '/data-lab/export' | '/data-lab/returns';
+/** Where a legacy address ends in the instrument place. */
+export type LegacyDataLabTarget = 'chart' | 'returns' | 'build';
 
-/** Validate left Data Lab for Operations → Data checks → TradingView comparison; `mode=validate` ends there. */
-const TRADINGVIEW_CHECK = dataCheckRoute('tradingview').join('/');
-
-/** Where a legacy address ends: a Data Lab child, or the instrument place that now holds the chart. */
-export type LegacyDataLabTarget = DataLabRoute | 'instrument';
-
-export interface LegacyDataLabResolution {
-  /** Surviving, validated query params (string values only). */
-  params: Record<string, string>;
-  /** Human-readable notes about ignored keys / invalid values. */
-  warnings: string[];
-}
-
-/** Query keys the pre-implementation inventory preserved as aliases. */
-const KNOWN_KEYS: ReadonlySet<string> = new Set([
-  'ticker',
-  'from',
-  'to',
-  'trading-session',
-  'sessionId',
-  'mode',
-]);
-
-const MODE_TO_ROUTE: Readonly<Record<string, string>> = {
-  explore: 'instrument',
-  build: '/data-lab/export',
-  export: '/data-lab/export',
-  validate: TRADINGVIEW_CHECK,
+/** Where each target lives under `/markets/:symbol`. */
+const INSTRUMENT_PAGE: Readonly<Record<LegacyDataLabTarget, { tab: InstrumentTab; rest: readonly string[] }>> = {
+  chart: { tab: 'chart', rest: [] },
+  returns: { tab: 'returns', rest: [] },
+  build: { tab: 'data', rest: ['build'] },
 };
 
-/** The place a legacy `mode` names, or `undefined` for a value that names none. */
-function routeForMode(mode: unknown): string | undefined {
-  return typeof mode === 'string' && Object.hasOwn(MODE_TO_ROUTE, mode) ? MODE_TO_ROUTE[mode] : undefined;
+/** What a legacy `mode` names: an instrument page, or Validate, which is a check in Operations now. */
+const MODE_TO_TARGET: Readonly<Record<string, LegacyDataLabTarget | 'validate'>> = {
+  explore: 'chart',
+  build: 'build',
+  export: 'build',
+  validate: 'validate',
+};
+
+function targetForMode(mode: unknown): LegacyDataLabTarget | 'validate' | undefined {
+  return typeof mode === 'string' && Object.hasOwn(MODE_TO_TARGET, mode) ? MODE_TO_TARGET[mode] : undefined;
 }
 
 /**
  * The Operations tab a retired archive-card anchor belongs to. The card sat on
- * top of every Data Lab tab with one anchor per underlying (`#option-archive-SPY`)
- * and one each for the lake backup and the weekly restore check; those moved to
- * Operations, so an old link carrying one goes there.
+ * top of every Data Lab page with one anchor per underlying
+ * (`#option-archive-SPY`) and one each for the lake backup and the weekly
+ * restore check; those moved to Operations, so an old link carrying one goes
+ * there.
  */
 function archiveTabFor(fragment: string | null | undefined): OperationsTab | null {
   if (typeof fragment !== 'string' || !/^option-archive(-|$)/.test(fragment)) return null;
@@ -71,94 +58,29 @@ function archiveTabFor(fragment: string | null | undefined): OperationsTab | nul
 }
 
 /**
- * The redirect for a legacy Data Lab address (`/data-lab`, `/data-lab/explore`).
+ * The redirect for a legacy Data Lab address (`/data-lab`, `/data-lab/explore`,
+ * `/data-lab/export`, `/data-lab/returns`).
  *
- * It goes straight to the place the address names — `mode` decides, else
- * `fallback` — in the navigation the router is already making. A chart goes to
- * the instrument its `ticker` names, window and session carried over, or to
- * Markets when the address names no instrument: it never opens a default one.
- * Everything else the bookmark carried stays in the URL: the query, which the
- * Data Lab shell reads to populate the workspace and to name what it ignored,
- * and the fragment. Only a `mode` that names a place is spent, because the
- * path now says it; one that names none stays so the shell can report it.
- *
- * An archive-card anchor (`#option-archive-…`) names a card that now lives in
- * Operations, so such an address leaves Data Lab for that tab, query and
- * fragment intact.
+ * An archive-card anchor leaves for the Operations tab that holds that part of
+ * the card, query and fragment intact. Otherwise `mode` decides the page when it
+ * names one, else `fallback` does; a `mode` that names a page is spent, because
+ * the path now says it. A `mode` that names none stays in the query, where the
+ * instrument place names it as ignored.
  */
 export function redirectLegacyDataLab(fallback: LegacyDataLabTarget): RedirectFunction {
-  return ({ queryParams, fragment }) => {
-    const archiveTab = archiveTabFor(fragment);
-    if (archiveTab !== null) {
-      return inject(Router).createUrlTree([...operationsTabRoute(archiveTab)], { queryParams, fragment: fragment ?? undefined });
-    }
-    const named = routeForMode(queryParams['mode']);
-    const { mode: _spent, ...rest } = queryParams;
-    const target = named ?? fallback;
-    const kept = named === undefined ? queryParams : rest;
-    const router = inject(Router);
-    if (target === 'instrument') {
-      const instrument = legacyInstrumentTarget(kept, 'chart');
-      return router.createUrlTree(instrument.commands, {
-        queryParams: instrument.queryParams,
-        fragment: fragment ?? undefined,
-      });
-    }
-    return router.createUrlTree([target], { queryParams: kept, fragment: fragment ?? undefined });
+  return (source) => {
+    const named = targetForMode(source.queryParams['mode']);
+    const drop = named === undefined ? [] : ['mode'];
+    const archiveTab = archiveTabFor(source.fragment);
+    if (archiveTab !== null) return redirectKeepingState(operationsTabRoute(archiveTab), { drop })(source);
+    if (named === 'validate') return redirectKeepingState(dataCheckRoute('tradingview'), { drop })(source);
+
+    const page = INSTRUMENT_PAGE[named ?? fallback];
+    const kept = Object.fromEntries(Object.entries(source.queryParams).filter(([key]) => !drop.includes(key)));
+    const instrument = legacyInstrumentTarget(kept, page.tab, page.rest);
+    return inject(Router).createUrlTree(instrument.commands, {
+      queryParams: instrument.queryParams,
+      fragment: source.fragment ?? undefined,
+    });
   };
-}
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function isUuid(v: string): boolean {
-  return UUID_RE.test(v);
-}
-
-/** Resolve a legacy /data-lab URL to the workspace params it carries and the
- *  notes on what it ignored. Pure. */
-export function resolveLegacyDataLabUrl(url: string): LegacyDataLabResolution {
-  const warnings: string[] = [];
-  const params: Record<string, string> = {};
-
-  // The legacy URL may arrive scheme-less (e.g. "/data-lab?mode=build");
-  // give the parser a synthetic origin when needed.
-  const query = new URL(url, 'https://data-lab.invalid').searchParams;
-
-  // The redirect spends a `mode` that names a child. One that reaches the
-  // shell is either not a mode, or sits on a child whose path already decided.
-  const mode = query.get('mode');
-  if (mode !== null) {
-    warnings.push(
-      routeForMode(mode)
-        ? `Ignored mode "${mode}": the address already names the page`
-        : `Ignored invalid mode "${mode}"`,
-    );
-  }
-
-  // Non-UUID sessionId values are ignored with a note.
-  const sessionId = query.get('sessionId');
-  if (sessionId !== null) {
-    if (isUuid(sessionId)) params['sessionId'] = sessionId;
-    else warnings.push(`Ignored invalid sessionId "${sessionId}" (not a UUID)`);
-  }
-
-  // Known scope keys pass through verbatim (values validated later at the
-  // boundary); everything else — including indicator recipe/param keys — is
-  // ignored with a note until the bounded recipe schema lands.
-  for (const key of new Set(query.keys())) {
-    if (key === 'mode' || key === 'sessionId') continue;
-    if (!KNOWN_KEYS.has(key)) {
-      warnings.push(`Ignored unknown query key "${key}"`);
-      continue;
-    }
-    const value = query.get(key);
-    if (value === null || value === '') {
-      warnings.push(`Ignored empty query key "${key}"`);
-      continue;
-    }
-    params[key] = value;
-  }
-
-  return { params, warnings };
 }

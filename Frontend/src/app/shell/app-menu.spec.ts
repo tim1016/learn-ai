@@ -89,7 +89,7 @@ describe('app menu projections', () => {
     expect(menuItemsFor('/unlisted-page').every((group) => group.styleClass === undefined)).toBe(true);
   });
 
-  it('places the Operations tabs in Operations and the Return Distribution study in Markets', () => {
+  it('places the Operations tabs in Operations', () => {
     const operations = menuItemsFor('/operations/backups').find((group) => group.label === 'Operations');
 
     expect.soft(
@@ -103,17 +103,6 @@ describe('app menu projections', () => {
     expect.soft(windowTitleFor('/operations/lake'), 'titles the window for the Lake tab').toBe(`${operationsTabLabel('lake')} · Operations`);
     expect.soft(windowTitleFor('/operations/math-checks'), 'titles the window for the Math checks tab').toBe(`${operationsTabLabel('math-checks')} · Operations`);
     expect.soft(windowTitleFor('/operations/data-checks/pre-flight'), 'titles a check by the tab that holds it').toBe(`${operationsTabLabel('data-checks')} · Operations`);
-
-    // The study route is not under the Markets entry's address, so it must
-    // resolve to its own item — the page highlights its own item.
-    const returnsEntry = menuItemsFor('/data-lab/returns')
-      .find((group) => group.label === 'Markets')
-      ?.items?.find((item) => item.label === 'Return Distribution');
-
-    expect.soft(returnsEntry?.routerLink, 'links the Return Distribution entry to /data-lab/returns').toBe('/data-lab/returns');
-    expect.soft(returnsEntry?.styleClass, 'marks the Return Distribution entry active').toBe(ACTIVE_ITEM_CLASS);
-    expect.soft(activeMenuNodeFor('/data-lab/returns')?.item.route, 'resolves /data-lab/returns to its own menu node').toBe('/data-lab/returns');
-    expect.soft(windowTitleFor('/data-lab/returns'), 'titles the window for Return Distribution').toBe('Return Distribution · Markets');
   });
 
   it('titles the window Page · Group, and an account page by its group alone', () => {
@@ -133,7 +122,7 @@ describe('app menu projections', () => {
     // any tab or sub-page, lights Markets.
     ['/markets/SPY/chart', 'Markets', 'Markets'],
     ['/markets/SPY/chart/news', 'Markets', 'Markets'],
-    ['/data-lab/export', 'Markets', 'Build dataset'],
+    ['/markets/SPY/data/build', 'Markets', 'Markets'],
     ['/options-lab/chain', 'Markets', 'Options Lab'],
     ['/options-lab/strategy-finder', 'Markets', 'Options Lab'],
     ['/research-lab/strategy-runs/run-42', 'Research', 'Research Lab'],

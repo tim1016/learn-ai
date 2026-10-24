@@ -355,6 +355,38 @@ class FakeCatalog:
             and _in_window(row["trading_date"])
         ]
 
+    async def select_artifact_coverage(
+        self, market, symbol, data_type, provider, price_adjustment_mode, start_trading_date, end_trading_date,
+        data_root_id=None,
+    ) -> list[catalog_client.ArtifactCoverageRow]:
+        """Per-day minute-bar rows in any status, as the coverage query reads them (``/coverage``)."""
+        root_id = data_root_id if data_root_id is not None else root_identity.active_root_id()
+        rows = [
+            row
+            for row in self.rows.values()
+            if row["artifact_kind"] == "time_series_bars"
+            and row["resolution"] == "minute"
+            and row["data_root_id"] == root_id
+            and row["market"] == market
+            and row["symbol"] == symbol
+            and row["data_type"] == data_type
+            and row["provider"] == provider
+            and row["price_adjustment_mode"] == price_adjustment_mode
+            and start_trading_date <= row["trading_date"] <= end_trading_date
+        ]
+        return [
+            catalog_client.ArtifactCoverageRow(
+                trading_date=row["trading_date"],
+                status=row["status"],
+                artifact_id=row["id"],
+                symbol=row["symbol"],
+                file_path=row["file_path"],
+                file_sha256=row["file_sha256"] or None,
+                last_error=row.get("last_error"),
+            )
+            for row in sorted(rows, key=lambda row: row["trading_date"])
+        ]
+
     async def select_complete_minute_bar_symbols(
         self, market, symbols, data_type, trading_date, *, price_adjustment_mode, provider, data_root_id=None
     ) -> frozenset[str]:
@@ -632,6 +664,7 @@ FAKE_CATALOG_FUNCTIONS: tuple[str, ...] = (
     "select_minute_bar_claim_state",
     "steal_or_retry_minute_bar",
     "select_coverage_minute_bars",
+    "select_artifact_coverage",
     "claim_aggregated_bar_artifact",
     "select_complete_aggregated_bar_artifact",
     "claim_corp_action_artifact",

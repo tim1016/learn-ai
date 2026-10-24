@@ -15,11 +15,12 @@ import type { ChartSeriesColorToken } from '../../shared/trading-chart/chart-ser
 import type { DataLabSessionChartSnapshot } from '../../services/data-lab-session.service';
 import type { ActiveIndicatorEntry } from '../../components/data-lab/active-indicator-card/active-indicator-card.component';
 import { IndicatorConfigModalComponent } from '../../components/data-lab/indicator-config-modal/indicator-config-modal.component';
-import { buildChartRequestBody, mapSessionToWire, utcMsToIsoDate } from '../../components/data-lab/data-lab-request-mapper';
+import { mapSessionToWire, utcMsToIsoDate } from '../../components/data-lab/data-lab-request-mapper';
 import { barTimeframeFor, parseChartTimeframe } from '../../components/data-lab/data-lab-scope';
 import { DataLabWorkspaceStore } from '../../components/data-lab/data-lab-workspace-store';
 import { InstrumentContextService } from '../instrument-context.service';
 import { ChartHeadlinesComponent } from './chart-headlines/chart-headlines.component';
+import { chartRequestIdentity, chartTimeframeOf } from './chart-request';
 import { ChartIndicatorControlsComponent } from './chart-indicator-controls/chart-indicator-controls.component';
 import { DataLabChartComponent } from './data-lab-chart/data-lab-chart.component';
 import { QualityModalComponent } from './quality-modal/quality-modal.component';
@@ -82,17 +83,8 @@ export class InstrumentChartComponent {
       const scope = this.store.committedScope();
       const indicators = this.store.indicators();
       if (scope === null || this.chartComponent() === undefined) return;
-      const body = buildChartRequestBody({
-        ticker: scope.ticker,
-        window: scope.window,
-        timeframe: this.chartTimeframe(),
-        session: scope.session,
-        forwardFill: scope.forwardFill,
-        adjusted: scope.adjusted,
-        indicators,
-        computeAllIndicators: false,
-      });
-      untracked(() => this.request(JSON.stringify(body)));
+      const identity = chartRequestIdentity(scope, indicators);
+      untracked(() => this.request(identity));
     });
   }
 
@@ -110,13 +102,7 @@ export class InstrumentChartComponent {
     // Chart policy reads the COMMITTED scope — a fetch must never mix a
     // committed ticker/window with uncommitted draft bar policy.
     const d = this.store.committedScope();
-    if (!d) return '1D';
-    if (d.timespan === 'minute') return `${d.multiplier}m`;
-    if (d.timespan === 'hour') return `${d.multiplier}h`;
-    if (d.timespan === 'day') return d.multiplier === 1 ? '1D' : `${d.multiplier}D`;
-    if (d.timespan === 'week') return `${d.multiplier}W`;
-    if (d.timespan === 'month') return `${d.multiplier}M`;
-    return '1D';
+    return d === null ? '1D' : chartTimeframeOf(d);
   });
   readonly hasCommittedScope = computed(
     () => !!this.store.committedTicker() && !!this.store.committedWindow(),

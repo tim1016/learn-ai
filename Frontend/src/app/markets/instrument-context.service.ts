@@ -15,6 +15,7 @@ import type { QuickRangeKey, QuickRangeOffer } from '../shared/date-picker';
 import { isUsEquitySymbol } from '../shared/symbol-catalog/us-equity-symbol';
 import {
   CONTEXT_QUERY_KEYS,
+  SETUP_QUERY_KEY,
   readInstrumentContext,
   sameContext,
   type ContextRead,
@@ -68,6 +69,12 @@ export class InstrumentContextService {
 
   /** What the address says about the context. */
   readonly read = computed<ContextRead>(() => readInstrumentContext(this.query()));
+
+  /** The saved setup the address names to open, exactly as written; `null` when it names none. */
+  readonly setupParam = computed(() => this.query().get(SETUP_QUERY_KEY));
+
+  /** The query keys the address carries, in order. */
+  readonly queryKeys = computed(() => this.query().keys);
 
   /** The context keys the address carries, for a link that keeps the context across a tab. */
   readonly carriedQuery = computed<Readonly<Record<string, string>>>(() =>

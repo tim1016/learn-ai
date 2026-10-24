@@ -1,0 +1,45 @@
+@use '../../styles/tokens' as *;
+
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.data-fill__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+
+  button {
+    min-height: 44px;
+    padding: 0.35rem 0.9rem;
+    border: 1px solid $border-light;
+    border-radius: $radius-md;
+    background: $bg-surface;
+    color: $text-primary;
+    cursor: pointer;
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  }
+
+  .data-fill__fill:not(:disabled) {
+    border-color: $accent;
+    background: $accent;
+  }
+}
+
+.data-fill__note {
+  margin: 0 0 0.75rem;
+  color: $text-secondary;
+  font-size: 0.875rem;
+}
+
+.data-fill__scope {
+  margin: 0 0 0.35rem;
+  color: $text-subtle;
+  font-size: 0.8125rem;
+}

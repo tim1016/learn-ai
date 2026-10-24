@@ -4,14 +4,15 @@ import {
   ChartSeriesColorToken,
   isChartSeriesColorToken,
 } from '../../shared/trading-chart/chart-series-color-tokens';
-import { browserTimeZone, type ExportColumnSelection } from './export/export-csv-options';
+import { browserTimeZone, type ExportColumnSelection } from './export-csv-options';
 
 /* DataLabWorkspaceStore.
  *
- * Component-scoped shared shell state for the /data-lab route family. The
- * store is NOT provided in any injector root — the route shell constructs it
- * via `createDataLabWorkspaceStore()` and provides it to child routes, so
- * state dies with the shell instead of leaking across the app.
+ * Component-scoped state an instrument's place shares across its tabs (the
+ * Chart's recipe, the committed scope, the Build dataset choices). The store is
+ * NOT provided in any injector root — the place constructs it via
+ * `createDataLabWorkspaceStore()`, so state dies with the place instead of
+ * leaking across the app.
  *
  * Server sessions and runs remain durable truth; the store keeps references
  * and draft state only. All timestamps are int64 ms UTC at every boundary. */
@@ -65,12 +66,6 @@ export interface DataLabSavedSessionRef {
   readonly schemaVersion: number;
 }
 
-/** Reference to an active dataset-generation run (server-durable truth). */
-export interface DataLabGenerationRunRef {
-  readonly id: string;
-  readonly status: string;
-}
-
 /** Stable parameter-aware instance identity. Params are sorted so
  *  `{a:1,b:2}` and `{b:2,a:1}` are the same instance. Pure. */
 export function dataLabIndicatorInstanceId(
@@ -89,18 +84,7 @@ export interface DataLabScopeCommitResult {
   error: string | null;
 }
 
-// ── Serialization envelope (v2) ───────────────────────────────
-export interface SerializedDataLabWorkspace {
-  schemaVersion: number;
-  ticker: string;
-  windowMsUtc: DataLabWindowMsUtc;
-  scope: Omit<DataLabDraftScope, 'ticker' | 'window'>;
-  indicators: DataLabIndicatorInstance[];
-  colorTokenOverrides: Record<string, ChartSeriesColorToken>;
-  companions: DataLabCompanionSettings;
-  savedSession: DataLabSavedSessionRef | null;
-}
-
+// ── Restore result ────────────────────────────────────────────
 export interface RestoreResult {
   warnings: string[];
 }
@@ -149,8 +133,8 @@ function isParams(v: unknown): v is Record<string, number> {
   return true;
 }
 
-/** Pure workspace store for the /data-lab shared shell. Construct through
- *  `createDataLabWorkspaceStore()` in the shell component's providers. */
+/** Pure workspace store for an instrument place. Construct through
+ *  `createDataLabWorkspaceStore()` in the place's providers. */
 export class DataLabWorkspaceStore {
   // ── Committed scope (what the chart/news follow) ────────────
   private readonly _committedTicker = signal('');
@@ -182,13 +166,9 @@ export class DataLabWorkspaceStore {
    *  signature no longer matches the live recipe is stale and must not be
    *  presented as current plan data. */
   private readonly _datasetPlanSignature = signal<string | null>(null);
-  private readonly _generationRun = signal<DataLabGenerationRunRef | null>(null);
-  /** Chart snapshot restored from a saved session — a reference the shell
-   *  stages so the chart can render cached bars without an HTTP call. */
-  private readonly _restoredChartSnapshot = signal<unknown | null>(null);
-  /** Latest chart payload the Chart tab produced — a reference the shell
-   *  merges into "Save setup", and the answer the tab shows again when it is
-   *  reopened with the same context. Never triggers a chart render by itself. */
+  /** Latest chart payload the Chart tab produced — a reference "Save setup"
+   *  merges in, and the answer the tab shows again when it is reopened with the
+   *  same context. Never triggers a chart render by itself. */
   private readonly _latestChartSnapshot = signal<unknown | null>(null);
 
   // ── Read-only state surface ─────────────────────────────────
@@ -205,8 +185,9 @@ export class DataLabWorkspaceStore {
   readonly chartStale = this._chartStale.asReadonly();
   readonly datasetPlanReceipt = this._datasetPlanReceipt.asReadonly();
   readonly datasetPlanReceiptSignature = this._datasetPlanSignature.asReadonly();
-  readonly restoredChartSnapshot = this._restoredChartSnapshot.asReadonly();
   readonly latestChartSnapshot = this._latestChartSnapshot.asReadonly();
+  /** The saved setup the workspace was opened from or saved as, if any. */
+  readonly savedSession = this._savedSession.asReadonly();
 
   // ── Scope ───────────────────────────────────────────────────
   /** Validate and atomically commit the draft scope. Returns an error string
@@ -293,23 +274,6 @@ export class DataLabWorkspaceStore {
     this.markChartStale();
   }
 
-  /** Replace the whole recipe (saved-session restore). Clears stale color
-   *  overrides for instances that no longer exist. */
-  setIndicators(list: readonly DataLabIndicatorInstance[]): void {
-    const ids = new Set(list.map(i => i.id));
-    this._indicators.set(list.map(i => ({ ...i, params: { ...i.params } })));
-    this._colorOverrides.update(map => {
-      let changed = false;
-      const next: Record<string, ChartSeriesColorToken> = {};
-      for (const [instanceId, token] of Object.entries(map)) {
-        if (ids.has(instanceId)) next[instanceId] = token;
-        else changed = true;
-      }
-      return changed ? next : map;
-    });
-    this.markChartStale();
-  }
-
   /** Update an instance's params. Preserves list position and migrates the
    *  color override to the new parameter-aware identity. Returns the new id,
    *  or null when `id` is unknown — or when the new params collide with a
@@ -378,55 +342,13 @@ export class DataLabWorkspaceStore {
     this._datasetPlanSignature.set(receipt ? planSignature : null);
   }
 
-  setGenerationRun(ref: DataLabGenerationRunRef | null): void {
-    this._generationRun.set(ref ? { ...ref } : null);
-  }
-
-  /** Stage a saved-session chart snapshot for the chart to render. */
-  setRestoredChartSnapshot(snapshot: unknown | null): void {
-    this._restoredChartSnapshot.set(snapshot);
-    // A restored snapshot renders the old chart; if the current recipe or
-    // scope differs the chart is stale by definition — that stays
-    // visible rather than hiding it behind a fresh-looking render.
-    this._chartStale.set(true);
-  }
-
-  /** The chart consumed the staged snapshot. */
-  clearRestoredChartSnapshot(): void {
-    this._restoredChartSnapshot.set(null);
-  }
-
-  /** Record the latest fetched chart payload (for the shell's Save setup). */
+  /** Record the latest fetched chart payload (for Save setup, and the answer the Chart tab shows again for the same request). */
   setLatestChartSnapshot(snapshot: unknown | null): void {
     this._latestChartSnapshot.set(snapshot);
   }
 
-  // ── Serialization (saved-session JSON, schema v2) ───────────
-  /** Pure snapshot of the workspace in the v2 envelope. */
-  serialize(): SerializedDataLabWorkspace {
-    const draft = this._draft();
-    const { ticker: _t, window: _w, ...scopeFields } = draft;
-    const committedWindow = this._committedWindow();
-    const savedSession = this._savedSession();
-    return {
-      schemaVersion: DATA_LAB_WORKSPACE_SCHEMA_VERSION,
-      ticker: this._committedTicker(),
-      windowMsUtc: committedWindow
-        ? { startMsUtc: committedWindow.startMsUtc, endMsUtc: committedWindow.endMsUtc }
-        : { ...draft.window },
-      scope: scopeFields,
-      indicators: this._indicators().map(i => ({
-        id: i.id,
-        canonicalKey: i.canonicalKey,
-        params: { ...i.params },
-      })),
-      colorTokenOverrides: { ...this._colorOverrides() },
-      companions: { ...this._companions() },
-      savedSession: savedSession ? { id: savedSession.id, schemaVersion: savedSession.schemaVersion } : null,
-    };
-  }
-
-  /** Restore from a persisted envelope. Bounded validator: unknown keys and
+  // ── Restore (saved-setup JSON, schema v2) ───────────────────
+  /** Restore from a v2 envelope. Bounded validator: unknown keys and
    *  invalid entries are dropped with a reported warning; valid state is
    *  applied. A schema-version mismatch refuses the restore entirely. */
   restore(value: unknown): RestoreResult {
@@ -627,14 +549,14 @@ export class DataLabWorkspaceStore {
   }
 }
 
-/** Shell-owned construction — the store is deliberately not `providedIn`:
- *  it must live and die with the /data-lab route shell. */
+/** Place-owned construction — the store is deliberately not `providedIn`:
+ *  it must live and die with the instrument place that provides it. */
 export function createDataLabWorkspaceStore(): DataLabWorkspaceStore {
   return new DataLabWorkspaceStore();
 }
 
 /** The product's thirteen-indicator default recipe (unchanged
- *  until a separate product decision). A shell seeds these into a fresh
+ *  until a separate product decision). A place seeds these into a fresh
  *  workspace through {@link seedDefaultIndicators}. */
 export const DEFAULT_DATA_LAB_INDICATORS: readonly {
   canonicalKey: string;
