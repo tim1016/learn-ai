@@ -31,7 +31,7 @@
     <h4>Next valid action</h4>
     <p>Opening diagnostics and inspecting an archived input only read evidence. Existing study files and verdicts stay frozen.</p>
     <p>A new linked study can use newly captured inputs. Capturing data is a separate explicit action while checking that new plan; it affects future work and cannot promise to fill a naturally sparse minute.</p>
-    <a routerLink="/options-golden-search" [queryParams]="{ setup_name: view.setup_name, parent_study_id: view.study_id }">Prepare a new linked plan</a>
+    <a [routerLink]="planRoute(view.setup_name)" [queryParams]="{ parent_study_id: view.study_id }">Prepare a new linked plan</a>
     <details><summary>Diagnostic scope receipt</summary><p>Evaluation <code>{{ view.evidence_identity }}</code></p><p>Artifact <code>{{ view.evidence_blob_sha256 }}</code></p></details>
   }
 </section>

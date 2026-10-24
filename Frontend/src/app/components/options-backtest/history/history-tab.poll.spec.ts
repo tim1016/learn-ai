@@ -2,7 +2,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/angular';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderHistoryTab } from '../testing/render-history';
-import { fakeService, type FakeService } from '../testing/render-page';
+import { fakeService, type FakeService } from '../testing/fake-service';
 import { runDetail, runItem } from '../testing/run-fixtures';
 import { reads } from '../testing/page-actions';
 import type { RunListItem } from '../options-backtest.types';

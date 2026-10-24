@@ -195,6 +195,8 @@ test('walks pinned source-76, historical69 and the separate blocked PUT study wi
     else if (path.endsWith('/runs/76')) await route.fulfill({ json: run76 });
     else if (path.endsWith(`/workspace/study/${STUDY_WORKSPACE.subject_id}`)) await route.fulfill({ json: STUDY_WORKSPACE });
     else if (path.endsWith('/lineage')) await route.fulfill({ json: lineage });
+    // Which saved setups hold the evidence's content: none are saved in this walk.
+    else if (path.endsWith('/setup-index')) await route.fulfill({ json: { read_at_ms: 1_792_000_000_000, setups: [], runs: [], runs_total: 0, studies: [], studies_total: 0, approvals: [], approvals_total: 0 } });
     else if (path.endsWith('/setups/describe')) await route.fulfill({ json: route.request().postDataJSON().legs.length === 1 ? studyDescription : description76 });
     else await route.fallback();
   });
@@ -214,7 +216,7 @@ test('walks pinned source-76, historical69 and the separate blocked PUT study wi
   await card.getByRole('button', { name: 'Refresh execution proof' }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: 'test-results/options-bot-current-proof-narrow.png' });
   await card.getByRole('link', { name: 'Inspect pinned Golden evidence' }).click();
-  await expect(page).toHaveURL(new RegExp(`/options-evidence/golden/${golden.id}`));
+  await expect(page).toHaveURL(new RegExp(`/options-setups/evidence/golden/${golden.id}`));
   const workspace = page.locator('app-options-evidence-page');
   await expect(workspace.getByRole('heading', { name: 'Approved from backtest' })).toBeVisible();
   await expect(workspace.getByText('Source run 76.', { exact: false })).toBeVisible();
@@ -236,13 +238,14 @@ test('walks pinned source-76, historical69 and the separate blocked PUT study wi
   expect(await workspace.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
   await workspace.getByRole('heading', { name: 'Historical comparator', exact: true }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: 'test-results/options-historical-comparison-narrow.png' });
-  await page.goto(`/options-evidence/study/${STUDY_WORKSPACE.subject_id}?view=lineage&bot_return=${encodeURIComponent(botPath)}`);
-  await expect(workspace.getByRole('heading', { name: 'This search did not establish a result.' })).toBeVisible();
-  await expect(workspace.getByText(/4 observed \/ 373 scheduled sessions/)).toBeVisible();
-  await expect(workspace.getByText('No eligible training winner', { exact: true })).toHaveCount(6);
-  await expect(workspace.getByText('The final test was not opened. No final outcomes are exposed by this view.')).toBeVisible();
+  await page.goto(`/options-setups/evidence/study/${STUDY_WORKSPACE.subject_id}?view=lineage&bot_return=${encodeURIComponent(botPath)}`);
+  const study = page.locator('app-options-study-page');
+  await expect(study.getByRole('heading', { name: 'This search did not establish a result.' })).toBeVisible();
+  await expect(study.getByText(/4 observed \/ 373 scheduled sessions/)).toBeVisible();
+  await expect(study.getByText('No eligible training winner', { exact: true })).toHaveCount(6);
+  await expect(study.getByText('The final test was not opened. No final outcomes are exposed by this view.')).toBeVisible();
   await page.screenshot({ path: 'test-results/options-owner-journey-put-narrow.png', fullPage: true });
-  await workspace.getByRole('link', { name: 'Back to bot', exact: true }).click();
+  await study.getByRole('link', { name: 'Back to bot', exact: true }).click();
   await expect(page).toHaveURL(new RegExp(botPath + '$'));
   await page.getByRole('button', { name: 'Build proof', exact: true }).click();
   await expect(card.getByText('Source backtest 76', { exact: true })).toBeVisible();

@@ -52,7 +52,7 @@ from app.options_backtest import run_json
 from app.options_backtest.describe import fee_policy_sentence
 from app.options_backtest.results import ExitReason, Fill, LegTrade, Mark, SessionOutcome, SessionStatus, SkipReason
 from app.options_backtest.run import RunResult, SlippagePoint, SlippageTolerance
-from app.options_backtest.saved_setups import read_stored_setup
+from app.options_backtest.saved_setups import SavedSetup, read_stored_setup
 from app.options_backtest.session_result import SessionResult
 from app.options_backtest.setup import OptionsBacktestSetup
 from app.options_backtest.statistics import RunSummary
@@ -486,6 +486,25 @@ async def read_run_rows(
         limit,
     )
     return tuple(rows)
+
+
+async def read_run_setups(conn: asyncpg.Connection, run_ids: Sequence[int]) -> dict[int, SavedSetup]:
+    """What each of these runs froze as its setup, read again with today's rules: the setup, or why it cannot be read.
+
+    The history lists a run without its setup; the Options setups index needs the setup's identity, and never its
+    figures, so this reads only the setup column of the rows asked for.
+    """
+    rows = await conn.fetch(
+        "SELECT id, setup_json::text AS setup_json, created_at_ms FROM research_options_backtest_runs "
+        "WHERE id = ANY($1::bigint[])",
+        list(run_ids),
+    )
+    return {row["id"]: read_stored_setup(f"run {row['id']}", row["setup_json"], row["created_at_ms"]) for row in rows}
+
+
+async def count_runs(conn: asyncpg.Connection) -> int:
+    """How many runs are stored, so a list cut at a limit can say how many it left out."""
+    return await conn.fetchval("SELECT count(*) FROM research_options_backtest_runs")
 
 
 async def present_runs(rows: Sequence[asyncpg.Record], *, is_live: IsLive) -> tuple[RunRecord, ...]:

@@ -2,6 +2,7 @@ import type { MenuItem } from 'primeng/api';
 
 import { accountWorkspaceLocation, routePathOf } from '../fleet/account-workspace';
 import type { BreadcrumbItem } from '../shared/breadcrumb/breadcrumb-item';
+import { optionsSetupWindowTitle } from '../options-setups/options-setups.address';
 import { HELP_DOCUMENTS } from '../shared/help/help-documents';
 import { OPERATIONS_TABS, operationsTabRoute } from '../operations/operations-tabs';
 
@@ -112,15 +113,11 @@ export const APP_MENU: readonly AppMenuGroup[] = [
     title: 'Options setups',
     icon: 'pi pi-sliders-h',
     items: [
-      { title: 'Options Backtest', route: '/options-backtest' },
-      { title: 'Options Golden Search', route: '/options-golden-search' },
+      { title: 'Options setups', route: '/options-setups' },
     ],
     // The analytical builder is an Options Lab tab until the options setup
     // workspace hosts it (R32 files it under Options setups, not Markets).
-    pages: [
-      { title: 'Options evidence', route: '/options-evidence' },
-      { title: 'Strategy Builder', route: '/options-lab/strategy-builder' },
-    ],
+    pages: [{ title: 'Strategy Builder', route: '/options-lab/strategy-builder' }],
   },
   {
     id: 'accounts',
@@ -216,6 +213,9 @@ export function activeMenuNodeFor(url: string): ActiveMenuNode | null {
  * it once, and a served document is titled by itself.
  */
 export function windowTitleFor(url: string): string | null {
+  // One setup's tab is titled by the setup, its tab and the group (R01).
+  const setupTitle = optionsSetupWindowTitle(url);
+  if (setupTitle !== null) return setupTitle;
   const node = activeMenuNodeFor(url);
   if (node === null) return HELP_DOCUMENTS.find((document) => document.route === routePathOf(url))?.title ?? null;
   return node.item.title === node.group.title ? node.item.title : `${node.item.title} · ${node.group.title}`;

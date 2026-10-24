@@ -1232,10 +1232,9 @@ for the account pills it hosts.
   per-transaction station pipeline in a bot page's order records.
 - **Active menu node** — the single app-menu node one URL resolves to, by longest
   match. It is the sole resolver behind menubar highlighting and, outside an
-  account workspace, the window title (`Page · Group`, such as "Options Backtest ·
-  Options setups"), which is why those two can never disagree. A page the menu
-  does not list still has a node when its group owns it (an options evidence
-  page). A served document has none, and neither has an address no page answers.
+  account workspace, the window title (`Page · Group`, such as "Pricing Lab ·
+  Markets"), which is why those two can never disagree. A page the menu does not
+  list still has a node when its group owns it (Ticker News, in Markets). A served document has none, and neither has an address no page answers.
   Inside a workspace the menubar highlights Accounts and the title is the
   workspace tab — or the bot's name on a bot's page — followed by the account
   name ("Activity · Paper"), so two windows on different accounts are told apart.
@@ -1631,10 +1630,54 @@ these are the others.
 - **Options setup** — one saved setup (see Options Backtest) as a place, with its
   tabs: Overview, Define, Explore and Golden. The saved name addresses the current
   draft; an approved version is addressed by its Golden Options ID and exact
-  setup hash, and a run by its run ID. Setups and signal strategies are told apart
+  setup hash, and a run by its run ID. A run, a search and an approved version
+  are found from a saved setup by the exact content each froze, never by the name
+  it was recorded under, so two names holding identical content share them and
+  neither owns them, and deleting or reusing a name moves none of them. The
+  Options setups list holds every one of them, including those no saved name
+  holds any more. A draft with no saved name (a new one, an imported file) lives
+  at `/options-setups/_new/…`: a saved name starts with a letter or a digit, so no
+  name can be that segment. Setups and signal strategies are told apart
   by strategy model (timed option legs replayed from rules, against a signal
   decision stream), never by the asset traded.
   _Avoid_: options strategy, option signal.
+- **Explore (an options setup's)** — the tab where a saved setup is replayed over
+  past dates (Backtest) and its runs are read: History, Performance, Research
+  lineage and Historical comparison, with the Past chain beside them. A backtest
+  tests the setup **as last saved**, never the draft being edited in Define, and is
+  recorded under the saved name, so an edit that is not saved changes nothing a run
+  tested. A run keeps the setup it froze; an opened run has its own address
+  (`/options-setups/:name/explore?view=&run=`). **Take to Golden** carries the id of
+  a run that froze this setup's saved content to Golden and approves nothing there.
+  _Avoid_: Backtest tab (it is a view of Explore).
+- **Golden (an options setup's)** — the tab where a saved setup's tested runs and
+  searches become approved versions, by the two ways that exist: **approve a tested
+  run** (a note, and the run's own execution proof) and **start a golden search**
+  from the setup as last saved. Both publish through Golden Options. A review is of
+  the run named in the address (`?run=`) and of what that run froze, never of the
+  draft in Define, and an approval carries the hash of the content read. A search
+  starts from the saved content, named by its hash, and its study opens at its own
+  address (`/options-setups/evidence/study/:id`), whether or not a saved setup still
+  holds what it started from.
+  _Avoid_: Options Golden Search (the page it replaced; the search itself keeps the name).
+- **Single-run approval** — an approved version made from one backtest run after
+  review. No search ran for it, so it is never called a qualified search. A
+  **golden search version** carries its study and the verdict that study recorded;
+  a version whose study link is incomplete claims no search. A search that changes
+  settings makes a version whose content is not the saved content, so it is linked
+  through its study and never matched to the draft. **Re-proof** replays a run's
+  execution under the current rules and does not recertify statistical evidence.
+- **Deploy an options bot** — the setup header's action that takes one approved
+  version to Deploy. It lists the approved versions of the saved content (and those a
+  search that began from it made with changed settings), and a ready one links to the
+  account list under Deploy's own `options_setup` key by its own Golden Options id.
+  The owner chooses the version and then the account: nothing is pre-chosen, even when
+  one version is ready, and a stale, revoked or unreadable version is refused by name,
+  never replaced by another. Navigation sends no command; Deploy re-reads the version and
+  applies its own admission. A registered signal program that trades options is not
+  deployed this way: it stays in the signal workflow (`strategy`, `golden_qualification`),
+  because the split is the strategy model and not the asset traded.
+  _Avoid_: Use in Deploy (the signal Golden Search action).
 - **Operations** — the group for the machinery under the research: the data lake,
   the option archive, backups, math checks (the golden fixtures) and data checks
   (the TradingView comparison, data divergence and strategy pre-flight). It holds

@@ -1,0 +1,58 @@
+<section class="deploy" aria-labelledby="deploy-an-options-bot-title">
+  <div class="deploy__head">
+    <h2 id="deploy-an-options-bot-title" class="deploy__title">Deploy an options bot</h2>
+    <button type="button" (click)="closed.emit()">Close</button>
+  </div>
+  <p class="note">
+    Choose the approved version to take to Deploy. You choose the account next, and nothing is started from here:
+    Deploy checks the version, the account and its gates again before anything is sent.
+  </p>
+
+  @if (draftChanged()) {
+    <p class="note" role="note">Define holds changes that are not saved. These versions are of the content as last saved, and no edit changes an approved version.</p>
+  }
+
+  @if (gate(); as state) {
+    <app-workspace-state-block [state]="state" (actionTriggered)="retry()" />
+  } @else {
+    @if (rows().length === 0) {
+      <p class="note">
+        No approved version holds this exact content{{ cut() ? ', among ' + cut() : '' }}.
+        <a [routerLink]="goldenRoute()">Approve a tested run, or start a golden search, in Golden</a>.
+      </p>
+    }
+    <ul class="versions">
+      @for (row of rows(); track row.approval.id) {
+        @let a = row.approval;
+        @let detail = detailOf(a.id);
+        <li class="version" [attr.data-version]="a.id">
+          <div class="version__what">
+            <code>{{ a.id }}</code>
+            <span class="chip" [attr.data-status]="detail?.status ?? a.status">{{ (detail?.status ?? a.status) | receiptLabel }}</span>
+            <strong>{{ pathTitle[a.origin] }}</strong>
+            @if (a.underlying; as symbol) { <app-asset-identity [symbol]="symbol" size="sm" /> }
+            <span class="muted">
+              from <a [routerLink]="evidenceRoute('run', a.source_run_id)">run {{ a.source_run_id }}</a>
+              @if (row.relation.kind === 'study') { · made by a search that began from this setup, with changed settings }
+              · <a [routerLink]="evidenceRoute('golden', a.id)">open this version</a>
+            </span>
+          </div>
+          <div class="version__use">
+            @if (detail === undefined) {
+              <span class="muted">Reading this version…</span>
+            } @else if (detail === null) {
+              <span class="muted">Not offered: this version could not be read by its own id.</span>
+            } @else if (detail.status === 'ready') {
+              <a [routerLink]="accountListRoute" [queryParams]="versionQuery(a.id)" [attr.aria-label]="'Deploy version ' + a.id">Deploy this version</a>
+            } @else {
+              <span class="muted">Not offered: {{ detail.status_explanation }}</span>
+            }
+          </div>
+        </li>
+      }
+    </ul>
+    @if (cut() && rows().length > 0) {
+      <p class="note">The read returns {{ cut() }} approved versions, so older ones may not be listed here.</p>
+    }
+  }
+</section>

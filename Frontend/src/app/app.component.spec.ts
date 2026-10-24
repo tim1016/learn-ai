@@ -51,7 +51,8 @@ describe('AppComponent', () => {
           { path: '', pathMatch: 'full', component: ShellSmokeRouteComponent, data: { chromeless: true } },
           { path: 'data-lab', component: ShellSmokeRouteComponent },
           { path: 'options-lab', component: ShellSmokeRouteComponent, data: { fullBleed: true } },
-          { path: 'options-backtest', component: ShellSmokeRouteComponent, data: { stickyContent: true } },
+          { path: 'options-setups', component: ShellSmokeRouteComponent },
+          { path: 'options-setups/:name/define', component: ShellSmokeRouteComponent, data: { stickyContent: true } },
           { path: 'research-lab/strategy-runs/:id', component: ShellSmokeRouteComponent },
           { path: 'research-lab/walk-forward/:id', component: ShellSmokeRouteComponent },
           { path: 'research-lab/monte-carlo/:id', component: ShellSmokeRouteComponent },
@@ -223,7 +224,8 @@ describe('AppComponent', () => {
     it.each([
       ['/options-lab', 'Options Lab · Markets'],
       ['/data-lab', 'Stocks · Markets'],
-      ['/options-backtest', 'Options Backtest · Options setups'],
+      ['/options-setups', 'Options setups'],
+      ['/options-setups/SPY%200DTE/define', 'SPY 0DTE · Define · Options setups'],
       ['/research-lab/strategy-runs/run-42', 'Research Lab · Research'],
       // A document is titled by itself: the help index is its home, not the page it explains.
       ['/strategy-lab/docs', 'Strategy Lab Manual'],
@@ -271,7 +273,7 @@ describe('AppComponent', () => {
     fixture.detectChanges();
     expect(main().classList.contains('main--sticky-content')).toBe(false);
 
-    await router.navigateByUrl('/options-backtest');
+    await router.navigateByUrl('/options-setups/SPY%200DTE/define');
     fixture.detectChanges();
     expect(main().classList.contains('main--sticky-content')).toBe(true);
   });

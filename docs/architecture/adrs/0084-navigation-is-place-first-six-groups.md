@@ -52,3 +52,29 @@ Two rules keep these unambiguous without reserving names. A setup or strategy ad
 - Pages keep their present addresses in this slice. The menu file lists the pages that still sit in another place's shell (`pages` on a group), and later slices delete those entries as the pages move.
 - The route-inventory spec (T01) holds one row per declared route and the group it must light up. A route added without a row fails it.
 - Legal Notices has no footer link today; it stays reachable from the help index. Whether to add a footer is an owner decision.
+
+## Amendment (#3512): a setup with no saved name
+
+A draft that has no saved name (a new setup, an imported file, the setup of a past run) is addressed `/options-setups/_new/(overview|define)`. A saved name must start with a letter or a digit, so no name can be `_new`, and the draft needs no reserved name. Saving it under a name moves the address to `/options-setups/:name/define`. `/options-setups/:name` with no tab, and a tab no page serves yet, are lost addresses and fail in place.
+
+## Amendment (#3513): Explore's views and an opened run
+
+An options setup's Explore is one address, `/options-setups/:name/explore`, and says what it shows in its query: `?view=` is `backtest` (the default, and left out), `history`, `chain`, `performance`, `lineage` or `comparison`; `run=` names the run the view is about, and `comparator_run_id=` the second run of a comparison. History's open run (`?view=history&run=30`) and two runs side by side (`?view=history&run=30&comparator_run_id=29`) are addressable the same way, so an opened run has a URL. The views are not path segments, so the setup's tab stays the third segment and the window title keeps reading `Name · Explore · Options setups`.
+
+A backtest runs the setup **as last saved** and records the saved name; a draft with no saved name has none to run. A run froze its own setup, so nothing edited in Define changes what it shows. Take to Golden is the link `/options-setups/:name/golden?run=<id>`: it carries the run's id and approves nothing, and is offered only for a run that froze this setup's saved content (read by exact content, never by name).
+
+## Amendment (#3514): Golden, and where a golden search study lives
+
+An options setup's Golden is one address, `/options-setups/:name/golden`, and says what it reviews and forks in its query: `?run=<id>` is the run under review (what **Take to Golden** carries) and `?parent_study_id=<id>` the study a new plan forks. It holds both ways to an approved version, and the Options Golden Search page is gone: a plan is made on the tab, from the setup as last saved, named by its content hash.
+
+A golden search study is evidence, so it has no saved name in its address: `/options-setups/evidence/study/:studyId` is the study to work on (its research, the comparison and final test, and the approval), and `?view=lineage` its recorded lineage. It opens whether or not a saved setup still holds the content it started from, and says which do. `/options-golden-search/:studyId` ends there in one redirect.
+
+`/options-golden-search` ends at `/options-setups/:name/golden` when it names a setup (`?setup_name=`), carrying the study it forks, and otherwise at `/options-setups?then=golden`, where every saved setup opens on its Golden tab. No setup is chosen for a link that names none.
+
+## Amendment (#3515): Deploy an options bot
+
+An options setup's header offers **Deploy an options bot** for a saved setup that opens. It is a button that opens a choice, not a link: it lists the approved versions of the saved content, found by exact content as Golden finds them, then the versions a search that began from that content made with changed settings, each read by its own id. A ready version links to the account list under the key options Deploy already reads, `/brokers/alpaca?options_setup=<ogs_… id>`. There is no new key, and no default: one ready version is still the owner's click. A stale, revoked or unreadable version is listed with why and has no link, and no other version is offered in its place.
+
+The account list reads that version again by its own id while the owner chooses an account, and refuses it by name when it is stale, revoked, unreadable, or answered as another version. A refusal stays until the owner asks again; the cards keep carrying the chosen id unchanged, so Deploy refuses it by the same facts at its own boundary. Nothing in the handoff selects an account, a version or a lane, and navigation sends no command. Deploy's admission, eligibility and submission code are unchanged.
+
+The split between the two Deploy paths is the strategy model, not the traded asset. A registered signal program that uses option execution keeps its handoff (`strategy`, `golden_qualification`), its Deploy workflow, and its traded-asset warnings and admission; it is not offered here and is not reclassified as a saved timed setup.

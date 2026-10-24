@@ -10,6 +10,7 @@ h3 { margin: 0; font-size: var(--fs-md); font-weight: var(--fw-semi); }
 .tag[data-status='failed'] { border-color: var(--bear); color: var(--bear-text); }
 .about { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-4); font-size: var(--fs-sm); color: var(--text-secondary); }
 .words { font-size: var(--fs-sm); color: var(--text-secondary); }
+.links { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-4); font-size: var(--fs-sm); }
 .problem { color: var(--bear); font-size: var(--fs-sm); }
 .again { justify-self: start; background: none; border: 1px solid var(--border-strong); color: var(--text-secondary); border-radius: var(--radius); padding: var(--space-1) var(--space-3); font: inherit; font-size: var(--fs-sm); cursor: pointer; }
 .again:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
