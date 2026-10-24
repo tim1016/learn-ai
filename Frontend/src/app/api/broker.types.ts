@@ -7212,11 +7212,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * List Runs Endpoint
-         * @description List persisted runs, optionally filtered, newest first.
-         */
-        get: operations["list_runs_endpoint_api_research_strategy_runs_get"];
+        get?: never;
         put?: never;
         /**
          * Create Run
@@ -32869,17 +32865,6 @@ export interface components {
             state?: "current" | "stale" | "missing" | "unreadable";
         };
         /**
-         * StrategyRunListResponse
-         * @description Response payload for listing — ledgers only, no results.
-         *
-         *     Keeps the listing payload small. Clients fetch full results
-         *     on-demand via ``GET /{run_id}``.
-         */
-        StrategyRunListResponse: {
-            /** Runs */
-            runs: components["schemas"]["RunLedger"][];
-        };
-        /**
          * StrategyRunRequest
          * @description Inputs for ``POST /api/research/strategy-runs``.
          *
@@ -49393,50 +49378,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResearchExperimentRefusalBody"];
-                };
-            };
-        };
-    };
-    list_runs_endpoint_api_research_strategy_runs_get: {
-        parameters: {
-            query?: {
-                /** @description Filter by ``strategy_spec_hash`` */
-                spec_hash?: string | null;
-                /** @description Filter by traded symbol */
-                symbol?: string | null;
-                /** @description Filter by lifecycle status: running | completed | failed */
-                status?: string | null;
-                /** @description Filter by lineage — fold/MC/sweep parent */
-                parent_run_id?: string | null;
-                /** @description Filter by sensitivity-grid parent */
-                parent_spec_hash?: string | null;
-                /** @description Only return runs created at or after this ``int64 ms UTC`` */
-                since_ms?: number | null;
-                /** @description Cap result count after sorting newest-first */
-                limit?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StrategyRunListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
