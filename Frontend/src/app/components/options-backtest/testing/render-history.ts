@@ -10,7 +10,7 @@ import { RUN_POLL_MS } from '../run-poll';
 import { RunDetailService } from '../run-detail/run-detail.service';
 import { inertRunDetail, type FakeRunDetail } from '../run-detail/testing/fake-run-detail';
 import { fakeJobs, type FakeJobs } from './fake-jobs';
-import { fakeService, type FakeService } from './render-page';
+import { fakeService, type FakeService } from './fake-service';
 
 type Spy = Pick<typeof Vi, 'fn'>;
 

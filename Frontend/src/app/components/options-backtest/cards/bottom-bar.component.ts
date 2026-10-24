@@ -10,8 +10,8 @@ export interface SaveStatus {
 }
 
 /**
- * The setup's name and Save setup, Check data, and Start backtest with its
- * shortcut. Beside the form it is the top card of the page's run rail. Where
+ * The setup's name and Save setup, and (unless `showRun` is off) Check data and
+ * Start backtest with its shortcut. Beside the form it is the top card of the page's rail. Where
  * the rail is stacked under the form it is a bar kept in view at the bottom of
  * the page instead, fixed to the window rather than sticky, because the
  * shell's `main` scrolls horizontally there and so would hold a sticky bar in
@@ -35,6 +35,8 @@ export class BottomBarComponent {
   /** Why Save is not available yet, when it is not. */
   readonly hint = input<string | null>(null);
   readonly status = input<SaveStatus | null>(null);
+  /** Whether the bar offers Check data and Start. Define saves a setup and runs nothing, so it turns them off. */
+  readonly showRun = input(true);
   /** Whether Check data can be asked: the setup is read back and both dates are picked. */
   readonly canCheck = input(false);
   /** Whether a backtest can be started: the same, and none is going. */

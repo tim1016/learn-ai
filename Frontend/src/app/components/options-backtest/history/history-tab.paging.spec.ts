@@ -6,7 +6,7 @@ import type { RunListItem } from '../options-backtest.types';
 import { deferred } from '../past-chain/testing/deferred';
 import { renderHistoryTab } from '../testing/render-history';
 import { press } from '../testing/page-actions';
-import { fakeService } from '../testing/render-page';
+import { fakeService } from '../testing/fake-service';
 import { runItem } from '../testing/run-fixtures';
 import { RUNS_LISTED } from './runs-listed';
 

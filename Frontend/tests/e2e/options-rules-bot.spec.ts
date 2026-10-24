@@ -214,7 +214,7 @@ test('walks pinned source-76, historical69 and the separate blocked PUT study wi
   await card.getByRole('button', { name: 'Refresh execution proof' }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: 'test-results/options-bot-current-proof-narrow.png' });
   await card.getByRole('link', { name: 'Inspect pinned Golden evidence' }).click();
-  await expect(page).toHaveURL(new RegExp(`/options-evidence/golden/${golden.id}`));
+  await expect(page).toHaveURL(new RegExp(`/options-setups/evidence/golden/${golden.id}`));
   const workspace = page.locator('app-options-evidence-page');
   await expect(workspace.getByRole('heading', { name: 'Approved from backtest' })).toBeVisible();
   await expect(workspace.getByText('Source run 76.', { exact: false })).toBeVisible();
@@ -236,7 +236,7 @@ test('walks pinned source-76, historical69 and the separate blocked PUT study wi
   expect(await workspace.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
   await workspace.getByRole('heading', { name: 'Historical comparator', exact: true }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: 'test-results/options-historical-comparison-narrow.png' });
-  await page.goto(`/options-evidence/study/${STUDY_WORKSPACE.subject_id}?view=lineage&bot_return=${encodeURIComponent(botPath)}`);
+  await page.goto(`/options-setups/evidence/study/${STUDY_WORKSPACE.subject_id}?view=lineage&bot_return=${encodeURIComponent(botPath)}`);
   await expect(workspace.getByRole('heading', { name: 'This search did not establish a result.' })).toBeVisible();
   await expect(workspace.getByText(/4 observed \/ 373 scheduled sessions/)).toBeVisible();
   await expect(workspace.getByText('No eligible training winner', { exact: true })).toHaveCount(6);

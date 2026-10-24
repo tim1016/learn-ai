@@ -52,3 +52,7 @@ Two rules keep these unambiguous without reserving names. A setup or strategy ad
 - Pages keep their present addresses in this slice. The menu file lists the pages that still sit in another place's shell (`pages` on a group), and later slices delete those entries as the pages move.
 - The route-inventory spec (T01) holds one row per declared route and the group it must light up. A route added without a row fails it.
 - Legal Notices has no footer link today; it stays reachable from the help index. Whether to add a footer is an owner decision.
+
+## Amendment (#3512): a setup with no saved name
+
+A draft that has no saved name (a new setup, an imported file, the setup of a past run) is addressed `/options-setups/_new/(overview|define)`. A saved name must start with a letter or a digit, so no name can be `_new`, and the draft needs no reserved name. Saving it under a name moves the address to `/options-setups/:name/define`. `/options-setups/:name` with no tab, and a tab no page serves yet, are lost addresses and fail in place.

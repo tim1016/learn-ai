@@ -5,6 +5,7 @@ import { RETIRED_LENS_QUERY_PARAM, dropRetiredLensGuard } from "./fleet/retired-
 import { EntryComponent } from "./components/entry/entry.component";
 import { redirectLegacyDataLab } from "./components/data-lab/data-lab-ingress";
 import { brokerClerkRedirectGuard } from "./fleet/broker-clerk-redirect.guard";
+import { redirectOptionsBacktest, redirectOptionsEvidence } from "./options-setups/options-setups.redirects";
 import { redirectKeepingState } from "./shell/route-redirects";
 
 const loadBrokerLaneUnavailable = () =>
@@ -253,8 +254,14 @@ export const routes: Routes = [
       ),
   },
   {
+    path: "options-setups",
+    loadChildren: () =>
+      import("./options-setups/options-setups.routes").then((m) => m.OPTIONS_SETUPS_ROUTES),
+  },
+  {
     path: "options-evidence/:kind/:subjectId",
-    loadComponent: () => import("./components/options-evidence/options-evidence-page.component").then((m) => m.OptionsEvidencePageComponent),
+    redirectTo: redirectOptionsEvidence,
+    pathMatch: "full",
   },
   {
     path: "options-golden-search",
@@ -266,12 +273,8 @@ export const routes: Routes = [
   },
   {
     path: "options-backtest",
-    loadComponent: () =>
-      import("./components/options-backtest/options-backtest-page.component").then(
-        (m) => m.OptionsBacktestPageComponent
-      ),
-    // The run rail stays in view beside the form while the page scrolls.
-    data: { stickyContent: true },
+    redirectTo: redirectOptionsBacktest,
+    pathMatch: "full",
   },
   {
     path: "strategy-validation",

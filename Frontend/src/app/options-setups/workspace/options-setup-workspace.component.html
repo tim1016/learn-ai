@@ -1,0 +1,17 @@
+<app-workspace-header [title]="title()" purpose="One options setup: its content, the evidence recorded for exactly that content, and what to do next." [breadcrumb]="breadcrumb()">
+  <app-how-this-works workspaceHelp route="/docs/options-backtest-manual" />
+  <div workspaceFacts class="facts">
+    @if (underlying(); as symbol) { <app-asset-identity [symbol]="symbol" size="sm" /> }
+    @if (entry().kind === 'open' || entry().kind === 'draft') {
+      <span class="chip" [attr.data-standing]="store.standing().kind">{{ standing().label }}</span>
+    }
+    @if (example()) { <span class="chip">Example</span> }
+  </div>
+</app-workspace-header>
+
+@if (failure(); as why) {
+  <app-workspace-state-block [state]="why" (actionTriggered)="act($event)" />
+} @else {
+  <app-workspace-tab-list [tabs]="tabs()" [activeId]="activeTab()" label="Options setup tabs" />
+  <router-outlet />
+}

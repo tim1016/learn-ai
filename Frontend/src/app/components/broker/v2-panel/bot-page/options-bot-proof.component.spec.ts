@@ -54,7 +54,7 @@ describe('Options bot pinned evidence', () => {
     expect(screen.queryByText('Source backtest 99')).toBeNull();
     expect(screen.getByText('Approved from backtest. No linked search qualification is recorded.')).toBeTruthy();
     expect(screen.queryByRole('link', { name: 'Open recorded search' })).toBeNull();
-    expect(screen.getByRole('link', { name: 'Inspect pinned Golden evidence' }).getAttribute('href')).toContain(`/options-evidence/golden/${PINNED.id}?view=lineage`);
+    expect(screen.getByRole('link', { name: 'Inspect pinned Golden evidence' }).getAttribute('href')).toContain(`/options-setups/evidence/golden/${PINNED.id}?view=lineage`);
   });
 
   it.each(['stale', 'revoked'] as const)('refreshes %s execution proof without rewriting historical approval', async status => {

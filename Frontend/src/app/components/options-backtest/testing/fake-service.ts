@@ -1,20 +1,8 @@
-import { PositionPreviewService } from '../position/position-preview.service';
-import { quietPositionPreview } from '../position/testing';
-import { render } from '@testing-library/angular';
-import { screen } from '@testing-library/angular';
 import type { Mock, vi as Vi } from 'vitest';
 
-import { JobsService } from '../../../services/jobs.service';
-import { FileDownloadService } from '../../../shared/file/file-download.service';
 import { etIsoDate } from '../../../shared/date/et-midnight';
-import { fakePickerWorld } from '../../../shared/symbol-picker/testing/fake-picker-world';
-import { OptionsBacktestPageComponent } from '../options-backtest-page.component';
-import { OptionsBacktestService, RunRefusedError, SetupInvalidError, type RunQuery } from '../options-backtest.service';
-import { RUN_POLL_MS } from '../run-poll';
-import { RunDetailService } from '../run-detail/run-detail.service';
-import { inertRunDetail, type FakeRunDetail } from '../run-detail/testing/fake-run-detail';
+import { RunRefusedError, SetupInvalidError, type RunQuery } from '../options-backtest.service';
 import type { DataCheck, RunDetail, RunListItem, RunStartRequest, SavedSetup, SessionClock, SetupLimits, SetupRequest, SetupSummary } from '../options-backtest.types';
-import { fakeJobs, type FakeJobs } from './fake-jobs';
 import { dataCheck, readBackOf, SERVED_LIMITS, SESSION_CLOCK, servedExamples, sessionCheck } from './fixtures';
 
 /** The `vi` of the spec that calls: a shared helper never imports vitest itself. */
@@ -130,32 +118,4 @@ export function fakeService(spy: Spy, changes: Partial<FakeService> = {}): FakeS
     remove: spy.fn(async () => undefined),
     ...changes,
   };
-}
-
-export interface FakeDownload {
-  save: Mock<(blob: Blob, filename: string) => void>;
-}
-
-/**
- * `settled: false` returns as soon as the page is up, for a spec whose fake never answers (a read that is still going).
- * `jobs` is the jobs service a spec scripts; without one the page gets a jobs service that knows of no job.
- * The poll that reads a going run again is off unless `polling` is set, so a spec that is not about it never waits on a timer.
- */
-export async function renderPage(service: FakeService, download?: FakeDownload, options: { setupName?: string; settled?: boolean; jobs?: FakeJobs; detail?: FakeRunDetail; polling?: boolean } = {}) {
-  const view = await render(OptionsBacktestPageComponent, {
-    inputs: { describeDebounceMs: 0, setup_name: options.setupName },
-    providers: [
-      { provide: PositionPreviewService, useValue: quietPositionPreview },
-      ...fakePickerWorld().providers,
-      ...(options.polling === true ? [] : [{ provide: RUN_POLL_MS, useValue: 0 }]),
-      { provide: OptionsBacktestService, useValue: service },
-      { provide: JobsService, useValue: (options.jobs ?? fakeJobs()).service },
-      { provide: RunDetailService, useValue: options.detail ?? inertRunDetail() },
-      ...(download === undefined ? [] : [{ provide: FileDownloadService, useValue: download }]),
-    ],
-  });
-  await screen.findByRole('heading', { name: 'Entry settings' });
-  // The limits and the saved setups are read by now, so a spec starts from a page that knows them.
-  if (options.settled !== false) await view.fixture.whenStable();
-  return view;
 }

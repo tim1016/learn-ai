@@ -76,7 +76,7 @@ describe('app menu projections', () => {
   });
 
   it('marks the group but no entry for a page the menu does not list', () => {
-    const groups = menuItemsFor('/options-evidence/run/run-7');
+    const groups = menuItemsFor('/options-lab/strategy-builder');
     const options = groups.find((group) => group.label === 'Options setups');
 
     expect(options?.styleClass).toBe(ACTIVE_GROUP_CLASS);
@@ -110,7 +110,8 @@ describe('app menu projections', () => {
   });
 
   it('titles the window Page · Group, and an account page by its group alone', () => {
-    expect.soft(windowTitleFor('/options-backtest'), 'Options Backtest sits in Options setups').toBe('Options Backtest · Options setups');
+    expect.soft(windowTitleFor('/options-setups'), 'the Options setups list sits in its own group').toBe('Options setups');
+    expect.soft(windowTitleFor('/options-setups/SPY%200DTE/define'), 'one setup is titled by its name, its tab and the group').toBe('SPY 0DTE · Define · Options setups');
     expect.soft(windowTitleFor('/pricing-lab'), 'Pricing Lab sits in Markets').toBe('Pricing Lab · Markets');
     expect.soft(windowTitleFor('/data-lab'), 'the Data Lab route is presented as Stocks').toBe('Stocks · Markets');
     expect.soft(windowTitleFor('/brokers/alpaca?deploy='), 'the account list says Accounts once').toBe('Accounts');
@@ -136,7 +137,8 @@ describe('app menu projections', () => {
     ['/research-lab/backtests/recency-chart', 'Signal strategies', 'Recency Chart'],
     // The analytical builder is an Options Lab tab, filed under Options setups (R32).
     ['/options-lab/strategy-builder', 'Options setups', 'Strategy Builder'],
-    ['/options-evidence/run/run-7', 'Options setups', 'Options evidence'],
+    ['/options-setups/evidence/run/run-7', 'Options setups', 'Options setups'],
+    ['/options-setups/SPY%200DTE/overview', 'Options setups', 'Options setups'],
     // Data checks: tabs other shells still host.
     ['/data-lab/validate', 'Operations', 'Validate'],
     ['/research-lab/inspect/data-divergence', 'Operations', 'Data Divergence'],

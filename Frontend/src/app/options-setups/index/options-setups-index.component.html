@@ -1,0 +1,96 @@
+<app-workspace-header title="Options setups" purpose="Saved setups by name, and every run, search and approved version recorded for any setup, whether or not a saved name still holds its content." [primaryAction]="newSetup">
+  <app-how-this-works workspaceHelp route="/docs/options-backtest-manual" />
+</app-workspace-header>
+
+@if (state(); as why) {
+  <app-workspace-state-block [state]="why" (actionTriggered)="act($event)" />
+} @else {
+  <div class="index">
+    <section class="block" aria-labelledby="osi-saved">
+      <h2 id="osi-saved">Saved setups</h2>
+      <p class="muted">A saved name is a label on a draft you can edit, delete and reuse. The evidence below is matched to a setup by its exact content, never by its name.</p>
+      @if (deleteProblem(); as why) { <p class="problem" role="alert">{{ why }}</p> }
+      <table class="table">
+        <thead>
+          <tr><th scope="col">Name</th><th scope="col">Underlying</th><th scope="col">Saved</th><th scope="col">Recorded for this exact content</th><th scope="col"><span class="sr-only">Actions</span></th></tr>
+        </thead>
+        <tbody>
+          @for (row of setups(); track row.setup.name) {
+            <tr>
+              <th scope="row">
+                @if (row.setup.setup_sha256 !== null) { <a [routerLink]="setupRoute(row.setup.name, 'overview')">{{ row.setup.name }}</a> }
+                @else { {{ row.setup.name }} }
+                @if (row.setup.example) { <span class="chip">Example</span> }
+                @if (row.sharedWith.length > 0) { <span class="note">Same content as @for (other of row.sharedWith; track other; let last = $last) {“{{ other }}”{{ last ? '' : ', ' }}}</span> }
+              </th>
+              <td>@if (row.setup.underlying; as symbol) { <app-asset-identity [symbol]="symbol" size="xs" [logo]="false" /> } @else { — }</td>
+              <td>@if (row.setup.saved_at_ms; as savedAt) { <app-timestamp-display [value]="savedAt" mode="local" granularity="short-date" /> } @else { — }</td>
+              <td>
+                @if (row.setup.cannot_open_reason; as reason) {
+                  <span class="problem">Cannot be opened: {{ reason }}</span>
+                } @else {
+                  {{ row.runs }} {{ row.runs === 1 ? 'run' : 'runs' }} · {{ row.studies }} {{ row.studies === 1 ? 'search' : 'searches' }} ·
+                  @if (row.latestApproval; as status) { {{ row.approvals }} approved {{ row.approvals === 1 ? 'version' : 'versions' }}, latest {{ status | receiptLabel }} } @else { no approved version }
+                }
+              </td>
+              <td>
+                @if (!row.setup.example) {
+                  <app-confirm-delete [ariaLabel]="'Delete setup ' + row.setup.name" confirmLabel="Delete" groupLabel="Confirm deleting this setup" [prompt]="'Delete ' + row.setup.name + '? Its runs, searches and approved versions stay.'" (confirmed)="remove(row.setup.name)" />
+                }
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </section>
+
+    <section class="block" aria-labelledby="osi-evidence">
+      <h2 id="osi-evidence">Runs, searches and approved versions</h2>
+      <p class="muted">Every one opens by its own id, including a run that was never named and evidence whose saved setup was changed or deleted.</p>
+      @for (list of cuts(); track list.what) {
+        <p class="muted" role="status">Showing the newest {{ list.shown }} of {{ list.total }} {{ list.what }}.</p>
+      }
+      <div class="filters" role="group" aria-label="Kind of evidence">
+        @for (option of filters; track option.id) {
+          <button type="button" class="filter" [class.filter--on]="filter() === option.id" [attr.aria-pressed]="filter() === option.id" (click)="setFilter(option.id)">{{ option.label }}</button>
+        }
+      </div>
+      <table class="table">
+        <thead>
+          <tr><th scope="col">Evidence</th><th scope="col">Underlying</th><th scope="col">Recorded</th><th scope="col">Status</th><th scope="col">Saved setups holding this exact content</th></tr>
+        </thead>
+        <tbody>
+          @for (row of shown(); track row.kind + row.id) {
+            <tr>
+              <th scope="row">
+                <a [routerLink]="row.route">{{ row.title }}</a>
+                @if (row.recordedName; as label) { <span class="note">Recorded as “{{ label }}”</span> } @else { <span class="note">Unnamed</span> }
+              </th>
+              <td>@if (row.underlying; as symbol) { <app-asset-identity [symbol]="symbol" size="xs" [logo]="false" /> } @else { — }</td>
+              <td><app-timestamp-display [value]="row.createdAtMs" mode="local" granularity="short-date" /></td>
+              <td>{{ row.status | receiptLabel }}@if (row.detail; as detail) { · {{ detail }} }</td>
+              <td>
+                @let holders = row.holders;
+                @if (holders.kind === 'names') {
+                  @for (name of holders.names; track name.name; let last = $last) {
+                    <a [routerLink]="setupRoute(name.name, 'overview')">“{{ name.name }}”</a>{{ last ? '' : ', ' }}
+                  }
+                  @if (holders.names.length > 1) { <span class="note">identical content, so each shares this evidence and none owns it</span> }
+                } @else if (holders.kind === 'none') {
+                  <span class="note">None. No saved setup holds this content now; it stays here and opens by its id.</span>
+                } @else {
+                  <span class="note">Not known: its setup can no longer be read.@if (holders.reason; as reason) { {{ reason }} }</span>
+                }
+              </td>
+            </tr>
+          } @empty {
+            <tr><td colspan="5">Nothing is recorded{{ filter() === 'all' ? '' : ' of this kind' }}.</td></tr>
+          }
+        </tbody>
+      </table>
+      @if (visible().length > shown().length) {
+        <button type="button" class="more" (click)="showMore()">Show {{ visible().length - shown().length > 100 ? 100 : visible().length - shown().length }} more</button>
+      }
+    </section>
+  </div>
+}

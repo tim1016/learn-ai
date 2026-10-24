@@ -19,7 +19,8 @@ import { AlpacaHomeComponent } from './components/brokers/alpaca-home/alpaca-hom
 import { AlpacaActivityPageComponent } from './components/brokers/alpaca-desk/activity/alpaca-activity-page.component';
 import { BotPanelShellComponent } from './components/broker/v2-panel/panel-shell/bot-panel-shell.component';
 import { EntryComponent } from './components/entry/entry.component';
-import { OptionsBacktestPageComponent } from './components/options-backtest/options-backtest-page.component';
+import { OptionsSetupsIndexComponent } from './options-setups/index/options-setups-index.component';
+import { routeTreeHasData } from './shell/current-url.service';
 import { NotFoundComponent } from './shell/not-found.component';
 import { accountWorkspaceFixRoute, type AccountWorkspaceFixDestination } from './fleet/account-workspace';
 import { HELP_DOCUMENTS } from './shared/help/help-documents';
@@ -142,6 +143,9 @@ describe('routes', () => {
     // A lost address starting like a real page fails in place too.
     '/research-lab/nothing-here',
     '/no-such-page?x=1#frag',
+    // A setup's address always carries its tab: a bare name, and a tab no page serves yet, name nothing.
+    '/options-setups/Mine',
+    '/options-setups/Mine/explore',
   ])('leaves %s where it is on the not-found page, never on a default page', async (path) => {
     TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
     const router = TestBed.inject(Router);
@@ -155,12 +159,21 @@ describe('routes', () => {
     expect(await leaf.routeConfig?.loadComponent?.()).toBe(NotFoundComponent);
   });
 
-  it('lazily loads the Options Backtest page at its own address', async () => {
-    const route = routes.find((candidate) => candidate.path === 'options-backtest');
-    if (route?.loadComponent === undefined) throw new Error('Options Backtest route is missing.');
+  it('lazily loads the Options setups list at its own address and keeps Define\'s rail in view', async () => {
+    TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
+    const router = TestBed.inject(Router);
+    const leafOf = () => {
+      let leaf = router.routerState.snapshot.root;
+      while (leaf.firstChild !== null) leaf = leaf.firstChild;
+      return leaf;
+    };
 
-    expect(await route.loadComponent()).toBe(OptionsBacktestPageComponent);
-    expect(route.data).toMatchObject({ stickyContent: true });
+    await router.navigateByUrl('/options-setups');
+    expect(await leafOf().routeConfig?.loadComponent?.()).toBe(OptionsSetupsIndexComponent);
+    expect(routeTreeHasData(router.routerState.snapshot.root, 'stickyContent')).toBe(false);
+
+    await router.navigateByUrl('/options-setups/SPY%200DTE/define');
+    expect(routeTreeHasData(router.routerState.snapshot.root, 'stickyContent')).toBe(true);
   });
 
   it('lazily loads the Data Lake Observatory and keeps it distinct from Data Lab', async () => {

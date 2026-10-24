@@ -21,7 +21,7 @@ test('explains the actual frozen PUT procedure without opening final or loading 
     else if (path === '/api/jobs') await route.fulfill({ json: [] });
     else await route.fulfill({ status: 503, json: { detail: 'Outside the retained lineage fixture.' } });
   });
-  await page.goto(`/options-evidence/study/${lineage.study_id}?view=lineage`);
+  await page.goto(`/options-setups/evidence/study/${lineage.study_id}?view=lineage`);
   const workspace = page.locator('app-options-evidence-page');
   const procedure = workspace.locator('app-options-research-lineage');
   await expect(procedure.getByRole('heading', { name: 'Why these parameters?' })).toBeVisible();

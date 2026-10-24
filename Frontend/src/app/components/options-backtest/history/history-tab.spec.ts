@@ -5,7 +5,7 @@ import { RunRefusedError } from '../options-backtest.service';
 import type { RunListItem } from '../options-backtest.types';
 import { fakeJobs, type FakeJobs } from '../testing/fake-jobs';
 import { expectTradingDatesInNewYork, lettingGo, press, reads } from '../testing/page-actions';
-import { fakeService, type FakeService } from '../testing/render-page';
+import { fakeService, type FakeService } from '../testing/fake-service';
 import { renderHistoryTab } from '../testing/render-history';
 import { runDetail, runItem } from '../testing/run-fixtures';
 import { sessionOpenMs } from '../../../shared/date-picker/testing/fake-trading-calendar';

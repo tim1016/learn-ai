@@ -3,7 +3,7 @@
   <p>Golden version <code>{{ configuration().golden_setup_id }}</code></p>
   <p>Exact setup <code>{{ configuration().setup_sha256 }}</code> <app-copy-button [text]="configuration().setup_sha256" ariaLabel="Copy setup hash" /></p>
   <p>Rules <code>{{ configuration().rules_digest }}</code></p>
-  <a [routerLink]="['/options-evidence/golden', configuration().golden_setup_id]" [queryParams]="evidenceQuery()">Inspect pinned Golden evidence</a>
+  <a [routerLink]="['/options-setups/evidence/golden', configuration().golden_setup_id]" [queryParams]="evidenceQuery()">Inspect pinned Golden evidence</a>
   @if (proof.hasValue()) { @let retained = proof.value();
     @if (!identityMatches()) {
       <div class="problem" role="status">
