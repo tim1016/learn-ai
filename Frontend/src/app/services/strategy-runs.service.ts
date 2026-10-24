@@ -1,18 +1,13 @@
-import { HttpClient, HttpParams } from '@angular/common/http';
+import { HttpClient } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import { environment } from '../../environments/environment';
-import type {
-  StrategyRunListFilters,
-  StrategyRunListResponse,
-  StrategyRunRequest,
-  StrategyRunResponse,
-} from './strategy-runs.types';
+import type { StrategyRunRequest, StrategyRunResponse } from './strategy-runs.types';
 
 /**
- * HTTP client for `/api/research/strategy-runs`. Mirrors the FastAPI
- * router exactly — three endpoints, no metric computation, no
- * client-side caching. Cache lives in the calling component's
+ * HTTP client for `/api/research/strategy-runs`: start a run and read one.
+ * The saved runs are listed by the Research History, not here. No metric
+ * computation, no client-side caching. Cache lives in the calling component's
  * `signal()` so each route refresh hits the server.
  *
  * Following the same pattern as `lean-engine`: Phase B consumes FastAPI
@@ -38,29 +33,6 @@ export class StrategyRunsService {
   async getRun(runId: string): Promise<StrategyRunResponse> {
     return firstValueFrom(
       this.http.get<StrategyRunResponse>(`${this.base}/${encodeURIComponent(runId)}`),
-    );
-  }
-
-  /**
-   * `GET /api/research/strategy-runs?…` — listing endpoint. Filters
-   * are AND-combined server-side; results sort newest-first.
-   */
-  async listRuns(filters: StrategyRunListFilters = {}): Promise<StrategyRunListResponse> {
-    let params = new HttpParams();
-    if (filters.spec_hash) params = params.set('spec_hash', filters.spec_hash);
-    if (filters.symbol) params = params.set('symbol', filters.symbol);
-    if (filters.status) params = params.set('status', filters.status);
-    if (filters.parent_run_id) params = params.set('parent_run_id', filters.parent_run_id);
-    if (filters.parent_spec_hash) {
-      params = params.set('parent_spec_hash', filters.parent_spec_hash);
-    }
-    if (filters.since_ms !== undefined) {
-      params = params.set('since_ms', String(filters.since_ms));
-    }
-    if (filters.limit !== undefined) params = params.set('limit', String(filters.limit));
-
-    return firstValueFrom(
-      this.http.get<StrategyRunListResponse>(this.base, { params }),
     );
   }
 

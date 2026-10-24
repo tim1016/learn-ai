@@ -147,6 +147,24 @@ def _isolate_data_lake_write_root(
 
 
 @pytest.fixture(autouse=True)
+def _isolate_research_artifacts_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep every test's research artifacts (runs, walk-forwards, study records) in its own tmp_path.
+
+    Unpinned, the root resolves to ``PythonDataService/artifacts/runs``: the directory a developer's own runs live in,
+    which the data plane container bind-mounts. A study route that records its run (#3520) writes there, so any test
+    that drives one would leave records in the real History. ``LEARN_AI_ARTIFACTS_ROOT`` is read at call time by
+    ``default_artifacts_root``, so setting it here redirects every reader and writer that takes the default. A test that
+    wants a specific root passes ``root=`` or sets the variable itself; later settings win.
+    """
+    from app.research.artifact.root import ARTIFACTS_ROOT_ENV
+
+    monkeypatch.setenv(ARTIFACTS_ROOT_ENV, str(tmp_path / "research-artifacts"))
+
+
+@pytest.fixture(autouse=True)
 def _isolate_canary_admission_ledger(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

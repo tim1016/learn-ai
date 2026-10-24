@@ -50,8 +50,9 @@ export class SignalReportComponent {
    *  reader is not seduced into reading meaning into noise. */
   readonly showDetailsAnyway = signal(false);
 
-  readonly graduationStage = computed<0 | 1 | 2 | 3>(() => {
-    return (this.result().graduation?.stageInfo?.stage ?? 0) as 0 | 1 | 2 | 3;
+  /** The recorded stage, or `null`: a result with no stage is not a Stage 0 rejection, so its panels stay open. */
+  readonly graduationStage = computed<0 | 1 | 2 | 3 | null>(() => {
+    return (this.result().graduation?.stageInfo?.stage ?? null) as 0 | 1 | 2 | 3 | null;
   });
 
   readonly isStage0Rejected = computed<boolean>(() => this.graduationStage() === 0);

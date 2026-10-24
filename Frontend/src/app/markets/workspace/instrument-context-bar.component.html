@@ -1,0 +1,38 @@
+<section class="context-bar" aria-label="Instrument context">
+  <div class="context-bar__field context-bar__field--instrument">
+    <app-symbol-picker [symbol]="context.symbol()" (symbolChange)="onSymbolPicked($event)" />
+  </div>
+  @if (windowControls()) {
+    <div class="context-bar__field context-bar__field--dates">
+      <span>Window</span>
+      <app-date-range-picker
+        label="Window"
+        [(from)]="fromIso"
+        [(to)]="toIso"
+        [bounds]="dateBounds()"
+        [sessionsOnly]="false"
+        [hostOffers]="context.presetOffers()"
+        (changed)="onDatesChanged($event)"
+        (picked)="onPresetPicked($event)"
+      />
+    </div>
+    <label class="context-bar__field">
+      <span>Timeframe</span>
+      <select (change)="onTimeframeChange($event)">
+        @for (timeframe of barTimeframes; track timeframe.value) {
+          <option [value]="timeframe.value" [selected]="timeframe.value === context.shown().timeframe">{{ timeframe.label }}</option>
+        }
+      </select>
+    </label>
+    <label class="context-bar__field">
+      <span>Session</span>
+      <select (change)="onSessionChange($event)">
+        <option value="regular" [selected]="context.shown().session === 'regular'">Regular hours</option>
+        <option value="extended" [selected]="context.shown().session === 'extended'">Extended hours</option>
+      </select>
+    </label>
+    @if (context.presetsProblem(); as problem) {
+      <p class="context-bar__note" role="status">{{ problem }}</p>
+    }
+  }
+</section>

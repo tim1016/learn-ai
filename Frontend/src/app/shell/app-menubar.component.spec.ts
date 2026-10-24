@@ -11,8 +11,8 @@ import { ACTIVE_GROUP_CLASS, APP_MENU } from './app-menu';
 class MenubarRouteComponent {}
 
 const routes = [
-  { path: 'data-lab', component: MenubarRouteComponent },
-  { path: 'pricing-lab', component: MenubarRouteComponent },
+  { path: 'markets', component: MenubarRouteComponent },
+  { path: 'markets/:symbol/options/pricing', component: MenubarRouteComponent },
 ];
 
 describe('AppMenubarComponent', () => {
@@ -32,7 +32,7 @@ describe('AppMenubarComponent', () => {
   it('moves the active highlight when the route changes', async () => {
     const { container, fixture } = await render(AppMenubarComponent, { providers: [provideRouter(routes)] });
 
-    await TestBed.inject(Router).navigateByUrl('/pricing-lab');
+    await TestBed.inject(Router).navigateByUrl('/markets/SPY/options/pricing');
     fixture.detectChanges();
 
     const active = container.querySelectorAll(`.${ACTIVE_GROUP_CLASS}`);

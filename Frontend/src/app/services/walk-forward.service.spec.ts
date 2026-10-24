@@ -7,52 +7,14 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { environment } from '../../environments/environment';
-import type { RunLedger } from './strategy-runs.types';
 import { WalkForwardService } from './walk-forward.service';
 import type {
   WalkForwardListResponse,
   WalkForwardResponse,
 } from './walk-forward.types';
+import { makeRunLedger } from '../testing/strategy-run-fixtures';
 
 const BASE_URL = `${environment.pythonServiceUrl}/api/research/strategy-runs/walk-forward`;
-
-function makeRunLedger(overrides: Partial<RunLedger> = {}): RunLedger {
-  return {
-    schema_version: '1.0',
-    run_id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    parent_run_id: null,
-    parent_spec_hash: null,
-    strategy_spec_id: 'spy_ema_crossover',
-    strategy_spec_hash: 'd'.repeat(64),
-    strategy_spec_json: { name: 'spy_ema_crossover', symbols: ['SPY'] },
-    engine_name: 'learn_ai_event_driven',
-    engine_version: '0.1.0',
-    engine_git_commit: 'unknown',
-    symbol: 'SPY',
-    resolution_minutes: 15,
-    // NY-midnight UTC ms (matches Phase A's _date_to_ny_midnight_ms output).
-    // 2024-01-02 NY-midnight = 2024-01-02T05:00:00Z = 1704171600000.
-    // 2024-12-31 NY-midnight = 2024-12-31T05:00:00Z = 1735621200000.
-    start_ms: 1704171600000,
-    end_ms: 1735621200000,
-    initial_cash: 100000,
-    fill_mode: 'signal_bar_close',
-    commission_per_order: 0,
-    slippage_per_share: 0,
-    warmup_policy: 'spec_indicator_warmup',
-    random_seed: 0,
-    data_source: 'lean_minute_reader',
-    data_snapshot_id: 'SPY|15|...|test',
-    result_hash: 'r'.repeat(64),
-    trade_log_hash: 't'.repeat(64),
-    metrics_hash: 'm'.repeat(64),
-    created_at_ms: 1736000000000,
-    completed_at_ms: 1736000001000,
-    status: 'completed',
-    failure_reason: null,
-    ...overrides,
-  };
-}
 
 function makeWfResponse(): WalkForwardResponse {
   return {
@@ -199,7 +161,7 @@ describe('WalkForwardService', () => {
 
   describe('runFromRun', () => {
     it('derives a rolling 60/30/30 WF from a run ledger and links parent_run_id', async () => {
-      const run = makeRunLedger({ run_id: 'c'.repeat(32) });
+      const run = makeRunLedger({ run_id: 'c'.repeat(32), strategy_spec_json: { name: 'spy_ema_crossover', symbols: ['SPY'] } });
       const promise = service.runFromRun(run);
       const req = httpMock.expectOne(BASE_URL);
       expect(req.request.method).toBe('POST');

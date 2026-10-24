@@ -49,14 +49,16 @@ describe('AppComponent', () => {
         AppComponent,
         RouterModule.forRoot([
           { path: '', pathMatch: 'full', component: ShellSmokeRouteComponent, data: { chromeless: true } },
-          { path: 'data-lab', component: ShellSmokeRouteComponent },
+          { path: 'markets', component: ShellSmokeRouteComponent },
+          { path: 'markets/:symbol/chart', component: ShellSmokeRouteComponent },
+          { path: 'markets/:symbol/chart/news', component: ShellSmokeRouteComponent },
           { path: 'options-lab', component: ShellSmokeRouteComponent, data: { fullBleed: true } },
           { path: 'options-backtest', component: ShellSmokeRouteComponent, data: { stickyContent: true } },
-          { path: 'research-lab/strategy-runs/:id', component: ShellSmokeRouteComponent },
-          { path: 'research-lab/walk-forward/:id', component: ShellSmokeRouteComponent },
-          { path: 'research-lab/monte-carlo/:id', component: ShellSmokeRouteComponent },
-          { path: 'research-lab/baselines/:id', component: ShellSmokeRouteComponent },
-          { path: 'research-lab/signal-report/:id', component: ShellSmokeRouteComponent },
+          { path: 'research/history/spec-run/:id', component: ShellSmokeRouteComponent },
+          { path: 'research/history/walk-forward/:id', component: ShellSmokeRouteComponent },
+          { path: 'research/history/monte-carlo/:id', component: ShellSmokeRouteComponent },
+          { path: 'research/history/baseline/:id', component: ShellSmokeRouteComponent },
+          { path: 'research/history/signal-report/:id', component: ShellSmokeRouteComponent },
           { path: 'strategy-lab/docs', component: ShellSmokeRouteComponent },
           // The workspace's own URLs, stubbed: these specs grade the window
           // title the shell computes from them, not what the tabs render.
@@ -222,9 +224,12 @@ describe('AppComponent', () => {
 
     it.each([
       ['/options-lab', 'Options Lab · Markets'],
-      ['/data-lab', 'Stocks · Markets'],
+      ['/markets', 'Markets'],
+      // An instrument's place is titled by the entity first (ADR 0084).
+      ['/markets/spy/chart', 'SPY · Chart · Markets'],
+      ['/markets/SPY/chart/news?from=2026-01-02', 'SPY · Headlines · Markets'],
       ['/options-backtest', 'Options Backtest · Options setups'],
-      ['/research-lab/strategy-runs/run-42', 'Research Lab · Research'],
+      ['/research/history/spec-run/run-42', 'History · Research'],
       // A document is titled by itself: the help index is its home, not the page it explains.
       ['/strategy-lab/docs', 'Strategy Lab Manual'],
     ])('sets the browser title outside a workspace as Page · Group from the active menu node: %s', async (url, expected) => {
@@ -254,7 +259,7 @@ describe('AppComponent', () => {
     const router = TestBed.inject(Router);
     const pageBody = () => fixture.nativeElement.querySelector('app-page-body') as HTMLElement;
 
-    await router.navigateByUrl('/data-lab');
+    await router.navigateByUrl('/markets');
     fixture.detectChanges();
     expect(pageBody().classList.contains('page-body--full-bleed')).toBe(false);
 
@@ -267,7 +272,7 @@ describe('AppComponent', () => {
     const router = TestBed.inject(Router);
     const main = () => fixture.nativeElement.querySelector('main') as HTMLElement;
 
-    await router.navigateByUrl('/data-lab');
+    await router.navigateByUrl('/markets');
     fixture.detectChanges();
     expect(main().classList.contains('main--sticky-content')).toBe(false);
 
@@ -280,12 +285,12 @@ describe('AppComponent', () => {
     const router = TestBed.inject(Router);
 
     for (const url of [
-      '/data-lab',
-      '/research-lab/strategy-runs/run-42',
-      '/research-lab/walk-forward/wf-42',
-      '/research-lab/monte-carlo/mc-42',
-      '/research-lab/baselines/baseline-42',
-      '/research-lab/signal-report/42',
+      '/markets',
+      '/research/history/spec-run/run-42',
+      '/research/history/walk-forward/wf-42',
+      '/research/history/monte-carlo/mc-42',
+      '/research/history/baseline/baseline-42',
+      '/research/history/signal-report/42',
     ]) {
       await router.navigateByUrl(url);
       fixture.detectChanges();
@@ -305,7 +310,7 @@ describe('AppComponent', () => {
     expect(fixture.nativeElement.querySelector('app-top-bar')).toBeNull();
     expect(fixture.nativeElement.textContent).toContain('Route body');
 
-    await router.navigateByUrl('/data-lab');
+    await router.navigateByUrl('/markets');
     fixture.detectChanges();
     expect(fixture.nativeElement.querySelector('app-top-bar')).toBeTruthy();
     expect(fixture.nativeElement.querySelector('app-alpaca-live-banner')).toBeTruthy();

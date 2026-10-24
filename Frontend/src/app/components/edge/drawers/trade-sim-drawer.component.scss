@@ -15,6 +15,12 @@
   animation: tsdSlide .2s ease;
 }
 
+.tsd--inline {
+  position: static; width: auto;
+  border: 1px solid $border; border-radius: $radius-md;
+  box-shadow: none; animation: none; z-index: auto;
+}
+
 .tsd-header {
   padding: 14px 18px; border-bottom: 1px solid $border;
   display: flex; align-items: center; justify-content: space-between;

@@ -1,0 +1,265 @@
+{
+  "success": true,
+  "ticker": "SPY",
+  "feature_name": "momentum_5m",
+  "start_date": "2025-01-02",
+  "end_date": "2025-06-30",
+  "bars_used": 48750,
+  "flip_sign": false,
+  "thresholds_tested": [
+    0.5,
+    1.0,
+    1.5
+  ],
+  "cost_bps_options": [
+    1.0,
+    2.5
+  ],
+  "best_threshold": 1.0,
+  "best_cost_bps": 2.5,
+  "backtest_grid": [
+    {
+      "threshold": 1.0,
+      "cost_bps": 2.5,
+      "dates": [
+        "2025-01-02",
+        "2025-01-03"
+      ],
+      "cumulative_returns": [
+        0.001,
+        -0.0025
+      ],
+      "positions": [
+        1.0,
+        -1.0
+      ],
+      "gross_sharpe": 1.4,
+      "net_sharpe": 0.9,
+      "max_drawdown": -0.07,
+      "annualized_turnover": 31.5,
+      "avg_holding_bars": 12.25,
+      "win_rate": 0.52,
+      "avg_win_loss_ratio": 1.1,
+      "total_trades": 412,
+      "net_total_return": 0.18,
+      "gross_total_return": 0.23
+    }
+  ],
+  "walk_forward": {
+    "windows": [
+      {
+        "fold_index": 2,
+        "train_start": "2025-01-02",
+        "train_end": "2025-03-31",
+        "test_start": "2025-04-01",
+        "test_end": "2025-04-30",
+        "train_bars": 19500,
+        "test_bars": 6500,
+        "mu": 0.0003,
+        "sigma": 0.0011,
+        "best_threshold": 1.5,
+        "oos_net_sharpe": 0.7,
+        "oos_gross_sharpe": 1.1,
+        "oos_max_drawdown": -0.03,
+        "oos_net_return": 0.04,
+        "oos_win_rate": 0.51,
+        "oos_total_trades": 77,
+        "oos_dates": [
+          "2025-04-01"
+        ],
+        "oos_cumulative_returns": [
+          0.002
+        ],
+        "oos_segment_lengths": []
+      }
+    ],
+    "mean_oos_sharpe": 0.65,
+    "std_oos_sharpe": 0.3,
+    "median_oos_sharpe": 0.6,
+    "pct_windows_profitable": 0.66,
+    "pct_windows_positive_sharpe": 0.75,
+    "worst_window_sharpe": -0.4,
+    "best_window_sharpe": 1.3,
+    "total_oos_bars": 26000,
+    "combined_oos_dates": [
+      "2025-04-01",
+      "2025-05-01"
+    ],
+    "combined_oos_cumulative_returns": [
+      0.002,
+      0.011
+    ],
+    "combined_oos_bar_returns": [
+      0.0001,
+      -0.0002,
+      0.0003
+    ],
+    "oos_sharpe_trend_slope": -0.05,
+    "alpha_decay": {
+      "slope": -0.05,
+      "intercept": 0.9,
+      "t_stat": -1.7,
+      "p_value": 0.12,
+      "r_squared": 0.31,
+      "n_folds_used": 6,
+      "is_test_valid": true,
+      "is_significant": false
+    }
+  },
+  "graduation": {
+    "criteria": [
+      {
+        "name": "oos_sharpe",
+        "description": "Mean out-of-sample Sharpe",
+        "passed": true,
+        "value": 0.65,
+        "threshold": 0.5,
+        "label": "Pass",
+        "failure_reason": ""
+      }
+    ],
+    "overall_passed": true,
+    "overall_grade": "B",
+    "summary": "Holds out of sample.",
+    "status_label": "Research",
+    "parameter_stability": {
+      "sharpe_values_by_threshold": {
+        "0.5": 0.4,
+        "1.0": 0.9,
+        "1.5": 0.7
+      },
+      "stability_score": 0.82,
+      "stability_label": "Stable"
+    },
+    "stage0_rejection": {
+      "rejected": true,
+      "failed_criteria": [
+        {
+          "criterion_name": "turnover",
+          "value": 210.0,
+          "threshold_repr": "> 200x",
+          "message": "Trades too often."
+        }
+      ]
+    },
+    "stage_info": {
+      "stage": 2,
+      "label": "Research",
+      "description": "Worth studying further.",
+      "next_stage_label": "Promotion",
+      "advance_criteria": [
+        {
+          "name": "stability",
+          "description": "Parameter stability",
+          "current_value": 0.82,
+          "required_repr": ">= 0.5",
+          "met": true
+        }
+      ]
+    }
+  },
+  "signal_diagnostics": {
+    "signal_mean": 0.01,
+    "signal_std": 1.02,
+    "pct_time_active": 0.43,
+    "avg_abs_signal": 0.8,
+    "pct_filtered_by_threshold": 0.2,
+    "pct_gated_by_regime": 0.1
+  },
+  "data_sufficiency": {
+    "total_bars": 48750,
+    "train_bars": 19500,
+    "test_bars": 6500,
+    "walk_forward_folds": 6,
+    "effective_oos_bars": 26000,
+    "regimes_covered": 3,
+    "regime_coverage": {
+      "low_vol": 60,
+      "high_vol": 25
+    },
+    "coverage_warnings": [
+      "Few high-vol days."
+    ]
+  },
+  "effective_sample": {
+    "raw_n": 48750,
+    "effective_n": 9100.5,
+    "autocorrelation_lag1": 0.12,
+    "independent_bets": 410,
+    "max_lag_used": 15,
+    "rho_sum": 1.9
+  },
+  "regime_coverage": {
+    "low_vol_up": 40,
+    "high_vol_down": 12
+  },
+  "joint_regime_coverage": [
+    {
+      "vol_label": "low",
+      "trend_label": "up",
+      "days": 40,
+      "effective_trades": 31.5,
+      "badge": "Pass"
+    }
+  ],
+  "signal_behavior": {
+    "avg_forward_return_when_active": 0.0002,
+    "skewness_active_returns": 0.3,
+    "avg_win_return": 0.0009,
+    "avg_loss_return": -0.0008,
+    "hit_rate": 0.53
+  },
+  "oos_sharpe_ci": {
+    "point": 0.65,
+    "se": 0.2,
+    "ci_lower": 0.26,
+    "ci_upper": 1.04,
+    "confidence_level": 0.95,
+    "n_eff_used": 9100.5,
+    "valid": true,
+    "method": "lo_hac",
+    "sample_size": 0,
+    "hac_lag": 0,
+    "segment_count": 0,
+    "unavailable_reason": ""
+  },
+  "deflated_sharpe": {
+    "raw_sharpe": 0.9,
+    "expected_max_under_null": 0.5,
+    "dsr_probability": 0.71,
+    "n_trials": 12,
+    "skewness": 0.1,
+    "kurtosis": 3.4,
+    "valid": true,
+    "method": "dsr_grid",
+    "effective_trials": 0.0,
+    "trial_sharpe_std": 0.0,
+    "mean_trial_correlation": 0.0,
+    "sample_size": 0,
+    "unavailable_reason": ""
+  },
+  "methodology": {
+    "train_months": 3,
+    "test_months": 1,
+    "window_type": "rolling",
+    "optimization_target": "net_sharpe",
+    "annualization_factor": 98280,
+    "bars_per_day": 390,
+    "horizon": 15,
+    "default_cost_bps": 2.0,
+    "min_bars_for_signal": 500,
+    "flip_sign": false,
+    "regime_gate_enabled": true,
+    "thresholds": [
+      0.5,
+      1.0,
+      1.5
+    ],
+    "cost_bps_options": [
+      1.0,
+      2.5
+    ]
+  },
+  "research_log": "Loaded 48,750 bars\nRan 12 configs",
+  "error": null
+}

@@ -22,12 +22,13 @@ export class SignalVerdictBlockComponent {
 
   readonly graduation = computed<GraduationResult | null>(() => this.result().graduation);
 
-  readonly stage = computed<0 | 1 | 2 | 3>(() => {
-    return (this.graduation()?.stageInfo?.stage ?? 0) as 0 | 1 | 2 | 3;
+  /** The stage the server recorded, or `null` when the result carries none: an absent stage is never read as Stage 0. */
+  readonly stage = computed<0 | 1 | 2 | 3 | null>(() => {
+    return (this.graduation()?.stageInfo?.stage ?? null) as 0 | 1 | 2 | 3 | null;
   });
 
   readonly stageLabel = computed<string>(
-    () => this.graduation()?.stageInfo?.label ?? 'Rejected',
+    () => this.graduation()?.stageInfo?.label ?? 'Stage not recorded',
   );
 
   /** Visual band shared with the engine-lab readiness-score-card so the
@@ -101,6 +102,9 @@ export class SignalVerdictBlockComponent {
     const g = this.graduation();
     const stage = this.stage();
     if (!g) return 'No graduation result available.';
+    if (stage === null) {
+      return 'The server recorded no graduation stage for this signal, so no stage verdict is shown. The criteria below are what it did record.';
+    }
     if (stage === 0) {
       const failedNames = g.stage0Rejection?.failedCriteria?.map((f) => f.criterionName) ?? [];
       const list =

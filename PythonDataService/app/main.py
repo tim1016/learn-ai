@@ -64,6 +64,7 @@ from app.routers import (
     golden_validation,
     grid_search,
     indicator_reliability,
+    instrument_facts,
     iv30,
     iv_recorder,
     jobs,
@@ -79,7 +80,9 @@ from app.routers import (
     recency,
     research_divergence,
     research_experiments,
+    research_history,
     research_runs,
+    research_study_records,
     return_distribution,
     snapshot,
     spec_strategy,
@@ -93,6 +96,9 @@ from app.routers import (
 )
 from app.routers import (
     data_lake as data_lake_router,
+)
+from app.routers import (
+    instrument_data as instrument_data_router,
 )
 from app.routers.fleet_qualification import (
     is_qualification_coordinator_lane_from_environment,
@@ -1347,6 +1353,7 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     app.include_router(option_archive.router)
     app.include_router(scoped_health.router)
     app.include_router(snapshot.router, prefix="/api/snapshot", tags=["snapshot"])
+    app.include_router(instrument_facts.router, prefix="/api/markets", tags=["markets"])
     app.include_router(tickers.router, prefix="/api/tickers", tags=["tickers"])
     app.include_router(trading_calendar.router, prefix="/api/calendar", tags=["calendar"])
     app.include_router(news.router, prefix="/api/news", tags=["news"])
@@ -1432,9 +1439,14 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     app.include_router(options_backtest_runs.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])
     app.include_router(indicator_reliability.router, prefix="/api/research", tags=["research"])
     app.include_router(return_distribution.router, prefix="/api/research", tags=["research"])
-    # Legacy experiment history the Research Lab screens still read: literal ``/experiments`` and
-    # ``/signal-experiments`` segments, so nothing under ``/api/research`` can shadow them.
+    # A stored legacy signal report (``/signal-experiments/{id}/report``), which a History entry of that kind opens.
     app.include_router(research_experiments.router, prefix="/api/research", tags=["research-experiments"])
+    # The Research History: one typed index over the research stores (literal ``/history`` segment).
+    app.include_router(research_history.router, prefix="/api/research/history", tags=["research-history"])
+    # One recorded run of a study (#3520): the detail a History entry of a study type opens.
+    app.include_router(
+        research_study_records.router, prefix="/api/research/study-records", tags=["research-study-records"]
+    )
     # Research-pipeline walk-forward (Phase C). Registered BEFORE
     # ``research_runs`` so the literal ``/walk-forward`` segment wins
     # against the ``GET /{run_id}`` route on the parent router.
@@ -1605,6 +1617,7 @@ if _ROLE_RUNS_CLERK:
 # from the flag-dark slice that first registered the router.
 if _ROLE_RUNS_DATA_PLANE_CORE:
     app.include_router(data_lake_router.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
+    app.include_router(instrument_data_router.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 
 
 if _FLEET_COORDINATOR_SURFACE:

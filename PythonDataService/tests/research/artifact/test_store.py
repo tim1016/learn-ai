@@ -229,6 +229,29 @@ def test_list_ids_empty_returns_empty(tmp_path: Path):
     assert store.list_ids() == []
 
 
+def test_config_paths_lists_every_artifact_with_a_config_including_one_list_ids_would_skip(tmp_path: Path):
+    store = ArtifactStore(_descriptor(), root=tmp_path)
+    good, broken, bare = "a" * 32, "b" * 32, "c" * 32
+    store.save(_make_config(artifact_id=good), _make_result(artifact_id=good))
+    (tmp_path / "phase-x" / broken).mkdir()
+    (tmp_path / "phase-x" / broken / "config.json").write_text("{ not json", encoding="utf-8")
+    (tmp_path / "phase-x" / bare).mkdir()  # a directory with no config is not an artifact
+    (tmp_path / "phase-x" / "not-an-id").mkdir()
+    (tmp_path / "phase-x" / "not-an-id" / "config.json").write_text("{}", encoding="utf-8")
+
+    listed = dict(store.config_paths())
+
+    assert listed == {
+        good: tmp_path / "phase-x" / good / "config.json",
+        broken: tmp_path / "phase-x" / broken / "config.json",
+    }
+    assert store.list_ids() == [good], "list_ids skips the unparseable config; config_paths leaves that to the caller"
+
+
+def test_config_paths_of_a_phase_not_yet_written_is_empty(tmp_path: Path):
+    assert ArtifactStore(_descriptor(), root=tmp_path).config_paths() == []
+
+
 def test_list_ids_orders_newest_first_and_filters_by_since_ms(tmp_path: Path):
     store = ArtifactStore(_descriptor(), root=tmp_path)
     older_id = "a" * 32

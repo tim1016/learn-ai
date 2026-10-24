@@ -32,6 +32,7 @@ from app.data_lake.adjustment_versions import (
     adjustment_companion,
     capture_lock,
     current_snapshot_path,
+    current_version,
     verify_adjustment_receipt,
 )
 from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
@@ -85,6 +86,7 @@ from app.data_lake.polygon_fetcher import (
     volume_may_be_fractional,
 )
 from app.data_lake.polygon_ticker_events import fetch_ticker_events
+from app.data_lake.run_readiness import needs_adjustment_record
 from app.data_lake.sessions import trading_sessions_for
 from app.data_lake.types import (
     ArtifactFailure,
@@ -438,20 +440,23 @@ def expand_required_artifacts(
 
         # Daily-trade derived artifact (per symbol, null trading_date).
         if "trade" in spec.data_types and spec.include_daily_trade:
-            required.append(
-                ArtifactIdentity(
-                    artifact_kind="time_series_bars",
-                    market=spec.market,
-                    symbol=symbol,
-                    trading_date=None,
-                    resolution="daily",
-                    data_type="trade",
-                    provider="learn_ai_derived",
-                    price_adjustment_mode=spec.price_adjustment_mode,
-                )
-            )
+            required.append(daily_trade_identity(spec.market, symbol, spec.price_adjustment_mode))
 
     return required, non_sessions
+
+
+def daily_trade_identity(market: str, symbol: str, price_adjustment_mode: PriceAdjustmentMode) -> ArtifactIdentity:
+    """The identity of a symbol's derived daily-trade rollup in one adjustment tree (one row per symbol, no trading date)."""
+    return ArtifactIdentity(
+        artifact_kind="time_series_bars",
+        market=market,
+        symbol=symbol,
+        trading_date=None,
+        resolution="daily",
+        data_type="trade",
+        provider="learn_ai_derived",
+        price_adjustment_mode=price_adjustment_mode,
+    )
 
 
 def _compute_data_availability_hash(artifacts: list[ArtifactRecord]) -> str:
@@ -530,6 +535,55 @@ def check_stored_minute_day(file_path: str, lake_root: Path, *, symbol: str, tra
     assert_publishable_stored_minute_bars(
         read_minute_trade_bars(file_path, lake_root, admission=admission), symbol=symbol, trading_date=trading_date
     )
+
+
+#: Where a symbol's derived daily file stands against the minute sessions the lake holds now.
+#: ``current`` the writer would reuse it; ``sources_changed`` it was built from another set of sessions (or, for an
+#: adjusted tree, against another corporate-action version, which is part of its data contract);
+#: ``adjustment_evidence_invalid`` its contract matches and the adjustment record its price file needs does not hold;
+#: ``not_built`` there is no complete daily file.
+DailyRollupState = Literal["current", "sources_changed", "adjustment_evidence_invalid", "not_built"]
+
+
+def _daily_rollup_verdict(
+    cached: ArtifactRecord,
+    sources: Sequence[ArtifactRecord],
+    price_adjustment_mode: PriceAdjustmentMode,
+    lake_root: Path,
+    version: str | None,
+) -> Literal["current", "sources_changed", "adjustment_evidence_invalid"]:
+    """The writer's reuse rule for a complete daily file, with the reason it is not reused. Blocking: it reads the file."""
+    contract = _daily_dch([s.id for s in sources], [s.file_sha256 for s in sources], price_adjustment_mode, version)
+    if cached.data_contract_hash != contract:
+        return "sources_changed"
+    return "current" if _cache_matches(cached, contract, lake_root, version) else "adjustment_evidence_invalid"
+
+
+async def daily_rollup_state(
+    symbol: str, price_adjustment_mode: PriceAdjustmentMode, history_floor: date
+) -> DailyRollupState:
+    """Would the writer reuse this symbol's daily file as it stands, and if not, why? Reads; writes nothing.
+
+    The rule is the one the writer reuses a file under (:func:`_daily_rollup_verdict`, also the cache-hit branch of
+    :func:`_process_daily_trade_artifact`), judged against the lake's recorded corporate-action version
+    (``current_version``). It is not the writer's whole decision: a build also refuses inputs of mixed versions and
+    adjusts against a snapshot it has just fetched from the provider, which a read does not do. ``history_floor`` is
+    the oldest session the provider still serves (:func:`_daily_trade_sources`). The source filter reads files, so it
+    runs off the event loop.
+    """
+    identity = daily_trade_identity("usa", symbol, price_adjustment_mode)
+    cached = await catalog_client.select_complete_aggregated_bar_artifact(identity)
+    if cached is None:
+        return "not_built"
+    lake_root = resolve_lake_root(price_adjustment_mode)
+    version: str | None = None
+    if needs_adjustment_record(price_adjustment_mode):
+        try:
+            version = await asyncio.to_thread(current_version, lake_root, symbol)
+        except AdjustmentVersionError:
+            return "adjustment_evidence_invalid"
+    sources = await _daily_trade_sources(identity, lake_root, version, history_floor)
+    return await asyncio.to_thread(_daily_rollup_verdict, cached, sources, price_adjustment_mode, lake_root, version)
 
 
 async def _cached_bars_still_valid(cached: ArtifactRecord, spec: DataRunSpec) -> bool:
@@ -1605,10 +1659,17 @@ async def _daily_trade_sources(
     )
     if adjustment_version is None or history_floor is None:
         return sources
+    return await asyncio.to_thread(_sources_still_rebuildable, sources, lake_root, identity.symbol or "", history_floor)
+
+
+def _sources_still_rebuildable(
+    sources: Sequence[ArtifactRecord], lake_root: Path, symbol: str, history_floor: date
+) -> list[ArtifactRecord]:
+    """``sources`` less the sessions older than ``history_floor`` whose file lacks a valid adjustment record. Blocking."""
     return [
         source for source in sources
         if (source.trading_date is not None and source.trading_date >= history_floor)
-        or adjusted_file_gap(lake_root / source.file_path, source.file_sha256, identity.symbol or "") is None
+        or adjusted_file_gap(lake_root / source.file_path, source.file_sha256, symbol) is None
     ]
 
 
@@ -1648,7 +1709,11 @@ async def _process_daily_trade_artifact(
     # current — and the build below costs seconds against a multi-year
     # history, so answering "reused" must not pay for it.
     cached = await catalog_client.select_complete_aggregated_bar_artifact(identity)
-    if cached is not None and _cache_matches(cached, dch, lake_root, adjustment_version):
+    if (
+        cached is not None
+        and _daily_rollup_verdict(cached, source_trade_records, spec.price_adjustment_mode, lake_root, adjustment_version)
+        == "current"
+    ):
         return cached, None, "reused"
 
     # Then build, and only then claim. The payload is a pure function of

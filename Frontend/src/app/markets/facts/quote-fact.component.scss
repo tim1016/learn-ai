@@ -1,0 +1,55 @@
+:host {
+  display: inline-flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.quote-fact__figures {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.quote-fact__price {
+  color: var(--text-primary);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semi);
+
+  &--unavailable {
+    color: var(--text-subtle);
+    font-weight: var(--fw-regular);
+  }
+}
+
+.quote-fact__move {
+  color: var(--text-subtle);
+  font-size: var(--fs-sm);
+
+  &.positive { color: var(--bull); }
+  &.negative { color: var(--bear); }
+
+  &--unavailable { color: var(--text-subtle); }
+}
+
+.quote-fact__source,
+.quote-fact__note {
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+}
+
+.quote-fact__retry {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-text);
+  font-size: var(--fs-xs);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+:host(.quote-fact--row) {
+  .quote-fact__price { font-size: var(--fs-sm); }
+}

@@ -186,14 +186,13 @@ export class FeatureReportComponent {
     return `${top.reason}: ${top.count}`;
   }
 
-  get stageBadgeSeverity(): 'success' | 'info' | 'warn' | 'danger' {
-    const stage = this.stageInfo?.stage;
-    switch (stage) {
+  get stageBadgeSeverity(): 'success' | 'info' | 'warn' | 'danger' | 'secondary' {
+    switch (this.stageInfo?.stage) {
       case 3: return 'success';
       case 2: return 'info';
       case 1: return 'warn';
-      case 0:
-      default: return 'danger';
+      case 0: return 'danger';
+      default: return 'secondary'; // no stage recorded: neither a pass nor a rejection
     }
   }
 

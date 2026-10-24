@@ -141,7 +141,8 @@ def historical_preview(request: PositionPreviewRequest, data: RunData) -> Positi
     found = data.underlying_day(session.trading_date)
     if found is None:
         raise PreviewUnavailable(
-            "Underlying minute bars are not stored for this session. Use Check data or Past chain to download them."
+            "Underlying minute bars are not stored for this session. "
+            "Use Check data, or Past · Archive on the instrument's Options tab, to download them."
         )
     bars = bars_by_close(found.value, trading_date=session.trading_date, what="the underlying")
     if entry_ms not in bars:
@@ -215,7 +216,8 @@ def historical_preview(request: PositionPreviewRequest, data: RunData) -> Positi
         listing = data.listing(session.trading_date)
         if listing is None:
             raise PreviewUnavailable(
-                "The option listing is not stored for this session. Use Past chain to download it."
+                "The option listing is not stored for this session. "
+                "Use Past · Archive on the instrument's Options tab to download it."
             )
         for leg in setup.legs:
             picked = pick_contract(leg, listing=listing.value, trading_date=session.trading_date, underlying_price=spot)
@@ -224,7 +226,8 @@ def historical_preview(request: PositionPreviewRequest, data: RunData) -> Positi
             option = data.option_day(picked.contract, session.trading_date)
             if option is None:
                 raise PreviewUnavailable(
-                    f"{picked.contract.occ_symbol}: minute prices are not stored. Use Check data or Past chain."
+                    f"{picked.contract.occ_symbol}: minute prices are not stored. "
+                    "Use Check data, or Past · Archive on the instrument's Options tab."
                 )
             bar = bars_by_close(option.value, trading_date=session.trading_date, what=picked.contract.occ_symbol).get(
                 entry_ms

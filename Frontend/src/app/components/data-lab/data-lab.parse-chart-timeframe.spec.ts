@@ -9,7 +9,7 @@
  * ZIP payload.
  */
 import { describe, it, expect } from 'vitest';
-import { parseChartTimeframe } from './data-lab.component';
+import { parseChartTimeframe } from './data-lab-scope';
 
 describe('parseChartTimeframe', () => {
   it('maps chart timeframe labels to timespan and multiplier, and rejects unrecognized vocabulary', () => {

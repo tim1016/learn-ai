@@ -78,6 +78,7 @@ function toSnapshotContract(contract: Schema['OptionsContractSnapshotItem']): Sn
     contractType: contract.contract_type ?? null,
     strikePrice: contract.strike_price ?? null,
     expirationMs: contract.expiration_ms ?? null,
+    standard: contract.standard ?? null,
     breakEvenPrice: contract.break_even_price ?? null,
     impliedVolatility: contract.implied_volatility ?? null,
     openInterest: contract.open_interest ?? null,
