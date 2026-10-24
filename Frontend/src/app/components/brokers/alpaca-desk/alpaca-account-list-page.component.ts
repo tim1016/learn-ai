@@ -4,6 +4,7 @@ import { ActivatedRoute } from '@angular/router';
 
 import { GOLDEN_QUALIFICATION_QUERY_PARAM } from '../../../fleet/account-workspace';
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
+import { AlpacaDeployIntentComponent } from './alpaca-deploy-intent.component';
 import { AlpacaLaneCardComponent } from './alpaca-lane-card.component';
 
 /** The runbooks each dead-end state points at: how to add an account, and
@@ -37,7 +38,7 @@ export const DIRECTORY_RUNBOOK_URL = `${RUNBOOKS}/fleet-directory-unavailable.md
 @Component({
   selector: 'app-alpaca-account-list-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AlpacaLaneCardComponent],
+  imports: [AlpacaDeployIntentComponent, AlpacaLaneCardComponent],
   templateUrl: './alpaca-account-list-page.component.html',
   styleUrl: './alpaca-account-list-page.component.scss',
 })
@@ -51,6 +52,12 @@ export class AlpacaAccountListPageComponent {
   /** A golden configuration on its way to Deploy (#2696): "Use in Deploy"
    * names no account, so choosing one here is the step it still needs. */
   protected readonly goldenHandoff = computed(() => this.queryParams().has(GOLDEN_QUALIFICATION_QUERY_PARAM));
+
+  /** The exact version the handoff names, as the address carries it. It stays
+   * in the address while an account is chosen and is read again, never
+   * replaced, by the panel that shows it (PRD #3490 R19). */
+  protected readonly pinnedVersion = computed(() => this.queryParams().get(GOLDEN_QUALIFICATION_QUERY_PARAM) ?? '');
+  protected readonly strategyKey = computed(() => this.queryParams().get('strategy'));
 
   /** A broker-wide `?deploy` intent has no lane yet: the list itself is the
    * deploy entry point's lane-selection step. A golden handoff is one too. */
