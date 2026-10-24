@@ -6,7 +6,10 @@ Canonical implementation: app/research/validation/ic.py
 Validated against: RP-001 fixture (tests/fixtures/test_research_fixtures.py::TestRP001InformationCoefficient) and REL-001 fixture (tests/fixtures/test_research_fixtures.py::TestREL001ICHitRate), both at atol=1e-9.
 
 The IC measures the daily Spearman rank correlation between a feature
-and the 15-minute forward log return.
+and the 15-minute forward log return. A day is the New York calendar date
+of the bar's instant (``SESSION_TZ``, resolved through the zone, so
+daylight saving time moves nothing): a bar at 19:30 ET belongs to its own
+session's day in January, where its UTC date is already the next one.
 
 Formulas
 --------
@@ -28,6 +31,9 @@ import pandas as pd
 from scipy import stats
 
 logger = logging.getLogger(__name__)
+
+#: The zone whose calendar date names a day (a session), here and in the callers that report a day.
+SESSION_TZ = "America/New_York"
 
 
 @dataclass
@@ -291,6 +297,11 @@ def compute_information_coefficient(
 ) -> ICResult:
     """Compute daily Information Coefficient.
 
+    Formula: IC_d = Spearman(feature, target) over the bars of New York date d (n_d >= 5 pairs, both standard deviations above 1e-12); mean_IC = (1/N)·Σ IC_d; t = mean_IC / (std_IC / sqrt(N)), with the Newey-West t and effective N of the module docstring.
+    Reference: López de Prado, Advances in Financial Machine Learning (2018) §8 for the daily IC; in-house for the day, which is the New York date of the bar's instant (the zone resolves daylight saving time).
+    Canonical implementation: this file.
+    Validated against: RP-001 and REL-001 in tests/fixtures/test_research_fixtures.py at atol=1e-9, rtol=0 (regular-hours bars, whose New York and UTC dates agree); tests/research/test_ic.py::TestDailyGroupingFollowsTheNewYorkDate for the day itself.
+
     Parameters
     ----------
     feature_values : pd.Series
@@ -298,7 +309,8 @@ def compute_information_coefficient(
     target_returns : pd.Series
         15-minute forward log returns (aligned with bars).
     timestamps_ms : pd.Series
-        Bar timestamps in milliseconds since epoch.
+        Bar timestamps in milliseconds since epoch. With ``rolling_window`` set they are only read for the
+        window's date (UTC); without it they name each bar's New York day.
     correlation_method : str
         Correlation method (default ``"spearman"``).
     min_nw_lag : int
@@ -326,7 +338,7 @@ def compute_information_coefficient(
         {
             "feature": feature_values.values,
             "target": target_returns.values,
-            "date": pd.to_datetime(timestamps_ms, unit="ms", utc=True).dt.date,
+            "date": pd.to_datetime(timestamps_ms, unit="ms", utc=True).dt.tz_convert(SESSION_TZ).dt.date,
         }
     )
 

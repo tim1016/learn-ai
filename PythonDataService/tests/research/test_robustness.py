@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
+import pytest
 
 from app.research.validation.robustness import (
     compute_monthly_ic_breakdown,
@@ -229,6 +231,34 @@ class TestRegimeAnalysis:
         if trend_regimes:
             labels = {r.regime_label for r in trend_regimes}
             assert labels.issubset({"Trending Up", "Sideways", "Trending Down"}), "trend regimes use the trend labels"
+
+    def test_the_regime_days_are_the_new_york_dates_the_daily_ic_names(self) -> None:
+        """Each session is 40 flat bars at 15:00 ET and ten at 19:00 ET (00:00 UTC of the next date, in standard time).
+
+        The evening of an odd session swings 2%; an even session's evening is flat. By New York date the volatile
+        days are the odd sessions, so those are the sessions the IC of 0.08 sits in; by UTC date the swing lands on the
+        following session and the regimes would read the other way round (#3523).
+        """
+        sessions = [d.date() for d in pd.bdate_range("2024-01-02", periods=30)]
+        ic_dates = [str(day) for day in sessions]
+        ic_values = [(0.08 if k % 2 == 1 else 0.02) + 0.001 * (k % 3) for k in range(1, 31)]
+        bars: list[dict] = []
+        for k, day in enumerate(sessions, start=1):
+            swing = 0.02 if k % 2 == 1 else 0.0
+            for hour, count in ((15, 40), (19, 10)):
+                opening = pd.Timestamp(f"{day} {hour:02d}:00", tz="America/New_York")
+                for minute in range(count):
+                    flat = hour == 15 or minute == count - 1
+                    price = 100.0 if flat else 100.0 * np.exp(swing if minute % 2 == 0 else -swing)
+                    bars.append({"timestamp": int((opening + pd.Timedelta(minutes=minute)).timestamp() * 1000), "close": price})
+
+        vol, _ = compute_regime_analysis(ic_values, ic_dates, bars, date_zone="America/New_York")
+
+        by_label = {r.regime_label: r.mean_ic for r in vol}
+        odd = [ic for k, ic in enumerate(ic_values, start=1) if k % 2 == 1]
+        even = [ic for k, ic in enumerate(ic_values, start=1) if k % 2 == 0]
+        assert by_label["Low Vol"] == pytest.approx(float(np.mean(even)), abs=1e-12, rel=0), "the flat evenings' sessions are low volatility"
+        assert by_label["Normal Vol"] == pytest.approx(float(np.mean(odd)), abs=1e-12, rel=0), "the swinging evenings' sessions are not"
 
     def test_insufficient_ic_data(self) -> None:
         vol, trend = compute_regime_analysis(

@@ -227,6 +227,26 @@ class TestComputeIndicatorReliabilityWithOos:
                 horizons=[10],
             )
 
+    def test_the_train_and_test_dates_are_the_new_york_dates_of_the_edge_bars_so_an_evening_is_not_the_next_day(self):
+        """In standard time a bar at 19:xx ET is 00:xx UTC of the next date; the window ends on its own session (#3523)."""
+        rng = np.random.default_rng(3)
+        sessions = ["2024-02-20", "2024-02-21", "2024-02-22", "2024-02-23", "2024-02-26", "2024-02-27", "2024-02-28", "2024-02-29"]
+        stamps = []
+        for day in sessions:
+            for hour, count in ((15, 40), (19, 20)):
+                opening = pd.Timestamp(f"{day} {hour:02d}:00", tz="America/New_York")
+                stamps.extend(int((opening + pd.Timedelta(minutes=minute)).timestamp() * 1000) for minute in range(count))
+        close = 100 * np.exp(np.cumsum(rng.normal(0, 0.001, len(stamps))))
+        df = pd.DataFrame({"timestamp": stamps, "close": close, "rsi_14": rng.normal(50, 10, len(stamps))})
+
+        # 360 of 480 bars train: the last train bar is session 2024-02-27's 19:19 ET, the first test bar 2024-02-28's 15:00 ET.
+        _, _, metadata = compute_indicator_reliability_with_oos(
+            df=df, indicator_column="rsi_14", horizons=[1], train_ratio=0.75, random_simulations=5
+        )
+
+        assert (metadata["train_start"], metadata["train_end"]) == ("2024-02-20", "2024-02-27"), "train ends on its own session"
+        assert (metadata["test_start"], metadata["test_end"]) == ("2024-02-28", "2024-02-29"), "test ends on the last session"
+
 
 class TestFindBestHorizon:
     """Tests for find_best_horizon function (OOS-priority selection)."""

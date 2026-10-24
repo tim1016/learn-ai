@@ -652,11 +652,6 @@ measured in `tests/research/test_feature_study_lake_vs_provider.py`.
   refuses it (`captured_before_final`, naming the day) after the count warned of nothing. The count also treats today
   as forming until the New York date rolls, while a run admits it once the extended final instant plus the lease has
   passed (20:20 ET, or 17:20 on an early close), so between 20:20 ET and midnight the notice says nothing and the run fetches one session.
-- **P3: under extended hours in standard time, the daily IC and the dates a result reports group by UTC date (Feature,
-  Indicator reliability).** 19:00 to 20:00 ET is 00:00 to 01:00 UTC from November to March, so those after-hours bars
-  count with the next day in the daily IC (`app/research/validation/ic.py`, shared) and in a reliability result's train
-  and test dates. Regular hours are unaffected. The overnight mask of both studies reads the New York date, so no
-  forward return reaches across the gap.
 - **P2: a window that starts before the symbol listed refuses.** Admission has no "not applicable" outcome for a
   session before the first trade; the provider path computed on the shorter series. The refusal is
   `data_unavailable_from_provider` for the sessions the vendor answers empty.

@@ -85,7 +85,7 @@ Research Lab sub-nav). This document is organised by concept, not by tranche.
 | $C_t$ | Close price at bar $t$ |
 | $r_t^{(h)} = \ln(C_{t+h} / C_t)$ | $h$-bar forward log return; NaN where bars $t$ and $t+h$ fall on different New York dates |
 | $f_t$ | Indicator value at bar $t$ |
-| $d$ | A calendar date (session) |
+| $d$ | A trading day: the New York calendar date of a bar's instant, so a session's 04:00 to 20:00 ET tape is one day |
 | $\mathcal{B}_d$ | Set of bars belonging to date $d$ |
 | $n_d = \lvert \mathcal{B}_d \rvert$ | Valid (non-NaN) feature/return pairs in day $d$ |
 | $N$ | Number of days with a valid daily IC |

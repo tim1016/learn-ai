@@ -61,9 +61,10 @@ response carries the identity (input identity, admitted snapshot digest, calcula
 version) a cache or a saved result would key on. No calculation ownership changes: the
 IC, correction, baseline, regime and IR-proxy math stay in
 `app/research/indicator_reliability.py`. Two session-dependent inputs follow the
-session: the overnight mask reads the New York date (the UTC date put late after-hours
-bars with the next pre-market), and the IR proxy's bars a year count the extended span
-under `extended`. For regular hours both are what they were.
+session: a day is the New York date (the UTC date put late after-hours bars with the
+next day, so the overnight mask, the daily IC and the reported train and test dates all
+read the New York date), and the IR proxy's bars a year count the extended span under
+`extended`. For regular hours both are what they were.
 
 Committed lake-file admission (#2456) is owned by
 `PythonDataService/app/data_lake/admission.py`, backed by committed catalog

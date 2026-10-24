@@ -31,7 +31,7 @@ from app.research.target import (
     compute_forward_log_return,
     validate_return_series,
 )
-from app.research.validation.ic import compute_information_coefficient
+from app.research.validation.ic import SESSION_TZ, compute_information_coefficient
 from app.research.validation.quantile import compute_quantile_analysis
 from app.research.validation.robustness import RobustnessResult, compute_robustness
 
@@ -270,6 +270,7 @@ def run_feature_research(
                 daily_ic_values=ic_result.daily_ic_values,
                 daily_ic_dates=ic_result.daily_ic_dates,
                 bars=bars,
+                date_zone=SESSION_TZ,
             )
             if report.robustness is not None and report.robustness.train_test is not None:
                 tt = report.robustness.train_test

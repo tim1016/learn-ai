@@ -268,6 +268,7 @@ def compute_regime_analysis(
     daily_ic_values: list[float],
     daily_ic_dates: list[str],
     bars: list[dict],
+    date_zone: str = "UTC",
 ) -> tuple[list[RegimeICResult], list[RegimeICResult]]:
     """Split ICs by volatility and trend regimes.
 
@@ -279,6 +280,9 @@ def compute_regime_analysis(
         YYYY-MM-DD dates corresponding to IC values.
     bars : list[dict]
         OHLCV bars with timestamp (ms), close, volume.
+    date_zone : str
+        The zone whose calendar date groups the bars into days. It must be the zone that named ``daily_ic_dates``: the
+        New York zone for intraday bars (the daily IC counts a bar in its New York day), UTC for a daily series.
 
     Returns
     -------
@@ -289,7 +293,7 @@ def compute_regime_analysis(
         return [], []
 
     bar_df = pd.DataFrame(bars).sort_values("timestamp").reset_index(drop=True)
-    bar_df["date"] = pd.to_datetime(bar_df["timestamp"], unit="ms", utc=True).dt.date
+    bar_df["date"] = pd.to_datetime(bar_df["timestamp"], unit="ms", utc=True).dt.tz_convert(date_zone).dt.date
     bar_df["log_return"] = np.log(bar_df["close"] / bar_df["close"].shift(1))
 
     # Build daily summary from intraday bars
@@ -564,6 +568,7 @@ def compute_robustness(
     daily_ic_values: list[float],
     daily_ic_dates: list[str],
     bars: list[dict],
+    date_zone: str = "UTC",
 ) -> RobustnessResult:
     """Orchestrate all robustness computations.
 
@@ -575,6 +580,8 @@ def compute_robustness(
         YYYY-MM-DD dates (from ic.py).
     bars : list[dict]
         OHLCV bars for regime detection.
+    date_zone : str
+        The zone that named ``daily_ic_dates`` (see :func:`compute_regime_analysis`).
 
     Returns
     -------
@@ -605,6 +612,7 @@ def compute_robustness(
         daily_ic_values,
         daily_ic_dates,
         bars,
+        date_zone=date_zone,
     )
 
     # Train/Test split

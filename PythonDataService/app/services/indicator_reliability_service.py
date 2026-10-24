@@ -64,8 +64,8 @@ and what it reads now, field by field:
   two dates are the same, so no ``rth`` number moved, and under ``extended`` in standard time
   the 19:00 to 20:00 ET bars (00:00 to 01:00 UTC) are no longer given a return that reaches
   into the next pre-market. The daily IC (:mod:`app.research.validation.ic`, shared with the
-  Feature study) and the train and test dates still group by UTC date, so under ``extended`` in
-  standard time those late after-hours bars count with the next day.
+  Feature study) and the train and test dates group by the same New York date, so a session's
+  evening counts with its own day and no day falls after ``to_date``.
 * **Annualizing.** The IR and Sharpe proxies scale by the bars a trading year holds. Regular hours:
   390 one-minute bars a day, as before. Extended: the 04:00 to 20:00 ET span, 960 one-minute
   bars a day, counted by the scheduled span and not by the minutes that traded (as the regular

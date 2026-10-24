@@ -17,7 +17,8 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
-from app.research.validation.ic import ICResult, compute_information_coefficient
+from app.research.validation.ic import SESSION_TZ, ICResult, compute_information_coefficient
+from app.utils.session_anchors import et_date_at_ms
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,6 @@ to ``outside N-shuffle null; diagnostic only`` whenever
 ``random_simulations < 1000``, so this default keeps the literal-σ
 language available."""
 MIN_OOS_OBSERVATIONS = 10
-SESSION_TZ = "America/New_York"
 
 
 @dataclass
@@ -510,11 +510,11 @@ def compute_indicator_reliability_with_oos(
     train_df = df.iloc[:split_idx].reset_index(drop=True)
     test_df = df.iloc[split_idx:].reset_index(drop=True)
 
-    # Determine date ranges
-    train_start = str(pd.to_datetime(train_df["timestamp"].iloc[0], unit="ms", utc=True).date())
-    train_end = str(pd.to_datetime(train_df["timestamp"].iloc[-1], unit="ms", utc=True).date())
-    test_start = str(pd.to_datetime(test_df["timestamp"].iloc[0], unit="ms", utc=True).date()) if len(test_df) > 0 else None
-    test_end = str(pd.to_datetime(test_df["timestamp"].iloc[-1], unit="ms", utc=True).date()) if len(test_df) > 0 else None
+    # Determine date ranges: the New York date of the first and last bar, the day the daily IC counts them in (#3523)
+    train_start = str(et_date_at_ms(int(train_df["timestamp"].iloc[0])))
+    train_end = str(et_date_at_ms(int(train_df["timestamp"].iloc[-1])))
+    test_start = str(et_date_at_ms(int(test_df["timestamp"].iloc[0]))) if len(test_df) > 0 else None
+    test_end = str(et_date_at_ms(int(test_df["timestamp"].iloc[-1]))) if len(test_df) > 0 else None
 
     metadata = {
         "train_start": train_start,
