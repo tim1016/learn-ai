@@ -1,10 +1,11 @@
-import { inject } from "@angular/core";
-import { Router, Routes, type RedirectFunction, type Route } from "@angular/router";
+import { Routes, type Route } from "@angular/router";
 import { alpacaSurfaceRedirectGuard } from "./fleet/alpaca-surface-redirect.guard";
-import { homeRedirectGuard } from "./fleet/home-redirect.guard";
-import { dropRetiredLensGuard } from "./fleet/retired-lens.guard";
+import { homeRedirect } from "./fleet/home-redirect";
+import { RETIRED_LENS_QUERY_PARAM, dropRetiredLensGuard } from "./fleet/retired-lens.guard";
 import { EntryComponent } from "./components/entry/entry.component";
+import { redirectLegacyDataLab } from "./components/data-lab/data-lab-ingress";
 import { brokerClerkRedirectGuard } from "./fleet/broker-clerk-redirect.guard";
+import { redirectKeepingState } from "./shell/route-redirects";
 
 const loadBrokerLaneUnavailable = () =>
   import('./fleet/broker-lane-unavailable.component').then(
@@ -33,12 +34,35 @@ const markdownDocRoute = (path: string, data: MarkdownDocRouteData): Route => ({
 });
 
 // Shared by every legacy persisted-run URL (strategy-lab/runs/:id and the
-// older engine/runs/:id bookmark). Both must redirect straight to this same
-// final destination rather than to each other: Angular's router does not
-// chain a redirect target that is itself a redirect route within one
-// navigation, so a two-hop redirect silently falls through to the wildcard.
-const redirectToStrategyLabRun: RedirectFunction = ({ params }) =>
-  inject(Router).parseUrl(`/strategy-lab?run=${encodeURIComponent(String(params["id"] ?? ""))}`);
+// older engine/runs/:id bookmark). Both redirect straight to this same final
+// destination rather than to each other: a redirect lands in one hop (PRD
+// #3490 R32). Angular follows an absolute redirect (a `/` string or a
+// `UrlTree`, as here) into another redirect by restarting from the root; it
+// does not follow a relative one, which is re-matched with redirects off and
+// falls through to the wildcard. One hop is the one shape that works for both.
+// The run id joins whatever else the bookmark carried (a tab, a filter, a
+// fragment) rather than replacing it.
+const redirectToStrategyLabRun = redirectKeepingState(["/strategy-lab"], {
+  set: (params) => ({ run: String(params["id"] ?? "") }),
+});
+
+// The retired broker-wide choosers (Bots, Gallery, Settings and
+// Configuration) end at the account list. Their query and fragment go with
+// them, so a co-traveling `deploy` intent, the `strategy` it names and a
+// `golden_qualification` handoff reach the list; the retired `?lens=` and
+// `?surface=` hints do not.
+const redirectToAccountList = redirectKeepingState(["/brokers", "alpaca"], {
+  drop: [RETIRED_LENS_QUERY_PARAM, "surface"],
+});
+
+// A lane's bare address and its retired Configuration tab end at the lane's
+// Settings. The retired `?lens=` is spent in this one redirect, so the old link
+// does not reach the workspace's lens guard and move a second time; a review
+// request (`?profileId&revision`) goes with it.
+const redirectToLaneSettings = redirectKeepingState(
+  (params) => ["/brokers", "alpaca", "clerks", String(params["clerkId"] ?? ""), "settings"],
+  { drop: [RETIRED_LENS_QUERY_PARAM] },
+);
 
 /**
  * Retired Interactive Broker navigation.
@@ -111,8 +135,8 @@ export const routes: Routes = [
         path: "strategy-finder",
         loadComponent: () =>
           import(
-            "./components/options-lab/strategy-finder-stub/strategy-finder-stub.component"
-          ).then((m) => m.StrategyFinderStubComponent),
+            "./components/options-lab/strategy-finder-unavailable/strategy-finder-unavailable.component"
+          ).then((m) => m.StrategyFinderUnavailableComponent),
       },
     ],
   },
@@ -163,11 +187,11 @@ export const routes: Routes = [
       ).then((m) => m.DataLabDocsComponent),
   },
   {
-    // Legacy /data-quality bookmark → the Validate child route.
-    // Any query params pass through; the Data Lab shell normalizes legacy
-    // query state after landing.
+    // Legacy /data-quality bookmark → the Validate child route (or the child
+    // its `mode` names). Query and fragment go with it in the same
+    // navigation; the Data Lab shell applies that query after landing.
     path: "data-quality",
-    redirectTo: "data-lab/validate",
+    redirectTo: redirectLegacyDataLab("/data-lab/validate"),
     pathMatch: "full",
   },
   {
@@ -268,8 +292,7 @@ export const routes: Routes = [
   },
   {
     // Redirects straight to the final destination (not to strategy-lab/runs/:id)
-    // for the same reason as that route: Angular does not chain a redirect
-    // through another redirect route within one navigation.
+    // for the same reason as that route: a redirect lands in one hop.
     path: "engine/runs/:id",
     redirectTo: redirectToStrategyLabRun,
     pathMatch: "full",
@@ -357,12 +380,12 @@ export const routes: Routes = [
     // account is choosing whose Settings to open — never a lane picked for
     // the operator (FR-096).
     path: "brokers/alpaca/settings",
-    redirectTo: "/brokers/alpaca",
+    redirectTo: redirectToAccountList,
     pathMatch: "full",
   },
   {
     path: "brokers/alpaca/configuration",
-    redirectTo: "/brokers/alpaca",
+    redirectTo: redirectToAccountList,
     pathMatch: "full",
   },
   {
@@ -421,7 +444,7 @@ export const routes: Routes = [
         // Settings was the Configuration tab until PRD #2560; the redirect
         // keeps a bookmark's `?profileId&revision` review request with it.
         path: 'configuration',
-        redirectTo: 'settings',
+        redirectTo: redirectToLaneSettings,
         pathMatch: 'full',
       },
       {
@@ -437,8 +460,8 @@ export const routes: Routes = [
       },
       // Bots and Gallery merged into Home (PRD #2560); their lane-scoped
       // bookmarks land on the lane's Home.
-      { path: 'bots', canActivate: [homeRedirectGuard('list')], children: [] },
-      { path: 'gallery', canActivate: [homeRedirectGuard('wall')], children: [] },
+      { path: 'bots', redirectTo: homeRedirect('list'), pathMatch: 'full' },
+      { path: 'gallery', redirectTo: homeRedirect('wall'), pathMatch: 'full' },
       {
         // The account-scoped tabs. Componentless: it contributes account
         // identity to the URL, not a second shell under the first.
@@ -454,8 +477,8 @@ export const routes: Routes = [
           },
           // Overview, Bots and Gallery merged into Home (PRD #2560): the old
           // tabs' bookmarks land on it, Gallery as its Wall view.
-          { path: 'bots', canActivate: [homeRedirectGuard('list')], children: [] },
-          { path: 'gallery', canActivate: [homeRedirectGuard('wall')], children: [] },
+          { path: 'bots', redirectTo: homeRedirect('list'), pathMatch: 'full' },
+          { path: 'gallery', redirectTo: homeRedirect('wall'), pathMatch: 'full' },
           {
             // Activity — the account's history and records (PRD #2560):
             // Today / 30D / 60D money, fees per bot, orders and cash moves,
@@ -489,7 +512,7 @@ export const routes: Routes = [
         // A lane deep link without a tab: its Settings is the lane's own home
         // (the account list is the broker-level surface).
         path: '',
-        redirectTo: 'settings',
+        redirectTo: redirectToLaneSettings,
         pathMatch: 'full',
       },
     ],
@@ -498,16 +521,15 @@ export const routes: Routes = [
   // Decision 2): a surface belongs to an account, so choosing one is
   // choosing an account, and the account list is where that happens. Both
   // bookmarks redirect there rather than 404-ing — including the old
-  // `?surface=` hints, which the guard below still folds onto these two
-  // paths and which therefore land on the list in one further hop.
+  // `?surface=` hints, which the guard below sends to the list directly.
   {
     path: "brokers/alpaca/bots",
-    redirectTo: "/brokers/alpaca",
+    redirectTo: redirectToAccountList,
     pathMatch: "full",
   },
   {
     path: "brokers/alpaca/gallery",
-    redirectTo: "/brokers/alpaca",
+    redirectTo: redirectToAccountList,
     pathMatch: "full",
   },
   {
@@ -603,8 +625,15 @@ export const routes: Routes = [
     loadComponent: loadBrokerLaneUnavailable,
   },
   {
+    // Keeps `?profileId&revision` like the Alpaca twin does.
     path: 'brokers/:broker/clerks/:clerkId/configuration',
-    redirectTo: '/brokers/:broker/clerks/:clerkId/settings',
+    redirectTo: redirectKeepingState((params) => [
+      '/brokers',
+      String(params['broker'] ?? ''),
+      'clerks',
+      String(params['clerkId'] ?? ''),
+      'settings',
+    ]),
     pathMatch: 'full',
   },
   {
@@ -636,5 +665,13 @@ export const routes: Routes = [
     path: 'brokers/:broker/gallery',
     loadComponent: loadBrokerLaneUnavailable,
   },
-  { path: "**", redirectTo: "/data-lab" },
+  {
+    // An address no page answers fails in place, at that address, with a way
+    // back (PRD #3490 R01) — never a second redirect onto a default page that
+    // drops the query and the fragment.
+    path: "**",
+    data: { notFound: true },
+    loadComponent: () =>
+      import("./shell/not-found.component").then((m) => m.NotFoundComponent),
+  },
 ];

@@ -1,7 +1,4 @@
-export {
-  IndicatorVerdictHeroComponent,
-  type VerdictCta,
-} from "./indicator-verdict-hero.component";
+export { IndicatorVerdictHeroComponent } from "./indicator-verdict-hero.component";
 export {
   type Verdict,
   type VerdictAnalysis,

@@ -15,12 +15,11 @@ import type {
   TickerRange,
 } from '../ticker-range-picker.types';
 
-/** Session-toggle behaviour for the picker.
- *  ``preview``  = Both options visible; "preview" tag on Extended; both
- *                 selectable but consumers may ignore Extended.
- *  ``disabled`` = Extended rendered but disabled with a tooltip.
+/** Session-toggle behaviour for the picker. The Python engine reads regular
+ *  hours only, so Extended is never selectable.
+ *  ``disabled`` = Extended rendered but disabled, with the reason shown.
  *  ``hidden``   = Session group not rendered at all. */
-export type SessionMode = 'preview' | 'disabled' | 'hidden';
+export type SessionMode = 'disabled' | 'hidden';
 
 /** The fields the sampling card sets. */
 export type SamplingChange = Partial<Pick<TickerRange, 'resolution' | 'multiplier' | 'session' | 'autoFetch'>>;
@@ -47,7 +46,7 @@ export class SamplingCardComponent {
     'daily',
   ]);
   readonly availableMultipliers = input<readonly number[]>([]);
-  readonly sessionMode = input<SessionMode>('preview');
+  readonly sessionMode = input<SessionMode>('disabled');
   readonly showAutoFetch = input(true);
 
   readonly effectiveSession = computed<Session>(
@@ -66,7 +65,7 @@ export class SamplingCardComponent {
   }
 
   setSession(s: Session): void {
-    if (s === 'extended' && this.sessionMode() === 'disabled') return;
+    if (s === 'extended') return;
     this.changed.emit({ session: s });
   }
 

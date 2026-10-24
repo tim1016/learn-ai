@@ -53,12 +53,9 @@
 }
 .divider { width: 1px; height: 30px; background: $border; }
 .form-row { display: flex; gap: 6px; }
-.sel {
-  height: 28px; padding: 0 8px;
-  background: $bg-elevated; border: 1px solid $border-light;
-  border-radius: 4px; color: $text-primary; font-size: 12px;
-  outline: none; cursor: pointer;
-  &.mono { font-family: $font-mono; }
+.states-fixed {
+  display: inline-flex; align-items: center; height: 28px;
+  color: $text-primary; font-size: 12px; font-family: $font-mono;
 }
 .seg { display: flex; gap: 0; }
 .seg-btn {
@@ -67,12 +64,6 @@
   color: $text-subtle;
   font-size: 11px; font-family: $font-mono; cursor: pointer;
 
-  &.algo.on {
-    background: var(--ind-cat-momentum-soft);
-    border-color: var(--ind-cat-momentum);
-    color: var(--ind-cat-momentum);
-    text-transform: uppercase; letter-spacing: 0.04em;
-  }
   &.view.on {
     background: $bg-elevated; border-color: $border-strong; color: $text-primary;
   }
@@ -92,10 +83,6 @@
   border-radius: $radius-md; padding: 12px;
   margin-bottom: 12px;
   overflow-x: auto;
-}
-.compare-meta {
-  display: flex; gap: 12px; margin-bottom: 8px;
-  font-size: 10px; color: $text-muted; font-family: $font-mono;
 }
 
 /* Bottom grid */

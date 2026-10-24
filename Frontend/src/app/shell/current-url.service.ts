@@ -1,7 +1,14 @@
-import { Injectable, inject } from '@angular/core';
+import { Injectable, computed, inject } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
-import { NavigationEnd, Router } from '@angular/router';
+import { ActivatedRouteSnapshot, NavigationEnd, Router } from '@angular/router';
 import { filter, map, startWith } from 'rxjs/operators';
+
+import { activeMenuNodeFor } from './app-menu';
+
+/** Whether the active route or any route beneath it declares `key` in its data. */
+export function routeTreeHasData(route: ActivatedRouteSnapshot, key: string): boolean {
+  return Boolean(route.data[key]) || route.children.some((child) => routeTreeHasData(child, key));
+}
 
 /**
  * The post-redirect URL, as a signal, for shell surfaces that project from it.
@@ -37,4 +44,17 @@ export class CurrentUrlService {
     this.navigationEnds.pipe(map(() => this.router.routerState.snapshot.root)),
     { initialValue: this.router.routerState.snapshot.root, equal: () => false },
   );
+
+  /**
+   * The URL of the page the router found, or `null` once it fell through to
+   * the not-found page. A lost address such as `/research-lab/nothing` starts
+   * with a real page's prefix, so the URL alone would name that page's group.
+   */
+  readonly pageUrl = computed(() => (routeTreeHasData(this.activeRoute(), 'notFound') ? null : this.url()));
+
+  /** The menu node the found page belongs to, or `null` outside every group. */
+  readonly menuNode = computed(() => {
+    const url = this.pageUrl();
+    return url === null ? null : activeMenuNodeFor(url);
+  });
 }

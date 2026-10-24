@@ -2,7 +2,11 @@
   <app-page-header
     [title]="title()"
     [hasTabs]="true"
-  />
+  >
+    @if (help(); as target) {
+      <app-how-this-works slot="actions" [route]="target.route" [anchor]="target.anchor" />
+    }
+  </app-page-header>
 
   <nav
     class="rl-subnav rl-subnav--two-row"

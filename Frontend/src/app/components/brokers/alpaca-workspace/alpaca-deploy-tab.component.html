@@ -15,6 +15,7 @@
       <strong>What do you want to deploy?</strong>
       <button type="button" [class.selected]="botKind() === 'signal'" [disabled]="optionsOutstanding()" (click)="botKind.set('signal')">Signal bot</button>
       <button type="button" [class.selected]="botKind() === 'options'" [disabled]="optionsOutstanding()" (click)="botKind.set('options')">Options bot</button>
+      <app-how-this-works class="bot-kind-choice__help" route="/docs/broker-manual" />
     </div>
     @if (botKind() === 'options') {
       <app-options-bot-deploy [target]="target" [accountId]="accountId" [fence]="fence()" [laneReviewRequired]="laneReviewRequired()" (outstandingChange)="optionsOutstanding.set($event)" (accountMoneyChanged)="refreshAccountMoney()" />

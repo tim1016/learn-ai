@@ -13203,6 +13203,21 @@
             ],
             "title": "Requester"
           },
+          "require_final_capture_for": {
+            "anyOf": [
+              {
+                "enum": [
+                  "regular",
+                  "extended"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Require Final Capture For"
+          },
           "resolution": {
             "const": "minute",
             "default": "minute",
@@ -17696,7 +17711,7 @@
       },
       "FeatureResearchJobRequest": {
         "additionalProperties": false,
-        "description": "Body of POST /api/jobs-internal/feature-research.\n\nThe worker reads the study's bars from the data lake itself, materializing\nwhat the lake lacks \u2014 the Frontend sends only the symbol + date range +\nfeature, no payload of OHLCV. Only minute bars of a length that divides\nthe study's 15-minute target are accepted (1, 3, 5, 15); other sizes are\nrefused with a reason (``app.services.feature_study_service``).\n\n``session`` is the base request's legacy label (the browser sends\n``\"rth\"``) and has never been read; it stays inert so no caller's sample\nchanges silently. ``session_policy`` is the real control and defaults to\nthe session the study has always computed on: ``extended``, 04:00-20:00\nET. ``regular`` is opt-in.",
+        "description": "Body of POST /api/jobs-internal/feature-research.\n\nThe worker reads the study's bars from the data lake itself, materializing\nwhat the lake lacks \u2014 the Frontend sends only the symbol + date range +\nfeature, no payload of OHLCV. Only minute bars of a length that divides\nthe study's 15-minute target are accepted (1, 3, 5, 15); other sizes are\nrefused with a reason (``app.services.feature_study_service``).\n\n**Default override**: ``session=\"extended\"``. ``session`` is the one\ncontrol for which bars the study computes on: ``extended`` is every bar the\nprovider served, 04:00-20:00 ET, which is what the study has always read;\n``rth`` is the scheduled session. The base default (``rth``) would have\nsilently moved every caller that omits it onto a different sample (D02).",
         "properties": {
           "featureName": {
             "minLength": 1,
@@ -17725,21 +17740,12 @@
             "type": "integer"
           },
           "session": {
-            "default": "rth",
+            "default": "extended",
             "enum": [
               "rth",
               "extended"
             ],
             "title": "Session",
-            "type": "string"
-          },
-          "sessionPolicy": {
-            "default": "extended",
-            "enum": [
-              "extended",
-              "regular"
-            ],
-            "title": "Sessionpolicy",
             "type": "string"
           },
           "symbol": {

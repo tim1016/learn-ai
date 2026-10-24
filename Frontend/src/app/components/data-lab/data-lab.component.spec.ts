@@ -224,19 +224,15 @@ describe('DataLabComponent (shell)', () => {
     expect(screen.getByText('export-stub')).toBeTruthy();
   });
 
-  it('applies a redirected /data-quality bookmark on the validate child URL', async () => {
+  it('applies a redirected /data-quality bookmark where it landed, without moving again', async () => {
     const { navSpy, fixture } = await renderDirectShell(
       '/data-lab/validate?ticker=AAPL&from=2026-04-15&to=2026-05-15',
     );
     fixture.componentInstance.runLegacyIngress();
 
-    expect(navSpy).toHaveBeenCalledWith(
-      ['/data-lab/validate'],
-      {
-        queryParams: { ticker: 'AAPL', from: '2026-04-15', to: '2026-05-15' },
-        replaceUrl: true,
-      },
-    );
+    // The redirect already put the bookmark on its child with the query
+    // intact; the shell populates the workspace from it and leaves the URL.
+    expect(navSpy).not.toHaveBeenCalled();
     expect(fixture.componentInstance.store.committedTicker()).toBe('AAPL');
     expect(fixture.componentInstance.store.committedWindow()?.startMsUtc).toBe(
       Date.UTC(2026, 3, 15),
@@ -248,18 +244,36 @@ describe('DataLabComponent (shell)', () => {
     );
   });
 
+  it('keeps the Returns study when a legacy scope arrives on it, instead of moving to Explore', async () => {
+    const { navSpy, fixture } = await renderDirectShell('/data-lab/returns?ticker=SPY&from=2026-04-15&to=2026-05-15');
+    fixture.componentInstance.runLegacyIngress();
+
+    expect(navSpy).not.toHaveBeenCalled();
+    expect(fixture.componentInstance.store.committedTicker()).toBe('SPY');
+  });
+
+  it('leaves a canonical child whose legacy mode names another where it is, and says the mode is ignored', async () => {
+    const { navSpy, fixture } = await renderDirectShell('/data-lab/explore?mode=build&ticker=AAPL');
+    fixture.componentInstance.runLegacyIngress();
+    fixture.detectChanges();
+
+    expect(navSpy, 'the router owns the path; the shell never moves it').not.toHaveBeenCalled();
+    expect(fixture.componentInstance.store.draft().ticker, 'the bookmark still populates the workspace').toBe('AAPL');
+    expect(screen.getByText(/Ignored mode "build"/)).toBeTruthy();
+  });
+
   it('surfaces ingress warnings in a dismissible banner', async () => {
     const { fixture } = await renderDirectShell('/data-lab?mode=bogus&frobnicate=1');
     fixture.componentInstance.runLegacyIngress();
     fixture.detectChanges();
 
-    expect(screen.getByText(/Dropped invalid mode "bogus"/)).toBeTruthy();
-    expect(screen.getByText(/Dropped unknown query key "frobnicate"/)).toBeTruthy();
+    expect(screen.getByText(/Ignored invalid mode "bogus"/)).toBeTruthy();
+    expect(screen.getByText(/Ignored unknown query key "frobnicate"/)).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     // Zoneless: raw user-event dispatch does not schedule change detection,
     // so flush manually before asserting the banner is gone.
     fixture.detectChanges();
-    expect(screen.queryByText(/Dropped invalid mode/)).toBeNull();
+    expect(screen.queryByText(/Ignored invalid mode/)).toBeNull();
   });
 
   it('hosts the shell-owned run dock and opens the saved-setups drawer', async () => {

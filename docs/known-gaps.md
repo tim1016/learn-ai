@@ -600,3 +600,31 @@ re-arms the server-authored timeframe auto-correct, and numeric
   `DECISION_BAR_MISSED` after IB Gateway's nightly blackout -- leaves the
   position held. It is not silent: Start refuses with
   `START_REQUIRES_FLAT_CUSTODY`, and the dead-run warning and Flatten apply.
+
+## Lake-sourced research studies: divergences from the provider path (#3521, 2026-10-24)
+
+The Feature study reads admitted lake bars instead of one provider call per run. The differences below are measured
+in `tests/research/test_feature_study_lake_vs_provider.py`; the first two are owner decisions (D02 of PRD #3490).
+
+- **P2: which session the study computes on is undecided.** It keeps `extended` (04:00 to 20:00 ET), what the
+  provider call always returned; `regular` is opt-in per request. Moving the default changes every number the study
+  prints (see the measured RSI and IC movement in the comparison test).
+- **P2: a held day with no recorded capture time cannot be judged early.** `captured_early` treats a missing
+  `CompletedAtMs` as final, and an imported day carries its import time, which is later than its capture. Such a day
+  captured before its session finished stays as short as it was captured. New captures always carry the time.
+- **P2: the vendor's after-hours tail (four hours) and delivery delay (15 minutes) are constants.**
+  `app/data_lake/capture_finality.py` names them once. A plan that delivers in real time makes the delay
+  conservative, not wrong; a change to the extended window needs the constant changed.
+- **P2: a day captured early and now older than the provider's history cannot be captured again.** A study whose
+  window holds one refuses it (`data_unavailable_from_provider`, "cannot be captured again") rather than computing on
+  the short tape.
+- **P2: a split announced after a day was captured stays invisible to that held day until a later capture of the
+  symbol refreshes its adjusted history.** The provider path adjusted to the moment of the request. Price-level
+  outputs (MACD signal, quantile-bin bounds) move by the split factor, not only the prices.
+- **P2: a window that starts before the symbol listed refuses.** Admission has no "not applicable" outcome for a
+  session before the first trade; the provider path computed on the shorter series. The refusal is
+  `data_unavailable_from_provider` for the sessions the vendor answers empty.
+- **Unverified assumptions:** that Polygon's own N-minute aggregate equals a fold of its minute aggregates, and that a
+  date-string window is ET-anchored on the live API. Both are asserted by the comparison tests against an
+  independent stand-in, not against live data.
+

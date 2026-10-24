@@ -117,7 +117,7 @@
       </section>
 
       <!-- Related -->
-      @if (r.relatedIndicators.length) {
+      @if (showRelated() && r.relatedIndicators.length) {
         <section class="icm-section">
           <h4 class="icm-section-title">Related indicators</h4>
           <div class="icm-related-row">

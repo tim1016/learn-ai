@@ -38,17 +38,12 @@ before execution. The legacy Spec environment-root resolver is removed.
 Exact consumed-bar parity and the scope of the fingerprint are documented
 in [the Spec reference note](../references/strategy-spec-layer.md#lake-input-authority-2446).
 
-**Feature study data admission (#3521).** The Feature study (Research Lab →
-Features → Validate) computes from admitted lake bars; its Polygon fetch inside
-the job router is gone. `app/research/study_inputs.py` names the study's input
-identity, asks `run_materialization.materialize_minute_window` (catalog claims
-and lease coordination) for the sessions the lake lacks, admits every session
-through committed-byte admission, and refuses with a typed outcome and coverage
-counts when it cannot. `app/services/feature_study_service.py` keys the result
-cache on that identity and the admitted snapshot digest, in a namespace no
-provider-era entry can reach. No calculation ownership changes: the feature,
-target, IC and robustness math is untouched. The session the study reads
-(extended hours today, as before) is an owner decision (D02 of PRD #3490).
+**Lake-sourced research studies (#3521).** `app/research/study_inputs.py` owns
+the admission of a study's minute-bar input from the lake (the materializer
+fills what is missing; the UI is never a writer), and
+`app/research/lake_study.py` owns the run around a study's math: cache identity,
+the data-source block and the typed refusal. No calculation ownership changes;
+which session a study reads is an owner decision (D02 of PRD #3490).
 
 **Cross-sectional study data admission (#3524).** The Cross-sectional study
 (Research Lab → Features → Cross-sectional) computes its stock bars from

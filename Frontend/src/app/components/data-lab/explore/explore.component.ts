@@ -9,6 +9,7 @@ import {
   viewChild,
 } from '@angular/core';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
+import { HowThisWorksLinkComponent } from '../../../shared/help/how-this-works-link.component';
 import type { TickerRange } from '../../../shared/ticker-range-picker';
 import { IndicatorCatalogService } from '../../../shared/indicator-catalog/indicator-catalog.service';
 
@@ -55,6 +56,7 @@ import {
   selector: 'app-data-lab-explore',
   imports: [
     AssetIdentityComponent,
+    HowThisWorksLinkComponent,
     DataLabChartComponent,
     QualityModalComponent,
     IndicatorConfigModalComponent,

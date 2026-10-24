@@ -1,12 +1,13 @@
 import { render, screen, waitFor } from '@testing-library/angular';
+import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { of } from 'rxjs';
 
 import { MarketDataService } from '../../../services/market-data.service';
-import { OptionsLabChainComponent } from './options-lab-chain.component';
+import { ADD_LEG_UNAVAILABLE_REASON, OptionsLabChainComponent } from './options-lab-chain.component';
 import { fakePickerWorld } from '../../../shared/symbol-picker/testing/fake-picker-world';
 import { optionExpiryAnchorMs } from '../../../shared/option-contract/option-expiry-date';
-import type { StockTickerSnapshot } from '../../../services/market-data.types';
+import type { SnapshotContractResult, StockTickerSnapshot } from '../../../services/market-data.types';
 
 /**
  * Renders the page against a stubbed market-data service whose chain
@@ -16,8 +17,11 @@ import type { StockTickerSnapshot } from '../../../services/market-data.types';
 async function renderChain(opts: {
   expirations: number[];
   snapshot: StockTickerSnapshot | null;
+  contracts?: SnapshotContractResult[];
+  chainReads?: () => void;
 }) {
   const breakEvenDelta = 9.87;
+  const contracts = opts.contracts ?? [];
   return render(OptionsLabChainComponent, {
     providers: [
       ...fakePickerWorld().providers,
@@ -30,23 +34,42 @@ async function renderChain(opts: {
             snapshot: opts.snapshot,
             error: null,
           }),
-          getOptionsChainSnapshot: () => of({
-            success: true,
-            underlying: {
-              ticker: 'SPY', price: 700, change: breakEvenDelta, changePercent: breakEvenDelta,
-            },
-            contracts: [],
-            count: 0,
-            riskFreeRate: null,
-            dividendYield: null,
-            rateSource: null,
-            dividendSource: null,
-            error: null,
-          }),
+          getOptionsChainSnapshot: () => {
+            opts.chainReads?.();
+            return of({
+              success: true,
+              underlying: {
+                ticker: 'SPY', price: 700, change: breakEvenDelta, changePercent: breakEvenDelta,
+              },
+              contracts,
+              count: contracts.length,
+              riskFreeRate: null,
+              dividendYield: null,
+              rateSource: null,
+              dividendSource: null,
+              error: null,
+            });
+          },
         },
       },
     ],
   });
+}
+
+function contractAt(contractType: 'call' | 'put', strike: number): SnapshotContractResult {
+  return {
+    ticker: `O:SPY${strike}${contractType[0].toUpperCase()}`,
+    contractType,
+    strikePrice: strike,
+    expirationMs: optionExpiryAnchorMs('2099-01-15'),
+    breakEvenPrice: null,
+    impliedVolatility: 0.2,
+    openInterest: 100,
+    greeks: { delta: 0.5, gamma: 0.01, theta: -0.05, vega: 0.1 },
+    day: { open: 1, high: 1, low: 1, close: 1, volume: 1000, vwap: 1 },
+    lastTrade: null,
+    lastQuote: null,
+  };
 }
 
 function stockSnapshot(overrides: Partial<StockTickerSnapshot>): StockTickerSnapshot {
@@ -128,5 +151,29 @@ describe('OptionsLabChainComponent header and expiry summary', () => {
     });
 
     expect(await screen.findByText(expected)).toBeTruthy();
+  });
+});
+
+describe('OptionsLabChainComponent Add leg', () => {
+  it('disables every L and S button, shows why, and a click starts nothing', async () => {
+    const chainReads = vi.fn();
+    await renderChain({
+      expirations: [optionExpiryAnchorMs('2099-01-15')],
+      snapshot: stockSnapshot({ todaysChange: 0, todaysChangePercent: 0 }),
+      contracts: [contractAt('call', 700), contractAt('put', 700)],
+      chainReads,
+    });
+
+    const reason = await screen.findByText(ADD_LEG_UNAVAILABLE_REASON);
+    const buttons = screen.getAllByRole('button', { name: /^Add (long|short) (call|put) at 700\.00$/ });
+    expect(buttons).toHaveLength(4);
+    for (const button of buttons) {
+      expect(button).toHaveProperty('disabled', true);
+      expect(button.getAttribute('title')).toBe(reason.textContent);
+    }
+
+    const readsBefore = chainReads.mock.calls.length;
+    await userEvent.setup().click(buttons[0]);
+    expect(chainReads.mock.calls.length).toBe(readsBefore);
   });
 });

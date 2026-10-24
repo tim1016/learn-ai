@@ -195,11 +195,11 @@
             >
               <!-- Calls: L/S action cell, then data toward strike -->
               <td class="ls-cell call-side">
-                <button class="ls-btn long" type="button"
-                  (click)="addLeg(row.strike, 'CALL', 'LONG')"
+                <button class="ls-btn long" type="button" disabled
+                  [attr.title]="addLegUnavailableReason"
                   [attr.aria-label]="'Add long call at ' + row.strikeFormatted">L</button>
-                <button class="ls-btn short" type="button"
-                  (click)="addLeg(row.strike, 'CALL', 'SHORT')"
+                <button class="ls-btn short" type="button" disabled
+                  [attr.title]="addLegUnavailableReason"
                   [attr.aria-label]="'Add short call at ' + row.strikeFormatted">S</button>
               </td>
               @if (density() === 'greeks') {
@@ -259,11 +259,11 @@
                 <td class="num put-side">{{ row.putDelta }}</td>
               }
               <td class="ls-cell put-side">
-                <button class="ls-btn long" type="button"
-                  (click)="addLeg(row.strike, 'PUT', 'LONG')"
+                <button class="ls-btn long" type="button" disabled
+                  [attr.title]="addLegUnavailableReason"
                   [attr.aria-label]="'Add long put at ' + row.strikeFormatted">L</button>
-                <button class="ls-btn short" type="button"
-                  (click)="addLeg(row.strike, 'PUT', 'SHORT')"
+                <button class="ls-btn short" type="button" disabled
+                  [attr.title]="addLegUnavailableReason"
                   [attr.aria-label]="'Add short put at ' + row.strikeFormatted">S</button>
               </td>
             </tr>
@@ -291,6 +291,7 @@
       <span class="legend-item">
         <span class="legend-swatch legend-swatch--atm" aria-hidden="true"></span>ATM row
       </span>
+      <span class="legend-note">{{ addLegUnavailableReason }}</span>
       <span class="legend-sep" aria-hidden="true"></span>
       <span class="legend-hint">Strike prices rise top → bottom · volume bars grow toward spine</span>
     </div>

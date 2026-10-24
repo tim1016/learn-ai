@@ -102,6 +102,10 @@
   min-width: 0;
 }
 
+.top-bar__help {
+  flex: none;
+}
+
 .top-bar__nav {
   display: flex;
   align-items: center;

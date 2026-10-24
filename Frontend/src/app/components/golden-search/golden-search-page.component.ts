@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, effect, inject, input, signal, untr
 import { Router, RouterLink } from '@angular/router';
 import { Tab, TabList, TabPanel, TabPanels, Tabs } from 'primeng/tabs';
 
+import { HowThisWorksLinkComponent } from '../../shared/help/how-this-works-link.component';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 import { extractServerMessage } from '../broker/operation-error';
 import { GoldenSearchHistoryComponent } from './golden-search-history.component';
@@ -21,7 +22,7 @@ export type GoldenSearchTab = 'new' | 'history';
  */
 @Component({
   selector: 'app-golden-search-page',
-  imports: [GoldenSearchHistoryComponent, GoldenSearchPlanFormComponent, GoldenSearchStudyComponent, PageHeaderComponent, RouterLink, Tab, TabList, TabPanel, TabPanels, Tabs],
+  imports: [GoldenSearchHistoryComponent, GoldenSearchPlanFormComponent, GoldenSearchStudyComponent, HowThisWorksLinkComponent, PageHeaderComponent, RouterLink, Tab, TabList, TabPanel, TabPanels, Tabs],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './golden-search-page.component.html',
   styleUrl: './golden-search-page.component.scss',

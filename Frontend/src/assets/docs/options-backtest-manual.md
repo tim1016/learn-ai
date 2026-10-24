@@ -6,7 +6,7 @@ A backtest asks, “What would these rules have done with past prices?” It doe
 
 ### Follow this first exercise
 
-1. Open **Strategy Tools → Options Backtest**. Stay on the **Backtest** tab.
+1. Open **Options setups → Options Backtest**. Stay on the **Backtest** tab.
 2. In **Instrument**, choose an underlying, such as SPY. The underlying is the stock or fund the option refers to. In **Duration**, choose a short range of completed trading days. The available range depends on the data plan.
 3. Keep the initial **Entry time** and **Exit time** while you learn. They begin five minutes after the open and fifteen minutes before the close. Leave **No re-entry after** off for this first exercise.
 4. In **Leg builder**, choose **Buy → Call → 1 contract → Weekly → At the money**, then press **Add leg**. Leave Stop loss, Momentum and Re-entry off. This is a practice configuration, not a trading recommendation.

@@ -464,7 +464,7 @@
     color: var(--ol-pos);
     border-color: rgba(38, 166, 154, 0.3);
 
-    &:hover {
+    &:hover:not(:disabled) {
       background: rgba(38, 166, 154, 0.28);
       border-color: var(--ol-pos);
     }
@@ -475,10 +475,15 @@
     color: var(--ol-neg);
     border-color: rgba(239, 83, 80, 0.3);
 
-    &:hover {
+    &:hover:not(:disabled) {
       background: rgba(239, 83, 80, 0.28);
       border-color: var(--ol-neg);
     }
+  }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
 
   &:focus-visible {
@@ -538,6 +543,11 @@
 
 .legend-sep {
   flex: 1;
+}
+
+.legend-note {
+  font-size: 11px;
+  color: var(--ol-fg-muted);
 }
 
 .legend-hint {

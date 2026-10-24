@@ -52,7 +52,6 @@ interface PreflightCheck {
   status: Severity;
   message: string;
   fix_hint: string | null;
-  docs_link: string | null;
 }
 
 interface PreflightResponse {

@@ -9,11 +9,54 @@
   // includes whatever the run dock occupies right now (see .p-tabpanel), so
   // the wide workbench is sized above the dock and the narrow workbench and
   // History, which flow in the page, pad clear of it (#1974).
-  --strategy-lab-chrome: calc(var(--topbar-h) + var(--page-pad-y) * 2 + 48px + var(--run-dock-height, 0px));
+  --strategy-lab-head-h: 32px;
+  --strategy-lab-chrome: calc(
+    var(--topbar-h) + var(--page-pad-y) * 2 + var(--strategy-lab-head-h) + var(--space-4) + 48px + var(--run-dock-height, 0px)
+  );
 
+  position: relative;
   display: grid;
   gap: var(--space-4);
   min-width: 0;
+}
+
+// The page title row: the trail back to the group, then the page's name. Its
+// height is fixed so the workbench's height arithmetic above can name it.
+.strategy-lab__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--strategy-lab-head-h);
+  padding-inline: var(--page-pad-x);
+}
+
+.strategy-lab__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-semi);
+  line-height: 1;
+}
+
+// A trail before the title reads as one path: group / page.
+app-breadcrumb:not(:empty) + .strategy-lab__title::before {
+  content: '/';
+  margin-right: var(--space-2);
+  color: var(--text-subtle);
+  font-weight: var(--fw-regular, 400);
+}
+
+// Beside the tabs, in the tab list's own row, so the workbench's height
+// arithmetic above does not change.
+.strategy-lab__help {
+  position: absolute;
+  top: calc(var(--strategy-lab-head-h) + var(--space-4));
+  right: var(--page-pad-x);
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  height: 48px;
+  gap: var(--space-2);
 }
 
 .workbench {

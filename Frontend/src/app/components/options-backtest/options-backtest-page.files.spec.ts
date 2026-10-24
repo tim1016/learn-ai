@@ -251,3 +251,13 @@ describe('import', () => {
     expect(service.describe.mock.calls.length).toBe(calls);
   });
 });
+
+describe('help', () => {
+  it('opens the manual from the header in a new tab, so the half-built setup stays as it is', async () => {
+    await renderPage(fakeService(vi), download());
+
+    const link = screen.getByRole('link', { name: 'How this works' });
+    expect(link.getAttribute('href')).toBe('/docs/options-backtest-manual');
+    expect(link.getAttribute('target')).toBe('_blank');
+  });
+});
