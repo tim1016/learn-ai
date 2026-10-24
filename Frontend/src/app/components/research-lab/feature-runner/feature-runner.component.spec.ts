@@ -247,6 +247,7 @@ describe('FeatureRunnerComponent', () => {
       fixture.detectChanges();
 
       expect.soft(root().querySelector('.study-run__summary')?.textContent).toContain('extended hours');
+      expect.soft(screen.getByRole('button', { name: 'Ext' }).getAttribute('aria-pressed'), 'the picker shows what the run sends').toBe('true');
       await press('Run study');
 
       expect(jobsServiceMock.startJob.mock.calls[0][1].session).toBe('extended');

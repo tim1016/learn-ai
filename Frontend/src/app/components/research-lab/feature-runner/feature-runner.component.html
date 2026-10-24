@@ -15,7 +15,8 @@
 >
   <div studyInstrument>
     <app-ticker-range-picker
-      [(value)]="range"
+      [value]="shownRange()"
+      (valueChange)="range.set($event)"
       dateBounds="provider"
       presentation="embedded"
       sessionMode="enabled"

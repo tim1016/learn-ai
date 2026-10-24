@@ -224,14 +224,21 @@ export class FeatureRunnerComponent {
   private readonly gate = createRunGate();
   readonly starting = this.gate.starting;
 
+  /**
+   * The range the picker shows: one that names no session is extended hours, which is what the study computed on before
+   * it named one. The picker shows the same session the run sends, instead of its own `rth` fallback.
+   */
+  readonly shownRange = computed<TickerRange & { readonly session: Session }>(() => {
+    const range = this.range();
+    return { ...range, session: range.session ?? 'extended' };
+  });
+
   /** The inputs the shown result answers; a result is "previous" once these change. */
   private readonly enteredInputs = computed<FeatureStudyInputs>(() => {
-    const range = this.range();
-    // A range that names no session is extended hours, which is what the study computed on before it named one.
-    const session = range.session ?? 'extended';
+    const range = this.shownRange();
     return {
-      range: { ...range, session },
-      policy: SESSION_POLICY_FOR_REQUEST[session],
+      range,
+      policy: SESSION_POLICY_FOR_REQUEST[range.session],
       indicator: this.selectedIndicator(),
       params: this.selectedParams(),
     };
