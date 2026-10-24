@@ -114,7 +114,7 @@ describe('lake study refusal payload', () => {
     refusal: {
       code: 'data_unavailable_from_provider',
       reason: 'The lake cannot admit this window: 1 of 5 sessions cannot be supplied by the provider.',
-      sessions: [{ group: 'window', trading_date_ms: Date.UTC(2024, 2, 6, 14, 30), outcome: 'unavailable_from_provider', reason: 'provider_no_data' }],
+      sessions: [{ group: 'window', trading_date_ms: Date.UTC(2024, 2, 6, 14, 30), outcome: 'unavailable_from_provider', reason: 'provider_no_data', failure_reason: 'provider_no_data' }],
       sessions_total: 1,
       coverage: {
         window: group({ added: 4, failed: 1, unavailable_from_provider: 1 }),
@@ -129,7 +129,7 @@ describe('lake study refusal payload', () => {
     const result = readLakeStudyRefusal(refused);
 
     expect(result?.refusal).toMatchObject({ code: 'data_unavailable_from_provider', sessionsTotal: 1 });
-    expect(result?.refusal.sessions[0]).toMatchObject({ outcome: 'unavailable_from_provider', group: 'window' });
+    expect(result?.refusal.sessions[0]).toMatchObject({ outcome: 'unavailable_from_provider', group: 'window', failureReason: 'provider_no_data' });
     expect(result?.refusal.coverage?.window).toMatchObject({ added: 4, failed: 1 });
     expect(result?.dataSource?.symbol).toBe('SPY');
   });

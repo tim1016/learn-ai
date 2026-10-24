@@ -211,6 +211,10 @@ class SessionIssue:
     trading_date: date
     outcome: SessionOutcome
     reason: str
+    #: The materializer's own reason code for the session (``ArtifactFailure.reason``), when it reported one: a study
+    #: that treats some failures differently from others (an empty vendor answer against a rate limit) reads it here
+    #: instead of parsing ``reason``.
+    failure_reason: ArtifactFailureReason | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -218,6 +222,7 @@ class SessionIssue:
             "trading_date_ms": session_open_ms_utc(self.trading_date),
             "outcome": self.outcome,
             "reason": self.reason,
+            "failure_reason": self.failure_reason,
         }
 
 
@@ -611,7 +616,13 @@ def admit_minute_inputs(
             )
 
     issues = tuple(
-        SessionIssue("warmup" if day in lead else "window", day, final[day], reasons[day])
+        SessionIssue(
+            "warmup" if day in lead else "window",
+            day,
+            final[day],
+            reasons[day],
+            failure_reason=failures[day].reason if day in failures else None,
+        )
         for day in required
         if final[day] != "ready"
     )

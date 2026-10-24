@@ -80,6 +80,8 @@ export interface LakeSessionIssueRaw {
   trading_date_ms: number;
   outcome: LakeSessionOutcome;
   reason: string;
+  /** The capture's own reason code for the session (`ArtifactFailureReason`), when it reported one. */
+  failure_reason: string | null;
 }
 
 export interface LakeRefusalRaw {
@@ -149,6 +151,7 @@ export interface LakeSessionIssue {
   tradingDateMs: number;
   outcome: LakeSessionOutcome;
   reason: string;
+  failureReason: string | null;
 }
 
 /** Why the lake could not supply a study's inputs, and what admission did before it stopped. */
@@ -218,6 +221,7 @@ export function mapLakeStudyRefusal(raw: LakeRefusalRaw): LakeStudyRefusal {
       tradingDateMs: s.trading_date_ms,
       outcome: s.outcome,
       reason: s.reason,
+      failureReason: s.failure_reason,
     })),
     sessionsTotal: raw.sessions_total,
     coverage: mapCoverage(raw.coverage),

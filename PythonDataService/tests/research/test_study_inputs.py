@@ -277,6 +277,8 @@ def test_a_file_a_live_writer_has_renamed_in_but_not_committed_is_building_never
     assert counts(refusal.coverage.window) == (2, 0, 0, 1)
     assert refusal.coverage.window.corrupt == 0
     assert "cannot be read" not in refusal.reason
+    assert refusal.coverage.issues[0].failure_reason == "lease_timeout", "the materializer's code travels with the session"
+    assert refusal.as_dict()["sessions"][0]["failure_reason"] == "lease_timeout"
 
 
 @respx.mock
@@ -309,7 +311,7 @@ def test_a_capture_that_failed_for_the_lakes_own_reason_is_not_captured_never_co
 
     assert refusal.code == "data_missing"
     assert [(i.trading_date, i.outcome) for i in refusal.coverage.issues] == [(MARCH[1], "missing")]
-    assert reason in refusal.coverage.issues[0].reason
+    assert reason in refusal.coverage.issues[0].reason and refusal.coverage.issues[0].failure_reason == reason
     assert refusal.coverage.window.corrupt == 0 and "cannot be read" not in refusal.reason
 
 

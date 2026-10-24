@@ -249,7 +249,7 @@ describe('FeatureRunnerComponent', () => {
       success: false, status: 'refused', ticker: 'SPY', error: reason,
       refusal: {
         code: 'data_unavailable_from_provider', reason,
-        sessions: [{ group: 'window', trading_date_ms: 1709738400000, outcome: 'unavailable_from_provider', reason: 'provider_no_data' }],
+        sessions: [{ group: 'window', trading_date_ms: 1709738400000, outcome: 'unavailable_from_provider', reason: 'provider_no_data', failure_reason: 'provider_no_data' }],
         sessions_total: 1,
         coverage: {
           window: group({ added: 9, failed: 1, unavailable_from_provider: 1 }),

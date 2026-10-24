@@ -31,7 +31,7 @@ const SOURCE: LakeStudyDataSource = {
 const REFUSAL: LakeStudyRefusal = {
   code: 'data_unavailable_from_provider',
   reason: 'The lake cannot admit this window: 1 of 5 sessions cannot be supplied by the provider: 2024-03-06 (provider_no_data).',
-  sessions: [{ group: 'window', tradingDateMs: WEDNESDAY_OPEN, outcome: 'unavailable_from_provider', reason: 'provider_no_data' }],
+  sessions: [{ group: 'window', tradingDateMs: WEDNESDAY_OPEN, outcome: 'unavailable_from_provider', reason: 'provider_no_data', failureReason: 'provider_no_data' }],
   sessionsTotal: 1,
   coverage: coverage({ reused: 0, added: 4, failed: 1, unavailableFromProvider: 1 }),
 };
