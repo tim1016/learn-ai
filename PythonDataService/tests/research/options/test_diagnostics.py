@@ -72,6 +72,22 @@ class TestIvDiagnostics:
         # Should still be valid with enough data points
         assert report.valid_iv_days >= 30, "moderate missing pct leaves enough valid days"
 
+    def test_missing_data_warning_counts_the_missing_days_by_reason(self):
+        df = _make_iv_df(n_days=100, iv_std=0.01)
+        df["missing_reason"] = None
+        df.loc[:29, "iv_30d_atm"] = np.nan
+        df.loc[:19, "missing_reason"] = "no_far_expiry"
+        df.loc[20:24, "missing_reason"] = "expiry_lookup_truncated"
+        report = run_iv_diagnostics(df)
+        assert report.valid is False, "30% missing fails"
+        assert "Missing data too high: 30.0% (max 15.0%): 20 no_far_expiry, 5 expiry_lookup_truncated, 5 no reason recorded" in (
+            report.warnings
+        ), "the warning says how many missing days each reason accounts for"
+
+        df["missing_reason"] = np.nan  # a frame no day of which carries a reason
+        report = run_iv_diagnostics(df)
+        assert "Missing data too high: 30.0% (max 15.0%): 30 no reason recorded" in report.warnings
+
     def test_discontinuities_flagged(self):
         df = _make_iv_df(n_days=100, discontinuities=3)
         report = run_iv_diagnostics(df)
