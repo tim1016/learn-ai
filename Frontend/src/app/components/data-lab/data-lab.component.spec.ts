@@ -224,19 +224,15 @@ describe('DataLabComponent (shell)', () => {
     expect(screen.getByText('export-stub')).toBeTruthy();
   });
 
-  it('applies a redirected /data-quality bookmark on the validate child URL', async () => {
+  it('applies a redirected /data-quality bookmark where it landed, without moving again', async () => {
     const { navSpy, fixture } = await renderDirectShell(
       '/data-lab/validate?ticker=AAPL&from=2026-04-15&to=2026-05-15',
     );
     fixture.componentInstance.runLegacyIngress();
 
-    expect(navSpy).toHaveBeenCalledWith(
-      ['/data-lab/validate'],
-      {
-        queryParams: { ticker: 'AAPL', from: '2026-04-15', to: '2026-05-15' },
-        replaceUrl: true,
-      },
-    );
+    // The redirect already put the bookmark on its child with the query
+    // intact; the shell populates the workspace from it and leaves the URL.
+    expect(navSpy).not.toHaveBeenCalled();
     expect(fixture.componentInstance.store.committedTicker()).toBe('AAPL');
     expect(fixture.componentInstance.store.committedWindow()?.startMsUtc).toBe(
       Date.UTC(2026, 3, 15),
@@ -246,6 +242,24 @@ describe('DataLabComponent (shell)', () => {
     expect(fixture.componentInstance.store.committedWindow()?.endMsUtc).toBe(
       Date.UTC(2026, 4, 15) + 86_400_000 - 1,
     );
+  });
+
+  it('keeps the Returns study when a legacy scope arrives on it, instead of moving to Explore', async () => {
+    const { navSpy, fixture } = await renderDirectShell('/data-lab/returns?ticker=SPY&from=2026-04-15&to=2026-05-15');
+    fixture.componentInstance.runLegacyIngress();
+
+    expect(navSpy).not.toHaveBeenCalled();
+    expect(fixture.componentInstance.store.committedTicker()).toBe('SPY');
+  });
+
+  it('moves a canonical child whose legacy mode names another child, dropping the spent mode', async () => {
+    const { navSpy, fixture } = await renderDirectShell('/data-lab/explore?mode=build&ticker=AAPL');
+    fixture.componentInstance.runLegacyIngress();
+
+    expect(navSpy).toHaveBeenCalledWith(['/data-lab/export'], {
+      queryParams: { ticker: 'AAPL' },
+      replaceUrl: true,
+    });
   });
 
   it('surfaces ingress warnings in a dismissible banner', async () => {
