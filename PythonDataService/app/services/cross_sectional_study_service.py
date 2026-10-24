@@ -7,7 +7,8 @@ The study's input contract. Each requested member needs two kinds of input, and 
   :mod:`app.research.study_inputs` (the existing materializer and committed-byte admission; the UI is never a writer)
   and folded to one bar per New York session by :func:`app.research.cross_sectional_inputs.daily_rows`.
 * **Option inputs.** The provider's, asked live: expiries (``list_options_contracts`` as of each month's first
-  session, cached per month), contracts (per expiry, cached for the run), daily option bars (5 threads) and the FRED
+  session, and again as of a later session that finds no near or no far expiry in it; each session's pair around 30
+  days is picked from that list, #3528), contracts (per expiry, cached for the run), daily option bars (5 threads) and the FRED
   risk-free rate. The lake holds none of them. Each is named in the result's ``data_source`` with the identity of what
   the provider answered (:mod:`app.research.options.option_input_ledger`); the provider does not archive its answers,
   so that identity cannot reproduce them and the block says so. Missing IV stays absent: no current IV is written
@@ -15,11 +16,14 @@ The study's input contract. Each requested member needs two kinds of input, and 
 * **Resolution.** Daily only; any other resolution is refused with ``resolution_unsupported`` before the lake is touched.
 * **Adjustment.** The lake's ``polygon_split_adjusted`` mode, named in the identity. Prices sit on the lake's 1/10,000
   grid, each minute rounded half-up before the fold: a change to the input data, not float rounding.
-* **Session.** ``session_policy`` is an identity field, set from the request's ``session`` (``rth`` is ``regular``, the
-  default; ``extended`` folds 04:00-20:00 ET). The stock close sets the IV spot and the ATM strike, so the policy moves
-  IVs and contract picks, not only the target. Which policy the study should use is an owner decision (D02), and
-  whether the regular fold equals Polygon's own daily bar is **unmeasured**: no real daily payload is held in the repo
-  (see ``tests/research/test_cross_sectional_lake_vs_provider.py``).
+* **Session.** The study's daily bar is the regular session, ``[open, close)``, which leaves out the minute stamped 16:00
+  (owner, 2026-10-24, #3524). ``session_policy`` is an identity field, set from the request's ``session`` (``rth`` is
+  ``regular``, the default and the only one the page sends; ``extended`` folds 04:00-20:00 ET and is reachable only
+  through the API). The stock close sets the IV spot and the ATM strike, so the policy moves IVs and contract picks, not
+  only the target. Measured against Polygon's own daily bars for SPY, 2025-01-13 to 17 (golden fixture ``SPY-DAILY-001``,
+  ``tests/research/test_cross_sectional_lake_vs_provider.py``): the open, high and low are exact; the close differs by up
+  to $0.15 because the vendor's is the official print and the study's is the last regular minute, the instant the option
+  minute bars price at; the fold holds 71.5 to 84.7 percent of the vendor's volume, and the study reads no stock volume.
 * **Warmup.** None. IV rank 60/252 need 30/60 rows inside the window; the other features need 5-20.
 * **Look-forward.** Inside the window only: ``directional`` and ``abs_return`` look one session ahead, ``volatility``
   five. The last rows have no target. Nothing is read past the window's end.

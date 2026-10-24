@@ -2975,6 +2975,55 @@
       "validated_by": [
         "tests/fixtures/test_sharpe_fixtures.py::TestRP008DeflatedSharpe"
       ]
+    },
+    {
+      "id": "SPY-DAILY-001",
+      "name": "SPY daily bars 2025-01-13 to 17: the vendor's real answer against the Cross-sectional study's regular-session fold of the minute capture",
+      "category": "market-data",
+      "canonical_module": "PythonDataService/app/research/cross_sectional_inputs.py",
+      "canonical_callable": "daily_rows",
+      "reference": {
+        "kind": "vendor_observed",
+        "oracle": "Polygon (Massive) REST API daily aggregates for SPY, 2025-01-13 to 2025-01-17, adjusted=false, recorded byte for byte in input.json",
+        "citation": "GET https://api.polygon.io/v2/aggs/ticker/SPY/range/1/day/2025-01-13/2025-01-17?adjusted=false&sort=asc&limit=50000, recorded 2026-10-24 with the owner's approval, see attribution.md; the minute side is tests/fixtures/polygon_capture/spy_minute_2025-01-13_2025-01-17. https://github.com/tim1016/learn-ai/issues/3524"
+      },
+      "market_input": {
+        "source": "polygon",
+        "vendor": "Polygon (Massive) REST API, recorded byte for byte",
+        "generated_by": "tests/fixtures/golden/market-data/SPY-DAILY-001/v1/regenerate.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 0.0,
+        "rtol": 0.0,
+        "note": "Open, high and low are exact (the study's fold and the vendor's daily bar print the same decimal prices). The close and volume differ for stated reasons: the vendor's close is the official print and its volume counts trades the minute aggregates omit. Those differences are accepted and pinned as measured, the close at atol=1e-9 and the volume share at atol=1e-12, rtol=0, in the validating test; nothing is loosened to make them pass."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "generated": "2026-10-24",
+          "justification": "Recorded for the Cross-sectional study's daily bar (#3524): the owner approved a vendor check of the regular-session fold against Polygon's own daily bars.",
+          "content_sha256": {
+            "input.json": "9d3d66a6c548563d7d1e15b203e0733978734f028eea20ca0e33cc0a405cc674",
+            "output.json": "56739b8b4ba01708e86e32f4944e6dda238b62815109740e8801fe9379dca752",
+            "attribution.md": "23bff12e64d352af00e72431339cf59e2ad78626d86e35aaa58673074e4c5ca0",
+            "regenerate.py": "7f9f0e03bb0d39ae07bd7cda2cb230f7ba68f27e9bf22730a6d9dbbd10adb84d"
+          },
+          "file_sha256": {
+            "input.json": "99731a29543f202041a21894a7a7166225735675e52b5a625962971836774409",
+            "output.json": "7bc388fa5c8fba19823242e74a3146ff29f78e7a485c250432b9b33a0979c08d",
+            "attribution.md": "23bff12e64d352af00e72431339cf59e2ad78626d86e35aaa58673074e4c5ca0",
+            "regenerate.py": "7f9f0e03bb0d39ae07bd7cda2cb230f7ba68f27e9bf22730a6d9dbbd10adb84d"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/research/test_cross_sectional_lake_vs_provider.py::test_the_regular_fold_of_a_real_spy_week_equals_the_vendors_real_daily_open_high_and_low"
+      ]
     }
   ]
 }

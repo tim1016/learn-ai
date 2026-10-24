@@ -1,0 +1,115 @@
+{
+  "fixture": "SPY-DAILY-001",
+  "sessions": {
+    "2025-01-13": {
+      "vendor": {
+        "open": 575.77,
+        "high": 581.75,
+        "low": 575.35,
+        "close": 581.39,
+        "volume": 47770060.0
+      },
+      "regular_fold": {
+        "open": 575.77,
+        "high": 581.75,
+        "low": 575.35,
+        "close": 581.54,
+        "volume": 36986595.0
+      },
+      "close_difference_fold_minus_vendor": "0.15",
+      "volume_share_fold_over_vendor": 0.7742631053844186,
+      "with_the_minute_stamped_16_00": {
+        "close": 581.5,
+        "close_difference_fold_minus_vendor": "0.11"
+      }
+    },
+    "2025-01-14": {
+      "vendor": {
+        "open": 584.36,
+        "high": 585,
+        "low": 578.35,
+        "close": 582.19,
+        "volume": 48377580.0
+      },
+      "regular_fold": {
+        "open": 584.36,
+        "high": 585,
+        "low": 578.35,
+        "close": 582.19,
+        "volume": 40987960.0
+      },
+      "close_difference_fold_minus_vendor": "0.00",
+      "volume_share_fold_over_vendor": 0.8472511440216729,
+      "with_the_minute_stamped_16_00": {
+        "close": 582.6,
+        "close_difference_fold_minus_vendor": "0.41"
+      }
+    },
+    "2025-01-15": {
+      "vendor": {
+        "open": 590.325,
+        "high": 593.94,
+        "low": 589.195,
+        "close": 592.78,
+        "volume": 56885159.0
+      },
+      "regular_fold": {
+        "open": 590.325,
+        "high": 593.94,
+        "low": 589.195,
+        "close": 592.78,
+        "volume": 42142340.0
+      },
+      "close_difference_fold_minus_vendor": "0.00",
+      "volume_share_fold_over_vendor": 0.7408318925503926,
+      "with_the_minute_stamped_16_00": {
+        "close": 592.81,
+        "close_difference_fold_minus_vendor": "0.03"
+      }
+    },
+    "2025-01-16": {
+      "vendor": {
+        "open": 594.175,
+        "high": 594.35,
+        "low": 590.93,
+        "close": 591.64,
+        "volume": 43292162.0
+      },
+      "regular_fold": {
+        "open": 594.175,
+        "high": 594.35,
+        "low": 590.93,
+        "close": 591.7,
+        "volume": 30959922.0
+      },
+      "close_difference_fold_minus_vendor": "0.06",
+      "volume_share_fold_over_vendor": 0.7151391977143576,
+      "with_the_minute_stamped_16_00": {
+        "close": 591.64,
+        "close_difference_fold_minus_vendor": "0.00"
+      }
+    },
+    "2025-01-17": {
+      "vendor": {
+        "open": 596.96,
+        "high": 599.36,
+        "low": 595.61,
+        "close": 597.58,
+        "volume": 55360878.0
+      },
+      "regular_fold": {
+        "open": 596.96,
+        "high": 599.36,
+        "low": 595.61,
+        "close": 597.57,
+        "volume": 46714655.0
+      },
+      "close_difference_fold_minus_vendor": "-0.01",
+      "volume_share_fold_over_vendor": 0.8438207031326346,
+      "with_the_minute_stamped_16_00": {
+        "close": 597.51,
+        "close_difference_fold_minus_vendor": "-0.07"
+      }
+    }
+  }
+}

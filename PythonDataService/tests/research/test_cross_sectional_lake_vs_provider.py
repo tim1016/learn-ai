@@ -1,4 +1,4 @@
-"""Cross-sectional stock bars: the old provider path against the admitted lake path, over a MODELED daily payload (#3524; R14, T08, D02).
+"""Cross-sectional stock bars: the old provider path against the admitted lake path, over a MODELED daily payload, and the study's daily bar against the vendor's real one (#3524; R14, T08).
 
 Slice 34 of the UX redesign moves the study's stock bars from ``PolygonClientService.fetch_aggregates(..., "day")`` to
 the lake. This module is the receipt for what that move changes, case by case. Both paths read the *same* pinned
@@ -13,33 +13,23 @@ Each case records changed timestamps, prices, counts and derived outputs, and na
 (``timestamp``, ``data-quality``, ``off-by-one``). The derived outputs are the three things a stock bar feeds in this
 study: the daily returns behind the N_eff correlation, the forward targets the IC is measured against, and — through the
 stock close — the ATM contract pick and the IV spot. A case that moves nothing says so by asserting zero. Unexplained
-drift fails here; an *intentional* divergence is the owner's decision (D02).
+drift fails here.
 
-What this comparison does NOT measure, and the decision it leaves open. ``modeled_daily`` builds the daily bar as the
-regular-session fold of the same minutes, so under the default ``regular`` policy the two paths agree on price and volume
-by construction. The cases that use it prove the plumbing (the admitted lake path equals an independent fold; the
-anchor, grid, gap, early-close and DST behaviour) and what the policy choice moves. They do not show that Polygon's own
-daily aggregate equals the regular fold. **That is unmeasured: no real Polygon daily payload is held in this repository.**
-The one real thing the repo holds is a week of Polygon one-minute SPY bars (2025-01-13..17), and
-``test_the_regular_fold_of_a_real_spy_week_...`` below measures on it what the regular fold leaves out: the minute
-stamped 16:00 (16:00:00 to 16:00:59). That minute is not the closing-auction print. It holds whatever printed in its
-sixty seconds, which can include the closing cross and the first after-hours trades, and this capture cannot tell them
-apart; whether the cross is in it at all, or filtered out of Polygon's minute bars by trade condition, is not
-established. Two numbers per session are pinned, each named for what it is: the minute's OPEN against the fold's close
-(a proxy for the auction print, the first trade the minute holds: 0.01 to 0.04 away, under one basis point) and the
-minute's CLOSE against it (the minute's last trade, after-hours included: 0.03 to 0.41 away, up to seven basis points,
-so not a proxy for the auction). If Polygon's daily close is the closing print, the regular fold's close differs from
-it by about the open's amounts; if it is the 15:59 close, it is the same. Closing the question takes ONE real daily
-payload for that week (``/v2/aggs/ticker/SPY/range/1/day/2025-01-13/2025-01-17``, ``adjusted=false``), pinned beside
-the minute capture with an attribution file and compared to the pinned fold. It is not fetched here: a vendor call is the
-owner's to authorise. Until then the choice between a regular fold and one that keeps the minute stamped 16:00 is D02 on
-measured minutes and an unmeasured daily.
+The daily bar is the regular session, and the owner chose that (2026-10-24, #3524): the minute stamped 16:00 is not folded
+in. ``modeled_daily`` builds the vendor's daily as the regular-session fold of the same minutes, so under the default
+``regular`` policy the two paths agree on price and volume by construction. The cases that use it prove the plumbing (the
+admitted lake path equals an independent fold; the anchor, grid, gap, early-close and DST behaviour) and what the session
+policy moves. They do not show that Polygon's own daily aggregate equals the regular fold. That is measured on a real
+payload by ``test_the_regular_fold_of_a_real_spy_week_equals_the_vendors_real_daily_open_high_and_low`` below, against
+golden fixture ``SPY-DAILY-001`` (the vendor's daily bars for 2025-01-13 to 17, ``adjusted=false``, recorded 2026-10-24)
+and the repo's SPY one-minute capture of the same week: the open, high and low are exact on all five days; the close
+differs by up to $0.15 (the vendor's is the official print); the fold holds 71.5 to 84.7 percent of the vendor's volume
+(the vendor counts trades its minute aggregates omit). ``test_the_regular_fold_of_a_real_spy_week_stops_at_the_15_59_minute...``
+measures what the fold leaves out: the minute stamped 16:00.
 
-The IV and contract-pick comparison runs on the first fortnight of March 2024, the span over which the monthly expiry
-bracket still holds 30 days (see ``tests/research/options/test_iv_builder_provider_inputs.py``). The study's IC itself
-cannot be compared end to end for that reason: on master, no chain passes the IV diagnostics over a window long enough
-to compute one. Derived-output parity for the IC, N_eff and the binomial test is therefore not shown end to end; returns,
-targets, the ATM pick, the spot and the IV are.
+The IV and contract-pick comparison runs on the first fortnight of March 2024 (11 sessions). The study's IC, N_eff and
+binomial test are not compared end to end here: a window long enough to compute them needs 30 aligned IV days, and the
+comparison is about what a stock bar feeds. Returns, targets, the ATM pick, the spot and the IV are compared.
 
 The lake's 1/10,000 price grid is ``data-quality`` (input quantization), never ``precision``: it changes the input data,
 and ``precision`` is floating-point accumulation. Each output it moves is pinned two-sided at its measured magnitude, to
@@ -78,11 +68,12 @@ from app.utils.session_anchors import et_midnight_ms
 from tests._helpers.fake_lake_catalog import install_fake_catalog, mock_launcher, point_lake_writer_at_tmp
 from tests._helpers.option_chain import OptionChain
 from tests._helpers.pinned_vendor import VendorBar, VendorCalls, mock_vendor, scaled, vendor_history
+from tests.fixtures.golden_support.registry import default as registry
 
 ET = ZoneInfo("America/New_York")
 NOW_MS = 1_735_689_600_000  # 2025-01-01
 
-#: 2024-03-10 is the spring-forward Sunday. The first fortnight keeps the monthly expiry bracket valid for the IV build.
+#: 2024-03-10 is the spring-forward Sunday.
 DST_WINDOW = expected_sessions(date(2024, 3, 1), date(2024, 3, 15))
 #: 2024-07-03 is an early close (13:00 ET) and 2024-07-04 a holiday.
 HALF_DAY_WINDOW = expected_sessions(date(2024, 7, 1), date(2024, 7, 12))
@@ -362,7 +353,7 @@ def test_an_early_close_week_matches_a_modeled_regular_daily_and_the_holiday_has
 
 
 def test_extended_hours_is_a_different_daily_bar_and_moves_the_spot_and_the_contract_pick(world):
-    """Cause: ``data-quality`` (session scope). The lake's own daily rollup folds 04:00-20:00 ET; the modeled daily's close is the 16:00 close. D02.
+    """Cause: ``data-quality`` (session scope). The lake's own daily rollup folds 04:00-20:00 ET; the modeled daily's close is the 16:00 close.
 
     The stock close sets the IV spot and the ATM strike. The numbers below are measured on the pinned synthetic tape: how much
     the policy moves the inputs, not how much it would move a live name.
@@ -388,7 +379,7 @@ def test_extended_hours_is_a_different_daily_bar_and_moves_the_spot_and_the_cont
 
 
 # ---------------------------------------------------------------------------
-# The one real Polygon tape in the repo: what the regular fold leaves out (D02)
+# The one real Polygon week in the repo: what the regular fold leaves out, and how it compares with the vendor's own daily
 # ---------------------------------------------------------------------------
 
 #: A week of real Polygon one-minute SPY bars (``adjusted=false``, extended hours included), captured 2026-05-20.
@@ -431,8 +422,8 @@ def spy_capture_tape() -> dict[date, list[VendorBar]]:
 
 
 def test_the_regular_fold_of_a_real_spy_week_stops_at_the_15_59_minute_and_leaves_out_the_minute_stamped_16_00(world):
-    """Cause, if Polygon's daily bar keeps the closing print: ``data-quality`` (session boundary). Polygon's daily bar for
-    this week is NOT held, so whether it does is unmeasured; this measures what the regular fold drops, on real minutes.
+    """Cause: ``data-quality`` (session boundary). This measures what the regular fold drops, on real minutes; the vendor's own
+    daily bar for the same week is compared with the fold below.
 
     The lake reads ``[open, close)``, so a session's last minute is 15:59. The minute stamped 16:00 is not the auction
     print; it is the sixty seconds from 16:00:00, with whatever printed in them (the closing cross, if Polygon's minute
@@ -481,6 +472,78 @@ def test_the_regular_fold_of_a_real_spy_week_stops_at_the_15_59_minute_and_leave
     assert max(abs(move) / SPY_REGULAR_FOLD[day][3] for move, day in zip(open_moves, SPY_WEEK, strict=True)) < 1e-4, "the open is under one basis point away"
     assert max(abs(move) / SPY_REGULAR_FOLD[day][3] for move, day in zip(close_moves, SPY_WEEK, strict=True)) < 7.1e-4, "the close up to seven"
     assert min(volume_share) > 0.003 and max(volume_share) < 0.012
+
+
+#: Golden fixture ``SPY-DAILY-001``: the vendor's daily aggregates for the same week, recorded byte for byte (``input.json``),
+#: and the measurement of the fold against them (``output.json``, written by the fixture's ``regenerate.py``).
+SPY_DAILY_FIXTURE = "SPY-DAILY-001"
+#: The fold's close less the vendor's, per session, as measured: exact on 2 of 5 days, up to $0.15 on the rest.
+SPY_CLOSE_DIFFERENCE = [0.15, 0.0, 0.0, 0.06, -0.01]
+#: The same difference had the minute stamped 16:00 been folded in (its close is the day's last): exact on 1 of 5, up to $0.41.
+SPY_CLOSE_DIFFERENCE_WITH_16_00 = [0.11, 0.41, 0.03, 0.0, -0.07]
+#: The fold's volume over the vendor's daily volume, per session, as measured: 71.5 to 84.7 percent.
+SPY_VOLUME_SHARE = [0.7742631053844186, 0.8472511440216729, 0.7408318925503926, 0.7151391977143576, 0.8438207031326346]
+#: Every top-level key of the recorded answer; a payload with another field (a key, a cursor) is not the one pinned.
+VENDOR_DAILY_KEYS = {"ticker", "queryCount", "resultsCount", "adjusted", "results", "status", "request_id", "count"}
+
+
+def test_the_regular_fold_of_a_real_spy_week_equals_the_vendors_real_daily_open_high_and_low(world):
+    """Vendor data, 2025-01-13 to 17, ``adjusted=false``, recorded 2026-10-24 (golden ``SPY-DAILY-001``) against the study's
+    daily fold of the repo's SPY minute capture of the same week, through the real lake path.
+
+    * **Open, high, low: exact on all five days.** The regular session is ``[09:30, 16:00)``, so the fold leaves out the
+      minute stamped 16:00.
+    * **Close: exact on two days, up to $0.15 off on the others.** The vendor's close is the official print. The study's is
+      the last regular minute's close, the 15:59 minute: the instant the option minute bars price at, and so the spot the IV
+      solve needs. Folding the 16:00 minute in would be worse: exact on one day and up to $0.41 off.
+    * **Volume: the fold holds 71.5 to 84.7 percent of the vendor's.** The vendor's volume counts trades its minute aggregates
+      omit. The study reads no stock volume, so this changes no output.
+
+    The differences are pinned as measured: the close at ``atol=1e-9`` (a difference of two prices on the 1/10,000 grid is
+    exact to float noise), the share at ``atol=1e-12`` (one division of two exact sums).
+    """
+    vendor_text = registry.resolve(SPY_DAILY_FIXTURE, "input").read_text(encoding="utf-8")
+    vendor = json.loads(vendor_text)
+    recorded = json.loads(registry.resolve(SPY_DAILY_FIXTURE, "output").read_text(encoding="utf-8"))["sessions"]
+    assert set(vendor) == VENDOR_DAILY_KEYS and vendor["adjusted"] is False and vendor["status"] == "OK"
+    assert "apikey" not in vendor_text.lower() and "api_key" not in vendor_text.lower(), "a recorded answer holds no key"
+    tape = spy_capture_tape()
+    mock_vendor("SPY", tape, adjusted=tape)
+
+    study = {_session(r): r for r in lake_rows(SPY_WEEK, now_ms=SPY_WEEK_NOW_MS)}
+
+    sessions = [datetime.fromtimestamp(daily["t"] / 1000, ET).date() for daily in vendor["results"]]
+    assert sessions == SPY_WEEK == sorted(study) == sorted(SPY_REGULAR_FOLD)
+    for day, daily in zip(sessions, vendor["results"], strict=True):
+        row = study[day]
+        np.testing.assert_allclose(
+            (row["open"], row["high"], row["low"]), (daily["o"], daily["h"], daily["l"]), atol=0.0, rtol=0.0, err_msg=f"{day} open, high, low"
+        )
+        np.testing.assert_allclose(
+            (row["open"], row["high"], row["low"], row["close"], row["volume"]), SPY_REGULAR_FOLD[day], atol=1e-9, rtol=0, err_msg=f"{day} fold"
+        )
+        assert recorded[day.isoformat()]["vendor"] == {
+            "open": daily["o"], "high": daily["h"], "low": daily["l"], "close": daily["c"], "volume": daily["v"]
+        }, "the recorded measurement was made from this payload"
+    close_gap = [study[day]["close"] - daily["c"] for day, daily in zip(sessions, vendor["results"], strict=True)]
+    np.testing.assert_allclose(close_gap, SPY_CLOSE_DIFFERENCE, atol=1e-9, rtol=0, err_msg="the fold's close less the vendor's")
+    assert sum(abs(gap) < 1e-9 for gap in close_gap) == 2 and max(abs(gap) for gap in close_gap) < 0.15 + 1e-9
+    volume_share = [study[day]["volume"] / daily["v"] for day, daily in zip(sessions, vendor["results"], strict=True)]
+    np.testing.assert_allclose(volume_share, SPY_VOLUME_SHARE, atol=1e-12, rtol=0, err_msg="the fold's volume over the vendor's")
+    assert min(volume_share) > 0.715 and max(volume_share) < 0.848
+
+    with_16_00 = [
+        float(recorded[day.isoformat()]["with_the_minute_stamped_16_00"]["close_difference_fold_minus_vendor"]) for day in sessions
+    ]
+    np.testing.assert_allclose(with_16_00, SPY_CLOSE_DIFFERENCE_WITH_16_00, atol=1e-9, rtol=0, err_msg="had the 16:00 minute been folded in")
+    np.testing.assert_allclose(
+        [recorded[day.isoformat()]["with_the_minute_stamped_16_00"]["close"] for day in sessions],
+        [SPY_CLOSING_MINUTE[day][3] for day in sessions],
+        atol=0.0, rtol=0.0, err_msg="the recorded close is the capture's minute stamped 16:00",
+    )
+    assert sum(abs(gap) < 1e-9 for gap in with_16_00) < sum(abs(gap) < 1e-9 for gap in close_gap), "fewer days exact"
+    assert max(abs(gap) for gap in with_16_00) > max(abs(gap) for gap in close_gap), "and a larger miss"
+    assert [recorded[day.isoformat()]["close_difference_fold_minus_vendor"] for day in sessions] == ["0.15", "0.00", "0.00", "0.06", "-0.01"]
 
 
 #: What the lake's price grid moves, measured on this pinned payload (seed 11, the DST window, 11 sessions) at three
@@ -552,7 +615,7 @@ def test_prices_finer_than_the_lake_grid_move_each_output_by_its_measured_amount
     float tolerance covers it.
 
     Each recorded output is pinned at its measured movement, within ``float_atol`` and with ``rtol=0`` because the quantity
-    compared is itself a difference. The table above is what D02 is decided on: the daily returns move by about 5e-7 on a
+    compared is itself a difference. The table above is what the grid costs: the daily returns move by about 5e-7 on a
     $150 name, 5e-6 on a $12 name and 3e-5 on a $2 name; the five-day volatility target by 1e-6, 4e-5 and 4e-4; the solved IV
     by 1e-6 and 5e-6 where it can be solved. ``worst_case_volatility_target_move`` is the bound the measured movement must sit
     under whatever the tape.
@@ -608,11 +671,11 @@ def test_a_session_the_provider_path_dropped_in_silence_now_excludes_the_member_
 
 
 def test_a_member_listed_inside_the_window_ran_on_its_shorter_history_before_and_is_now_excluded(world):
-    """Cause: ``data-quality`` (coverage). The lake gate does not run a study on a window it cannot fully admit. D02.
+    """Cause: ``data-quality`` (coverage). The lake gate does not run a study on a window it cannot fully admit.
 
     The sessions before the listing date are not in the provider's tape, so the old path simply started later. The lake
-    path asks for them, is told there is nothing, and excludes the member with those sessions named. Whether a member
-    should instead be evaluated on the part of the window it was listed for is the owner's decision.
+    path asks for them, is told there is nothing, and excludes the member with those sessions named. The owner chose this
+    (2026-10-24, #3524): a member missing a session, or listed mid-window, is excluded, and the page shows it.
     """
     tape = tape_for(DST_WINDOW)
     listed = DST_WINDOW[3]

@@ -64,8 +64,9 @@ did not answer (a key is configured) is a degraded input, and a result holding
 either is not cached. A study in which no member is evaluated fails with
 `no_member_evaluated` instead of completing. No calculation
 ownership changes: IV, IC, N_eff, binomial and graduation math is untouched. The
-session the daily bar folds from (`regular` by default, `extended` opt-in) is an
-owner decision (D02 of PRD #3490).
+daily bar is the regular session (the owner's decision, #3524), measured against
+the vendor's own daily bars in golden fixture `SPY-DAILY-001`; `extended` is
+reachable only through the API.
 
 Committed lake-file admission (#2456) is owned by
 `PythonDataService/app/data_lake/admission.py`, backed by committed catalog

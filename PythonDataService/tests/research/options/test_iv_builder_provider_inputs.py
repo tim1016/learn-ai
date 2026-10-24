@@ -99,7 +99,7 @@ def test_the_iv_history_recovers_the_volatility_the_chain_was_priced_with():
 
 
 def test_a_different_stock_close_picks_a_different_atm_contract():
-    """The stock close sets the ATM strike, so the session the close comes from can change the contracts priced (D02)."""
+    """The stock close sets the ATM strike, so the session the close comes from can change the contracts priced."""
     low_rows, high_rows = stock_rows(WINDOW[:1], start=150.0), stock_rows(WINDOW[:1], start=150.9)
     chain_low, chain_high = chain_for(low_rows, WINDOW[:1]), chain_for(high_rows, WINDOW[:1])
     ledger_low, ledger_high = OptionInputLedger(), OptionInputLedger()

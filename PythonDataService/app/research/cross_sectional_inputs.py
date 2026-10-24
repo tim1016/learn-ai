@@ -1,4 +1,4 @@
-"""Admitted lake stock bars for the cross-sectional study (#3524; PRD #3490 R12-R15, R25, T05, T09, T18, D02).
+"""Admitted lake stock bars for the cross-sectional study (#3524; PRD #3490 R12-R15, R25, T05, T09, T18).
 
 The study's input contract, field by field and before/after, is the docstring of
 :mod:`app.services.cross_sectional_study_service`. This module is the lake side of it.
@@ -12,7 +12,11 @@ The study's input contract, field by field and before/after, is the docstring of
   one New York session, by the lake's own reduction (:func:`app.data_lake.derived_daily.aggregate_minute_to_daily`) —
   not the whole-symbol daily rollup. The rollup is rebuilt whenever a symbol's catalogued coverage changes, offers no
   session choice, and is not part of a per-session receipt. Under the ``extended`` policy the study's rows equal the
-  rollup's rows (``tests/research/test_cross_sectional_inputs.py``); under ``regular`` they fold the scheduled session.
+  rollup's rows (``tests/research/test_cross_sectional_inputs.py``); under ``regular``, the study's session, they fold the
+  scheduled session ``[open, close)``, which leaves out the minute stamped 16:00. Against the vendor's own daily bars for
+  SPY, 2025-01-13 to 17, the open, high and low are exact; the close differs by up to $0.15 (the vendor's is the official
+  print, the fold's is the last regular minute, the instant the option minute bars price at) and the fold holds 71.5 to
+  84.7 percent of the vendor's volume (golden fixture ``SPY-DAILY-001``).
 * **Partial universes** (T18): a member the lake cannot admit is a :class:`MemberExclusion` with its code, reason and
   coverage, not a dropped symbol. When no member can be admitted the study refuses.
 
@@ -153,7 +157,8 @@ def daily_rows(bars: Iterable[TradeBar]) -> list[dict[str, float | int]]:
     open, ``int64 ms UTC``; prices and volume are float64 of the exact Decimals.
     Reference: ``app/data_lake/derived_daily.py`` (the lake's own minute-to-daily reduction, ADR 0049 section 4.6).
     Canonical implementation: ``app/data_lake/derived_daily.py::aggregate_minute_to_daily`` (this function drives it).
-    Validated against: tests/research/test_cross_sectional_inputs.py::test_daily_rows_equal_the_lakes_own_daily_rollup
+    Validated against: tests/research/test_cross_sectional_inputs.py::test_daily_rows_equal_the_lakes_own_daily_rollup; the vendor's real daily bars
+    for one SPY week, golden fixture SPY-DAILY-001, by tests/research/test_cross_sectional_lake_vs_provider.py::test_the_regular_fold_of_a_real_spy_week_equals_the_vendors_real_daily_open_high_and_low
     """
     minutes = [
         MinuteTradeBar(

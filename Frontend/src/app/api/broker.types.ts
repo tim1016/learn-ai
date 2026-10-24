@@ -12625,8 +12625,8 @@ export interface components {
          *     that names no resolution gets the study it always got, and any other resolution
          *     is refused with a reason. ``session`` is the one control for which minutes each
          *     daily bar folds: ``rth`` (the base default, which the browser sends) is the
-         *     scheduled session, ``extended`` is 04:00-20:00 ET. Which one the study should
-         *     use is an owner decision (D02); the default is the one the browser has always sent.
+         *     scheduled session, ``extended`` is 04:00-20:00 ET. The study's session is the regular
+         *     one (the owner's decision, #3524); the browser always sends it, and ``extended`` is reachable only through the API.
          */
         CrossSectionalJobRequest: {
             /** Featurename */
