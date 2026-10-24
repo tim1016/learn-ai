@@ -202,6 +202,12 @@ describe('an instrument\'s Data tab', () => {
 
     expect(await screen.findByText(/The price adjustment "dividend" is not one this place offers/)).toBeTruthy();
     opened.http.expectNone(READ_URL);
+
+    // Committing a window writes a context the place offers, so the refused value does not outlive the pick.
+    opened.context().commitWindow({ from: '2026-04-20', to: '2026-05-20' });
+    await waitFor(() => expect(opened.router.url).not.toContain('dividend'));
+    const read = await waitFor(() => opened.http.expectOne(READ_URL));
+    expect(read.request.params.get('price_adjustment_mode')).toBe('polygon_split_adjusted');
   });
 
   describe('Fill', () => {

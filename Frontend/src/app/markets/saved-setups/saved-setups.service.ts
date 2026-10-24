@@ -13,7 +13,7 @@ import {
 } from '../../services/data-lab-session.service';
 import { chartRequestIdentity } from '../chart/chart-request';
 import { MARKETS_ROUTE, instrumentPageOf } from '../instrument-address';
-import { ADJUSTMENT_QUERY_KEY, DEFAULT_ADJUSTMENT, DEFAULT_FORWARD_FILL, FORWARD_FILL_QUERY_KEY, SETUP_QUERY_KEY } from '../instrument-context';
+import { ADJUSTMENT_QUERY_KEY, DEFAULT_ADJUSTMENT, FORWARD_FILL_QUERY_KEY, SETUP_QUERY_KEY } from '../instrument-context';
 import { InstrumentContextService } from '../instrument-context.service';
 import { isShowableChart, planSetupOpening, type SetupOpening } from './saved-setup';
 
@@ -218,7 +218,7 @@ export class SavedSetupsService {
       session,
       // The defaults are an absent key, as the place writes them.
       ...(adjustment === DEFAULT_ADJUSTMENT ? {} : { [ADJUSTMENT_QUERY_KEY]: adjustment }),
-      ...(forwardFill === DEFAULT_FORWARD_FILL ? {} : { [FORWARD_FILL_QUERY_KEY]: forwardFill ? 'on' : 'off' }),
+      ...(forwardFill ? {} : { [FORWARD_FILL_QUERY_KEY]: 'off' }),
       ...(window === null ? {} : { from: window.from, to: window.to }),
     };
     const page = (fromAddress ? instrumentPageOf(this.router.url) : null) ?? ['chart'];

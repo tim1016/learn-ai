@@ -174,9 +174,9 @@ export class InstrumentWorkspaceComponent {
     if (problems.length > 0) {
       return {
         kind: 'invalid',
-        happened: 'The window in this address cannot be used, so nothing is loaded.',
+        happened: 'This address names a context the place cannot use, so nothing is loaded.',
         why: problems.join(' '),
-        next: 'Pick a window above. Nothing is substituted for it.',
+        next: 'Pick a window above, which writes a context the place offers. Nothing is substituted for it.',
       };
     }
     const pending = this.context.defaultWindowPending();

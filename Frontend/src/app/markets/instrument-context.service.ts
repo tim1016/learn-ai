@@ -17,7 +17,6 @@ import {
   ADJUSTMENT_QUERY_KEY,
   CONTEXT_QUERY_KEYS,
   DEFAULT_ADJUSTMENT,
-  DEFAULT_FORWARD_FILL,
   FORWARD_FILL_QUERY_KEY,
   SETUP_QUERY_KEY,
   readInstrumentContext,
@@ -301,7 +300,7 @@ function adjustmentParam(adjustment: InstrumentAdjustment): string | null {
   return adjustment === DEFAULT_ADJUSTMENT ? null : adjustment;
 }
 
-/** The query value of the forward-fill choice: `off`, or `null` (no key) for the default. */
+/** The query value of the forward-fill choice: `off`, or `null` (no key) for the default, which is on. */
 function forwardFillParam(forwardFill: boolean): string | null {
-  return forwardFill === DEFAULT_FORWARD_FILL ? null : forwardFill ? 'on' : 'off';
+  return forwardFill ? null : 'off';
 }
