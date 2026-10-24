@@ -13,9 +13,10 @@ A study that computes from the lake does three things before it computes.
    materializer waits out the one and steals from the other), and reads those
    again. The UI is never a writer.
 3. **Refuses, or hands over bars with a receipt.** A required session that is
-   missing, being built by another writer, corrupt, or unavailable from the
-   provider ends in a typed :class:`StudyInputRefusal` carrying the counts —
-   never a result computed on a shorter series. Success carries the same counts
+   missing, being built by another writer, corrupt, captured before its data
+   stopped forming, or unavailable from the provider ends in a typed
+   :class:`StudyInputRefusal` carrying the counts — never a result computed on a
+   shorter series. Success carries the same counts
    plus the admitted snapshot (the sha256 of every byte read), which is what a
    result cache must key on.
 
@@ -26,6 +27,13 @@ one minute artifact, but the materializer also reports metadata artifacts).
 A retained day older than the provider's history floor stays readable; a
 missing one is ``unavailable_from_provider`` and is never asked of the provider
 (the request would be refused, and a refused day ends a whole backfill).
+
+A day captured before the study's session policy finished forming
+(:mod:`app.data_lake.capture_finality`) is held but short: its tail is missing,
+and nothing in the lake refreshes a committed day. Admission refuses it as
+``captured_before_final`` and asks the vendor for nothing — it neither computes
+on that tape nor rewrites the day, which every other reader of the lake shares.
+Re-capturing such a day is an owner decision (``docs/known-gaps.md``).
 
 Fold. The lake holds minute bars; a coarser study resolution is folded from
 them by :func:`fold_minute_bars` — never by the chart's resampler, which fills
@@ -49,9 +57,12 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID
 
+import asyncpg
+
+from app.data_lake import catalog_client
 from app.data_lake.adjustment_versions import AdjustmentVersionError, adjusted_root_for, companion_path
 from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
-from app.data_lake.capture_finality import CaptureSession, capture_final_ms
+from app.data_lake.capture_finality import CLAIM_LEASE_MS, CaptureSession, capture_final_ms, captured_early
 from app.data_lake.catalog_client import CatalogUnavailableError
 from app.data_lake.path_policy import LeanMinuteBarPath
 from app.data_lake.polygon_fetcher import polygon_history_floor
@@ -59,7 +70,6 @@ from app.data_lake.root_identity import read_marker
 from app.data_lake.run_materialization import (
     LakeMaterializationError,
     MinuteWindowMaterialization,
-    early_minute_captures,
     materialize_minute_window,
 )
 from app.data_lake.types import ArtifactFailure, ArtifactFailureReason, is_lake_addressable_symbol
@@ -70,6 +80,7 @@ from app.engine.data.policy_store import resolve_data_roots
 from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms_utc
 from app.research.sweep.snapshot import DataSnapshot
+from app.utils.background_loop import CallerStoppedWaitingError, run_on_background_loop
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 from app.utils.timestamps import display_time, now_ms_utc
 
@@ -85,7 +96,7 @@ AdjustmentMode = Literal["raw", "polygon_split_adjusted"]
 FOLD_RULE = "minute_fold_et_wall_clock_no_fill"
 
 #: What admission concludes about one required session.
-SessionOutcome = Literal["ready", "missing", "building", "corrupt", "unavailable_from_provider"]
+SessionOutcome = Literal["ready", "missing", "building", "corrupt", "captured_before_final", "unavailable_from_provider"]
 
 RefusalCode = Literal[
     "resolution_unsupported",
@@ -94,6 +105,7 @@ RefusalCode = Literal[
     "window_not_complete",
     "data_unavailable_from_provider",
     "data_corrupt",
+    "captured_before_final",
     "data_building",
     "data_missing",
     "lake_unavailable",
@@ -143,6 +155,7 @@ _REPAIRED_BY_CAPTURE: tuple[type[Exception], ...] = (LakeAdmissionError, Adjustm
 _REFUSAL_PRECEDENCE: tuple[tuple[SessionOutcome, RefusalCode], ...] = (
     ("unavailable_from_provider", "data_unavailable_from_provider"),
     ("corrupt", "data_corrupt"),
+    ("captured_before_final", "captured_before_final"),
     ("building", "data_building"),
     ("missing", "data_missing"),
 )
@@ -233,7 +246,8 @@ class GroupCoverage:
     ``reused`` sessions were ready before this admission began; ``added`` were
     made ready by it. ``missing`` are held nowhere and were not fetched (the
     request could not complete anyway, or the fetch produced nothing and said
-    nothing). ``failed`` is ``building + corrupt + unavailable_from_provider``.
+    nothing). ``failed`` is
+    ``building + corrupt + captured_before_final + unavailable_from_provider``.
     """
 
     expected: int = 0
@@ -242,11 +256,12 @@ class GroupCoverage:
     missing: int = 0
     building: int = 0
     corrupt: int = 0
+    captured_before_final: int = 0
     unavailable_from_provider: int = 0
 
     @property
     def failed(self) -> int:
-        return self.building + self.corrupt + self.unavailable_from_provider
+        return self.building + self.corrupt + self.captured_before_final + self.unavailable_from_provider
 
     def as_dict(self) -> dict[str, int]:
         return {
@@ -257,6 +272,7 @@ class GroupCoverage:
             "failed": self.failed,
             "building": self.building,
             "corrupt": self.corrupt,
+            "captured_before_final": self.captured_before_final,
             "unavailable_from_provider": self.unavailable_from_provider,
         }
 
@@ -346,13 +362,16 @@ class _SessionRead:
 
     ``absent``: no file, or none of its bars belong to the policy's session. ``unreadable``: a file that cannot be
     admitted or decoded. ``invalid``: it decoded to bars that break the session's invariants. ``early``: readable,
-    but captured before the policy's data stopped forming, so its tail is missing for good unless it is captured
-    again. ``repairable`` is whether a capture can put the session right (see :data:`_REPAIRED_BY_CAPTURE`).
+    but captured before the policy's data stopped forming, so its tail is missing for good; no capture the lake makes
+    on its own puts that right, so it is never ``repairable``. ``repairable`` is whether a capture can put the
+    session right (see :data:`_REPAIRED_BY_CAPTURE`). ``uncommitted``: the bytes have no committed receipt, which a
+    writer still publishing and a writer that died both leave.
     """
 
     state: Literal["ready", "absent", "unreadable", "invalid", "early"]
     reason: str = ""
     repairable: bool = False
+    uncommitted: bool = False
     bars: list[TradeBar] = field(default_factory=list)
     receipts: dict[str, str] = field(default_factory=dict)
 
@@ -392,7 +411,12 @@ def _read_session(
         reader.adjustment_guard.verify(path, payload, identity.symbol, companion_payload=companion)
         bars = reader.parse_day_zip(payload, identity.symbol, day)
     except _UNREADABLE_FILE as exc:
-        return _SessionRead("unreadable", f"{type(exc).__name__}: {exc}", repairable=isinstance(exc, _REPAIRED_BY_CAPTURE))
+        return _SessionRead(
+            "unreadable",
+            f"{type(exc).__name__}: {exc}",
+            repairable=isinstance(exc, _REPAIRED_BY_CAPTURE),
+            uncommitted=isinstance(exc, LakeAdmissionError),
+        )
     if not bars:
         return _SessionRead("absent", f"the file holds no {identity.session_policy}-session bars", repairable=True)
     previous: int | None = None
@@ -405,6 +429,31 @@ def _read_session(
             )
         previous = bar.start_ms
     return _SessionRead("ready", bars=bars, receipts=receipts)
+
+
+def _early_captures(
+    *, symbol: str, days: Sequence[date], price_adjustment_mode: AdjustmentMode, session: SessionPolicy
+) -> dict[date, int]:
+    """The days among ``days`` the lake holds a minute artifact for that may have been captured before ``session`` data
+    was final, each with the catalog's completion time (``int64 ms UTC``).
+
+    Judged by :func:`~app.data_lake.capture_finality.captured_early`, from the time the catalog recorded, never from
+    the file. Blocking; raises :class:`CatalogUnavailableError` when the catalog cannot answer.
+    """
+    if not days:
+        return {}
+
+    async def _completion_times() -> dict[date, int]:
+        await catalog_client.init_pool()
+        return await catalog_client.select_minute_capture_times(
+            "usa", symbol, "trade", min(days), max(days), price_adjustment_mode=price_adjustment_mode
+        )
+
+    try:
+        completed = run_on_background_loop(_completion_times(), timeout=35)
+    except (asyncpg.PostgresError, OSError, TimeoutError, CallerStoppedWaitingError) as exc:
+        raise CatalogUnavailableError(f"cannot read capture times from the catalog ({type(exc).__name__})") from exc
+    return {day: completed[day] for day in days if day in completed and captured_early(completed[day], day, session)}
 
 
 def _describe_failure(failure: ArtifactFailure) -> str:
@@ -420,6 +469,7 @@ def _summarise(issues: Sequence[SessionIssue], total: int) -> str:
     meaning: Mapping[str, str] = {
         "unavailable_from_provider": "cannot be supplied by the provider",
         "corrupt": "are in the lake but cannot be read",
+        "captured_before_final": "were captured before their data stopped forming, so their tail is missing",
         "building": "are still being captured by another run",
         "missing": "are not in the lake",
     }
@@ -441,12 +491,19 @@ def _why_not_ready(
 ) -> tuple[SessionOutcome, str]:
     """The outcome and plain reason for a session the read pass could not admit.
 
-    The materializer's own failure for the session wins when it has one — it
-    says why the lake could not repair or fill it. A file that exists but
-    cannot be read is corrupt whatever else is true, unless a capture was
-    asked to put it right and is still at it. A missing session older than the
-    provider's history was never asked of the provider.
+    A session captured before its data stopped forming is refused as such
+    whatever else is true: it is held, readable and short, and no capture asked
+    for it. Otherwise the materializer's own failure for the session wins when it
+    has one — it says why the lake could not repair or fill it. A file that
+    exists but cannot be read is corrupt whatever else is true, unless a capture
+    was asked to put it right and is still at it, or no capture was asked and the
+    file is only missing its receipt (a writer mid-publish looks the same as one
+    that died; nothing was done to tell them apart, so it is not called damaged).
+    A missing session older than the provider's history was never asked of the
+    provider.
     """
+    if read.state == "early":
+        return "captured_before_final", read.reason
     if failure is not None:
         reason = _describe_failure(failure)
         if read.state != "absent":
@@ -455,16 +512,13 @@ def _why_not_ready(
     if read.state in ("unreadable", "invalid"):
         if capture_timed_out and read.repairable:
             return "building", f"{read.reason}; the capture did not finish in time"
+        if read.uncommitted and not fetched:
+            return "building", f"{read.reason}; no capture was asked, so a writer still publishing it is not ruled out"
         return "corrupt", read.reason
-    beyond_provider = f"older than the provider's history, which starts {floor.isoformat()}"
     if older_than_floor:
-        if read.state == "early":
-            return "unavailable_from_provider", f"{read.reason}; it is {beyond_provider}, so it cannot be captured again"
-        return "unavailable_from_provider", beyond_provider
+        return "unavailable_from_provider", f"older than the provider's history, which starts {floor.isoformat()}"
     if capture_timed_out:
         return "building", "the capture did not finish in time"
-    if read.state == "early":
-        return "missing", read.reason if fetched else f"{read.reason}; not captured again"
     return "missing", read.reason if fetched else "not in the lake; not fetched"
 
 
@@ -487,6 +541,7 @@ def _group_coverage(
         missing=counts["missing"],
         building=counts["building"],
         corrupt=counts["corrupt"],
+        captured_before_final=counts["captured_before_final"],
         unavailable_from_provider=counts["unavailable_from_provider"],
     )
 
@@ -502,7 +557,9 @@ def admit_minute_inputs(
 
     Each required session's file is read, committed-byte admitted and parsed
     exactly once; only a session that was not ready is read again, after the
-    materializer (catalog claims, lease coordination) has had its say. What a
+    materializer (catalog claims, lease coordination) has had its say. (An
+    adjusted window is read again whole after a capture: the capture can
+    rebuild days that were ready, and one series must sit on one basis.) What a
     session turns out to be comes from that read and from the materializer's
     own failure for it — never from a guess: a file with no committed receipt
     is a capture in flight or one that died, and the materializer decides which.
@@ -550,7 +607,7 @@ def admit_minute_inputs(
         raise StudyInputRefusal("lake_unavailable", f"The data lake's catalog is unavailable ({exc}).") from exc
 
     try:
-        early = early_minute_captures(
+        early = _early_captures(
             symbol=symbol,
             days=[day for day in required if first_read[day].state == "ready"],
             price_adjustment_mode=identity.price_adjustment_mode,
@@ -558,12 +615,13 @@ def admit_minute_inputs(
         )
     except CatalogUnavailableError as exc:
         raise StudyInputRefusal("lake_unavailable", f"The data lake's catalog is unavailable ({exc}).") from exc
-    for day, captured_ms in early.items():
+    for day, completed_ms in early.items():
         first_read[day] = _SessionRead(
             "early",
-            f"captured {display_time(captured_ms)} ET, before its {identity.session_policy} data stopped forming "
-            f"({display_time(capture_final_ms(day, identity.session_policy))} ET)",
-            repairable=True,
+            f"captured at {display_time(completed_ms)} ET (up to {CLAIM_LEASE_MS // 60_000} minutes earlier), before its "
+            f"{identity.session_policy} session had closed and been delivered "
+            f"({display_time(capture_final_ms(day, identity.session_policy))} ET); it must be captured again before "
+            f"a study of the {identity.session_policy} session can use it",
         )
     check_cancelled()
 
@@ -579,7 +637,6 @@ def admit_minute_inputs(
                 end=max(fixable),
                 price_adjustment_mode=identity.price_adjustment_mode,
                 requester=requester,
-                final_for=identity.session_policy,
             )
         except LakeMaterializationError as exc:
             raise StudyInputRefusal("lake_unavailable", f"The data lake cannot materialize this window: {exc}") from exc
@@ -593,8 +650,15 @@ def admit_minute_inputs(
     reads = dict(first_read)
     if materialization is not None:
         failures = {f.trading_date: f for f in materialization.withheld if f.trading_date is not None}
+        # A capture of an adjusted symbol can move the basis of every day the lake holds for it, including days that
+        # read ready before it. The reader pins the first basis it sees, so the days read again are read with a reader
+        # of their own, and every required day is read again: one read on the old basis and one on the new would
+        # otherwise be refused as mixed, or worse, admitted as one series.
+        again = required if identity.adjusted else fixable
+        if identity.adjusted:
+            reader = LeanMinuteDataReader(roots, session=identity.session_policy)
         try:
-            for day in fixable:
+            for day in again:
                 reads[day] = _read_session(root, reader, identity, day)
                 check_cancelled()
         except CatalogUnavailableError as exc:
@@ -609,7 +673,7 @@ def admit_minute_inputs(
             final[day], reasons[day] = _why_not_ready(
                 reads[day],
                 failure=failures.get(day),
-                older_than_floor=day < floor and first_read[day].state in ("absent", "early"),
+                older_than_floor=day < floor and first_read[day].state == "absent",
                 capture_timed_out=materialization is not None and materialization.interruption == "did_not_finish",
                 floor=floor,
                 fetched=materialization is not None,

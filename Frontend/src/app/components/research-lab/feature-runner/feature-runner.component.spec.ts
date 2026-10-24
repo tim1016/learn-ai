@@ -1,5 +1,6 @@
 import { provideFakeDateWorld } from '../../../shared/date-picker/testing/fake-trading-calendar';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { HttpErrorResponse } from '@angular/common/http';
 import {
   HttpClientTestingModule,
   HttpTestingController,
@@ -185,7 +186,7 @@ describe('FeatureRunnerComponent', () => {
 
   const group = (over: Record<string, number>) => ({
     expected_sessions: 10, reused: 0, added: 10, missing: 0, failed: 0,
-    building: 0, corrupt: 0, unavailable_from_provider: 0, ...over,
+    building: 0, corrupt: 0, captured_before_final: 0, unavailable_from_provider: 0, ...over,
   });
   const dataSource = (coverage: unknown, over: Record<string, unknown> = {}) => ({
     kind: 'lake',
@@ -276,12 +277,35 @@ describe('FeatureRunnerComponent', () => {
   });
 
   it('shows the failure message alone when the job failed on something other than a refused window', async () => {
-    jobsServiceMock.fetchResult.mockRejectedValueOnce(new Error('404'));
+    jobsServiceMock.fetchResult.mockRejectedValueOnce(new HttpErrorResponse({ status: 404, statusText: 'Not Found' }));
 
     const el = await settleJob('failed', { errorCode: 'internal_error', errorMessage: 'The study crashed.' });
 
-    expect(el.querySelector('p-message')?.textContent).toContain('The study crashed.');
+    const shown = el.querySelector('p-message')?.textContent ?? '';
+    expect(shown).toContain('The study crashed.');
+    expect(shown, 'a missing result is the expected answer, not a second failure').not.toContain('could not be loaded');
     expect(el.querySelector('app-lake-study-source')).toBeNull();
+  });
+
+  it('says so when the failed job\'s result could not be read for any reason other than there being none', async () => {
+    jobsServiceMock.fetchResult.mockRejectedValueOnce(
+      new HttpErrorResponse({ status: 500, statusText: 'Internal Server Error', url: '/api/jobs/job-id-1/result' }),
+    );
+
+    const el = await settleJob('failed', { errorCode: 'data_corrupt', errorMessage: 'The lake cannot admit this window.' });
+
+    const shown = el.querySelector('p-message')?.textContent ?? '';
+    expect(shown).toContain('The lake cannot admit this window.');
+    expect(shown).toContain("The lake's reason could not be loaded");
+    expect(shown).toContain('500');
+  });
+
+  it('says so when the parked refusal is not the shape the page reads, rather than showing nothing', async () => {
+    jobsServiceMock.fetchResult.mockResolvedValueOnce({ success: false, status: 'refused', refusal: { code: 'data_corrupt' } });
+
+    const el = await settleJob('failed', { errorCode: 'data_corrupt', errorMessage: 'The lake cannot admit this window.' });
+
+    expect(el.querySelector('p-message')?.textContent).toContain("The lake's reason could not be loaded");
   });
 
   describe('indicator catalog load', () => {

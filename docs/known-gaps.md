@@ -607,20 +607,35 @@ re-arms the server-authored timeframe auto-correct, and numeric
 ## Lake-sourced research studies: divergences from the provider path (#3521, 2026-10-24)
 
 The Feature study reads admitted lake bars instead of one provider call per run. The differences below are measured
-in `tests/research/test_feature_study_lake_vs_provider.py`; the first two are owner decisions (D02 of PRD #3490).
+in `tests/research/test_feature_study_lake_vs_provider.py`; the first and the fourth are owner decisions (D02 of
+PRD #3490 and the re-capture path below).
 
 - **P2: which session the study computes on is undecided.** It keeps `extended` (04:00 to 20:00 ET), what the
   provider call always returned; `regular` is opt-in per request. Moving the default changes every number the study
   prints (see the measured RSI and IC movement in the comparison test).
 - **P2: a held day with no recorded capture time cannot be judged early.** `captured_early` treats a missing
   `CompletedAtMs` as final, and an imported day carries its import time, which is later than its capture. Such a day
-  captured before its session finished stays as short as it was captured. New captures always carry the time.
+  captured before its session finished stays as short as it was captured. New captures always carry the time. A
+  capture is judged by `CompletedAtMs` less the claim lease (five minutes), the earliest the vendor can have been
+  asked; `FetchedAtMs` is not used because it keeps the row's first claim through a retry or a re-capture.
 - **P2: the vendor's after-hours tail (four hours) and delivery delay (15 minutes) are constants.**
   `app/data_lake/capture_finality.py` names them once. A plan that delivers in real time makes the delay
   conservative, not wrong; a change to the extended window needs the constant changed.
-- **P2: a day captured early and now older than the provider's history cannot be captured again.** A study whose
-  window holds one refuses it (`data_unavailable_from_provider`, "cannot be captured again") rather than computing on
-  the short tape.
+- **Owner decision, P2: how a day captured before its session finished is captured again.** A study whose window
+  holds one refuses it (`captured_before_final`, with the day, when it was captured and what it needs) rather than
+  computing on the short tape; it asks the vendor for nothing and rewrites nothing. The lake keeps a committed day as
+  captured, so the only way to capture it again today is a forced rewrite of a complete day
+  (`refresh_complete_artifact`, the path of a provider correction), and that is not safe to run from a study:
+  - it changes bytes that sealed receipts may have pinned, so a golden proof replay then fails with
+    `RECEIPT_MISMATCH` although its numbers would not move;
+  - it moves the shared day to `fetching`, so Golden, Grid Search and a regular-hours study cannot read it until the
+    fetch ends, and a vendor failure leaves it `failed` with the prior row not restored (the prior path and sha are
+    returned for exactly this, and unused).
+
+  To decide: an operator-run re-capture that fetches first, swaps only on success and restores the prior row on any
+  failure, together with what happens to receipts that pinned the early bytes; or leaving held early days refused for
+  good. An extended-hours study refuses a day captured before 20:15 ET (17:15 on an early close); a regular-hours
+  study one captured before 16:15 ET (13:15).
 - **P2: a split announced after a day was captured stays invisible to that held day until a later capture of the
   symbol refreshes its adjusted history.** The provider path adjusted to the moment of the request. Price-level
   outputs (MACD signal, quantile-bin bounds) move by the split factor, not only the prices.

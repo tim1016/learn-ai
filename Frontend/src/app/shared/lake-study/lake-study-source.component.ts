@@ -17,6 +17,7 @@ const OUTCOME_LABELS: Readonly<Record<LakeSessionOutcome, string>> = {
   missing: 'not in the lake',
   building: 'still being captured',
   corrupt: 'cannot be read',
+  captured_before_final: 'captured before the session closed; must be captured again',
   unavailable_from_provider: 'unavailable from the provider',
 };
 
@@ -83,6 +84,7 @@ export class LakeStudySourceComponent {
       const why = [
         group.building > 0 ? `${group.building} still being captured` : '',
         group.corrupt > 0 ? `${group.corrupt} cannot be read` : '',
+        group.capturedBeforeFinal > 0 ? `${group.capturedBeforeFinal} captured before the session closed` : '',
         group.unavailableFromProvider > 0 ? `${group.unavailableFromProvider} unavailable from the provider` : '',
       ].filter((part) => part !== '');
       parts.push(`${group.failed} failed (${why.join(', ')})`);
