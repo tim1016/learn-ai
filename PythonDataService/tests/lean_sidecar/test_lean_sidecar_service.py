@@ -89,6 +89,51 @@ async def test_completed_run_persists_after_source_changes_mid_run(
     assert study_id == 73
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("strategy_key", "recorded_name"),
+    [
+        pytest.param("rsi_mean_reversion", "rsi_mean_reversion", id="a custom source is owned by the strategy that submitted it"),
+        pytest.param(None, "user_provided", id="a request that names no owner keeps the name the run was built with"),
+    ],
+)
+async def test_completed_run_records_the_owner_the_request_names(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+    strategy_key: str | None,
+    recorded_name: str,
+) -> None:
+    from app.services import lean_sidecar_service as service
+
+    request = service.TrustedRunRequest(
+        run_id="completed-owner",
+        start_ms_utc=1_736_175_600_000,
+        end_ms_utc=1_736_607_600_000,
+        starting_cash=100_000.0,
+        data_policy=_make_data_policy(),
+        algorithm_source="class MyAlgorithm: pass",
+        strategy_key=strategy_key,
+    )
+    persisted: list[dict] = []
+
+    async def capture_persist(payload) -> int:
+        persisted.append(payload)
+        return 73
+
+    monkeypatch.setattr(service, "assert_lean_persistence_source_current", lambda: None)
+    monkeypatch.setattr(service, "build_persist_payload", lambda **_kwargs: {"strategy_name": "user_provided"})
+    monkeypatch.setattr(service, "persist_run_payload", capture_persist)
+
+    await service._persist_completed_run(
+        request=request,
+        workspace=SimpleNamespace(root=tmp_path),
+        manifest=SimpleNamespace(),
+        response=SimpleNamespace(is_clean=True, lean_errors={}),
+    )
+
+    assert persisted == [{"strategy_name": recorded_name}]
+
+
 @pytest.mark.parametrize(
     "adjusted",
     [

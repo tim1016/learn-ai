@@ -333,8 +333,10 @@ _TRADE_COLUMNS = (
 _VERDICT_COLUMNS = "id, parity_group_id, left_run_id, right_run_id, verdict_version, status, verdict_json::text AS verdict_json, created_at_ms"
 
 
-async def list_runs(conn: asyncpg.Connection, *, engine: Engine | None, limit: int) -> list[RunSummary]:
-    """History rows newest-first, optionally one engine's."""
+async def list_runs(
+    conn: asyncpg.Connection, *, engine: Engine | None, limit: int, strategy_name: str | None = None
+) -> list[RunSummary]:
+    """History rows newest-first, optionally one engine's and one strategy's."""
     rows = await conn.fetch(
         f"""
         SELECT {_RUN_ROW_COLUMNS},
@@ -342,12 +344,14 @@ async def list_runs(conn: asyncpg.Connection, *, engine: Engine | None, limit: i
                    SELECT 1 FROM research_backtest_run_trades t WHERE t.run_id = r.id AND t.is_synthetic_exit
                ) AS has_synthetic_exit
           FROM research_backtest_runs r
-         WHERE $1::text IS NULL OR r.source = $1::text
+         WHERE ($1::text IS NULL OR r.source = $1::text)
+           AND ($3::text IS NULL OR r.strategy_name = $3::text)
          ORDER BY r.executed_at_ms DESC, r.id DESC
          LIMIT $2
         """,
         None if engine is None else _SOURCE_BY_ENGINE[engine],
         limit,
+        strategy_name,
     )
     return [RunSummary(**row) for row in rows]
 

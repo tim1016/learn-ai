@@ -466,6 +466,7 @@ async def start_lean_engine_run_job(req: LeanEngineRunJobRequest) -> dict:
         starting_cash=payload.starting_cash,
         algorithm_source=payload.algorithm_source,
         template=payload.template,
+        strategy_key=payload.strategy_key,
         data_policy=data_policy,
         parity_group_id=payload.parity_group_id,
         strategy_parameters=(

@@ -154,6 +154,8 @@ async def _persist_completed_run(
         requested_engine=request.requested_engine,
         parameters=dict(request.strategy_parameters),
     )
+    if request.strategy_key is not None:
+        persist_payload = persist_payload | {"strategy_name": request.strategy_key}
     return await persist_run_payload(persist_payload)
 
 
@@ -255,6 +257,11 @@ class TrustedRunRequest:
     # caller supplies their own ``algorithm_source`` — operator-pasted
     # source picks its own brokerage via SetBrokerageModel.
     template: TrustedTemplate = TrustedTemplate.TRUSTED_DEFAULT
+    # The registered strategy that owns a custom-source run: its Explore
+    # submitted the source, so the saved run opens under that strategy. A
+    # bundled template is owned by the strategy that registers it, so this
+    # stays None for those.
+    strategy_key: str | None = None
     # Engine Lab parity — set when this run is the LEAN validating
     # companion of a Python engine run. Persisted onto the run row so
     # the companion's persist step can freeze the parity verdict for

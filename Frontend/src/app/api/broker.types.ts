@@ -5703,7 +5703,7 @@ export interface paths {
         };
         /**
          * List Backtest Runs
-         * @description Run history, newest first.
+         * @description Run history, newest first; the limit applies after the filters.
          */
         get: operations["list_backtest_runs_api_research_backtest_runs_get"];
         put?: never;
@@ -33994,6 +33994,11 @@ export interface components {
              */
             starting_cash?: number;
             /**
+             * Strategy Key
+             * @description Registry key of the strategy whose Explore submitted ``algorithm_source``. A custom source is not a bundled template, so this key becomes the saved run's owner (its ``strategy_name``) and the run opens under that strategy. Accepted only with ``algorithm_source``: a bundled template run is already owned by the strategy that registers the template as its LEAN twin.
+             */
+            strategy_key?: string | null;
+            /**
              * Strategy Parameters
              * @description Validated strategy-logic parameters for a bundled trusted template. Accepted by the parameterized EMA twins; omitted values use that template's declared defaults.
              */
@@ -35961,6 +35966,8 @@ export interface operations {
                 symbol?: string | null;
                 /** @description Only this bot, with all of its runs. */
                 strategy_instance_id?: string | null;
+                /** @description Only this strategy's bots, by registry key. */
+                strategy_key?: string | null;
                 page?: number;
                 page_size?: number;
             };
@@ -45532,6 +45539,8 @@ export interface operations {
         parameters: {
             query?: {
                 engine?: ("PYTHON" | "LEAN") | null;
+                /** @description Only this strategy's runs. */
+                strategy_name?: string | null;
                 limit?: number;
             };
             header?: never;
