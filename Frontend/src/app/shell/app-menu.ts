@@ -132,14 +132,11 @@ export const APP_MENU: readonly AppMenuGroup[] = [
     title: 'Operations',
     icon: 'pi pi-server',
     items: [
-      { title: 'Data Lake Observatory', route: '/data-lake' },
-      { title: 'Golden Fixtures', route: '/golden-fixtures' },
-    ],
-    // Data checks: tabs the Data Lab and Research Lab shells still host.
-    pages: [
-      { title: 'Validate', route: '/data-lab/validate' },
-      { title: 'Data Divergence', route: '/research-lab/inspect/data-divergence' },
-      { title: 'Strategy Pre-flight', route: '/research-lab/inspect/pre-flight' },
+      { title: 'Lake', route: '/operations/lake' },
+      { title: 'Option archive', route: '/operations/option-archive' },
+      { title: 'Backups', route: '/operations/backups' },
+      { title: 'Math checks', route: '/operations/math-checks' },
+      { title: 'Data checks', route: '/operations/data-checks' },
     ],
   },
 ];

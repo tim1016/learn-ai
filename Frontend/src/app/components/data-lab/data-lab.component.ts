@@ -13,7 +13,6 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 import { AssetIdentityComponent } from '../../shared/asset-identity';
 import { DateRangePickerComponent, ProviderBoundsService, type QuickRangeKey, type QuickRangeOffer } from '../../shared/date-picker';
-import { OptionArchiveCardComponent } from '../../shared/option-archive/option-archive-card.component';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 import { TimestampDisplayPipe } from '../../shared/timestamp';
 import { SymbolPickerComponent } from '../../shared/symbol-picker/symbol-picker.component';
@@ -153,7 +152,6 @@ export function parseYmdMsUtc(s: string): number | null {
 @Component({
   selector: 'app-data-lab',
   imports: [
-    OptionArchiveCardComponent,
     RouterLink,
     RouterLinkActive,
     RouterOutlet,
@@ -228,13 +226,12 @@ export class DataLabComponent {
    *  the migration banner. The fetch decision belongs to Explore's mount
    *  auto-load, not to the ingress itself.
    *
-   *  The router owns the path: the legacy addresses (`/data-lab`,
-   *  `/data-quality`) redirect straight to the child their `mode` names, query
-   *  intact (`redirectLegacyDataLab`), and on a canonical child the path wins.
-   *  This never navigates. The trigger keys on a `mode` marker, the legacy
-   *  parent path, or a canonical child URL carrying legacy scope keys — that
-   *  last shape is what a `/data-quality?ticker=…` bookmark looks like once
-   *  redirected.
+   *  The router owns the path: the legacy address (`/data-lab`) redirects
+   *  straight to the child its `mode` names, query intact
+   *  (`redirectLegacyDataLab`), and on a canonical child the path wins. This
+   *  never navigates. The trigger keys on a `mode` marker, the legacy parent
+   *  path, or a canonical child URL carrying legacy scope keys — that last
+   *  shape is what a `/data-lab?ticker=…` bookmark looks like once redirected.
    *
    *  Public so the ingress spec can drive it against a stubbed
    *  `router.url`. */
@@ -250,7 +247,6 @@ export class DataLabComponent {
     const isLegacyShape =
       query.get('mode') !== null ||
       path === '/data-lab' ||
-      path === '/data-quality' ||
       (path.startsWith('/data-lab/') && hasLegacyScopeKeys);
     if (!isLegacyShape) return;
     this.ingressApplied = true;

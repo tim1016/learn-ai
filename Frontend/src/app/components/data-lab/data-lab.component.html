@@ -10,8 +10,6 @@
   />
 </header>
 
-<app-option-archive-card />
-
 @if (ingressWarnings().length > 0) {
   <div class="dl-shell__ingress-banner" role="status">
     <div class="dl-shell__ingress-text">
@@ -84,7 +82,6 @@
 <nav class="dl-shell__tabs" aria-label="Data Lab sections">
   <a routerLink="explore" routerLinkActive="dl-tab--active">Explore</a>
   <a routerLink="export" routerLinkActive="dl-tab--active">Build dataset</a>
-  <a routerLink="validate" routerLinkActive="dl-tab--active">Validate</a>
   <a routerLink="returns" routerLinkActive="dl-tab--active">Returns study</a>
   <button
     type="button"

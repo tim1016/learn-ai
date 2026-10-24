@@ -49,16 +49,16 @@ describe('resolveLegacyDataLabUrl', () => {
   });
 
   it('says a mode on a canonical child is ignored because the address already names the page', () => {
-    const res = resolveLegacyDataLabUrl('/data-lab/validate?mode=build&ticker=AAPL');
+    const res = resolveLegacyDataLabUrl('/data-lab/returns?mode=build&ticker=AAPL');
     expect(res.params).toEqual({ ticker: 'AAPL' });
     expect(res.warnings).toEqual(['Ignored mode "build": the address already names the page']);
   });
 
-  it('a redirected /data-quality bookmark keeps its ticker and range params', () => {
-    // The /data-quality redirect keeps the query, so the shell first sees the
+  it('a redirected bookmark keeps its ticker and range params', () => {
+    // The /data-lab redirect keeps the query, so the shell first sees the
     // REDIRECTED URL on its child.
     const res = resolveLegacyDataLabUrl(
-      '/data-lab/validate?ticker=AAPL&from=2026-01-02&to=2026-06-30',
+      '/data-lab/export?ticker=AAPL&from=2026-01-02&to=2026-06-30',
     );
     expect(res.params).toEqual({
       ticker: 'AAPL',

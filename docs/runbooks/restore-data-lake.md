@@ -18,7 +18,7 @@ Moving a backup to an SSD remains a separate owner action.
    mounts it at `/lake-backup`, the path `OPTION_ARCHIVE_BACKUP_DESTINATION` names.
    Compose also declares the absolute host checkout and lake paths for
    containment checks across bind-mount aliases.
-3. Read `GET /api/option-archive/status` or the Option archive card on Data Lab.
+3. Read `GET /api/option-archive/status` or the Operations → Option archive and Backups tabs.
    `POST /api/option-archive/trigger/capture`, `/snapshot`, `/backup`, and `/restore`
    require the normal data-plane control-secret header. They return acceptance;
    read the resulting receipt on the status route. Repeating a running trigger

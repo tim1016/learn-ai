@@ -1,0 +1,38 @@
+<section id="option-archive" class="archive-section">
+  <h2>Option archive</h2>
+  @if (archive.unavailable()) {
+    <p role="status">Archive status is unavailable. Check the data service connection.</p>
+    <button type="button" (click)="archive.retry()">Retry status</button>
+  } @else if (archive.health(); as health) {
+    @if (!health.enabled) { <p>Preservation is awaiting operator activation.</p> }
+    @for (item of health.underlyings; track item.underlying) {
+      <article [id]="'option-archive-' + item.underlying" [class.needs-attention]="needsAttention(item.severity)">
+        <h3><app-asset-identity [symbol]="item.underlying" size="sm" /></h3>
+        <p>{{ item.reason }}</p>
+        <dl>
+          <dt>Earliest required session</dt><dd><app-timestamp-display [value]="item.earliest_required_session_ms" mode="date-et" /></dd>
+          <dt>Next capture due</dt><dd><app-timestamp-display [value]="item.next_due_ms" mode="local" /></dd>
+          <dt>Last successful capture</dt><dd><app-timestamp-display [value]="item.last_success_ms" mode="local" /></dd>
+          <dt>Complete through</dt><dd><app-timestamp-display [value]="item.complete_through_session_ms" mode="date-et" /></dd>
+          <dt>Last archived session</dt><dd><app-timestamp-display [value]="item.last_archived_session_ms" mode="date-et" /></dd>
+          <dt>Pending / partial / lost</dt><dd>{{ item.pending_sessions }} / {{ item.partial_sessions }} / {{ item.lost_sessions }}</dd>
+          <dt>Evening observation</dt><dd><app-timestamp-display [value]="item.snapshot_session_ms" mode="date-et" /></dd>
+          <dt>Missed / incomplete observations</dt><dd>{{ item.snapshot_missed_evenings }} / {{ item.snapshot_incomplete }}</dd>
+          <dt>Missing reference fields</dt><dd>{{ item.snapshot_field_gaps }}</dd>
+        </dl>
+        @if (item.last_failure; as failure) { <p>{{ failure }}</p> }
+        @if (item.phase === 'rth_pause') { <p>Capture is paused for regular trading hours.</p> }
+        @if (item.phase === 'snapshot_pause') { <p>Capture is yielding to the evening observation.</p> }
+        @for (gap of item.gaps.slice(0, 3); track gap.session_ms) {
+          <p><app-timestamp-display [value]="gap.session_ms" mode="date-et" />: {{ gap.reason }}
+            @if (gap.days_left !== null && gap.days_left !== undefined) { <span>{{ gap.days_left }} calendar days remain before the cutoff.</span> }
+          </p>
+        }
+      </article>
+    }
+    <p>Vendor retention permission is awaiting a reply. Capture and backup stay on this Mac.</p>
+    <button type="button" (click)="archive.retry()">Refresh status</button>
+  } @else {
+    <p role="status">Reading archive status…</p>
+  }
+</section>

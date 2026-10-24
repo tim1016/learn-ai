@@ -132,8 +132,8 @@ describe('TickerCatalogService', () => {
 
   // The adjustment mode is a segment of the lake root (#1866) and a backtest
   // resolves `adjusted=True` by default. Asking the catalog for every mode
-  // would offer a symbol backfilled only in `raw` — which is what the Data
-  // Lake Observatory produces by default — and the run would then refuse it.
+  // would offer a symbol backfilled only in `raw` — which is what the
+  // Lake tab produces by default — and the run would then refuse it.
   it('asks only for the tree a run actually reads', async () => {
     await catalogFor(summary([]));
 

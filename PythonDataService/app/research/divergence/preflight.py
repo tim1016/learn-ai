@@ -3,7 +3,7 @@
 Given a proposed strategy configuration + date range, evaluates a series of
 checks that cover the most common reasons a backtest result will diverge
 from what a TradingView user would see (every item maps to a known gotcha
-in the ``_GOTCHAS_DOC`` catalog).
+in the TradingView-vs-Polygon gotchas catalog, ``docs/tv-polygon-validation-gotchas.md``).
 
 Each check returns one of:
 
@@ -56,7 +56,6 @@ class CheckResult:
     status: CheckStatus
     message: str
     fix_hint: str | None = None
-    docs_link: str | None = None
 
 
 @dataclass(frozen=True)
@@ -95,8 +94,6 @@ _CONVERGENCE_BAR_MULTIPLIER: dict[str, float] = {
 # Bars per RTH trading day at each timeframe.
 _BARS_PER_DAY: dict[str, int] = {"5m": 78, "15m": 26, "1h": 7}
 
-_GOTCHAS_DOC = "docs/tv-polygon-validation-gotchas.md"
-
 
 def _check_session_filter(req: PreflightRequest) -> CheckResult:
     if req.session_filter == "rth_only":
@@ -122,7 +119,6 @@ def _check_session_filter(req: PreflightRequest) -> CheckResult:
                 "at the top of your bar handler that returns early on bars "
                 "outside 09:30–16:00 ET."
             ),
-            docs_link=f"{_GOTCHAS_DOC}#2-extended-hours-bars-flood-the-indicators",
         )
     # unspecified
     return CheckResult(
@@ -134,7 +130,6 @@ def _check_session_filter(req: PreflightRequest) -> CheckResult:
             "(includes pre-market + after-hours), which diverges from TradingView."
         ),
         fix_hint="Explicitly declare session_filter='rth_only' in your strategy config.",
-        docs_link=f"{_GOTCHAS_DOC}#2-extended-hours-bars-flood-the-indicators",
     )
 
 
@@ -184,7 +179,6 @@ def _check_warmup(req: PreflightRequest) -> CheckResult:
                 f"trade window will partially reflect the SMA seed."
             ),
             fix_hint=f"Increase warmup_days to >= {needed_days}.",
-            docs_link=f"{_GOTCHAS_DOC}#3-ema-warmup-seeding-and-convergence",
         )
     return CheckResult(
         id="warmup",
@@ -197,7 +191,6 @@ def _check_warmup(req: PreflightRequest) -> CheckResult:
             f"immediately on the first bar — using deeply unconverged values."
         ),
         fix_hint=f"Increase warmup_days to at least {needed_days}.",
-        docs_link=f"{_GOTCHAS_DOC}#3-ema-warmup-seeding-and-convergence",
     )
 
 
@@ -327,7 +320,6 @@ def _check_dividend_handling(req: PreflightRequest) -> CheckResult:
                 "Use unadjusted prices for backtests. Apply dividend adjustment "
                 "only when comparing against a TradingView chart."
             ),
-            docs_link=f"{_GOTCHAS_DOC}#1-tradingview-adjusts-for-dividends-polygon-doesnt",
         )
     return CheckResult(
         id="dividend_adjustment",

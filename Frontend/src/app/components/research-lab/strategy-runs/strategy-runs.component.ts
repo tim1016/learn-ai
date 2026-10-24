@@ -28,10 +28,8 @@ import { TimestampDisplayPipe } from '../../../shared/timestamp';
  * Clicking a row navigates to ``/research-lab/strategy-runs/<run_id>``,
  * which fetches the full ``BacktestRunResult``.
  *
- * The ``Run SPY EMA fixture`` button POSTs the canonical fixture spec
- * verbatim — exercises the full reproducibility contract end-to-end
- * without requiring a curl command, and lets the workbench be useful
- * before a spec-editor UI lands.
+ * The ``Run SPY EMA fixture`` tool is Operations → Math checks; the run it
+ * persists is listed here with every other.
  */
 @Component({
   selector: 'app-strategy-runs',
@@ -55,9 +53,7 @@ export class StrategyRunsComponent {
 
   readonly runs = signal<RunLedger[]>([]);
   readonly loading = signal(false);
-  readonly running = signal(false);
   readonly error = signal<string | null>(null);
-  readonly lastFixtureRunId = signal<string | null>(null);
 
   constructor() {
     void this.refresh();
@@ -76,27 +72,8 @@ export class StrategyRunsComponent {
     }
   }
 
-  async runFixture(): Promise<void> {
-    this.running.set(true);
-    this.error.set(null);
-    try {
-      const { ledger } = await this.service.runSpyEmaFixture();
-      this.lastFixtureRunId.set(ledger.run_id);
-      await this.refresh();
-    } catch (err) {
-      this.error.set(this.formatError(err));
-    } finally {
-      this.running.set(false);
-    }
-  }
-
   open(run: RunLedger): void {
-    this.openById(run.run_id);
-  }
-
-  /** Navigate by raw run_id — used by the "fixture run completed" flash link. */
-  openById(runId: string): void {
-    void this.router.navigate(['/research-lab/strategy-runs', runId]);
+    void this.router.navigate(['/research-lab/strategy-runs', run.run_id]);
   }
 
   /**
