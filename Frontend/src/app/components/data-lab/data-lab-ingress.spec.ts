@@ -14,14 +14,13 @@ describe('resolveLegacyDataLabUrl — PRD §14 table', () => {
   });
 
   it.each([
-    ['/data-quality → /data-lab/validate', '/data-quality', '/data-lab/validate'],
     ['?mode=explore → /data-lab/explore', '/data-lab?mode=explore', '/data-lab/explore'],
     ['?mode=build → /data-lab/export', '/data-lab?mode=build', '/data-lab/export'],
     ['?mode=export → /data-lab/export', '/data-lab?mode=export', '/data-lab/export'],
-    ['?mode=validate → /data-lab/validate', '/data-lab?mode=validate', '/data-lab/validate'],
+    ['?mode=validate → Operations → Data checks → TradingView', '/data-lab?mode=validate', '/operations/data-checks/tradingview'],
     [
-      'an explicit mode still overrides an already-canonical child path (/data-lab/validate?mode=build → /data-lab/export)',
-      '/data-lab/validate?mode=build',
+      'an explicit mode still overrides an already-canonical child path (/data-lab/returns?mode=build → /data-lab/export)',
+      '/data-lab/returns?mode=build',
       '/data-lab/export',
     ],
   ])('%s', (_name, url, route) => {
@@ -52,7 +51,7 @@ describe('resolveLegacyDataLabUrl — PRD §14 table', () => {
     expect(exportSel.params).toEqual({ sessionId: UUID });
 
     const validateSel = resolveLegacyDataLabUrl(`/data-lab?sessionId=${UUID}&mode=validate`);
-    expect(validateSel.route).toBe('/data-lab/validate');
+    expect(validateSel.route).toBe('/operations/data-checks/tradingview');
   });
 
   it('drops unknown keys with a warning (indicator recipe treated opaquely in Phase 1)', () => {
@@ -75,20 +74,14 @@ describe('resolveLegacyDataLabUrl — PRD §14 table', () => {
     expect(res.warnings.some(w => w.includes('not a UUID'))).toBe(true);
   });
 
-  it('/data-quality wins over the absence of mode but an explicit mode still applies', () => {
-    expect(resolveLegacyDataLabUrl('/data-quality?x=1').route).toBe('/data-lab/validate');
-    expect(resolveLegacyDataLabUrl('/data-quality?mode=build').route).toBe('/data-lab/export');
-  });
-
-  it('a redirected /data-quality bookmark keeps validate and preserves ticker/range params', () => {
-    // Angular's /data-quality → /data-lab/validate redirect preserves the
-    // query string, so the shell first sees the REDIRECTED URL. The
-    // resolver must keep the validate destination and the scope params —
-    // keying only on the original legacy path would drop them.
+  it('keeps a redirected child and its scope params', () => {
+    // The /data-lab redirect preserves the query string, so the shell first
+    // sees the REDIRECTED URL. The resolver must keep that child and the
+    // scope params — keying only on the original legacy path would drop them.
     const res = resolveLegacyDataLabUrl(
-      '/data-lab/validate?ticker=AAPL&from=2026-01-02&to=2026-06-30',
+      '/data-lab/export?ticker=AAPL&from=2026-01-02&to=2026-06-30',
     );
-    expect(res.route).toBe('/data-lab/validate');
+    expect(res.route).toBe('/data-lab/export');
     expect(res.params).toEqual({
       ticker: 'AAPL',
       from: '2026-01-02',

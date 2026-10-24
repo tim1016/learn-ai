@@ -1,6 +1,6 @@
 <div class="gf-catalog">
   <header class="gf-header">
-    <h1>Golden Fixtures</h1>
+    <h2>Golden Fixtures</h2>
     <p class="gf-subtitle">Certified numerical equivalence proofs for every canonical implementation.</p>
   </header>
 
@@ -14,7 +14,7 @@
     </div>
   }
 
-  @if (catalog.value(); as cat) {
+  @if (catalog.hasValue()) {
     <!-- Stats bar -->
     <section class="gf-stats" aria-label="Fixture statistics">
       <div class="stat-card">
@@ -51,7 +51,7 @@
     <!-- Category sections -->
     @for (group of categoryGroups(); track group.key) {
       <section class="gf-category" [attr.aria-labelledby]="'cat-' + group.key">
-        <h2 class="cat-title" [id]="'cat-' + group.key">{{ group.label }}</h2>
+        <h3 class="cat-title" [id]="'cat-' + group.key">{{ group.label }}</h3>
         <table class="gf-table" role="table" [attr.aria-label]="group.label + ' fixtures'">
           <thead>
             <tr>

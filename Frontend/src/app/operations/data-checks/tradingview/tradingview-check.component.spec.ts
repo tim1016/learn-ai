@@ -7,37 +7,35 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
 import { environment } from '../../../../environments/environment';
-import { ValidateComponent } from './validate.component';
-import { createDataLabWorkspaceStore, DataLabWorkspaceStore } from '../data-lab-workspace-store';
+import { fakePickerWorld } from '../../../shared/symbol-picker/testing/fake-picker-world';
+import { TradingviewCheckComponent } from './tradingview-check.component';
 
-async function renderValidate() {
-  const result = await render(ValidateComponent, {
-    providers: [
-      provideRouter([]),
-      provideHttpClient(),
-      provideHttpClientTesting(),
-      { provide: DataLabWorkspaceStore, useFactory: createDataLabWorkspaceStore },
-    ],
+/** The check as a link opens it: the scope the link carried is its inputs. */
+async function renderCheck(scope: { ticker?: string; from?: string; to?: string } = {}) {
+  const result = await render(TradingviewCheckComponent, {
+    inputs: { ticker: 'SPY', from: '2026-04-15', to: '2026-05-15', ...scope },
+    providers: [provideRouter([]), provideHttpClient(), provideHttpClientTesting(), ...fakePickerWorld().providers],
   });
   const http = TestBed.inject(HttpTestingController);
-  const store = result.fixture.componentInstance.store;
-  store.patchDraft({
-    ticker: 'SPY',
-    window: { startMsUtc: Date.UTC(2026, 3, 15), endMsUtc: Date.UTC(2026, 4, 15) },
-  });
-  store.commitScope();
-  return { ...result, http, store, component: result.fixture.componentInstance };
+  return { ...result, http, component: result.fixture.componentInstance };
 }
 
-describe('ValidateComponent', () => {
+describe('TradingviewCheckComponent', () => {
+  it('opens without a request: nothing is uploaded or analyzed until a control is pressed', async () => {
+    const { http } = await renderCheck();
+
+    http.expectNone(() => true);
+    http.verify();
+  });
+
   it('runs disabled until both CSVs are selected', async () => {
-    await renderValidate();
+    await renderCheck();
     const run = screen.getByRole('button', { name: 'Run validation' }) as HTMLButtonElement;
     expect(run.disabled).toBe(true);
   });
 
-  it('uploads both files, renders the report, and offers download', async () => {
-    const { http, component } = await renderValidate();
+  it('uploads both files with the picked ticker, renders the report, and offers download', async () => {
+    const { http, component } = await renderCheck({ ticker: 'aapl' });
     component.ourCsvFile.set(new File(['t,close\n1,2\n'], 'ours.csv', { type: 'text/csv' }));
     component.tvCsvFile.set(new File(['time,close\n1,2\n'], 'theirs.csv', { type: 'text/csv' }));
 
@@ -46,6 +44,7 @@ describe('ValidateComponent', () => {
       http.expectOne(`${environment.pythonServiceUrl}/api/dataset/validation-report`),
     );
     expect(req.request.method).toBe('POST');
+    expect((req.request.body as FormData).get('ticker')).toBe('AAPL');
     req.flush({ success: true, report: '# Comparison\n\npandas-ta matches TradingView on 250/250 bars.' });
 
     expect(await screen.findByText(/pandas-ta matches TradingView/)).toBeTruthy();
@@ -54,7 +53,7 @@ describe('ValidateComponent', () => {
   });
 
   it('surfaces a failed validation response as an alert', async () => {
-    const { http, component } = await renderValidate();
+    const { http, component } = await renderCheck();
     component.ourCsvFile.set(new File(['a'], 'ours.csv'));
     component.tvCsvFile.set(new File(['b'], 'theirs.csv'));
 
@@ -68,13 +67,14 @@ describe('ValidateComponent', () => {
     http.verify();
   });
 
-  it('runs quality analysis from the committed numeric window and renders server numbers', async () => {
-    const { http } = await renderValidate();
-    await userEvent.click(screen.getByText("Quality evidence"));
-    await userEvent.click(screen.getByRole("button", { name: "Run quality analysis" }));
+  it('runs quality analysis over the dates the link carried and renders server numbers', async () => {
+    const { http } = await renderCheck();
+    await userEvent.click(screen.getByText('Quality evidence'));
+    await userEvent.click(screen.getByRole('button', { name: 'Run quality analysis' }));
     const req = await waitFor(() =>
       http.expectOne(`${environment.pythonServiceUrl}/api/data-quality/analyze`),
     );
+    expect(req.request.body['symbol']).toBe('SPY');
     expect(req.request.body['from_date']).toBe('2026-04-15');
     expect(req.request.body['to_date']).toBe('2026-05-15');
     req.flush({
@@ -98,5 +98,16 @@ describe('ValidateComponent', () => {
     expect(await screen.findByText('Total bars')).toBeTruthy();
     expect(await screen.findByText('99')).toBeTruthy();
     http.verify();
+  });
+
+  it.each([
+    ['no dates', {}],
+    ['a date that is not a calendar day', { from: '2026-02-30', to: '2026-05-15' }],
+  ])('keeps quality analysis disabled when the link carried %s, rather than inventing a window', async (_name, scope) => {
+    await renderCheck({ from: undefined, to: undefined, ...scope });
+    await userEvent.click(screen.getByText('Quality evidence'));
+
+    expect((screen.getByRole('button', { name: 'Run quality analysis' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText('Pick both dates above before running quality analysis.')).toBeTruthy();
   });
 });

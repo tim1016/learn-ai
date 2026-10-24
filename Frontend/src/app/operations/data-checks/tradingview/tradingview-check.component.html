@@ -1,3 +1,19 @@
+<section class="validate__section" aria-labelledby="validate-scope-h">
+  <h2 id="validate-scope-h">Scope</h2>
+  <p class="validate__muted">
+    The ticker labels the comparison and its report. Both dates bound the quality evidence below.
+  </p>
+  <app-ticker-range-picker
+    [(value)]="range"
+    [dateBounds]="dateBounds()"
+    [sessionsOnly]="false"
+    [hideSampling]="true"
+    [showAutoFetch]="false"
+    presentation="embedded"
+    title="Comparison scope"
+  />
+</section>
+
 <section class="validate__section" aria-labelledby="validate-compare-h">
   <h2 id="validate-compare-h">Compare datasets</h2>
   <p class="validate__muted">

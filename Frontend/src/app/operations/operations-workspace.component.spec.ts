@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { routes } from '../app.routes';
 import { routeTreeHasData } from '../shell/current-url.service';
+import { DATA_CHECKS } from './data-checks/data-checks';
 import { OPERATIONS_TABS } from './operations-tabs';
 
 /** Opens an address on the app's real routes, recording every request the page makes. */
@@ -15,7 +16,7 @@ async function open(url: string) {
   const requests: { method: string; url: string }[] = [];
   TestBed.configureTestingModule({
     providers: [
-      // As the app does: a placeholder tab takes its name from the route's data.
+      // As the app does: a routed page takes the scope its link carried from the query.
       provideRouter(routes, withComponentInputBinding()),
       provideHttpClient(
         withInterceptors([
@@ -58,25 +59,22 @@ describe('the Operations place', () => {
     expect(screen.queryByRole('link', { name: 'How this works' })).toBeNull();
   });
 
-  it.each([
-    ['math-checks', 'Math checks are not in Operations yet.', [['Open Golden Fixtures', '/golden-fixtures']]],
-    [
-      'data-checks',
-      'Data checks are not in Operations yet.',
-      [
-        ['Open CSV compare', '/data-lab/validate'],
-        ['Open Data divergence', '/research-lab/inspect/data-divergence'],
-        ['Open Strategy pre-flight', '/research-lab/inspect/pre-flight'],
-      ],
-    ],
-  ])('says the %s tab arrives in the next step and points to where its content is today', async (tab, happened, where) => {
-    await open(`/operations/${tab}`);
+  it('opens Data checks on the TradingView comparison, naming every check once and marking the open one', async () => {
+    await open('/operations/data-checks');
 
-    expect(screen.getByText(happened)).toBeTruthy();
-    expect(screen.getByText('They arrive in the next step of this redesign.')).toBeTruthy();
-    for (const [label, href] of where) {
-      expect(screen.getByRole('link', { name: label }).getAttribute('href')).toBe(href);
-    }
+    const links = within(screen.getByRole('navigation', { name: 'Data checks' })).getAllByRole('link');
+
+    expect(TestBed.inject(Router).url).toBe('/operations/data-checks/tradingview');
+    expect(links.map((link) => link.textContent?.trim())).toEqual(DATA_CHECKS.map((check) => check.label));
+    expect(links.map((link) => link.getAttribute('href'))).toEqual(DATA_CHECKS.map((check) => `/operations/data-checks/${check.id}`));
+    expect(links.filter((link) => link.getAttribute('aria-current') === 'page').map((link) => link.textContent?.trim())).toEqual(['TradingView comparison']);
+  });
+
+  it('starts the TradingView comparison from the scope an old link carried', async () => {
+    await open('/data-quality?ticker=aapl&from=2026-04-15&to=2026-05-15');
+
+    expect(TestBed.inject(Router).url).toBe('/operations/data-checks/tradingview?ticker=aapl&from=2026-04-15&to=2026-05-15');
+    expect(screen.getByText('AAPL · 2026-04-15 → 2026-05-15')).toBeTruthy();
   });
 
   it('fails in place on a tab it does not have, rather than opening the Lake', async () => {
@@ -87,21 +85,22 @@ describe('the Operations place', () => {
     expect(routeTreeHasData(router.routerState.snapshot.root, 'notFound')).toBe(true);
   });
 
-  // Opening Operations or any tab only reads: a backfill, a backup or a
-  // restore starts from an explicit control, never from a visit (PRD #3490 R29).
+  // Opening Operations or any tab only reads: a backfill, a backup, a restore
+  // or a fixture run starts from an explicit control, never from a visit (PRD
+  // #3490 R29).
   it.each([
     ['lake', '/api/data-lake/run-readiness'],
     ['option-archive', '/api/option-archive/status'],
     ['backups', '/api/option-archive/status'],
-    ['math-checks', null],
-    ['data-checks', null],
+    ['math-checks', '/api/golden-fixtures'],
+    ['data-checks/tradingview', '/api/tickers/catalog'],
+    ['data-checks/divergence', '/research/data-divergence/matrix/15m'],
+    ['data-checks/pre-flight', '/api/tickers/catalog'],
   ])('starts nothing when the %s tab opens: every request it makes is a read', async (tab, evidence) => {
     const { requests } = await open(`/operations/${tab}`);
 
-    if (evidence !== null) {
-      // The check can fire: the tab did reach for its evidence, and only read it.
-      await vi.waitFor(() => expect(requests.some((request) => request.url.endsWith(evidence))).toBe(true));
-    }
+    // The check can fire: the tab did reach for its evidence, and only read it.
+    await vi.waitFor(() => expect(requests.some((request) => request.url.endsWith(evidence))).toBe(true));
 
     expect(requests.filter((request) => request.method !== 'GET')).toEqual([]);
   });

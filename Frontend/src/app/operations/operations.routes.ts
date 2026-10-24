@@ -1,16 +1,14 @@
 import type { Routes } from '@angular/router';
 
 import { redirectKeepingState } from '../shell/route-redirects';
+import { dataCheckRoute } from './data-checks/data-checks';
 import { operationsTabRoute } from './operations-tabs';
 
 /**
  * The `/operations` route family (ADR 0084): the Operations header over one
  * child per tab. The tab ids are the URL segments declared in
- * `operations-tabs.ts`.
- *
- * Math checks and Data checks are placeholders until their content moves here
- * (#3499): that slice replaces each `OperationsPendingTabComponent` route with
- * its page and deletes the placeholder.
+ * `operations-tabs.ts`. Data checks is a second level: one child per check,
+ * declared in `data-checks/data-checks.ts`.
  */
 export const OPERATIONS_ROUTES: Routes = [
   {
@@ -37,15 +35,31 @@ export const OPERATIONS_ROUTES: Routes = [
       },
       {
         path: 'math-checks',
-        data: { tab: 'math-checks' },
         loadComponent: () =>
-          import('./pending/operations-pending-tab.component').then((m) => m.OperationsPendingTabComponent),
+          import('./math-checks/math-checks-tab.component').then((m) => m.MathChecksTabComponent),
       },
       {
         path: 'data-checks',
-        data: { tab: 'data-checks' },
         loadComponent: () =>
-          import('./pending/operations-pending-tab.component').then((m) => m.OperationsPendingTabComponent),
+          import('./data-checks/data-checks-tab.component').then((m) => m.DataChecksTabComponent),
+        children: [
+          { path: '', pathMatch: 'full', redirectTo: redirectKeepingState(dataCheckRoute('tradingview')) },
+          {
+            path: 'tradingview',
+            loadComponent: () =>
+              import('./data-checks/tradingview/tradingview-check.component').then((m) => m.TradingviewCheckComponent),
+          },
+          {
+            path: 'divergence',
+            loadComponent: () =>
+              import('./data-checks/divergence/data-divergence.component').then((m) => m.DataDivergenceComponent),
+          },
+          {
+            path: 'pre-flight',
+            loadComponent: () =>
+              import('./data-checks/pre-flight/strategy-preflight.component').then((m) => m.StrategyPreflightComponent),
+          },
+        ],
       },
     ],
   },

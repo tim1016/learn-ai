@@ -129,17 +129,8 @@ export const APP_MENU: readonly AppMenuGroup[] = [
       { title: 'Lake', route: '/operations/lake' },
       { title: 'Option archive', route: '/operations/option-archive' },
       { title: 'Backups', route: '/operations/backups' },
-      { title: 'Golden Fixtures', route: '/golden-fixtures' },
-    ],
-    // Math checks and Data checks are tabs of Operations that open onto a
-    // placeholder until their content moves in; Golden Fixtures and the three
-    // data checks below are where that content is until then.
-    pages: [
       { title: 'Math checks', route: '/operations/math-checks' },
       { title: 'Data checks', route: '/operations/data-checks' },
-      { title: 'Validate', route: '/data-lab/validate' },
-      { title: 'Data Divergence', route: '/research-lab/inspect/data-divergence' },
-      { title: 'Strategy Pre-flight', route: '/research-lab/inspect/pre-flight' },
     ],
   },
 ];

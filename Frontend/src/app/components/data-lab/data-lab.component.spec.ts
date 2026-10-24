@@ -24,9 +24,6 @@ class ExploreStubComponent {}
 @Component({ selector: 'app-export-stub', template: 'export-stub' })
 class ExportStubComponent {}
 
-@Component({ selector: 'app-validate-stub', template: 'validate-stub' })
-class ValidateStubComponent {}
-
 @Component({ selector: 'app-returns-stub', template: 'returns-stub' })
 class ReturnsStubComponent {}
 
@@ -97,7 +94,6 @@ function shellRoutes(): Routes {
         { path: '', pathMatch: 'full', redirectTo: 'explore' },
         { path: 'explore', component: ExploreStubComponent },
         { path: 'export', component: ExportStubComponent },
-        { path: 'validate', component: ValidateStubComponent },
         { path: 'returns', component: ReturnsStubComponent },
       ],
     },
@@ -194,12 +190,11 @@ async function renderDirectShell(url: string) {
 }
 
 describe('DataLabComponent (shell)', () => {
-  it('renders the shell on first load: four route tabs, the redirect to explore, the default recipe, the quick-range chips', async () => {
+  it('renders the shell on first load: three route tabs, the redirect to explore, the default recipe, the quick-range chips', async () => {
     const { router, store } = await renderRoutedShell();
     expect.soft(router.url, 'redirects /data-lab to explore').toBe('/explore');
     expect.soft(screen.getByRole('link', { name: 'Explore' }), 'renders the Explore tab').toBeTruthy();
     expect.soft(screen.getByRole('link', { name: 'Build dataset' }), 'renders the Build dataset tab').toBeTruthy();
-    expect.soft(screen.getByRole('link', { name: 'Validate' }), 'renders the Validate tab').toBeTruthy();
     expect.soft(screen.getByRole('link', { name: 'Returns study' }), 'renders the Returns study tab').toBeTruthy();
     expect.soft(screen.getByText('explore-stub'), 'redirects /data-lab to explore: renders the explore child').toBeTruthy();
     expect.soft(store.indicators().length, 'seeds the thirteen-indicator default recipe into a fresh workspace').toBe(13);
@@ -211,10 +206,6 @@ describe('DataLabComponent (shell)', () => {
 
   it('navigates between child routes via the tabs', async () => {
     const { router } = await renderRoutedShell();
-    await userEvent.click(screen.getByRole('link', { name: 'Validate' }));
-    await waitFor(() => expect(router.url).toBe('/validate'));
-    expect(screen.getByText('validate-stub')).toBeTruthy();
-
     await userEvent.click(screen.getByRole('link', { name: 'Returns study' }));
     await waitFor(() => expect(router.url).toBe('/returns'));
     expect(screen.getByText('returns-stub')).toBeTruthy();
@@ -224,9 +215,9 @@ describe('DataLabComponent (shell)', () => {
     expect(screen.getByText('export-stub')).toBeTruthy();
   });
 
-  it('applies a redirected /data-quality bookmark where it landed, without moving again', async () => {
+  it('applies a redirected /data-lab bookmark where it landed, without moving again', async () => {
     const { navSpy, fixture } = await renderDirectShell(
-      '/data-lab/validate?ticker=AAPL&from=2026-04-15&to=2026-05-15',
+      '/data-lab/export?ticker=AAPL&from=2026-04-15&to=2026-05-15',
     );
     fixture.componentInstance.runLegacyIngress();
 

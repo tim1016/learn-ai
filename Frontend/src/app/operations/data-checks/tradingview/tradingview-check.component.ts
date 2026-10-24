@@ -1,11 +1,13 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input, linkedSignal, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 
 import { environment } from '../../../../environments/environment';
-import { DataLabWorkspaceStore } from '../data-lab-workspace-store';
-import { utcMsToIsoDate } from '../data-lab-request-mapper';
+import { ProviderBoundsService } from '../../../shared/date-picker';
+import { parseIsoDate } from '../../../shared/date/iso-date';
+import { TickerRangePickerComponent } from '../../../shared/ticker-range-picker/ticker-range-picker.component';
+import type { TickerRange } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
 
 interface ValidationResponse {
   success: boolean;
@@ -47,21 +49,40 @@ interface QualityAnalyzeResponse {
 }
 
 /**
- * Data Lab Validate — one readable column: pandas-ta CSV vs
- * TradingView CSV comparison, report display/download, and focused quality
- * evidence. The past-chain inspector stays under the Build dataset options
- * companion — linked from here.
+ * Operations → Data checks → TradingView comparison — one readable column:
+ * pandas-ta CSV vs TradingView CSV comparison, report display/download, and
+ * focused quality evidence. The past-chain inspector stays under the Build
+ * dataset options companion — linked from here.
+ *
+ * Its ticker and dates are its own, picked here. A link that carried them
+ * (`?ticker=SPY&from=2026-01-02&to=2026-06-30`, the shape the Data Lab and
+ * `/data-quality` links had) starts the picker there; the uploaded files
+ * cannot travel in a link. Opening the page uploads and runs nothing.
  */
 @Component({
-  selector: 'app-data-lab-validate',
-  imports: [RouterLink],
-  templateUrl: './validate.component.html',
-  styleUrls: ['./validate.component.scss'],
+  selector: 'app-tradingview-check',
+  imports: [RouterLink, TickerRangePickerComponent],
+  templateUrl: './tradingview-check.component.html',
+  styleUrls: ['./tradingview-check.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
-export class ValidateComponent {
+export class TradingviewCheckComponent {
   private readonly http = inject(HttpClient);
-  readonly store = inject(DataLabWorkspaceStore);
+
+  /** The scope a link carried, bound from its query. */
+  readonly ticker = input<string>();
+  readonly from = input<string>();
+  readonly to = input<string>();
+
+  /** The picker's value. A link carrying a new scope replaces it; an edit holds until then. */
+  protected readonly range = linkedSignal<TickerRange>(() => ({
+    symbol: (this.ticker() ?? '').trim().toUpperCase() || 'SPY',
+    from: parseIsoDate(this.from() ?? '') ?? '',
+    to: parseIsoDate(this.to() ?? '') ?? '',
+    resolution: 'daily',
+  }));
+  /** Any calendar day from the provider's oldest: a check may cover the session still forming. */
+  protected readonly dateBounds = inject(ProviderBoundsService).openEnded;
 
   readonly ourCsvFile = signal<File | null>(null);
   readonly tvCsvFile = signal<File | null>(null);
@@ -99,18 +120,19 @@ export class ValidateComponent {
   });
 
   readonly qualityScopeSummary = computed(() => {
-    const window = this.store.committedWindow();
-    return window
-      ? `${this.store.committedTicker() || '—'} · ${utcMsToIsoDate(window.startMsUtc)} → ${utcMsToIsoDate(window.endMsUtc)}`
-      : 'No committed scope — commit a ticker and window (Explore or the shell scope bar) before running quality analysis.';
+    const { symbol, from, to } = this.range();
+    return from !== '' && to !== ''
+      ? `${symbol || '—'} · ${from} → ${to}`
+      : 'Pick both dates above before running quality analysis.';
   });
 
-  /** Quality analysis requires from_date/to_date server-side; without a
-   *  committed window the request is a guaranteed 422, so the run action
-   *  stays disabled until a committed range exists. */
-  readonly canRunQuality = computed(
-    () => !!this.store.committedWindow() && !this.qualityLoading(),
-  );
+  /** Quality analysis requires from_date/to_date server-side; without both
+   *  dates (a picker holds an empty date for one it cannot use) the request
+   *  is a guaranteed 422, so the run action stays disabled until they exist. */
+  readonly canRunQuality = computed(() => {
+    const { symbol, from, to } = this.range();
+    return symbol !== '' && from !== '' && to !== '' && !this.qualityLoading();
+  });
 
   async runQualityAnalysis(): Promise<void> {
     if (!this.canRunQuality()) return;
@@ -118,18 +140,14 @@ export class ValidateComponent {
     this.qualityError.set('');
     this.qualityResult.set(null);
     try {
-      const window = this.store.committedWindow();
+      const { from, to } = this.range();
       const res = await firstValueFrom(
         this.http.post<QualityAnalyzeResponse>(
           `${environment.pythonServiceUrl}/api/data-quality/analyze`,
           {
-            symbol: this.ticker(),
-            ...(window
-              ? {
-                  from_date: utcMsToIsoDate(window.startMsUtc),
-                  to_date: utcMsToIsoDate(window.endMsUtc),
-                }
-              : {}),
+            symbol: this.label(),
+            from_date: from,
+            to_date: to,
             volume_fix: 'round',
             recompute_indicators: false,
             indicator_entries: [],
@@ -175,9 +193,8 @@ export class ValidateComponent {
     return lines.join('\n');
   }
 
-  /** Ticker the validation requests are labeled with — defaults to the
-   *  committed workspace ticker; editable for one-off comparisons. */
-  readonly ticker = computed(() => this.store.committedTicker() || 'SPY');
+  /** The ticker the requests and the downloaded reports are labeled with. */
+  private readonly label = computed(() => this.range().symbol || 'SPY');
 
   readonly canRunValidation = computed(
     () => !!this.ourCsvFile() && !!this.tvCsvFile() && !this.loadingValidation(),
@@ -206,7 +223,7 @@ export class ValidateComponent {
       const formData = new FormData();
       formData.append('our_csv', ourFile);
       formData.append('tv_csv', tvFile);
-      formData.append('ticker', this.ticker());
+      formData.append('ticker', this.label());
 
       const response = await firstValueFrom(
         this.http.post<ValidationResponse>(
@@ -231,7 +248,7 @@ export class ValidateComponent {
     const report = this.validationReport();
     if (!report) return;
     const blob = new Blob([report], { type: 'text/markdown' });
-    this.downloadBlob(blob, `${this.ticker()}_validation_report.md`);
+    this.downloadBlob(blob, `${this.label()}_validation_report.md`);
   }
   private downloadBlob(blob: Blob, filename: string): void {
     const url = URL.createObjectURL(blob);

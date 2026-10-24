@@ -93,19 +93,22 @@ describe('app menu projections', () => {
     const operations = menuItemsFor('/operations/backups').find((group) => group.label === 'Operations');
 
     expect.soft(
-      operations?.items?.slice(0, 3).map((item) => [item.label, item.routerLink]),
-      'lists the Lake, Option archive and Backups tabs',
+      operations?.items?.map((item) => [item.label, item.routerLink]),
+      'lists every Operations tab',
     ).toEqual([
       ['Lake', '/operations/lake'],
       ['Option archive', '/operations/option-archive'],
       ['Backups', '/operations/backups'],
+      ['Math checks', '/operations/math-checks'],
+      ['Data checks', '/operations/data-checks'],
     ]);
     expect.soft(
       operations?.items?.find((item) => item.label === 'Backups')?.styleClass,
       'marks the open tab active',
     ).toBe(ACTIVE_ITEM_CLASS);
     expect.soft(windowTitleFor('/operations/lake'), 'titles the window for the Lake tab').toBe('Lake · Operations');
-    expect.soft(windowTitleFor('/operations/math-checks'), 'titles the window for a tab not yet listed').toBe('Math checks · Operations');
+    expect.soft(windowTitleFor('/operations/math-checks'), 'titles the window for the Math checks tab').toBe('Math checks · Operations');
+    expect.soft(windowTitleFor('/operations/data-checks/pre-flight'), 'titles a check by the tab that holds it').toBe('Data checks · Operations');
 
     // The study route is longer than the Stocks entry, so the longest-match
     // resolution must prefer it — the page highlights its own item.
@@ -176,14 +179,11 @@ describe('app menu projections', () => {
     ['/operations/lake', 'Operations', 'Lake'],
     ['/operations/option-archive', 'Operations', 'Option archive'],
     ['/operations/backups', 'Operations', 'Backups'],
-    // Math checks and Data checks open onto a placeholder until their content moves in.
     ['/operations/math-checks', 'Operations', 'Math checks'],
     ['/operations/data-checks', 'Operations', 'Data checks'],
-    ['/golden-fixtures', 'Operations', 'Golden Fixtures'],
-    // Data checks: tabs other shells still host.
-    ['/data-lab/validate', 'Operations', 'Validate'],
-    ['/research-lab/inspect/data-divergence', 'Operations', 'Data Divergence'],
-    ['/research-lab/inspect/pre-flight', 'Operations', 'Strategy Pre-flight'],
+    ['/operations/data-checks/tradingview', 'Operations', 'Data checks'],
+    ['/operations/data-checks/divergence', 'Operations', 'Data checks'],
+    ['/operations/data-checks/pre-flight', 'Operations', 'Data checks'],
     // ADR 0064: every tab of one account is that account's place, so the
     // menubar names the account list rather than moving between Bots and
     // Gallery entries while the workspace's own tabs already say which page

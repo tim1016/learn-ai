@@ -226,13 +226,13 @@ export class DataLabComponent {
    *  the migration banner. The fetch decision belongs to Explore's mount
    *  auto-load, not to the ingress itself.
    *
-   *  The legacy addresses (`/data-lab`, `/data-quality`) redirect straight to
-   *  the child their `mode` names, query intact (`redirectLegacyDataLab`), so
-   *  this normally runs on a URL that is already canonical and navigates
-   *  nowhere. Only a canonical child whose `mode` names another child is moved.
-   *  The trigger keys on the legacy `mode` marker, the legacy parent path, or
-   *  a canonical child URL carrying legacy scope keys — that last shape is
-   *  what a `/data-quality?ticker=…` bookmark looks like once redirected.
+   *  The legacy address (`/data-lab`) redirects straight to the child its
+   *  `mode` names, query intact (`redirectLegacyDataLab`), so this normally
+   *  runs on a URL that is already canonical and navigates nowhere. Only a
+   *  canonical child whose `mode` names another child is moved. The trigger
+   *  keys on the legacy `mode` marker, the legacy parent path, or a canonical
+   *  child URL carrying legacy scope keys — that last shape is what a
+   *  `/data-lab?ticker=…` bookmark looks like once redirected.
    *
    *  Public so the ingress spec can drive it against a stubbed
    *  `router.url`. */
@@ -248,7 +248,6 @@ export class DataLabComponent {
     const isLegacyShape =
       query.get('mode') !== null ||
       path === '/data-lab' ||
-      path === '/data-quality' ||
       (path.startsWith('/data-lab/') && hasLegacyScopeKeys);
     if (!isLegacyShape) return;
     this.ingressApplied = true;
