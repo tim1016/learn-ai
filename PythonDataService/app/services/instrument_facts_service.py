@@ -37,7 +37,8 @@ from typing import Protocol
 
 from app.broker.contract.models import US_EQUITY_SYMBOL_PATTERN
 from app.data_lake.types import PriceAdjustmentMode
-from app.lean_sidecar.trading_calendar import SessionWindow, latest_completed_sessions
+from app.lean_sidecar.completed_sessions import latest_completed_sessions
+from app.lean_sidecar.trading_calendar import SessionWindow
 from app.option_archive.planner import UNDERLYINGS as ARCHIVED_UNDERLYINGS
 from app.schemas.instrument_facts import (
     MAX_FACT_SYMBOLS,
