@@ -26,6 +26,8 @@ import { LiveStrikePickerComponent } from './live-strike-picker.component';
 
 /** The band the Chain (Live) page selected around the spot: every qualifiable strike within this many dollars. */
 const ATM_BAND_DOLLARS = 20;
+const strikesKey = (symbol: string, expiryMs: number): string => `${symbol.toUpperCase()}:${expiryMs}`;
+
 /** Picking through expiries fast must not ask IBKR to qualify every strike of each one. */
 const STRIKES_DELAY_MS = 250;
 
@@ -78,6 +80,12 @@ export class LiveChainComponent {
   private expirationsRequest = 0;
   /** Counts strike reads; only the latest may write the page, and leaving a chain ends the one in flight. */
   private strikesRequest = 0;
+  /**
+   * The strikes IBKR qualified for an (underlying, expiry) this page has read. Qualifying a chain's strikes
+   * is hundreds of contract-details requests on the data plane's one shared IBKR session, so an expiry is
+   * read once and shown again from here; a failed read is never kept, and Try again reads it anew.
+   */
+  private readonly strikeLists = new Map<string, readonly number[]>();
 
   private readonly connection = computed(() => {
     const failure = this.health.lastError();
@@ -213,6 +221,11 @@ export class LiveChainComponent {
       const symbol = this.symbol();
       untracked(() => this.leaveChain());
       if (expiry === null) return;
+      const read = this.strikeLists.get(strikesKey(symbol, expiry));
+      if (read !== undefined) {
+        untracked(() => this.availableStrikes.set(read));
+        return;
+      }
       const timer = setTimeout(() => void this.loadStrikes(symbol, expiry), STRIKES_DELAY_MS);
       onCleanup(() => clearTimeout(timer));
     });
@@ -258,8 +271,12 @@ export class LiveChainComponent {
     else this.feed.pause();
   }
 
+  /** Try again reads what failed: the expirations when they were not read, else the strikes of the expiry open. */
   protected onAction(id: string): void {
-    if (id === 'retry') void this.loadExpirations(this.symbol());
+    if (id !== 'retry') return;
+    const expiry = this.chainExpiry();
+    if (this.expirationsRead() && expiry !== null) void this.loadStrikes(this.symbol(), expiry);
+    else void this.loadExpirations(this.symbol());
   }
 
   /** Lets go of the chain on screen: the subscription, the engine's questions and answers, and the strikes read for it. */
@@ -291,10 +308,15 @@ export class LiveChainComponent {
   private async loadStrikes(symbol: string, expiryMs: number): Promise<void> {
     const request = ++this.strikesRequest;
     this.strikesLoading.set(true);
+    // A failure of an earlier read is not this one's: it is said again only if this read fails too.
+    this.setupError.set(null);
     try {
       const listed = await this.market.strikes(symbol, expiryMs);
+      const strikes = [...listed.strikes].sort((a, b) => a - b);
+      // A listing is true of its (underlying, expiry) whichever chain is on screen when it arrives.
+      this.strikeLists.set(strikesKey(symbol, expiryMs), strikes);
       if (request !== this.strikesRequest) return;
-      this.availableStrikes.set([...listed.strikes].sort((a, b) => a - b));
+      this.availableStrikes.set(strikes);
       this.selectedStrikes.set(new Set());
     } catch (error) {
       if (request === this.strikesRequest) {

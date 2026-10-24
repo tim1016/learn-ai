@@ -289,6 +289,59 @@ describe('Now · Live IBKR with a session', () => {
     expect(world.expirations).toHaveBeenCalledTimes(2);
   });
 
+  it('fails in place when IBKR cannot qualify the strikes, and Try again reads the strikes again, not the expirations', async () => {
+    const world = liveWorld(vi);
+    world.strikes.mockRejectedValueOnce(new HttpErrorResponse({ status: 503, error: { detail: 'IBKR is busy qualifying contracts.' } }));
+    await renderLive(vi, world);
+
+    expect(await screen.findByText('IBKR is busy qualifying contracts.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '500' })).toBeNull();
+
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Try again' }));
+
+    expect(await screen.findByRole('button', { name: '500' })).toBeTruthy();
+    expect(screen.queryByText('IBKR is busy qualifying contracts.')).toBeNull();
+    expect(world.strikes).toHaveBeenCalledTimes(2);
+    expect(world.expirations).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not keep the failure of one expiry\'s strikes on the screen once another expiry is picked', async () => {
+    const world = liveWorld(vi);
+    world.strikes.mockRejectedValueOnce(new HttpErrorResponse({ status: 503, error: { detail: 'IBKR is busy qualifying contracts.' } }));
+    const { host, fixture } = await renderLive(vi, world);
+    await screen.findByText('IBKR is busy qualifying contracts.');
+
+    host.expiryMs.set(FAR);
+    fixture.detectChanges();
+
+    expect(await screen.findByRole('button', { name: '500' })).toBeTruthy();
+    expect(screen.queryByText('IBKR is busy qualifying contracts.')).toBeNull();
+  });
+
+  it('asks IBKR to qualify an expiry\'s strikes once, and shows them at once when the expiry is picked again', async () => {
+    const world = liveWorld(vi);
+    const { host, fixture } = await renderLive(vi, world);
+    await screen.findByRole('button', { name: '500' });
+    expect(world.strikes).toHaveBeenCalledTimes(1);
+
+    host.expiryMs.set(FAR);
+    fixture.detectChanges();
+    await waitFor(() => expect(world.strikes).toHaveBeenCalledTimes(2));
+    await screen.findByRole('button', { name: '500' });
+    expect(world.strikes).toHaveBeenLastCalledWith('SPY', FAR);
+
+    host.expiryMs.set(NEAR);
+    fixture.detectChanges();
+    expect(screen.getByRole('button', { name: '500' }), 'shown without waiting for a read').toBeTruthy();
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(world.strikes, 'neither expiry was read twice').toHaveBeenCalledTimes(2);
+
+    host.symbol.set('QQQ');
+    fixture.detectChanges();
+    await waitFor(() => expect(world.strikes).toHaveBeenCalledTimes(3));
+    expect(world.strikes).toHaveBeenLastCalledWith('QQQ', NEAR);
+  });
+
   it('says an expiry IBKR does not list is not, and opens none in its place', async () => {
     const world = liveWorld(vi);
     const unlisted = FAR + 86_400_000;
