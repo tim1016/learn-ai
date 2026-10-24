@@ -3,9 +3,6 @@ import { IndicatorBlock, StrategySpec } from '../../services/spec-strategy.types
 import {
   buildSummaryFragments,
   formatCondition,
-  formatEntryBlock,
-  formatExitBlock,
-  formatSurvivalRule,
 } from './plain-english';
 
 const INDS: readonly IndicatorBlock[] = [
@@ -236,85 +233,6 @@ describe('plain-english', () => {
           'renders BarProperty with friendly label',
         )
         .toBe('bar range % ≥ 0.003');
-    });
-  });
-
-  describe('formatEntryBlock', () => {
-    it('renders the entry block as a readable sentence: the SPY EMA fixture in full, a non-100% sizing as a fraction percent label', () => {
-      const entry = {
-        logic: 'AND' as const,
-        size: { kind: 'SetHoldings' as const, fraction: 1.0 },
-        conditions: [
-          { kind: 'FreshCross' as const, left: 'ema5', right: 'ema10', direction: 'up' as const },
-          {
-            kind: 'IndicatorComparison' as const,
-            left: {
-              kind: 'Subtract' as const,
-              left: { kind: 'IndicatorRef' as const, indicator: 'ema5' },
-              right: { kind: 'IndicatorRef' as const, indicator: 'ema10' },
-            },
-            op: '>=' as const,
-            right: { kind: 'Const' as const, value: 0.2 },
-          },
-          {
-            kind: 'IndicatorBetween' as const,
-            indicator: 'rsi14',
-            lo: 50,
-            hi: 70,
-            inclusive: true,
-          },
-        ],
-      };
-      const out = formatEntryBlock(entry, INDS);
-      expect
-        .soft(out, 'renders the SPY EMA fixture entry as a single readable sentence')
-        .toBe(
-          'Enter all-in when EMA(5) crosses above EMA(10) AND EMA(5) − EMA(10) ≥ 0.2 AND RSI(14) is between 50 and 70.',
-        );
-
-      const halfSized = formatEntryBlock(
-        {
-          logic: 'AND',
-          size: { kind: 'SetHoldings', fraction: 0.5 },
-          conditions: [{ kind: 'FreshCross', left: 'ema5', right: 'ema10', direction: 'up' }],
-        },
-        INDS,
-      );
-      expect.soft(halfSized, 'falls back to fraction percent label for non-100% sizing').toContain('Enter 50% of equity');
-    });
-  });
-
-  describe('formatExitBlock', () => {
-    it('renders the exit block: a BarsSinceEntry exit, and the no-exit message for empty conditions', () => {
-      expect
-        .soft(
-          formatExitBlock(
-            { logic: 'OR', conditions: [{ kind: 'BarsSinceEntry', op: '>=', value: 5 }] },
-            INDS,
-          ),
-          'renders BarsSinceEntry exit',
-        )
-        .toBe('Exit when 5 or more bars since entry.');
-      expect
-        .soft(formatExitBlock({ logic: 'OR', conditions: [] }, INDS), 'handles empty exit conditions')
-        .toBe('No signal-flip exit configured.');
-    });
-  });
-
-  describe('formatSurvivalRule', () => {
-    it('renders a typical stop-loss', () => {
-      const out = formatSurvivalRule(
-        {
-          name: 'stop loss',
-          when: {
-            logic: 'AND',
-            conditions: [{ kind: 'PnLPercent', op: '<=', value: -0.01 }],
-          },
-          action: { kind: 'CLOSE_ALL' },
-        },
-        INDS,
-      );
-      expect(out).toBe('stop loss: when unrealized PnL ≤ -1%, close the position.');
     });
   });
 });

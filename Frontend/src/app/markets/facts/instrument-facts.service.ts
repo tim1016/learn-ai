@@ -9,7 +9,6 @@ import { errorMessage } from '../../shared/errors/error-message';
 
 type Schemas = components['schemas'];
 export type InstrumentFacts = Schemas['InstrumentFacts'];
-export type InstrumentQuote = InstrumentFacts['quote'];
 export type AvailableQuote = Schemas['AvailableQuote'];
 export type OptionsArchiveFact = Schemas['OptionsArchiveFact'];
 export type QuoteBasis = AvailableQuote['basis'];

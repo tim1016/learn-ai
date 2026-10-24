@@ -9,13 +9,10 @@
 
 import {
   Condition,
-  EntryBlock,
-  ExitBlock,
   IndicatorBlock,
   LogicNode,
   Operand,
   StrategySpec,
-  SurvivalRule,
 } from '../../services/spec-strategy.types';
 
 const OP_LABEL: Record<string, string> = {
@@ -137,51 +134,6 @@ export function formatCondition(
       return `prediction ${cond.prediction} ${op} ${formatNumber(cond.value)}`;
     }
   }
-}
-
-export function formatEntryBlock(entry: EntryBlock, indicators: readonly IndicatorBlock[]): string {
-  if (entry.conditions.length === 0) return 'Enter on every bar (no entry conditions configured).';
-  const parts = entry.conditions.map((c) => formatCondition(c, indicators));
-  const joiner = entry.logic === 'AND' ? ' AND ' : ' OR ';
-  const sized = formatSize(entry);
-  return `Enter ${sized} when ${parts.join(joiner)}.`;
-}
-
-function formatSize(entry: EntryBlock): string {
-  const size = entry.size;
-  if (size.kind === 'SetHoldings') {
-    if (size.fraction === 1) return 'all-in';
-    return `${(size.fraction * 100).toFixed(0)}% of equity`;
-  }
-  if (size.kind === 'FixedContracts') {
-    return `${size.value} contract${size.value === 1 ? '' : 's'}`;
-  }
-  return '';
-}
-
-export function formatExitBlock(exit: ExitBlock, indicators: readonly IndicatorBlock[]): string {
-  if (exit.conditions.length === 0) return 'No signal-flip exit configured.';
-  const parts = exit.conditions.map((c) => formatCondition(c, indicators));
-  const joiner = exit.logic === 'AND' ? ' AND ' : ' OR ';
-  return `Exit when ${parts.join(joiner)}.`;
-}
-
-export function formatSurvivalRule(
-  rule: SurvivalRule,
-  indicators: readonly IndicatorBlock[],
-): string {
-  const parts = rule.when.conditions.map((c) => formatCondition(c, indicators));
-  const joiner = rule.when.logic === 'AND' ? ' AND ' : ' OR ';
-  const action = rule.action.kind === 'CLOSE_ALL' ? 'close the position' : rule.action.kind;
-  return `${rule.name}: when ${parts.join(joiner)}, ${action}.`;
-}
-
-export function formatSurvivalBlock(
-  rules: readonly SurvivalRule[],
-  indicators: readonly IndicatorBlock[],
-): string {
-  if (rules.length === 0) return 'No manage rules configured.';
-  return rules.map((r) => '• ' + formatSurvivalRule(r, indicators)).join('\n');
 }
 
 // ---------------------------------------------------------------------------
