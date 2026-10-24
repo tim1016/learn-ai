@@ -26,13 +26,15 @@ import asyncio
 import logging
 from dataclasses import asdict
 from datetime import date
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, status
 from fastapi.encoders import jsonable_encoder
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
+from app.engine.edge.confidence import DEFAULT_CONFIDENCE_FLOOR
+from app.engine.edge.features_realtime.hf_realized_vol import Session as HfSession
 from app.jobs import cache as result_cache
 from app.jobs.progress import JobCancelled, ProgressEmitter
 from app.jobs.runner import run_in_thread
@@ -42,8 +44,10 @@ from app.research.batch_runner import (
     run_cross_sectional_study,
 )
 from app.research.lake_study import SESSION_POLICY_FOR_REQUEST
+from app.research.study_records.captures import capture_realized_vs_iv
 from app.research.study_records.models import RecordId
 from app.research.study_records.recorder import keeps_job_record
+from app.schemas.broker_bots import normalized_symbol
 from app.schemas.engine_backtest import EngineBacktestRequest
 from app.schemas.ticker_request import (
     MultiTickerRequest,
@@ -54,7 +58,14 @@ from app.services.dataset_service import RunCancelledError
 from app.services.engine_backtest_service import execute_engine_backtest
 from app.services.feature_study_service import FeatureStudyParams, run_feature_study
 from app.services.polygon_client import PolygonClientService
+from app.services.realized_vs_iv_study_service import (
+    DEFAULT_SESSION_POLICY,
+    HF_SESSION_FOR_POLICY,
+    RealizedVsIvParams,
+    run_realized_vs_iv_study,
+)
 from app.services.signal_study_service import SignalStudyParams, run_signal_study
+from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms, et_midnight_ms
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -226,6 +237,90 @@ class FeatureResearchJobRequest(_CamelCaseTickerRequest):
     force: bool = False
     rerun_of: RecordId | None = None
     """The saved run this one was prefilled from (the History's Rerun); lineage only, never an input."""
+
+
+class IvPointPayload(_CamelCaseModel):
+    """One caller-supplied IV point, stamped as the snapshot was taken (the study aligns it to a bar).
+
+    ``iv30`` is ACT/365, the solver's native basis; the study converts it to TRD/252 before VRP. A
+    ``health_score`` or ``variance_contribution_synthetic`` that is present, even as ``null``, turns the confidence
+    path on (``null`` means no evidence and drops that factor), so what the caller set is kept apart from what it left out.
+    """
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
+
+    ts: int = Field(..., ge=0, le=MAX_TIMESTAMP_MS, description="int64 ms UTC")
+    iv30: float = Field(..., ge=0.0)
+    health_score: float | None = None
+    variance_contribution_synthetic: float | None = None
+
+
+class RealizedVsIvJobRequest(_CamelCaseModel):
+    """Body of POST /api/jobs-internal/realized-vs-iv.
+
+    The worker reads the study's bars from the data lake itself, materializing what the lake lacks: the browser
+    sends the symbol and the study's settings, never bars. Unless ``window_start_ms`` and ``window_end_ms`` (ET
+    midnight of the first and last session, ``int64 ms UTC``) name a window, it is the fewest sessions whose bars let a
+    VRP z-score exist, ending at the last session the study can read (``GET /api/edge/realized-vs-iv/window`` says which);
+    see ``app.services.realized_vs_iv_study_service``.
+
+    ``bar_size`` is ``15m`` or ``1d``. Anything else is accepted here and refused by the job with
+    ``resolution_unsupported`` and a reason, so the answer is a typed refusal a page can show rather than a 422.
+
+    ``session`` is which bars the study folds from: ``extended`` (04:00-20:00 ET) or ``rth``. Omitted, it is the session
+    each bar size has always read (``extended`` for ``15m``, ``rth`` for ``1d``; #3525). ``hf_session`` is the HF
+    estimator's own ETH/RTH filter and follows the session (``rth`` is RTH, ``extended`` is ETH): omitted, it is derived
+    for ``15m`` bars and recorded as derived, and one that disagrees with the session, or ``extended`` with ``1d``,
+    fails the job with ``resolution_unsupported`` and the reason (``resolve_session_choice``).
+    """
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
+
+    job_id: str = Field(..., min_length=1)
+    symbol: str = Field(..., min_length=1, max_length=20)
+    bar_size: str = Field("1d", max_length=16)
+    tenor_days: int = Field(30, ge=1, le=365)
+    hf_session: HfSession | None = None
+    session: Session | None = None
+    estimators: list[Literal["ctc", "parkinson", "gk", "yz"]] = Field(default_factory=lambda: ["yz"], min_length=1)
+    windows: list[Annotated[int, Field(ge=2, le=500)]] = Field(default_factory=lambda: [5, 10, 30], min_length=1)
+    iv_series: list[IvPointPayload] | None = None
+    confidence_floor: float = Field(DEFAULT_CONFIDENCE_FLOOR, ge=0.0, le=1.0)
+    window_start_ms: int | None = Field(
+        None, ge=0, le=MAX_TIMESTAMP_MS, description="ET midnight of the first session, int64 ms UTC"
+    )
+    window_end_ms: int | None = Field(
+        None, ge=0, le=MAX_TIMESTAMP_MS, description="ET midnight of the last session, int64 ms UTC"
+    )
+    force: bool = False
+    """Skip the result cache and always re-run."""
+    rerun_of: RecordId | None = None
+    """The saved run this one was prefilled from (the History's Rerun); lineage only, never an input."""
+
+    @model_validator(mode="after")
+    def _derive_the_hf_session_a_fifteen_minute_request_omits(self) -> RealizedVsIvJobRequest:
+        """Derive the HF filter a 15-minute request left out, so the run's record holds the filter the run read."""
+        if self.hf_session is None and self.bar_size == "15m":
+            policy = SESSION_POLICY_FOR_REQUEST[self.session] if self.session is not None else DEFAULT_SESSION_POLICY["15m"]
+            self.hf_session = HF_SESSION_FOR_POLICY[policy]
+        return self
+
+    @model_validator(mode="after")
+    def _window_is_two_et_midnights_or_neither(self) -> RealizedVsIvJobRequest:
+        if (self.window_start_ms is None) != (self.window_end_ms is None):
+            raise ValueError("window_start_ms and window_end_ms name a window together; send both or neither")
+        if self.window_start_ms is not None and self.window_end_ms is not None:
+            for name, value in (("window_start_ms", self.window_start_ms), ("window_end_ms", self.window_end_ms)):
+                if value != et_midnight_ms(et_date_at_ms(value)):
+                    raise ValueError(f"{name} must be ET midnight of the session date, got {value}")
+            if self.window_end_ms < self.window_start_ms:
+                raise ValueError(f"window_end_ms ({self.window_end_ms}) must be >= window_start_ms ({self.window_start_ms})")
+        return self
+
+    @field_validator("symbol", mode="before")
+    @classmethod
+    def _normalize_symbol(cls, value: object) -> object:
+        return normalized_symbol(value) if isinstance(value, str) else value
 
 
 class SignalEngineJobRequest(_CamelCaseTickerRequest):
@@ -767,6 +862,45 @@ async def start_feature_research_job(req: FeatureResearchJobRequest) -> dict:
         req.job_id,
         keeps_job_record("feature-study", req, work),
         thread_name=f"feature-{req.job_id[:8]}",
+        cancel_check_every_n=100,
+    )
+    return {"job_id": req.job_id, "status": "queued"}
+
+
+@router.post("/realized-vs-iv", status_code=status.HTTP_202_ACCEPTED)
+async def start_realized_vs_iv_job(req: RealizedVsIvJobRequest) -> dict:
+    """Kick off a Realized vs IV study in a worker thread.
+
+    The worker admits the study's bars from the data lake (materializing what is missing), aligns the recorded or
+    caller-supplied IV to them, and computes the realized-vol series and the variance premium. A window the lake
+    cannot admit, or a bar size the study is not defined for, fails the job with a typed refusal and its coverage
+    counts; no result is computed. A successful prior run over the same admitted data and the same IV is served from
+    cache (the lookup follows admission). Pass ``force=true`` to bypass.
+    """
+    params = RealizedVsIvParams(
+        symbol=req.symbol,
+        bar_size=req.bar_size,
+        tenor_days=req.tenor_days,
+        hf_session=req.hf_session,
+        session_policy=SESSION_POLICY_FOR_REQUEST[req.session] if req.session is not None else None,
+        estimators=tuple(req.estimators),
+        windows=tuple(req.windows),
+        iv_series=(
+            [point.model_dump(exclude_unset=True) for point in req.iv_series] if req.iv_series is not None else None
+        ),
+        confidence_floor=req.confidence_floor,
+        window=(et_date_at_ms(req.window_start_ms), et_date_at_ms(req.window_end_ms))
+        if req.window_start_ms is not None and req.window_end_ms is not None
+        else None,
+    )
+
+    def work(emit: ProgressEmitter, cancel) -> dict | None:
+        return run_realized_vs_iv_study(params, job_id=req.job_id, force=req.force, emit=emit, cancel=cancel)
+
+    run_in_thread(
+        req.job_id,
+        keeps_job_record("realized-vs-iv", req, work, capture=capture_realized_vs_iv),
+        thread_name=f"realized-vs-iv-{req.job_id[:8]}",
         cancel_check_every_n=100,
     )
     return {"job_id": req.job_id, "status": "queued"}

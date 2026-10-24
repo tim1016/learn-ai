@@ -78,7 +78,7 @@
           <app-indicator-reliability-report [result]="shown.result" />
         }
         @case ('realized-vs-iv') {
-          <app-realized-vs-iv-report [data]="shown.data" [barSize]="shown.barSize" />
+          <app-realized-vs-iv-report [data]="shown.data" />
         }
         @case ('unreadable') {
           <app-workspace-state-block

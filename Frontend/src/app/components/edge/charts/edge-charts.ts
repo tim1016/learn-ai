@@ -119,7 +119,7 @@ export class EdgePriceIVChartComponent implements AfterViewInit {
   rvBands = input(true);
   hoverIdx = input<number | null>(null);
   /** Drives the x-axis date format: ISO `YYYY-MM-DD` for daily, `MMM DD HH:mm` for intraday. */
-  barSize = input<"5m" | "15m" | "1h" | "1D">("1D");
+  barSize = input<"15m" | "1D">("1D");
 
   hover = output<number | null>();
 
@@ -242,7 +242,7 @@ export class EdgePriceIVChartComponent implements AfterViewInit {
     // existing pixels). Renders only when callers supply data.liveIv30 AND
     // its value falls inside the right-axis window — out-of-range values
     // would draw off the chart and mislead the eye.
-    const live = data.liveIv30;
+    const live = data.liveIv30.kind === "available" ? data.liveIv30.marker : null;
     if (this.showLiveIv30() && live && Number.isFinite(live.iv30Act365)
         && live.iv30Act365 >= ivLo && live.iv30Act365 <= ivHi) {
       const cx = L + innerW;

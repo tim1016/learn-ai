@@ -236,8 +236,8 @@ _IV_SOURCES = {
 
 
 def _rviv_window(inputs: Inputs) -> tuple[int, int] | None:
-    bars = inputs.get("bars")
-    first, last = _dig(bars, "first_ts_ms"), _dig(bars, "last_ts_ms")
+    """The window a run named. A run that named none read the server's default window: the record has no window."""
+    first, last = inputs.get("window_start_ms"), inputs.get("window_end_ms")
     return (first, last) if isinstance(first, int) and isinstance(last, int) else None
 
 

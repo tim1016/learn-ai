@@ -4,7 +4,6 @@ import {
   EdgeVrpHistogramComponent,
   EDGE_TOK,
 } from "../charts/edge-charts";
-import type { BarSize } from "../services/edge-api.service";
 import type { RealizedVsIvData } from "../services/edge-data.model";
 import { TimestampDisplayPipe } from "../../../shared/timestamp";
 
@@ -25,8 +24,6 @@ export class RealizedVsIvReportComponent {
   protected readonly TOK = EDGE_TOK;
 
   readonly data = input.required<RealizedVsIvData>();
-  /** The bars `data` was computed on; the chart's date axis reads daily and intraday bars differently. */
-  readonly barSize = input<BarSize>("1D");
 
   /** The bar under the cursor; a new result starts with none. */
   readonly hoverIdx = linkedSignal<RealizedVsIvData, number | null>({
@@ -67,12 +64,50 @@ export class RealizedVsIvReportComponent {
     this.data().vrpHistogram.reduce((acc, b) => acc + b.count, 0),
   );
 
-  /** True iff the loaded series has no finite IV30 samples: the endpoint
-   *  aligns recorded IV30 snapshots to the bar timestamps, and none landed. */
+  /** The name of the readout's trailing Yang-Zhang row: its bars are the run's bars, daily or 15-minute. */
+  readonly rvReadoutKey = computed(() => `rv_yz_30_${this.data().run.barSize === "15m" ? "15m" : "daily"}`);
+
+  /** True iff the loaded series has no finite IV30 samples: no recorded or supplied snapshot fell inside a bar. */
   readonly ivMissing = computed(() => !this.data().iv30.some((v) => Number.isFinite(v)));
 
-  /** Null for a stored result, which never carries the live marker. */
-  readonly liveIv30 = computed(() => this.data().liveIv30);
+  /** Why there is no IV, from the counts the server reported: nothing recorded or supplied, or points none of which
+   *  landed inside a bar. */
+  readonly ivMissingReason = computed(() => {
+    const d = this.data();
+    const read = d.ivAlignment.snapshotsRead;
+    if (read === 0) return `The IV recorder holds no snapshot for ${d.symbol} in this window, and none was supplied.`;
+    const plural = read === 1 ? "" : "s";
+    return d.ivConfidence?.ivSource === "caller_supplied"
+      ? `${read} supplied IV point${plural} ${read === 1 ? "was" : "were"} sent, but none falls inside a bar.`
+      : `The IV recorder holds ${read} snapshot${plural} for ${d.symbol} in this window, but none falls inside a bar.`;
+  });
+
+  /** Why the page has no VRP z-score, hence no long-vol or short-vol markers and no `vrp_z` in the readout, when it has none
+   *  anywhere. The z-score is a rolling statistic over `vrpLookbackBars` bars and needs a value on every one of them: a bar
+   *  with a forward realized volatility (the last bars of a window have none yet) and IV30, which is never carried from
+   *  one bar to the next. The reason is read off the window's own counts. */
+  readonly signalUnavailableReason = computed<string | null>(() => {
+    const d = this.data();
+    if (d.vrpZ.some((z) => Number.isFinite(z))) return null;
+    const need = d.coverage.vrpLookbackBars;
+    const withForward = d.N - d.coverage.forwardBlindTail;
+    if (withForward < need) {
+      return `The z-score is measured over ${need} bars in a row that each have a forward realized volatility. This window has ${withForward} of ${d.N} (the last ${d.coverage.forwardBlindTail} are not realized yet), so it needs a longer window.`;
+    }
+    return `The z-score is measured over ${need} bars in a row that each have IV30, and IV30 is never carried from one bar to the next. IV30 is on ${d.ivAlignment.barsWithIv} of this window's ${d.N} bars, and no ${need} in a row have it.`;
+  });
+
+  /** The current-IV marker, when a live endpoint answered. It is a reading taken now and is never part of the IV series. */
+  readonly liveMarker = computed(() => {
+    const live = this.data().liveIv30;
+    return live.kind === "available" ? live.marker : null;
+  });
+
+  /** Why there is no current-IV marker, when neither live endpoint answered (and why a saved run has none). */
+  readonly liveUnavailableReason = computed(() => {
+    const live = this.data().liveIv30;
+    return live.kind === "unavailable" ? live.reason : null;
+  });
 
   readonly ivConfidence = computed(() => this.data().ivConfidence);
 

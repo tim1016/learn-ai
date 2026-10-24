@@ -57,7 +57,9 @@ INPUTS: dict[StudyType, dict[str, Any]] = {
         "symbol": "SPY",
         "bar_size": "1d",
         "tenor_days": 30,
-        "bars": {"count": 60, "first_ts_ms": SPY_START, "last_ts_ms": SPY_END},
+        "window_start_ms": SPY_START,
+        "window_end_ms": SPY_END,
+        "iv_series_supplied": False,
     },
 }
 RESULTS: dict[StudyType, dict[str, Any]] = {
@@ -186,6 +188,21 @@ async def test_a_study_run_is_listed_with_the_question_instruments_window_and_he
     bars = next(e for e in body["entries"] if e["type"] == "realized-vs-iv")
     assert bars["window"] == {"start_ms": SPY_START, "end_ms": SPY_END}
     assert bars["headline"] == "60 bars; IV from none, so realized volatility alone; 21 without a forward window"
+
+
+async def test_a_run_that_named_no_window_shows_the_window_its_data_source_says_it_read(
+    client: httpx.AsyncClient, tmp_path: Path, clock: Clock
+) -> None:
+    named = {key: value for key, value in INPUTS["realized-vs-iv"].items() if key not in ("window_start_ms", "window_end_ms")}
+    read = {"effective_window": {"start_ms": SPY_START + 86_400_000, "end_ms": SPY_END - 86_400_000}}
+    record_run(tmp_path, "realized-vs-iv", instant=T0, clock=clock, inputs=named, result={**RESULTS["realized-vs-iv"], "data_source": read})
+    record_run(tmp_path, "realized-vs-iv", instant=T0 + 1, clock=clock, inputs=named)
+
+    body = (await client.get(URL, params={"type": "realized-vs-iv"})).json()
+
+    windows = {e["created_at_ms"]: e["window"] for e in body["entries"]}
+    assert windows[T0] == {"start_ms": SPY_START + 86_400_000, "end_ms": SPY_END - 86_400_000}
+    assert windows[T0 + 1] is None, "a run with neither a named window nor a source that read one has no window to show"
 
 
 async def test_a_listing_reads_only_the_small_config_never_a_result(

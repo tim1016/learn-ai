@@ -85,6 +85,17 @@ previously tracked items (issues #1655, #1671, #1672, #1674, #1677, #1664,
   and stable moments within the inference sample. Numerical equation fixtures
   do not establish finite-sample interval coverage or DSR calibration for this
   intraday setting. Graduation gates remain independent of these diagnostics.
+- **Realized vs IV: open after it moved to the lake (#3525, 2026-10-24).**
+  - *Recorded rows carry no tenor (P2).* The recorder defaults to a 30-day target, and the scheduled snapshots are 30-day
+    ones, but a row does not say so, so the Tenor control (7, 14, 30 or 60 days) converts a recorded 30-day IV to
+    TRD/252 as if it were the tenor chosen. Tag each row with its target and read only the rows that match.
+  - *A once-a-day recorder gives a 15-minute run no z-score (P3).* The z-score needs IV on 252 consecutive bars. The
+    recorder files one snapshot a day at its quote time (before the 16:00 close: the 15:45 bar of the regular and the
+    extended session alike), so a 15-minute run holds IV on one bar a day and only daily bars can show a z-score (after
+    252 recorded days). The page says why from the window's counts.
+  - *The recorded IV history is not in the nightly backup (P2, [#3550](https://github.com/tim1016/learn-ai/issues/3550)).* `artifacts/iv_recorder` cannot be bought back, and
+    the option archive's backup copies only the lake roots and the catalog as one checked pair, so a lost artifacts volume
+    loses it. It needs its own copy; ADR 0071's 2026-10-24 amendment says why the lake backup cannot take it as it is.
 - **Temporal wire/storage contracts outside Alpaca V2 remain non-numeric
   (medium).** The 2026-08-18 census confirmed 4 Pydantic, 29 C# (since removed
   with the C# backend, ADR 0081), and 22 real

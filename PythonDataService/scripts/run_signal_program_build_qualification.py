@@ -158,6 +158,10 @@ _SHARED_EXECUTION_BOUNDARY_EXCLUSIONS: dict[str, str] = {
     "app/research/parity/ibkr_commission.py": (
         'IBKR fee-tier table reached only through execution/commission.py; same fee-only reasoning.'
     ),
+    "app/utils/symbols.py": (
+        'Reached only through the already-excluded config.py in this closure (#3525); validates IV_RECORDER_SYMBOLS '
+        'at settings load, never consulted by evaluate_signal_bar() or its decision inputs.'
+    ),
 }
 
 # The imports dividends.py makes — the canonical factor-file parser, the

@@ -58,6 +58,15 @@ FEATURE_RESEARCH_PHASES: tuple[Phase, ...] = (
 )
 
 
+# ── Realized vs IV study (#3525) ─────────────────────────────────────────
+REALIZED_VS_IV_PHASES: tuple[Phase, ...] = (
+    Phase("admitting_data", "Checking the data lake for this window", 3),
+    Phase("loading_bars", "Loading price history", 1),
+    Phase("computing", "Measuring realized volatility and the variance premium", 2),
+    Phase("completed", "Run complete", 1),
+)
+
+
 # ── Signal engine runner ─────────────────────────────────────────────────
 SIGNAL_ENGINE_PHASES: tuple[Phase, ...] = (
     Phase("admitting_data", "Checking the data lake for this window", 2),
@@ -162,6 +171,7 @@ JOB_PHASES: dict[str, tuple[Phase, ...]] = {
     "options_backtest": OPTIONS_BACKTEST_PHASES,
     "cross_sectional": CROSS_SECTIONAL_PHASES,
     "feature_research": FEATURE_RESEARCH_PHASES,
+    "realized_vs_iv": REALIZED_VS_IV_PHASES,
     "signal_engine": SIGNAL_ENGINE_PHASES,
     "engine_backtest": ENGINE_BACKTEST_PHASES,
     "lean_engine_run": LEAN_ENGINE_RUN_PHASES,

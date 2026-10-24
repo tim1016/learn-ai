@@ -185,15 +185,17 @@ export const RESEARCH_STUDIES: readonly StudyDefinition[] = [
     constraints: [
       {
         label: 'Window',
-        value: 'the last year of daily bars, or the last month of intraday bars, ending today, fixed',
+        value: 'the fewest sessions whose bars let a VRP z-score exist (273 daily bars), ending at the last session the study can read, fixed',
       },
     ],
+    // The bars are the data lake's (#3525); the recorded IV and the current-IV marker are not. A result's own block replaces
+    // this line with the window and counts it recorded.
     source: providerSource({
-      sources: ['Polygon aggregates', 'IV recorder (recorded IV30)', 'Polygon option snapshot (current IV marker)'],
-      adjustment: 'split_adjusted',
+      sources: ['Data lake', 'polygon', 'IV recorder (recorded IV30)', 'Polygon option snapshot (current IV marker)'],
+      adjustment: 'polygon_split_adjusted',
     }),
     limitations: [
-      'Implied volatility comes only from what the recorder stored, matched to bars by exact timestamp; with none stored the study shows realized volatility alone.',
+      'Implied volatility comes only from what the recorder stored (or the caller sent), placed on the bar whose interval holds the snapshot and never carried to another; with none stored the study shows realized volatility alone.',
       'The last bars have no forward window, so their forward figures stay unavailable.',
       'The current IV marker is a live snapshot; it is never written into past dates, and a saved run does not keep it.',
     ],

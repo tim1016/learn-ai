@@ -39,26 +39,32 @@ describe('storedStudyView', () => {
   });
 
   it('says a result is unreadable, with the reason, instead of drawing it from a guess', () => {
-    const noBars = { ...RVIV_RESULT, bars: [] } as never;
+    const fromBeforeTheLake = { ...RVIV_RESULT, bars: [], data_source: undefined } as never;
 
-    const view = storedStudyView(storedRecord('realized-vs-iv', { result: noBars }));
+    const view = storedStudyView(storedRecord('realized-vs-iv', { result: fromBeforeTheLake }));
 
-    expect(view).toEqual({ kind: 'unreadable', reason: 'the saved run holds no bars' });
+    expect(view).toEqual({
+      kind: 'unreadable',
+      reason: 'this run was saved in a form from before the study read the data lake, which this page can no longer draw',
+    });
   });
 
   it('shows a saved Realized vs IV result without the live marker, which a result only ever had at its own moment', () => {
     const view = storedStudyView(storedRecord('realized-vs-iv'));
 
-    expect(view.kind === 'realized-vs-iv' && view.data.liveIv30).toBeNull();
+    expect(view.kind === 'realized-vs-iv' && view.data.liveIv30.kind).toBe('unavailable');
     expect(view.kind === 'realized-vs-iv' && view.data.N).toBe(6);
   });
 
-  it('formats the chart axis for the bars the run held, whatever size they were sent as', () => {
-    const fiveMinutes = RVIV_RESULT.bars.map((bar, i) => ({ ...bar, ts: RVIV_RESULT.bars[0].ts + i * 300_000 }));
-    const intraday = storedStudyView(storedRecord('realized-vs-iv', { result: { ...RVIV_RESULT, bars: fiveMinutes } as never }));
+  it('reads the bar size, the lake source and the IV input from the saved result, not from the shape of its bars', () => {
     const daily = storedStudyView(storedRecord('realized-vs-iv'));
+    const intraday = storedStudyView(
+      storedRecord('realized-vs-iv', { result: { ...RVIV_RESULT, bar_size: '15m', hf_session: 'RTH' } as never }),
+    );
 
-    expect(intraday.kind === 'realized-vs-iv' && intraday.barSize).toBe('15m');
-    expect(daily.kind === 'realized-vs-iv' && daily.barSize).toBe('1D');
+    expect(daily.kind === 'realized-vs-iv' && daily.data.run).toEqual({ barSize: '1D', tenorDays: 30, hfSession: null });
+    expect(intraday.kind === 'realized-vs-iv' && intraday.data.run.barSize).toBe('15m');
+    expect(daily.kind === 'realized-vs-iv' && daily.data.dataSource.provider).toBe('polygon');
+    expect(daily.kind === 'realized-vs-iv' && daily.data.ivInput.source).toBe('absent');
   });
 });

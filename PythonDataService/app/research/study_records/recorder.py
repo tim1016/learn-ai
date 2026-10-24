@@ -4,9 +4,9 @@ A job or a route hands its work to this module and gets the same work back, whic
 run ends, however it ends: a result, an exception, a cancel, or a failure the work reports itself. The
 study's computation is not touched and does not know. Two shapes cover the five studies:
 
-* ``keeps_job_record(study, request, work)`` for a study that runs as a job (Feature, Signal, Cross-sectional);
-* ``@keeps_route_record(study, capture, body=...)`` for a study that answers a request (Indicator reliability, Realized
-  vs IV).
+* ``keeps_job_record(study, request, work)`` for a study that runs as a job (Feature, Signal, Cross-sectional, Realized
+  vs IV);
+* ``@keeps_route_record(study, capture, body=...)`` for a study that answers a request (Indicator reliability).
 
 What is stored is whatever the run carried: the inputs its request validated, the result as delivered, and the result's
 own ``data_source`` block when it has one. A result with no such block is stored with none, and the History says "not
@@ -250,11 +250,17 @@ def _say(emit: ProgressEmitter, problem: str | None) -> None:
         emit.log(problem, level="warn")
 
 
-def keeps_job_record(study: StudyType, request: BaseModel, work: JobWork, *, root: Path | None = None) -> JobWork:
-    """``work``, which also records the run when it ends, however it ends. Pass the result to ``run_in_thread`` as ``work``."""
+def keeps_job_record(
+    study: StudyType, request: BaseModel, work: JobWork, *, root: Path | None = None, capture: Capture = capture_request
+) -> JobWork:
+    """``work``, which also records the run when it ends, however it ends. Pass the result to ``run_in_thread`` as ``work``.
+
+    ``capture`` reads what the request says; the default keeps every field that is an input. A study whose request
+    carries a large input it should not copy into every record passes its own.
+    """
 
     def recorded(emit: ProgressEmitter, cancel: CancellationCheck) -> Any:
-        run = RunRecorder(study, request, capture_request, root=root)
+        run = RunRecorder(study, request, capture, root=root)
         try:
             result = work(_WatchedEmitter(emit, run), cancel)  # type: ignore[arg-type]
         except JobCancelled as exc:

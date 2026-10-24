@@ -52,3 +52,49 @@ superseded and one is reworded.
   configuration, so a future clock supplies them.
 - The title no longer names a .NET schedule. When a Python clock is built,
   record it here as a new amendment and delete `references/csharp-jobs/`.
+
+## Amendment 2026-10-24 — Realized vs IV reads the lake, and where a recorded snapshot lands on a bar (#3525)
+
+- The route `POST /api/edge/realized-vs-iv/series` is retired, and with it `app/routers/edge.py::_iv_series_from_recorder`
+  that decision 11 names. The Realized vs IV study is a job that reads admitted lake bars; it still takes IV recorded or
+  caller-supplied, and the live IV30 marker stays a separate call. The recorder read is `recorded_iv_points` in
+  `app/services/realized_vs_iv_study_service.py`, and the series composition is
+  `app/engine/edge/realized_vs_iv_series.py`. `iv_source`, `coverage.iv_first_ts` and `coverage.iv_last_ts` are reported as before.
+- Decision 9 stands: nothing is forward-filled at the service layer. What changes is how a snapshot meets a bar. Equal
+  timestamps almost never held, since a snapshot is stamped at the moment its quotes describe. `app/engine/edge/iv_alignment.py` now
+  puts each snapshot on the bar that contains it; the latest in a bar wins, a bar with none has no IV, and the response
+  counts the snapshots read, superseded, and inside no bar. Nothing is carried or interpolated, and that includes the VRP
+  z-score: it once forward-filled its IV input, which put a z-score and trade signals on bars with no IV, and no longer does.
+  It exists only where recorded IV covers every bar of its rolling window. The owner confirmed this rule (#3525).
+
+## Amendment 2026-10-24 — the 15:55 snapshot has a Python clock, and a row is filed at its quote time (#3525)
+
+- **The clock.** The data plane records IV30 once per trading day for `IV_RECORDER_SYMBOLS` (default SPY, QQQ, IWM) in
+  decision 7's 15:55 slot (`app/services/iv_recorder_schedule.py`), so the 2026-10-21 amendment's "records only when
+  something calls" now holds for the 09:35, 12:30 and 16:00 slots alone. Decision 7 said the slots "need no calendar":
+  the scheduled slot does, because it is five minutes before the canonical calendar's close (12:55 ET on an early
+  close), and the slot's name stays 15:55.
+- **Asking time and quote time.** The vendor's options snapshot runs 15 minutes behind the market on this plan
+  (`OPTIONS_SNAPSHOT_DELAY_MS`, named apart from `VENDOR_DELAY_MS`, the stock minute bars' delivery delay). So the vendor is
+  asked at the slot plus that delay (16:10 ET) and answers with the quotes of the slot. A row's `snapshot_ts_ms` is its
+  **quote time**: the chain's latest `last_quote.last_updated`, ingested from the vendor's nanoseconds to the closest
+  `int64 ms UTC` at the vendor boundary. A chain with none gets the asking time less the delay, and the row says so
+  (`quote_ts_derived`). The asking time is kept as `asked_at_ms`. Filed at the asking time, a row would sit after the
+  close and fall in no regular-hours 15-minute bar, so a regular-hours run would never get IV; at its quote time it falls in
+  the regular-hours 15:45 bar, the extended 15:45 bar and the day's bar (tests: `tests/research/test_realized_vs_iv_study.py`).
+- **No late catch-up.** If the clock finds the asking moment more than five minutes past (the slot's lead on the close, so
+  later quotes would be of a moment after the close), for instance after a restart, it records nothing for that day and
+  logs `iv_recorder_snapshot_skipped_late`. The next trading day tries again. A restart inside the five minutes still
+  records the day, once.
+- **The store (decision 8's layout).** One small series JSONL per ticker holds a row per snapshot: everything a study
+  reads, and the digest and relative path of the raw chain. The raw chain, which is megabytes and which the sovereignty
+  rule keeps, sits in its own file under `raw/<ticker>/`, named by its digest and written first (atomic), then the series row
+  is appended. Reading the series, for a study or for the day's existence check, never reads a chain. A torn last line
+  of the series is skipped and logged (`iv_series_torn_last_line_skipped`), the next write ends it, and any other bad
+  line fails loudly. Nothing had been recorded under the earlier layout, so there is no migration. The store's default
+  moved under the artifacts directory, which compose mounts.
+- **Not backed up.** `artifacts/iv_recorder` is not in the nightly backup. The history cannot be bought back, and the
+  option archive's backup copies the lake roots and the catalog as one checked pair and restores them into empty roots;
+  a directory outside the lake roots has no place in its manifest, its verification or its restore. A lost artifacts
+  volume loses the history until a copy of this directory is made alongside it. Backup and verified restore for this
+  history are tracked in [#3550](https://github.com/tim1016/learn-ai/issues/3550).

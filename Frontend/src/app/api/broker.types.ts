@@ -4750,21 +4750,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/edge/realized-vs-iv/series": {
+    "/api/edge/realized-vs-iv/window": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
-        put?: never;
         /**
-         * Realized Vs Iv Series
-         * @description Compute trailing + forward RV for the requested estimators and windows;
-         *     align IV30 series; emit VRP forward + z-score.
+         * Get Default Window
+         * @description The window a run of ``bar_size`` reads when it names none, and the session it reads it in.
+         *
+         *     A bar size and session the study does not offer (extended-hours daily bars) is a 422 whose detail carries the
+         *     refusal's ``code`` and ``reason``, the answer a run of the same inputs would give.
          */
-        post: operations["realized_vs_iv_series_api_edge_realized_vs_iv_series_post"];
+        get: operations["get_default_window_api_edge_realized_vs_iv_window_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5298,6 +5300,32 @@ export interface paths {
          *     event loop: a probe or a progress poll must never freeze behind them.
          */
         post: operations["drain_research_worker_pool_api_jobs_internal_pool_drain_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs-internal/realized-vs-iv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Realized Vs Iv Job
+         * @description Kick off a Realized vs IV study in a worker thread.
+         *
+         *     The worker admits the study's bars from the data lake (materializing what is missing), aligns the recorded or
+         *     caller-supplied IV to them, and computes the realized-vol series and the variance premium. A window the lake
+         *     cannot admit, or a bar size the study is not defined for, fails the job with a typed refusal and its coverage
+         *     counts; no result is computed. A successful prior run over the same admitted data and the same IV is served from
+         *     cache (the lookup follows admission). Pass ``force=true`` to bypass.
+         */
+        post: operations["start_realized_vs_iv_job_api_jobs_internal_realized_vs_iv_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -9531,30 +9559,6 @@ export interface components {
          */
         BacktestRunViewRefusalBody: {
             detail: components["schemas"]["BacktestRunViewRefusal"];
-        };
-        /**
-         * BarPayload
-         * @description Inline OHLCV bar.
-         */
-        BarPayload: {
-            /** Close */
-            close: number;
-            /** High */
-            high: number;
-            /** Low */
-            low: number;
-            /** Open */
-            open: number;
-            /**
-             * Ts
-             * @description int64 ms UTC
-             */
-            ts: number;
-            /**
-             * Volume
-             * @default 0
-             */
-            volume?: number;
         };
         /**
          * BarProperty
@@ -21566,6 +21570,27 @@ export interface components {
             target_calendar_days: number;
         };
         /**
+         * IvPointPayload
+         * @description One caller-supplied IV point, stamped as the snapshot was taken (the study aligns it to a bar).
+         *
+         *     ``iv30`` is ACT/365, the solver's native basis; the study converts it to TRD/252 before VRP. A
+         *     ``health_score`` or ``variance_contribution_synthetic`` that is present, even as ``null``, turns the confidence
+         *     path on (``null`` means no evidence and drops that factor), so what the caller set is kept apart from what it left out.
+         */
+        IvPointPayload: {
+            /** Healthscore */
+            healthScore?: number | null;
+            /** Iv30 */
+            iv30: number;
+            /**
+             * Ts
+             * @description int64 ms UTC
+             */
+            ts: number;
+            /** Variancecontributionsynthetic */
+            varianceContributionSynthetic?: number | null;
+        };
+        /**
          * IvProvenancePayload
          * @description Snake-case JSON projection of ``IvProvenance``.
          */
@@ -29131,92 +29156,104 @@ export interface components {
              */
             scope: "bot" | "account" | "broker";
         };
-        /** RealizedVsIvSeriesRequest */
-        RealizedVsIvSeriesRequest: {
+        /**
+         * RealizedVsIvJobRequest
+         * @description Body of POST /api/jobs-internal/realized-vs-iv.
+         *
+         *     The worker reads the study's bars from the data lake itself, materializing what the lake lacks: the browser
+         *     sends the symbol and the study's settings, never bars. Unless ``window_start_ms`` and ``window_end_ms`` (ET
+         *     midnight of the first and last session, ``int64 ms UTC``) name a window, it is the fewest sessions whose bars let a
+         *     VRP z-score exist, ending at the last session the study can read (``GET /api/edge/realized-vs-iv/window`` says which);
+         *     see ``app.services.realized_vs_iv_study_service``.
+         *
+         *     ``bar_size`` is ``15m`` or ``1d``. Anything else is accepted here and refused by the job with
+         *     ``resolution_unsupported`` and a reason, so the answer is a typed refusal a page can show rather than a 422.
+         *
+         *     ``session`` is which bars the study folds from: ``extended`` (04:00-20:00 ET) or ``rth``. Omitted, it is the session
+         *     each bar size has always read (``extended`` for ``15m``, ``rth`` for ``1d``; #3525). ``hf_session`` is the HF
+         *     estimator's own ETH/RTH filter and follows the session (``rth`` is RTH, ``extended`` is ETH): omitted, it is derived
+         *     for ``15m`` bars and recorded as derived, and one that disagrees with the session, or ``extended`` with ``1d``,
+         *     fails the job with ``resolution_unsupported`` and the reason (``resolve_session_choice``).
+         */
+        RealizedVsIvJobRequest: {
             /**
-             * Bar Size
+             * Barsize
              * @default 1d
-             * @enum {string}
              */
-            bar_size?: "15m" | "1d";
-            /** Bars */
-            bars: components["schemas"]["BarPayload"][];
+            barSize?: string;
             /**
-             * Confidence Floor
-             * @description Hard-gate floor: signals are forced to 0 where confidence < floor.
+             * Confidencefloor
              * @default 0.1
              */
-            confidence_floor?: number;
+            confidenceFloor?: number;
             /** Estimators */
-            estimators?: string[];
+            estimators?: ("ctc" | "parkinson" | "gk" | "yz")[];
             /**
-             * Iv Series
-             * @description Optional [{ts, iv30, health_score?, variance_contribution_synthetic?}] history. iv30 must be ACT/365 (the solver's native basis); the router converts to TRD/252 before VRP. When health_score and variance_contribution_synthetic are supplied, the response includes per-bar confidence and the VRP signal is gated by it (Step E of IV-ownership plan).
+             * Force
+             * @default false
              */
-            iv_series?: Record<string, never>[] | null;
-            /**
-             * Rerun Of
-             * @description The saved run this one was prefilled from (the History's Rerun); lineage only, never an input.
-             */
-            rerun_of?: string | null;
-            /**
-             * Session
-             * @description Session for the HF RV estimator. ETH = 04:00-20:00 ET (default), RTH = 09:30-16:00 ET.
-             * @default ETH
-             * @enum {string}
-             */
-            session?: "ETH" | "RTH";
+            force?: boolean;
+            /** Hfsession */
+            hfSession?: ("ETH" | "RTH") | null;
+            /** Ivseries */
+            ivSeries?: components["schemas"]["IvPointPayload"][] | null;
+            /** Jobid */
+            jobId: string;
+            /** Rerunof */
+            rerunOf?: string | null;
+            /** Session */
+            session?: ("rth" | "extended") | null;
             /** Symbol */
             symbol: string;
             /**
-             * Tenor Days
+             * Tenordays
              * @default 30
              */
-            tenor_days?: number;
+            tenorDays?: number;
+            /**
+             * Windowendms
+             * @description ET midnight of the last session, int64 ms UTC
+             */
+            windowEndMs?: number | null;
+            /**
+             * Windowstartms
+             * @description ET midnight of the first session, int64 ms UTC
+             */
+            windowStartMs?: number | null;
             /** Windows */
             windows?: number[];
         };
-        /** RealizedVsIvSeriesResponse */
-        RealizedVsIvSeriesResponse: {
-            /** Confidence */
-            confidence?: (number | null)[] | null;
-            /** Coverage */
-            coverage: Record<string, never>;
-            /** Explanation */
-            explanation?: Record<string, never> | null;
-            /** Floor Gated */
-            floor_gated?: boolean[] | null;
-            /** Iv30 */
-            iv30: (number | null)[];
-            /** Iv30 Trd252 */
-            iv30_trd252: (number | null)[];
+        /**
+         * RealizedVsIvWindow
+         * @description The window a Realized vs IV run reads when its request names none.
+         *
+         *     ``window_start_ms`` and ``window_end_ms`` are ET midnight of the first and last session, ``int64 ms UTC``: the values the
+         *     job request takes, so a page can send back exactly the window it showed. The window holds the fewest sessions whose
+         *     bars let a VRP z-score exist (``resolve_window``), and ends on the last session the study can read or capture now.
+         */
+        RealizedVsIvWindow: {
             /**
-             * Iv Source
-             * @default caller_supplied
+             * Bar Size
+             * @enum {string}
              */
-            iv_source?: string;
-            /** Rv Forward */
-            rv_forward: {
-                [key: string]: (number | null)[];
-            };
-            /** Rv Hf Forward */
-            rv_hf_forward: (number | null)[];
-            /** Rv Hf Trailing */
-            rv_hf_trailing: (number | null)[];
-            /** Rv Trailing */
-            rv_trailing: {
-                [key: string]: (number | null)[];
-            };
-            /** Symbol */
-            symbol: string;
-            /** Ts */
-            ts: number[];
-            /** Vrp Forward */
-            vrp_forward: (number | null)[];
-            /** Vrp Z */
-            vrp_z: (number | null)[];
-            /** Vrp Z Scaled */
-            vrp_z_scaled?: (number | null)[] | null;
+            bar_size: "15m" | "1d";
+            /**
+             * Session
+             * @enum {string}
+             */
+            session: "rth" | "extended";
+            /** Sessions */
+            sessions: number;
+            /**
+             * Window End Ms
+             * @description ET midnight of the last session, int64 ms UTC
+             */
+            window_end_ms: number;
+            /**
+             * Window Start Ms
+             * @description ET midnight of the first session, int64 ms UTC
+             */
+            window_start_ms: number;
         };
         /**
          * RecencyChartJobRequest
@@ -29477,6 +29514,11 @@ export interface components {
         };
         /** RecordedSnapshotItem */
         RecordedSnapshotItem: {
+            /**
+             * Asked At Ms
+             * @description When the vendor was asked, int64 ms UTC
+             */
+            asked_at_ms?: number | null;
             /** Dividend Source */
             dividend_source: string;
             /** Dividend Yield */
@@ -29491,13 +29533,22 @@ export interface components {
             iv30_vix_style: number | null;
             /** Iv Provenance */
             iv_provenance: Record<string, never>;
+            /**
+             * Quote Ts Derived
+             * @description True when the chain carried no quote time and the asking time less the vendor's delay stands in
+             * @default false
+             */
+            quote_ts_derived?: boolean;
             /** Rate */
             rate: number;
             /** Rate Source */
             rate_source: string;
             /** Slot */
             slot: string;
-            /** Snapshot Ts Ms */
+            /**
+             * Snapshot Ts Ms
+             * @description The quote time: the instant the chain's quotes describe, int64 ms UTC
+             */
             snapshot_ts_ms: number;
             /** Spot */
             spot: number;
@@ -45177,18 +45228,19 @@ export interface operations {
             };
         };
     };
-    realized_vs_iv_series_api_edge_realized_vs_iv_series_post: {
+    get_default_window_api_edge_realized_vs_iv_window_get: {
         parameters: {
-            query?: never;
+            query: {
+                /** @description The study's bar size. */
+                bar_size: "15m" | "1d";
+                /** @description The session the run reads; omitted, it is the session the bar size reads by default. */
+                session?: ("rth" | "extended") | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RealizedVsIvSeriesRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -45196,7 +45248,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RealizedVsIvSeriesResponse"];
+                    "application/json": components["schemas"]["RealizedVsIvWindow"];
                 };
             };
             /** @description Validation Error */
@@ -45937,6 +45989,39 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_realized_vs_iv_job_api_jobs_internal_realized_vs_iv_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RealizedVsIvJobRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };

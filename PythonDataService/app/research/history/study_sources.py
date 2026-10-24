@@ -4,15 +4,17 @@ Feature, Signal, Cross-sectional, Indicator reliability and Realized vs IV each 
 ``<artifacts>/<study>/<record_id>/`` (``app.research.study_records``). These sources read the small ``config.json`` of
 each and never its result: how a run ended, its headline and its inputs are all there, so a listing opens no result.
 
-A run's question, its instruments and its window are read from its inputs by the study's spec. A rerun's record names the
+A run's question, its instruments and its window are read from its inputs by the study's spec (a run whose inputs name
+no window shows the window its data source says it read). A rerun's record names the
 record it was prefilled from, shown as its parent. A directory whose config cannot be read as a record of this version
 is counted in ``unreadable`` like any other store's, so a record from a newer build is reported, not silently dropped.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import Any
 
 from app.research.history.artifact_sources import _ArtifactSource, _Own, _read_text, _Settled
 from app.research.study_records.models import StudyRecordConfig, StudyType
@@ -40,6 +42,15 @@ def _provenance(config: StudyRecordConfig) -> str | None:
     return None
 
 
+def _window_read(block: Mapping[str, Any] | None) -> tuple[int, int] | None:
+    """The window a run read, from its data source: the first and last session it admitted, ET midnights."""
+    window = None if block is None else block.get("effective_window")
+    if not isinstance(window, Mapping):
+        return None
+    start, end = window.get("start_ms"), window.get("end_ms")
+    return (start, end) if isinstance(start, int) and isinstance(end, int) else None
+
+
 def _own_reader(spec: StudySpec) -> Callable[[str], _Own]:
     def read(path: str) -> _Own:
         config = StudyRecordConfig.model_validate_json(_read_text(path))
@@ -56,7 +67,8 @@ def _own_reader(spec: StudySpec) -> Callable[[str], _Own]:
             provenance=_provenance(config),
             parent_run_id=config.rerun_of,
             symbols=symbols,
-            window=window,
+            # A run that named no window (Realized vs IV reads the last year or month of final sessions) shows the one it read.
+            window=window if window is not None else _window_read(config.data_source),
             settled=_Settled(config.status, config.status_detail, config.completed_at_ms),
             headline=config.headline,
         )

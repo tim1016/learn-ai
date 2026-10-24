@@ -1,17 +1,16 @@
+import { mapLakeStudyDataSource, type LakeDataSourceRaw } from "../../../shared/lake-study/lake-study";
 import {
   RV_READOUT_WINDOW,
-  type Candle, type IvConfidenceSummary, type RealizedVsIvData,
-  type RvWindowSeries, type SignalMark, type VrpBin,
+  type BarSize, type Candle, type HfSession, type IvAlignment, type IvConfidenceSummary,
+  type RealizedVsIvData, type RunSettings, type RvWindowSeries, type SignalMark, type VrpBin,
 } from "./edge-data.model";
 
-export interface BarPayload {
-  ts: number;
-  open: number; high: number; low: number; close: number; volume: number;
-}
-
-export interface RealizedVsIvSeriesResponse {
+/** What the `realized_vs_iv` job parks as its result (`app/services/realized_vs_iv_study_service.py`): the series, the
+ *  bars it was computed on, the settings it used, and where the bars came from. */
+export interface RealizedVsIvResultRaw {
   symbol: string;
   ts: number[];
+  bars: { open: number[]; high: number[]; low: number[]; close: number[]; volume: number[] };
   rv_trailing: Record<string, (number | null)[]>;
   rv_forward: Record<string, (number | null)[]>;
   iv30: (number | null)[];
@@ -20,9 +19,8 @@ export interface RealizedVsIvSeriesResponse {
   rv_hf_forward: (number | null)[];
   vrp_forward: (number | null)[];
   vrp_z: (number | null)[];
-  // IV-ownership Step E + recorder-fallback additions. Optional because old
-  // server builds and the "absent" path may omit them.
-  iv_source?: "caller_supplied" | "recorder" | "absent";
+  // IV-ownership Step E + recorder-fallback additions.
+  iv_source: "caller_supplied" | "recorder" | "absent";
   confidence?: (number | null)[] | null;
   vrp_z_scaled?: (number | null)[] | null;
   floor_gated?: boolean[] | null;
@@ -38,38 +36,68 @@ export interface RealizedVsIvSeriesResponse {
      *  pre-date the field. */
     health_imputed_now?: boolean;
   } | null;
+  bar_size: "15m" | "1d";
+  tenor_days: number;
+  hf_session: HfSession | null;
   coverage: {
     n_bars: number;
     iv_first_ts: number | null;
     iv_last_ts: number | null;
     forward_nan_bars: number;
-    session?: string;
+    /** The bars of the VRP z-score's rolling window: it needs a value on every one of them. */
+    vrp_lookback: number;
+    session: string | null;
     vrp_basis?: string;
     has_confidence?: boolean;
+    iv_alignment: {
+      rule: string;
+      snapshots_read: number;
+      bars_with_iv: number;
+      superseded: number;
+      outside_bars: number;
+    };
+  };
+  /** The lake block, with the fields this study adds to its identity: the IV it was given is named here. */
+  data_source: LakeDataSourceRaw & {
+    iv_source: "caller_supplied" | "recorder" | "absent";
+    iv_snapshots: number;
+    iv_digest: string;
   };
 }
 
-/** Map the API series response into the chart-friendly RealizedVsIvData.
- *  Only what the endpoint returns is projected; nothing is defaulted for the
+/** The wire's bar size for the page's. The server is defined for these two and refuses any other with a reason. */
+export const WIRE_BAR_SIZE: Readonly<Record<BarSize, RealizedVsIvResultRaw["bar_size"]>> = { "15m": "15m", "1D": "1d" };
+
+function barSizeFromWire(wire: RealizedVsIvResultRaw["bar_size"]): BarSize {
+  return wire === "1d" ? "1D" : "15m";
+}
+
+/** Map a Realized vs IV result, as the job delivers it or a saved run holds it, into the chart-friendly RealizedVsIvData.
+ *  Only what the study returns is projected; nothing is defaulted for the
  *  edge score, regimes or oracle signals it does not compute. */
-export function projectRealizedVsIvSeries(
-  symbol: string, bars: readonly BarPayload[], series: RealizedVsIvSeriesResponse, windows: readonly number[],
+export function projectRealizedVsIvResult(
+  result: RealizedVsIvResultRaw, windows: readonly number[],
 ): Omit<RealizedVsIvData, "liveIv30"> {
-  const N = bars.length;
-  const candles: Candle[] = bars.map((b) => ({
-    o: b.open, h: b.high, l: b.low, c: b.close, v: b.volume,
+  // A saved run from before the study read the lake held the bars the caller posted, as a list, and no data source.
+  const bars: unknown = result.bars;
+  if (typeof bars !== "object" || bars === null || Array.isArray(bars) || !("close" in bars) || result.data_source === undefined) {
+    throw new Error("this run was saved in a form from before the study read the data lake, which this page can no longer draw");
+  }
+  const N = result.ts.length;
+  const candles: Candle[] = result.ts.map((_, i) => ({
+    o: result.bars.open[i], h: result.bars.high[i], l: result.bars.low[i], c: result.bars.close[i], v: result.bars.volume[i],
   }));
-  const dates = bars.map((b) => new Date(b.ts));
-  const iv30 = nullsToNaN(series.iv30);
-  const iv30Trd252 = nullsToNaN(series.iv30_trd252 ?? []);
-  const rvYzByWindow = yangZhangTrailing(series, windows);
+  const dates = result.ts.map((t) => new Date(t));
+  const iv30 = nullsToNaN(result.iv30);
+  const iv30Trd252 = nullsToNaN(result.iv30_trd252 ?? []);
+  const rvYzByWindow = yangZhangTrailing(result, windows);
   const rvYZ = rvYzByWindow.find((s) => s.window === RV_READOUT_WINDOW)?.values;
   if (!rvYZ) {
     throw new Error(`the series response has no ${yzKey(RV_READOUT_WINDOW)} trailing RV for the readout`);
   }
-  const rvHf21d = nullsToNaN(series.rv_hf_forward ?? []);
-  const vrpForward = nullsToNaN(series.vrp_forward);
-  const vrpZ = nullsToNaN(series.vrp_z);
+  const rvHf21d = nullsToNaN(result.rv_hf_forward ?? []);
+  const vrpForward = nullsToNaN(result.vrp_forward);
+  const vrpZ = nullsToNaN(result.vrp_z);
 
   const validVrp = vrpForward.filter((x) => !Number.isNaN(x));
   const vrpHistogram: VrpBin[] = validVrp.length
@@ -84,9 +112,23 @@ export function projectRealizedVsIvSeries(
     else if (z < -1) signals.push({ i, dir: "long" });
   }
 
+  const run: RunSettings = {
+    barSize: barSizeFromWire(result.bar_size),
+    tenorDays: result.tenor_days,
+    hfSession: result.hf_session,
+  };
+  const alignment = result.coverage.iv_alignment;
+  const ivAlignment: IvAlignment = {
+    rule: alignment.rule,
+    snapshotsRead: alignment.snapshots_read,
+    barsWithIv: alignment.bars_with_iv,
+    superseded: alignment.superseded,
+    outsideBars: alignment.outside_bars,
+  };
+
   return {
     provenance: "real",
-    symbol,
+    symbol: result.symbol,
     N,
     dates,
     candles,
@@ -100,10 +142,19 @@ export function projectRealizedVsIvSeries(
     vrpHistogram,
     signals,
     coverage: {
-      forwardBlindTail: series.coverage.forward_nan_bars,
-      ivFirstTsMs: series.coverage.iv_first_ts,
+      forwardBlindTail: result.coverage.forward_nan_bars,
+      vrpLookbackBars: result.coverage.vrp_lookback,
+      ivFirstTsMs: result.coverage.iv_first_ts,
     },
-    ivConfidence: extractIvConfidence(series),
+    ivConfidence: extractIvConfidence(result),
+    ivAlignment,
+    run,
+    dataSource: mapLakeStudyDataSource(result.data_source),
+    ivInput: {
+      source: result.data_source.iv_source,
+      snapshots: result.data_source.iv_snapshots,
+      digest: result.data_source.iv_digest,
+    },
   };
 }
 
@@ -113,7 +164,7 @@ const yzKey = (window: number): string => `yz_${window}`;
  *  response holds one series per estimator per window, so position says
  *  nothing about which estimator or window a series is. */
 function yangZhangTrailing(
-  series: RealizedVsIvSeriesResponse, windows: readonly number[],
+  series: RealizedVsIvResultRaw, windows: readonly number[],
 ): RvWindowSeries[] {
   return [...windows]
     .sort((a, b) => a - b)
@@ -124,7 +175,7 @@ function yangZhangTrailing(
 }
 
 function extractIvConfidence(
-  series: RealizedVsIvSeriesResponse,
+  series: RealizedVsIvResultRaw,
 ): IvConfidenceSummary | null {
   if (!series.iv_source) return null;
   const nGated = series.floor_gated

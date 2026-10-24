@@ -22,6 +22,9 @@
   &:focus { border-color: $accent; }
 }
 .estimator-block { flex: 1 1 auto; min-width: 280px; display: flex; flex-direction: column; gap: 4px; }
+.window-block { flex: 1 1 auto; min-width: 280px; display: flex; flex-direction: column; gap: 4px; }
+.window-value { font-size: 12px; color: $text-primary; }
+.window-note { font-size: 11px; color: $text-subtle; &--error { color: $bear; } }
 .chip-row { display: flex; gap: 6px; }
 .vol-chip {
   height: 26px; padding: 0 10px; border-radius: 999px;
@@ -47,3 +50,6 @@
   display: flex; align-items: center; gap: 8px;
   margin-bottom: 12px;
 }
+
+.run-status { font-size: 11px; color: $text-subtle; font-family: $font-mono; }
+.lake-refused { margin-bottom: 12px; }

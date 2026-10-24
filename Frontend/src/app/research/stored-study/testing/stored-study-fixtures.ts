@@ -1,3 +1,4 @@
+import { lakeDataSource } from '../../../components/edge/testing/edge-compute-world';
 import type { StoredStudyRecord, StoredStudyType } from '../stored-study';
 
 /**
@@ -45,12 +46,14 @@ export const RVIV_INPUTS = {
   symbol: 'SPY',
   bar_size: '1d',
   tenor_days: 30,
-  session: 'ETH',
+  hf_session: 'ETH',
+  session: null,
   estimators: ['yz'],
   windows: [5, 10, 30],
   confidence_floor: 0.5,
+  window_start_ms: 1_704_171_600_000,
+  window_end_ms: 1_711_598_400_000,
   iv_series_supplied: false,
-  bars: { count: 6, first_ts_ms: 1_704_205_200_000, last_ts_ms: 1_704_205_200_000 + 5 * 86_400_000 },
 };
 
 export const FEATURE_RESULT = {
@@ -228,7 +231,7 @@ export const RELIABILITY_RESULT = {
 };
 
 const N = 6;
-const FIRST_BAR_MS = RVIV_INPUTS.bars.first_ts_ms;
+const FIRST_BAR_MS = 1_704_205_200_000;
 const flat = (value: number | null) => Array.from({ length: N }, () => value);
 
 export const RVIV_RESULT = {
@@ -243,15 +246,31 @@ export const RVIV_RESULT = {
   vrp_forward: flat(null),
   vrp_z: flat(null),
   iv_source: 'absent',
-  coverage: { n_bars: N, iv_first_ts: null, iv_last_ts: null, forward_nan_bars: 2 },
-  bars: Array.from({ length: N }, (_, i) => ({
-    ts: FIRST_BAR_MS + i * 86_400_000,
-    open: 500 + i,
-    high: 503 + i,
-    low: 498 + i,
-    close: 501 + i,
-    volume: 1_000_000,
-  })),
+  bar_size: '1d',
+  tenor_days: 30,
+  hf_session: null,
+  coverage: {
+    n_bars: N,
+    iv_first_ts: null,
+    iv_last_ts: null,
+    forward_nan_bars: 2,
+    vrp_lookback: 4,
+    session: null,
+    iv_alignment: { rule: 'snapshot_in_bar_latest', snapshots_read: 0, bars_with_iv: 0, superseded: 0, outside_bars: 0 },
+  },
+  bars: {
+    open: Array.from({ length: N }, (_, i) => 500 + i),
+    high: Array.from({ length: N }, (_, i) => 503 + i),
+    low: Array.from({ length: N }, (_, i) => 498 + i),
+    close: Array.from({ length: N }, (_, i) => 501 + i),
+    volume: Array.from({ length: N }, () => 1_000_000),
+  },
+  data_source: {
+    ...lakeDataSource(),
+    iv_source: 'absent',
+    iv_snapshots: 0,
+    iv_digest: 'c'.repeat(64),
+  },
 };
 
 const INPUTS: Record<StoredStudyType, Record<string, never>> = {

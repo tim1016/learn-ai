@@ -99,7 +99,7 @@ describe('StudyPageComponent', () => {
     ['signal', 'Data lake, Polygon'],
     ['indicator-reliability', 'Data lake, Polygon'],
     ['cross-sectional', 'Polygon stock bars, Polygon option bars, FRED risk-free rate'],
-    ['realized-vs-iv', 'Polygon aggregates, IV recorder (recorded IV30), Polygon option snapshot (current IV marker)'],
+    ['realized-vs-iv', 'Data lake, Polygon, IV recorder (recorded IV30), Polygon option snapshot (current IV marker)'],
   ] as const)(
     'names the provider behind %s on its data-source line, and reads "not recorded" for what it does not record',
     async (study, sources) => {

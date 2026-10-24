@@ -8,64 +8,96 @@
   [previous]="inputs.isPrevious()"
   [captured]="inputs.captured()"
   [prefill]="prefillNotice()"
+  [dataSource]="sourceLine()"
+  dataSourceWindows="date-et"
   (run)="onCompute()"
 >
-  <app-symbol-picker
-    studyInstrument
-    [symbol]="symbol()"
-    (symbolChange)="symbol.set($event)"
-  />
+  <div studyInstrument>
+    <app-symbol-picker
+      [symbol]="symbol()"
+      (symbolChange)="symbol.set($event)"
+    />
+    <app-lake-holding-notice [holding]="holding" />
+  </div>
 
   <div studyConfig class="form-card">
     <label class="field">
       <span class="field-label">Bar size</span>
-      <select class="field-input mono"
-              [value]="barSize()"
-              (change)="barSize.set($any($event.target).value)">
-        @for (b of ['5m','15m','1h','1D']; track b) {
+      <select class="field-input mono" data-testid="rviv-bar-size" (change)="selectBarSize($event)">
+        @for (b of barSizes; track b) {
           <option [value]="b" [selected]="b === barSize()">{{ b }}</option>
         }
       </select>
     </label>
     <label class="field">
       <span class="field-label">Tenor</span>
-      <select class="field-input mono"
-              [value]="tenor()"
-              (change)="tenor.set($any($event.target).value)">
-        @for (t of ['7D','14D','30D','60D']; track t) {
+      <select class="field-input mono" data-testid="rviv-tenor" (change)="selectTenor($event)">
+        @for (t of tenors; track t) {
           <option [value]="t" [selected]="t === tenor()">{{ t }}</option>
         }
       </select>
     </label>
 
-    <div class="estimator-block">
-      <span class="field-label" title="HF estimator session for VRP-driving rv_hf_21d. The trailing Yang-Zhang lines are session-agnostic daily-bar.">
-        HF session
-      </span>
-      <div class="chip-row">
-        @for (s of ['ETH','RTH']; track s) {
-          <button type="button" class="vol-chip"
-                  [class.on]="sessionOn($any(s))"
-                  (click)="setSession($any(s))">
-            {{ s }}
-          </button>
-        }
+    @if (barSize() === '15m') {
+      <div class="estimator-block" data-testid="rviv-session">
+        <span class="field-label" title="The session the 15-minute bars are folded from. The trailing Yang-Zhang lines and the HF estimator that drives the VRP both follow it. Daily bars read regular hours only.">
+          Session
+        </span>
+        <div class="chip-row">
+          @for (s of sessions; track s) {
+            <button type="button" class="vol-chip"
+                    [class.on]="sessionOn(s)"
+                    [attr.aria-pressed]="sessionOn(s)"
+                    [title]="s === 'rth' ? 'Regular trading hours only (09:30-16:00 ET).' : 'Pre-market and after-hours trading included (04:00-20:00 ET).'"
+                    (click)="setSession(s)">
+              {{ s === 'rth' ? 'RTH' : 'Ext' }}
+            </button>
+          }
+        </div>
       </div>
+    }
+
+    <div class="window-block" data-testid="rviv-window">
+      <span class="field-label" title="The window a run reads: the fewest sessions whose bars let a VRP z-score exist, ending at the last session the study can read. The server resolves it.">
+        Window
+      </span>
+      @if (defaultWindow(); as window) {
+        <span class="window-value mono">
+          <app-timestamp-display [value]="window.windowStartMs" mode="date-et" granularity="date" />
+          to
+          <app-timestamp-display [value]="window.windowEndMs" mode="date-et" granularity="date" />
+        </span>
+        <span class="window-note" data-testid="rviv-window-note">{{ window.sessions }} sessions, {{ sessionWords() }}</span>
+      } @else if (windowFailure(); as failure) {
+        <span class="window-note window-note--error" data-testid="rviv-window-error">
+          Could not read the window a run uses ({{ failure }}). Run study still works: the server picks it.
+        </span>
+      } @else {
+        <span class="window-note" data-testid="rviv-window-reading">Reading the window a run uses…</span>
+      }
     </div>
   </div>
 
   <div studyProgress>
+    @if (loading() && status(); as message) {
+      <span class="run-status" data-testid="rviv-status">{{ message }}</span>
+    }
     @if (errorMsg()) {
       <div class="compute-error" data-testid="rviv-error">
         <i class="pi pi-times-circle"></i>
         Compute failed — {{ errorMsg() }}
       </div>
     }
+    @if (refused(); as r) {
+      <div class="lake-refused" data-testid="rviv-refused">
+        <app-lake-study-source [refusal]="r.refusal" />
+      </div>
+    }
   </div>
 
   <div studyResult>
     @if (data(); as d) {
-      <app-realized-vs-iv-report [data]="d" [barSize]="barSize()" />
+      <app-realized-vs-iv-report [data]="d" />
     }
   </div>
 </app-study-page>

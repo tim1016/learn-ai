@@ -1,27 +1,38 @@
 import { TestBed } from "@angular/core/testing";
+import { vi } from "vitest";
 import { provideHttpClient } from "@angular/common/http";
 import { HttpTestingController, provideHttpClientTesting } from "@angular/common/http/testing";
-import { answerCompute, tick, YZ_RV_BY_WINDOW } from "../testing/edge-compute-world";
-import { EdgeApiService } from "./edge-api.service";
+import { JobsService } from "../../../services/jobs.service";
+import {
+  answerCompute, answerLiveIv, FakeJobs, failCompute, refuseCompute, resultResponse, tick, WINDOW_PATH, windowResponse,
+  YZ_RV_BY_WINDOW, type ComputeWorld,
+} from "../testing/edge-compute-world";
+import { EdgeApiService, hfSessionFor, LakeStudyRefusedError } from "./edge-api.service";
+
+function configure(): { service: EdgeApiService; world: ComputeWorld } {
+  TestBed.resetTestingModule();
+  const jobs = new FakeJobs();
+  TestBed.configureTestingModule({
+    providers: [
+      EdgeApiService,
+      { provide: JobsService, useValue: jobs },
+      provideHttpClient(),
+      provideHttpClientTesting(),
+    ],
+  });
+  return { service: TestBed.inject(EdgeApiService), world: { http: TestBed.inject(HttpTestingController), jobs } };
+}
 
 /** Targeted tests for `getLiveIv30` — the live-IV30 fetch with
- *  vix-style → parametric fallback. Here we pin the fallback policy and the
- *  response→marker mapping; the compute flow has its own describe below. */
+ *  vix-style → parametric fallback. Here we pin the fallback policy, the
+ *  response→marker mapping and what is said when neither endpoint answers; the
+ *  compute flow has its own describe below. */
 describe("EdgeApiService.getLiveIv30", () => {
   let service: EdgeApiService;
   let httpMock: HttpTestingController;
 
   beforeEach(() => {
-    TestBed.resetTestingModule();
-    TestBed.configureTestingModule({
-      providers: [
-        EdgeApiService,
-        provideHttpClient(),
-        provideHttpClientTesting(),
-      ],
-    });
-    service = TestBed.inject(EdgeApiService);
-    httpMock = TestBed.inject(HttpTestingController);
+    ({ service, world: { http: httpMock } } = configure());
   });
 
   afterEach(() => httpMock.verify());
@@ -48,6 +59,11 @@ describe("EdgeApiService.getLiveIv30", () => {
     };
   }
 
+  function available(state: Awaited<ReturnType<EdgeApiService["getLiveIv30"]>>) {
+    if (state.kind !== "available") throw new Error(`expected a marker, got: ${state.reason}`);
+    return state.marker;
+  }
+
   it("returns the vix-style marker on the happy path", async () => {
     const promise = service.getLiveIv30("SPY");
     const req = httpMock.expectOne("/api/edge/iv30/vix-style");
@@ -55,8 +71,7 @@ describe("EdgeApiService.getLiveIv30", () => {
     expect(req.request.body).toEqual({ symbol: "SPY", target_calendar_days: 30 });
     req.flush(mockIv30Response("vix_style", 0.21));
 
-    const marker = await promise;
-    if (!marker) throw new Error("expected a marker");
+    const marker = available(await promise);
     expect(marker.method).toBe("vix_style");
     expect(marker.iv30Act365).toBeCloseTo(0.21, 6);
     expect(marker.varianceContributionSynthetic).toBeCloseTo(0.04, 6);
@@ -73,21 +88,34 @@ describe("EdgeApiService.getLiveIv30", () => {
     const param = httpMock.expectOne("/api/edge/iv30/parametric");
     param.flush(mockIv30Response("parametric", 0.18));
 
-    const marker = await promise;
-    if (!marker) throw new Error("expected a fallback marker");
+    const marker = available(await promise);
     expect(marker.method).toBe("parametric");
     expect(marker.iv30Act365).toBeCloseTo(0.18, 6);
   });
 
-  it("returns null silently when both endpoints error", async () => {
+  it("says it is unavailable, and why from each endpoint, when both error", async () => {
     const promise = service.getLiveIv30("SPY");
     httpMock.expectOne("/api/edge/iv30/vix-style").flush(
       { detail: "polygon outage" }, { status: 502, statusText: "Bad Gateway" });
     await Promise.resolve(); await Promise.resolve();
     httpMock.expectOne("/api/edge/iv30/parametric").flush(
-      { detail: "polygon outage" }, { status: 502, statusText: "Bad Gateway" });
+      { detail: "no straddle in the chain" }, { status: 422, statusText: "Unprocessable" });
 
-    expect(await promise).toBeNull();
+    const state = await promise;
+    expect(state.kind).toBe("unavailable");
+    if (state.kind !== "unavailable") return;
+    expect(state.reason, "names the endpoint that failed first and the server's own reason").toContain("vix-style: 502 polygon outage");
+    expect(state.reason, "and the one it fell back to").toContain("parametric: 422 no straddle in the chain");
+  });
+
+  it("reports a data service that did not answer at all as that, not as an empty market", async () => {
+    const promise = service.getLiveIv30("SPY");
+    httpMock.expectOne("/api/edge/iv30/vix-style").error(new ProgressEvent("error"));
+    await Promise.resolve(); await Promise.resolve();
+    httpMock.expectOne("/api/edge/iv30/parametric").error(new ProgressEvent("error"));
+
+    const state = await promise;
+    expect(state.kind === "unavailable" && state.reason).toContain("the data service did not answer");
   });
 
   it("forwards a non-default target_calendar_days", async () => {
@@ -99,26 +127,106 @@ describe("EdgeApiService.getLiveIv30", () => {
   });
 });
 
-describe("EdgeApiService.computeRealizedVsIv", () => {
+describe("EdgeApiService.getDefaultWindow", () => {
   let service: EdgeApiService;
   let httpMock: HttpTestingController;
 
-  const request = { symbol: "SPY", barSize: "1D", tenor: "30D", estimators: ["yz"] } as const;
-
   beforeEach(() => {
-    TestBed.resetTestingModule();
-    TestBed.configureTestingModule({
-      providers: [EdgeApiService, provideHttpClient(), provideHttpClientTesting()],
-    });
-    service = TestBed.inject(EdgeApiService);
-    httpMock = TestBed.inject(HttpTestingController);
+    ({ service, world: { http: httpMock } } = configure());
   });
 
   afterEach(() => httpMock.verify());
 
-  it("returns a dataset that says it is real, with missing samples as NaN and the live marker absent when its endpoints are dark", async () => {
+  it("asks for the bar size on the wire's spelling and the session, and returns the window the server resolved", async () => {
+    const promise = service.getDefaultWindow("1D", "rth");
+    const req = httpMock.expectOne((request) => request.url === WINDOW_PATH);
+    expect(req.request.method).toBe("GET");
+    expect(req.request.params.get("bar_size")).toBe("1d");
+    expect(req.request.params.get("session")).toBe("rth");
+    req.flush(windowResponse({ bar_size: "1d", session: "rth" }));
+
+    expect(await promise).toEqual({
+      barSize: "1D", session: "rth", windowStartMs: Date.UTC(2023, 10, 29, 5), windowEndMs: Date.UTC(2024, 11, 30, 5), sessions: 273,
+    });
+  });
+
+  it("returns the 15-minute window as 15m, for the session the server says it resolved it for", async () => {
+    const promise = service.getDefaultWindow("15m", "extended");
+    httpMock.expectOne((request) => request.url === WINDOW_PATH).flush(windowResponse({ bar_size: "15m", session: "extended" }, { sessions: 25 }));
+
+    expect(await promise).toMatchObject({ barSize: "15m", session: "extended", sessions: 25 });
+  });
+
+  it("rejects with the HTTP error when the server cannot say, so the page can show why", async () => {
+    const rejection = expect(service.getDefaultWindow("1D", "rth")).rejects.toMatchObject({ status: 503 });
+    httpMock.expectOne((request) => request.url === WINDOW_PATH).flush({ detail: "down" }, { status: 503, statusText: "Unavailable" });
+    await rejection;
+  });
+});
+
+describe("EdgeApiService.computeRealizedVsIv", () => {
+  let service: EdgeApiService;
+  let world: ComputeWorld;
+
+  const request = { symbol: "SPY", barSize: "1D", tenor: "30D", estimators: ["yz"], session: "rth" } as const;
+
+  beforeEach(() => {
+    ({ service, world } = configure());
+  });
+
+  afterEach(() => world.http.verify());
+
+  it("starts the study on the lake with the bar size and tenor it was asked for, and sends no bars", async () => {
+    const promise = service.computeRealizedVsIv({ ...request, barSize: "15m", tenor: "60D", session: "rth" });
+    await answerCompute(world, { run: { bar_size: "15m", tenor_days: 60, hf_session: "RTH" } });
+    await promise;
+
+    expect(world.jobs.started).toEqual([
+      {
+        type: "realized_vs_iv",
+        payload: { symbol: "SPY", bar_size: "15m", tenor_days: 60, session: "rth", hf_session: "RTH", estimators: ["yz"], windows: [5, 10, 30] },
+      },
+    ]);
+    world.http.expectNone("/api/aggregates/fetch");
+  });
+
+  it("sends the HF estimator's session that follows the session the 15-minute bars are folded from", async () => {
+    const extended = service.computeRealizedVsIv({ ...request, barSize: "15m", session: "extended" });
+    await answerCompute(world, { run: { bar_size: "15m", tenor_days: 30, hf_session: "ETH" } });
+    await extended;
+
+    expect(world.jobs.started[0].payload).toMatchObject({ bar_size: "15m", session: "extended", hf_session: "ETH" });
+    expect(hfSessionFor("rth")).toBe("RTH");
+    expect(hfSessionFor("extended")).toBe("ETH");
+  });
+
+  it("sends the daily size as 1d, never as another size, on regular hours, and no HF session, which a daily run has no estimator for", async () => {
     const promise = service.computeRealizedVsIv(request);
-    await answerCompute(httpMock);
+    await answerCompute(world);
+    await promise;
+
+    expect(world.jobs.started[0].payload["bar_size"]).toBe("1d");
+    expect(world.jobs.started[0].payload["session"]).toBe("rth");
+    expect(world.jobs.started[0].payload).not.toHaveProperty("hf_session");
+  });
+
+  it("sends the window it was given as the ET midnights the server resolved, and none when it was given none", async () => {
+    const window = { startMs: Date.UTC(2023, 10, 29, 5), endMs: Date.UTC(2024, 11, 30, 5) };
+    const named = service.computeRealizedVsIv({ ...request, window });
+    await answerCompute(world);
+    await named;
+    expect(world.jobs.started[0].payload).toMatchObject({ window_start_ms: window.startMs, window_end_ms: window.endMs });
+
+    const unnamed = service.computeRealizedVsIv(request);
+    await answerCompute(world);
+    await unnamed;
+    expect(world.jobs.started[1].payload).not.toHaveProperty("window_start_ms");
+    expect(world.jobs.started[1].payload).not.toHaveProperty("window_end_ms");
+  });
+
+  it("returns a dataset that says it is real, with missing samples as NaN, the settings the run used, and the lake it read", async () => {
+    const promise = service.computeRealizedVsIv(request);
+    await answerCompute(world);
 
     const result = await promise;
     expect.soft(result.provenance).toBe("real");
@@ -127,13 +235,21 @@ describe("EdgeApiService.computeRealizedVsIv", () => {
     expect.soft(result.iv30[0], "no IV before the first sample").toBeNaN();
     expect.soft(result.iv30[5]).toBeCloseTo(0.21, 12);
     expect.soft(result.coverage.forwardBlindTail).toBe(3);
+    expect.soft(result.coverage.vrpLookbackBars).toBe(39);
     expect.soft(result.coverage.ivFirstTsMs).toBe(result.dates[5].getTime());
-    expect.soft(result.liveIv30).toBeNull();
+    expect.soft(result.candles[0]).toEqual({ o: 500, h: 503, l: 498, c: 501, v: 1_000_000 });
+    expect.soft(result.run).toEqual({ barSize: "1D", tenorDays: 30, hfSession: null });
+    expect.soft(result.dataSource.coverage?.window).toMatchObject({ added: 10, reused: 30, missing: 0 });
+    expect.soft(result.dataSource.barMinutes).toBe(1440);
+    expect.soft(result.ivAlignment).toEqual({ rule: "snapshot_in_bar_latest", snapshotsRead: 35, barsWithIv: 35, superseded: 0, outsideBars: 0 });
+    expect.soft(result.ivInput, "the IV is named as an input of its own, with the fingerprint of what was read").toEqual({
+      source: "recorder", snapshots: 35, digest: "c".repeat(64),
+    });
   });
 
   it("picks each Yang-Zhang window by key, whatever other estimators the response lists first", async () => {
     const promise = service.computeRealizedVsIv({ ...request, estimators: ["ctc", "yz"] });
-    await answerCompute(httpMock, { estimators: ["ctc", "yz"] });
+    await answerCompute(world, { estimators: ["ctc", "yz"] });
 
     const result = await promise;
     expect.soft(result.rvYZ[10], "the readout series is yz_30").toBeCloseTo(YZ_RV_BY_WINDOW[30], 12);
@@ -147,34 +263,95 @@ describe("EdgeApiService.computeRealizedVsIv", () => {
     const rejection = expect(
       service.computeRealizedVsIv({ ...request, estimators: ["ctc"] }),
     ).rejects.toThrow("yz_30");
-    await answerCompute(httpMock, { estimators: ["ctc"] });
+    await answerCompute(world, { estimators: ["ctc"] });
     await rejection;
   });
 
-  it("rejects with Python's reason when the bars fetch fails, leaving nothing to fall back to", async () => {
+  it("never puts the current IV on a past date: the live marker arrives beside an IV series that has none", async () => {
     const promise = service.computeRealizedVsIv(request);
-    httpMock.expectOne("/api/aggregates/fetch").flush({
-      success: false, ticker: "SPY", summary: {}, data: [], error: "Polygon is unavailable",
-    });
+    await answerCompute(world, { ivPresent: false, live: "vix" });
 
-    await expect(promise).rejects.toThrow("Polygon is unavailable");
+    const result = await promise;
+    expect(result.liveIv30.kind).toBe("available");
+    expect(result.liveIv30.kind === "available" && result.liveIv30.marker.iv30Act365).toBeCloseTo(0.213, 12);
+    expect(result.iv30.every((v) => Number.isNaN(v)), "no bar was given the live value").toBe(true);
+    expect(result.iv30Trd252.every((v) => Number.isNaN(v))).toBe(true);
+    expect(result.vrpForward.every((v) => Number.isNaN(v))).toBe(true);
   });
 
-  it("rejects when the series request fails", async () => {
-    const rejection = expect(service.computeRealizedVsIv(request)).rejects.toThrow();
-    httpMock.expectOne("/api/aggregates/fetch").flush({
-      success: true, ticker: "SPY", summary: {},
-      data: [{ timestamp: 1_767_623_400_000, open: 1, high: 2, low: 1, close: 2, volume: 10 }],
-    });
-    await tick();
-    httpMock.expectOne("/api/edge/realized-vs-iv/series")
-      .flush({ detail: "boom" }, { status: 500, statusText: "Server Error" });
-    httpMock.expectOne("/api/edge/iv30/vix-style")
-      .flush({ detail: "dark" }, { status: 503, statusText: "Unavailable" });
-    await tick();
-    httpMock.expectOne("/api/edge/iv30/parametric")
-      .flush({ detail: "dark" }, { status: 503, statusText: "Unavailable" });
+  it("says why there is no current IV when both live endpoints are dark, and still returns the study", async () => {
+    const promise = service.computeRealizedVsIv(request);
+    await answerCompute(world, { live: "dark" });
 
+    const result = await promise;
+    expect(result.liveIv30.kind === "unavailable" && result.liveIv30.reason).toContain("the chain is dark");
+    expect(result.N).toBe(40);
+  });
+
+  it("hands the job's log lines to the caller as they arrive", async () => {
+    const lines: string[] = [];
+    const promise = service.computeRealizedVsIv(request, (line) => lines.push(line));
+    await answerCompute(world);
+    await promise;
+
+    expect(lines).toEqual(["Checking the lake for SPY daily bars", "Loaded 40 bars from 15,600 minute bars"]);
+  });
+
+  it("settles on a job that finished before the listener attached", async () => {
+    const promise = service.computeRealizedVsIv(request);
+    world.jobs.complete(resultResponse());
+    await tick();
+    await answerLiveIv(world.http);
+
+    expect((await promise).N).toBe(40);
+  });
+
+  it("rejects with the server's reason and the admission counts when the lake could not supply the bars", async () => {
+    const refusal = {
+      success: false, status: "refused", symbol: "SPY", error: "The lake cannot admit this window.",
+      refusal: {
+        code: "data_unavailable_from_provider", reason: "The lake cannot admit this window: 1 of 252 sessions cannot be supplied by the provider.",
+        sessions: [{ group: "window", trading_date_ms: Date.UTC(2025, 5, 4, 13, 30), outcome: "unavailable_from_provider", reason: "provider_no_data", failure_reason: "provider_no_data" }],
+        sessions_total: 1,
+        coverage: {
+          window: { expected_sessions: 252, reused: 200, added: 51, missing: 0, failed: 1, building: 0, corrupt: 0, captured_before_final: 0, unavailable_from_provider: 1 },
+          warmup: { expected_sessions: 0, reused: 0, added: 0, missing: 0, failed: 0, building: 0, corrupt: 0, captured_before_final: 0, unavailable_from_provider: 0 },
+          artifacts: { fetched: 51, reused: 200, refreshed: 0 },
+        },
+      },
+      data_source: null,
+    };
+    const rejection = service.computeRealizedVsIv(request).catch((error: unknown) => error);
+    await refuseCompute(world, refusal);
+
+    const error = await rejection;
+    expect(error).toBeInstanceOf(LakeStudyRefusedError);
+    if (!(error instanceof LakeStudyRefusedError)) return;
+    expect(error.message).toContain("1 of 252 sessions cannot be supplied");
+    expect(error.refused.refusal.coverage?.window).toMatchObject({ reused: 200, added: 51, failed: 1 });
+  });
+
+  it("rejects with the job's own message when it failed for another reason and parked nothing", async () => {
+    const rejection = expect(service.computeRealizedVsIv(request)).rejects.toThrow("the series needs at least two bars");
+    await failCompute(world, "the series needs at least two bars, got 1");
+    await rejection;
+  });
+
+  it("does not swallow a failure to read the parked result that is not 'there is none'", async () => {
+    const parked = vi.spyOn(world.jobs, "fetchResult").mockRejectedValue(new Error("result store unreachable"));
+    const rejection = expect(service.computeRealizedVsIv(request)).rejects.toThrow("result store unreachable");
+    await tick();
+    world.jobs.fail("data_missing", "the lake is missing sessions");
+    await answerLiveIv(world.http);
+    await rejection;
+    expect(parked).toHaveBeenCalled();
+  });
+
+  it("rejects when the job is cancelled", async () => {
+    const rejection = expect(service.computeRealizedVsIv(request)).rejects.toThrow("cancelled by the operator");
+    await tick();
+    world.jobs.emit({ type: "job.cancelled", reason: "cancelled by the operator" });
+    await answerLiveIv(world.http);
     await rejection;
   });
 });
