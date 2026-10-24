@@ -294,6 +294,7 @@ def sum_groups(groups: Iterable[GroupCoverage]) -> GroupCoverage:
         missing=sum(g.missing for g in groups),
         building=sum(g.building for g in groups),
         corrupt=sum(g.corrupt for g in groups),
+        captured_before_final=sum(g.captured_before_final for g in groups),
         unavailable_from_provider=sum(g.unavailable_from_provider for g in groups),
     )
 
@@ -397,6 +398,7 @@ def refusal_code_for(exclusions: Mapping[str, MemberExclusion]) -> RefusalCode:
         "no_sessions_in_window",
         "data_unavailable_from_provider",
         "data_corrupt",
+        "captured_before_final",
         "data_building",
         "data_missing",
         "lake_unavailable",

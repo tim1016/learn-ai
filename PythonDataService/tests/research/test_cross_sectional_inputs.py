@@ -22,6 +22,7 @@ import respx
 
 from app.data_lake import run_materialization
 from app.data_lake.adjustment_versions import companion_path
+from app.data_lake.capture_finality import capture_final_ms
 from app.data_lake.path_policy import lake_root_for
 from app.engine.data.lean_format import LeanDailyDataReader
 from app.engine.data.policy_store import resolve_data_roots
@@ -116,7 +117,7 @@ def test_a_cold_universe_is_fetched_per_member_and_each_member_session_counts_as
     assert block["kind"] == "lake"
     assert block["coverage"]["window"] == {
         "expected_sessions": 2 * len(MARCH), "reused": 0, "added": 2 * len(MARCH), "missing": 0, "failed": 0,
-        "building": 0, "corrupt": 0, "unavailable_from_provider": 0,
+        "building": 0, "corrupt": 0, "captured_before_final": 0, "unavailable_from_provider": 0,
     }
     assert [m["status"] for m in block["members"]] == ["admitted", "admitted"]
 
@@ -232,6 +233,53 @@ def test_a_universe_nothing_can_serve_admits_no_member_and_names_each_reason(cat
     assert refusal_code_for(admission.excluded) == "data_unavailable_from_provider"
     assert block_of(identity_for(["SPY", "QQQ"], MARCH), admission)["snapshot_digest"] is None
     assert block_of(identity_for(["SPY", "QQQ"], MARCH), admission)["effective_window"] is None, "nothing admitted, no window read"
+
+
+def _capture_before_final(catalog: FakeCatalog, symbol: str, day: date) -> dict:
+    """Make the catalog say ``symbol``'s held ``day`` was captured a minute before its regular session was final."""
+    row = next(
+        r
+        for r in catalog.rows.values()
+        if r["symbol"] == symbol and r["trading_date"] == day and r["resolution"] == "minute"
+    )
+    row["completed_at_ms"] = capture_final_ms(day, "regular") - 1
+    return row
+
+
+@respx.mock
+def test_a_member_whose_held_day_was_captured_before_it_was_final_is_excluded_and_the_vendor_is_not_asked(catalog, lake):
+    """#3521: an early-captured day is refused, never refetched, and a universe of such members still names the code."""
+    mock_launcher()
+    calls = {"SPY": VendorCalls(), "QQQ": VendorCalls()}
+    mock_vendor("SPY", vendor_history(MARCH, seed=3), calls=calls["SPY"])
+    mock_vendor("QQQ", vendor_history(MARCH, seed=4, start_price=400.0), calls=calls["QQQ"])
+    admit(identity_for(["SPY", "QQQ"], MARCH))
+    day = MARCH[2]
+    qqq_row = _capture_before_final(catalog, "QQQ", day)
+    row_before = dict(qqq_row)
+    for log in calls.values():
+        log.requests.clear()
+
+    admission = admit(identity_for(["SPY", "QQQ"], MARCH))
+
+    assert list(admission.members) == ["SPY"]
+    excluded = admission.excluded["QQQ"]
+    assert (excluded.stage, excluded.code, excluded.retryable) == ("stock_bars", "captured_before_final", True)
+    assert day.isoformat() in excluded.reason
+    assert member_counts(admission, "QQQ") == (len(MARCH) - 1, 0, 0, 1), "the day is neither added nor read"
+    assert [(s["outcome"], s["group"]) for s in excluded.refusal["sessions"]] == [("captured_before_final", "window")]
+    assert all(log.count == 0 for log in calls.values()), "the study asks the vendor for nothing"
+    assert qqq_row == row_before, "the shared day is as committed as it was"
+    window = block_of(identity_for(["SPY", "QQQ"], MARCH), admission)["coverage"]["window"]
+    assert (window["captured_before_final"], window["failed"]) == (1, 1), "the universe's counts carry the early day"
+
+    _capture_before_final(catalog, "SPY", day)
+    nothing = admit(identity_for(["SPY", "QQQ"], MARCH))
+
+    assert nothing.members == {} and {e.code for e in nothing.excluded.values()} == {"captured_before_final"}
+    assert refusal_code_for(nothing.excluded) == "captured_before_final"
+    refusal = universe_refusal(identity_for(["SPY", "QQQ"], MARCH), nothing)
+    assert refusal.code == "captured_before_final" and refusal.coverage.window.captured_before_final == 2
 
 
 @respx.mock

@@ -180,7 +180,7 @@ def test_a_completed_study_names_the_lake_for_its_stock_bars_and_the_provider_fo
     assert stock["price_adjustment_mode"] == "polygon_split_adjusted" and stock["aggregation"] == "minute_fold_per_et_session_no_fill"
     assert stock["coverage"]["window"] == {
         "expected_sessions": 2 * len(WINDOW), "reused": 0, "added": 2 * len(WINDOW), "missing": 0, "failed": 0,
-        "building": 0, "corrupt": 0, "unavailable_from_provider": 0,
+        "building": 0, "corrupt": 0, "captured_before_final": 0, "unavailable_from_provider": 0,
     }
     assert [(m["ticker"], m["status"], m["daily_bars"]) for m in stock["members"]] == [(s, "admitted", len(WINDOW)) for s in SYMBOLS]
     assert len(stock["snapshot_digest"]) == 64 and len(stock["identity_digest"]) == 64

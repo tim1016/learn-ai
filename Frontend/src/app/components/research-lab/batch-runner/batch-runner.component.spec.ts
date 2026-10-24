@@ -26,7 +26,7 @@ import { BatchRunnerComponent } from './batch-runner.component';
 
 const group = (over: Record<string, number> = {}) => ({
   expected_sessions: 148, reused: 70, added: 78, missing: 0, failed: 0,
-  building: 0, corrupt: 0, unavailable_from_provider: 0, ...over,
+  building: 0, corrupt: 0, captured_before_final: 0, unavailable_from_provider: 0, ...over,
 });
 
 const providerInput = (over: Record<string, unknown> = {}) => ({
