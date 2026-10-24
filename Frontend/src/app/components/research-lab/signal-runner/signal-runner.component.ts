@@ -7,6 +7,7 @@ import {
   effect,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { HttpErrorResponse } from '@angular/common/http';
 import { FormsModule } from '@angular/forms';
 
 import {
@@ -394,14 +395,25 @@ export class SignalRunnerComponent {
 
   /**
    * A run the lake refused parks its reason and counts as the job's result (`status: "refused"`). A run that failed
-   * for any other reason parks nothing, and the fetch finds none: the failure message already shown is all there is.
+   * for any other reason parks nothing, and the result route answers 404: the failure message already shown is all
+   * there is. Any other failure to read the result is shown beside that message, never swallowed.
    */
   private async loadRefusal(id: string): Promise<void> {
     try {
       const refused = readLakeStudyRefusal(await this.jobsService.fetchResult<unknown>(id));
       if (refused !== null && this.jobId() === id) this.refusal.set(refused);
-    } catch {
-      // No parked result: the job failed on something other than a refused window.
+    } catch (err: unknown) {
+      if (err instanceof HttpErrorResponse && err.status === 404) return;
+      if (this.jobId() !== id) return;
+      const detail =
+        err instanceof HttpErrorResponse
+          ? `HTTP ${err.status}`
+          : err instanceof Error
+            ? err.message
+            : 'unknown error';
+      this.error.update(
+        (shown) => `${shown ?? 'Signal engine run failed'}. The lake's reason could not be loaded: ${detail}`,
+      );
     }
   }
 
