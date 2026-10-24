@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { equityCoordinates, filledSharePercent, heatStrengths, scaledBarPercents } from './run-chart-scale';
+import { equityPlot, filledSharePercent, heatStrengths, scaledBarPercents } from './run-chart-scale';
 
 describe('options run chart projection', () => {
   it('keeps dollar changes visible above JavaScript’s exact integer range, and projects only display strength and participation from exact source values', () => {
-    expect.soft(equityCoordinates(['9007199254740993.01', '9007199254740993.02']), 'keeps dollar changes visible above JavaScript’s exact integer range: equity coordinates').toEqual([
+    expect.soft(equityPlot(['9007199254740993.01', '9007199254740993.02'])?.coordinates, 'keeps dollar changes visible above JavaScript’s exact integer range: equity coordinates').toEqual([
       { x: 0, y: 148 }, { x: 1000, y: 12 },
     ]);
     expect.soft(scaledBarPercents(['-9007199254740993.01', '4503599627370496.505', '0'], 50), 'keeps dollar changes visible above JavaScript’s exact integer range: scaled bar percents').toEqual([

@@ -7,8 +7,3 @@ export function markdownSlug(text: string): string {
     .replace(/\s+/g, '-')
     .replace(/^-+|-+$/g, '');
 }
-
-/** Produces a CSS-safe anchor for headings rendered by the structured document compiler. */
-export function documentAnchor(text: string): string {
-  return `document-${markdownSlug(text)}`;
-}
