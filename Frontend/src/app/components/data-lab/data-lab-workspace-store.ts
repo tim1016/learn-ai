@@ -65,14 +65,6 @@ export interface DataLabSavedSessionRef {
   readonly schemaVersion: number;
 }
 
-export type DataLabNewsState =
-  | 'idle'
-  | 'loading'
-  | 'ready'
-  | 'stale'
-  | 'error'
-  | 'rate-limited';
-
 /** Reference to an active dataset-generation run (server-durable truth). */
 export interface DataLabGenerationRunRef {
   readonly id: string;
@@ -190,20 +182,14 @@ export class DataLabWorkspaceStore {
    *  signature no longer matches the live recipe is stale and must not be
    *  presented as current plan data. */
   private readonly _datasetPlanSignature = signal<string | null>(null);
-  private readonly _newsState = signal<DataLabNewsState>('idle');
   private readonly _generationRun = signal<DataLabGenerationRunRef | null>(null);
   /** Chart snapshot restored from a saved session — a reference the shell
-   *  hands to Explore so it can render cached bars without an HTTP call.
-   *  Explore consumes and clears it. */
+   *  stages so the chart can render cached bars without an HTTP call. */
   private readonly _restoredChartSnapshot = signal<unknown | null>(null);
-  /** Latest chart payload Explore produced — a reference the shell merges
-   *  into "Save setup". Never triggers a chart render by itself. */
+  /** Latest chart payload the Chart tab produced — a reference the shell
+   *  merges into "Save setup", and the answer the tab shows again when it is
+   *  reopened with the same context. Never triggers a chart render by itself. */
   private readonly _latestChartSnapshot = signal<unknown | null>(null);
-  /** Monotonic counter of shell-issued chart fetch requests. Explore owns the
-   *  fetch itself; this is the shell's only way to say "the committed scope
-   *  just changed on purpose — fetch it" without the shell reaching into the
-   *  routed child. Restored snapshots never bump it (they render cached bars). */
-  private readonly _chartRefreshRequests = signal(0);
 
   // ── Read-only state surface ─────────────────────────────────
   readonly committedTicker = this._committedTicker.asReadonly();
@@ -219,10 +205,8 @@ export class DataLabWorkspaceStore {
   readonly chartStale = this._chartStale.asReadonly();
   readonly datasetPlanReceipt = this._datasetPlanReceipt.asReadonly();
   readonly datasetPlanReceiptSignature = this._datasetPlanSignature.asReadonly();
-  readonly newsState = this._newsState.asReadonly();
   readonly restoredChartSnapshot = this._restoredChartSnapshot.asReadonly();
   readonly latestChartSnapshot = this._latestChartSnapshot.asReadonly();
-  readonly chartRefreshRequests = this._chartRefreshRequests.asReadonly();
 
   // ── Scope ───────────────────────────────────────────────────
   /** Validate and atomically commit the draft scope. Returns an error string
@@ -394,15 +378,11 @@ export class DataLabWorkspaceStore {
     this._datasetPlanSignature.set(receipt ? planSignature : null);
   }
 
-  setNewsState(state: DataLabNewsState): void {
-    this._newsState.set(state);
-  }
-
   setGenerationRun(ref: DataLabGenerationRunRef | null): void {
     this._generationRun.set(ref ? { ...ref } : null);
   }
 
-  /** Stage a saved-session chart snapshot for Explore to render. */
+  /** Stage a saved-session chart snapshot for the chart to render. */
   setRestoredChartSnapshot(snapshot: unknown | null): void {
     this._restoredChartSnapshot.set(snapshot);
     // A restored snapshot renders the old chart; if the current recipe or
@@ -411,7 +391,7 @@ export class DataLabWorkspaceStore {
     this._chartStale.set(true);
   }
 
-  /** Explore consumed the staged snapshot. */
+  /** The chart consumed the staged snapshot. */
   clearRestoredChartSnapshot(): void {
     this._restoredChartSnapshot.set(null);
   }
@@ -419,15 +399,6 @@ export class DataLabWorkspaceStore {
   /** Record the latest fetched chart payload (for the shell's Save setup). */
   setLatestChartSnapshot(snapshot: unknown | null): void {
     this._latestChartSnapshot.set(snapshot);
-  }
-
-  /** Request that Explore fetch the chart for the CURRENT committed scope.
-   *  Callers: shell actions that change the committed scope on purpose
-   *  (preset click, Apply scope, timeframe auto-correct). Explore consumes
-   *  the latest request when it is not already fetching, so rapid clicks
-   *  coalesce to one fetch that always reflects the newest scope. */
-  requestChartRefresh(): void {
-    this._chartRefreshRequests.update((n) => n + 1);
   }
 
   // ── Serialization (saved-session JSON, schema v2) ───────────
@@ -663,8 +634,8 @@ export function createDataLabWorkspaceStore(): DataLabWorkspaceStore {
 }
 
 /** The product's thirteen-indicator default recipe (unchanged
- *  until a separate product decision). The shell seeds these into a fresh
- *  workspace; the collapsed Explore summary reads "13 active". */
+ *  until a separate product decision). A shell seeds these into a fresh
+ *  workspace through {@link seedDefaultIndicators}. */
 export const DEFAULT_DATA_LAB_INDICATORS: readonly {
   canonicalKey: string;
   params: Record<string, number>;
@@ -683,3 +654,13 @@ export const DEFAULT_DATA_LAB_INDICATORS: readonly {
   { canonicalKey: 'rsi', params: { length: 14 } },
   { canonicalKey: 'adx', params: { length: 14 } },
 ];
+
+/** Seed the default recipe into a fresh workspace; a workspace that already
+ *  holds a recipe is left alone. Seeding never fetches anything. */
+export function seedDefaultIndicators(store: DataLabWorkspaceStore): void {
+  if (store.indicators().length > 0) return;
+  for (const entry of DEFAULT_DATA_LAB_INDICATORS) {
+    store.addIndicator(entry.canonicalKey, entry.params);
+  }
+  store.markChartStale();
+}

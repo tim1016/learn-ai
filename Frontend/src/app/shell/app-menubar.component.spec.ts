@@ -11,7 +11,7 @@ import { ACTIVE_GROUP_CLASS, APP_MENU } from './app-menu';
 class MenubarRouteComponent {}
 
 const routes = [
-  { path: 'data-lab', component: MenubarRouteComponent },
+  { path: 'markets', component: MenubarRouteComponent },
   { path: 'pricing-lab', component: MenubarRouteComponent },
 ];
 

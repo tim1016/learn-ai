@@ -166,7 +166,7 @@ export class ExportComponent {
   readonly scopeSummary = computed(() => {
     const ticker = this.store.committedTicker();
     const window = this.store.committedWindow();
-    if (!ticker || !window) return 'Commit a scope first (Explore or the shell scope bar).';
+    if (!ticker || !window) return 'Commit a scope first (the shell scope bar).';
     const d = this.store.draft();
     return `${ticker} · ${d.multiplier} ${d.timespan} bars · ${d.session} session`;
   });

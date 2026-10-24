@@ -2,6 +2,7 @@ import { Routes } from '@angular/router';
 
 import { dataCheckRoute } from '../../operations/data-checks/data-checks';
 import { redirectKeepingState } from '../../shell/route-redirects';
+import { redirectToInstrument } from '../../markets/instrument-address';
 
 export const researchLabRoutes: Routes = [
   // Detail routes retain focused content while inheriting the root application
@@ -95,12 +96,13 @@ export const researchLabRoutes: Routes = [
         data: { title: 'Signal History' },
       },
 
-      // Market
+      // Market: headlines moved under the instrument (ADR 0084). The old
+      // address went straight to them with no symbol in it, so it leads to the
+      // instrument its query names, or to Markets when it names none.
       {
         path: 'market/news',
-        loadComponent: () =>
-          import('./news/news-page.component').then((m) => m.NewsPageComponent),
-        data: { title: 'Ticker News' },
+        pathMatch: 'full',
+        redirectTo: redirectToInstrument('chart', ['news']),
       },
 
       // Backtests

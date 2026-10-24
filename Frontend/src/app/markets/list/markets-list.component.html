@@ -1,0 +1,49 @@
+<app-workspace-header
+  [title]="title"
+  purpose="Instruments the lake holds, and search over every listed US-equity symbol. A symbol the lake does not hold is filled first, then opens."
+/>
+
+<section class="markets__search" aria-label="Search instruments">
+  <app-symbol-picker label="Search any listed symbol" [symbol]="picked()" (symbolChange)="onPicked($event)" />
+</section>
+
+@if (degraded(); as notice) {
+  <app-workspace-state-block [state]="notice" (actionTriggered)="onAction($event)" />
+}
+
+@if (listState(); as state) {
+  <app-workspace-state-block [state]="state" (actionTriggered)="onAction($event)" />
+} @else {
+  <table class="markets__table">
+    <caption class="markets__caption">Held instruments</caption>
+    <thead>
+      <tr>
+        <th scope="col">Symbol</th>
+        <th scope="col">Name</th>
+        <th scope="col">Held span</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (row of rows(); track row.symbol) {
+        <tr>
+          <td>
+            <a [routerLink]="commandsFor(row.symbol)">
+              <app-asset-identity [symbol]="row.symbol" size="sm" [showTitle]="false" />
+            </a>
+          </td>
+          <td>
+            {{ row.name }}
+            @if (row.delisted) {
+              <span class="markets__badge">delisted</span>
+            }
+          </td>
+          <td>{{ row.firstHeld }} to {{ row.lastHeld }}</td>
+        </tr>
+      }
+    </tbody>
+  </table>
+  @if (cut() > 0) {
+    <p class="markets__note">Showing the first {{ rows().length }} of {{ held().length }} held instruments. Search reaches the rest.</p>
+  }
+  <p class="markets__note">The held span is the first and last day the lake holds, not a promise that every session between them is held.</p>
+}

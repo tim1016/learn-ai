@@ -1,0 +1,72 @@
+<section class="chart-tab__bar" aria-label="Chart controls">
+  <button type="button" (click)="indicatorsDrawerOpen.set(true)">Indicators</button>
+</section>
+
+<app-chart-indicator-controls
+  [drawerOpen]="indicatorsDrawerOpen()"
+  [categories]="catalogCategories()"
+  [activeKeys]="store.indicators().map((i) => i.canonicalKey)"
+  [loading]="catalogLoading()"
+  [loadFailed]="catalogLoadFailed()"
+  [chips]="chipEntries()"
+  [activeCount]="activeIndicatorCount()"
+  [chipsExpanded]="chipsExpanded()"
+  [colorOverrides]="store.colorTokenOverrides()"
+  (drawerOpenChange)="indicatorsDrawerOpen.set($event)"
+  (add)="onPickerAdd($event)"
+  (chipsExpandedChange)="chipsExpanded.set($event)"
+  (configure)="configuringInstanceId.set($event)"
+  (remove)="removeIndicator($event)"
+  (colorSelected)="onColorTokenSelected($event.instanceId, $event.token)"
+/>
+
+<app-indicator-config-modal
+  [visible]="configuringInstanceId() !== null"
+  (visibleChange)="onModalVisibleChange($event)"
+  mode="configure"
+  [entry]="configuringEntry()"
+  [paramConfigs]="configuringParamConfigs()"
+  [activeIndicatorKeys]="activeIndicatorNames()"
+  (paramChange)="onModalParamChange($event)"
+  (resetDefaults)="onModalResetDefaults()"
+  (resetParam)="onModalResetParam($event)"
+  (addRelated)="onModalAddRelated($event)"
+  (removeRelated)="onModalRemoveRelated($event)"
+  (addPreview)="onModalAddPreview($event)"
+/>
+
+<section class="chart-tab__chart" aria-label="Chart">
+  @if (hasCommittedScope()) {
+    <app-data-lab-chart
+      #chartComponent
+      [ticker]="chartTicker()"
+      [fromDate]="chartFromDate()"
+      [toDate]="chartToDate()"
+      [startMsUtc]="store.committedWindow()?.startMsUtc ?? null"
+      [endMsUtc]="store.committedWindow()?.endMsUtc ?? null"
+      [session]="chartSession()"
+      [forwardFill]="store.committedScope()?.forwardFill ?? store.draft().forwardFill"
+      [timeframe]="chartTimeframe()"
+      [adjusted]="store.committedScope()?.adjusted ?? store.draft().adjusted"
+      [chartIndicators]="store.indicators().map((i) => ({ name: i.canonicalKey, params: i.params }))"
+      (dataLoaded)="onChartDataLoaded($event)"
+      (loadSettled)="onChartSettled($event)"
+      (timeframeRejected)="onChartTimeframeRejected($event)"
+    />
+  }
+</section>
+
+<section class="chart-tab__quality" aria-label="Quality status">
+  <p class="chart-tab__muted">{{ qualitySummary() }}</p>
+  @if (lastQuality()) {
+    <button type="button" (click)="qualityModalOpen.set(true)">View quality report</button>
+  }
+  @if (qualityModalOpen() && lastQuality(); as q) {
+    <app-quality-modal [quality]="q" (closed)="qualityModalOpen.set(false)" />
+  }
+</section>
+
+<app-chart-headlines
+  [ticker]="chartTicker()"
+  [window]="store.committedWindow()"
+/>

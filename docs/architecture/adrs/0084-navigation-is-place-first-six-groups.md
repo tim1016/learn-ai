@@ -52,3 +52,13 @@ Two rules keep these unambiguous without reserving names. A setup or strategy ad
 - Pages keep their present addresses in this slice. The menu file lists the pages that still sit in another place's shell (`pages` on a group), and later slices delete those entries as the pages move.
 - The route-inventory spec (T01) holds one row per declared route and the group it must light up. A route added without a row fails it.
 - Legal Notices has no footer link today; it stays reachable from the help index. Whether to add a footer is an owner decision.
+
+## Amendment 2026-10-23: the instrument's context rides in its address (#3501)
+
+The instrument place (`/markets/:symbol/chart`, and `/markets/:symbol/chart/news` for every headline) is built.
+
+- **Context keys.** The window, bar timeframe and session are query keys, `?from=YYYY-MM-DD&to=YYYY-MM-DD&timeframe=(1m|5m|15m|30m|1h|4h|1d)&session=(regular|extended)`, and every tab carries them. The two dates are the date picker's form values (ADR 0075; ADR 0022 (f) names the deviation): a host builds `int64 ms UTC` from them at its own request (Data Lab's anchors, UTC midnight to the end of the end date), and nowhere else.
+- **Defaults are shown.** A missing timeframe or session reads as `1d` and `regular`. An address with no window opens on the 1Y range Python resolves, shown in the picker and written to the address only when something is committed over it. A window that is half there, unreal or reversed is refused in place with its reason; nothing is substituted for it.
+- **Commit rules.** A shared picker commits by moving the address; there is no Apply and no Refresh. A half-typed, refused or reversed entry commits nothing. A commit equal to what is committed does nothing. A distinct, complete context loads once, a request a newer one replaced is ended, and its answer, even one already delivered, cannot fill the newer context.
+- **Opening an instrument.** A held instrument opens. A listed one the lake does not hold goes through the one gate of ADR 0066 and opens when the lake confirms the bars (landing on its address is the pick); leaving releases only this place's hold on the fill. An address that names no symbol the lake can hold fails in place, with the way back to Markets.
+- **Old addresses.** `/data-lab` and `/data-lab/explore` lead to the instrument their `ticker` names, with its window and `trading-session` (now `session`), or to Markets when they name none. `/research-lab/market/news` leads to that instrument's headlines the same way. `/markets?then=<tab>` opens the tab it names for the instrument picked, where that tab is routed, and Chart where it is not.

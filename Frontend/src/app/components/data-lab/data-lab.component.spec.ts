@@ -21,9 +21,6 @@ import { ScopedHealthService } from '../../shared/scoped-health/scoped-health.se
 import { TestBed } from '@angular/core/testing';
 import { createDataLabWorkspaceStore, DataLabWorkspaceStore } from './data-lab-workspace-store';
 
-@Component({ selector: 'app-explore-stub', template: 'explore-stub' })
-class ExploreStubComponent {}
-
 @Component({ selector: 'app-export-stub', template: 'export-stub' })
 class ExportStubComponent {}
 
@@ -94,8 +91,7 @@ function shellRoutes(): Routes {
       ],
       component: DataLabComponent,
       children: [
-        { path: '', pathMatch: 'full', redirectTo: 'explore' },
-        { path: 'explore', component: ExploreStubComponent },
+        { path: '', pathMatch: 'full', redirectTo: 'export' },
         { path: 'export', component: ExportStubComponent },
         { path: 'returns', component: ReturnsStubComponent },
       ],
@@ -157,7 +153,7 @@ async function renderRoutedShell(runSession = idleRunSession(), overrides: Provi
     providers: [...baseProviders(runSession), ...overrides, provideRouter(shellRoutes())],
   });
   const router = result.fixture.componentRef.injector.get(Router);
-  await waitFor(() => expect(router.url).toBe('/explore'));
+  await waitFor(() => expect(router.url).toBe('/export'));
   // The workspace store lives on the route injector — reach the routed
   // shell instance and read its store from there.
   const shellDebug = result.fixture.debugElement.query(
@@ -186,20 +182,21 @@ async function renderDirectShell(url: string) {
   // Let the router's initial navigation finish before stubbing router.url:
   // the shell re-runs the legacy ingress on NavigationEnd, and a late
   // initial event would re-populate the banner after dismissal.
-  await waitFor(() => expect(router.url).toBe('/explore'));
+  await waitFor(() => expect(router.url).toBe('/export'));
   const navSpy = vi.spyOn(router, 'navigate').mockResolvedValue(true);
   vi.spyOn(router, 'url', 'get').mockReturnValue(url);
   return { ...result, router, navSpy };
 }
 
 describe('DataLabComponent (shell)', () => {
-  it('renders the shell on first load: three route tabs, the redirect to explore, the default recipe, the quick-range chips', async () => {
+  it('renders the shell on first load: three route tabs and the way to the chart, the default recipe, the quick-range chips', async () => {
     const { router, store } = await renderRoutedShell();
-    expect.soft(router.url, 'redirects /data-lab to explore').toBe('/explore');
-    expect.soft(screen.getByRole('link', { name: 'Explore' }), 'renders the Explore tab').toBeTruthy();
+    expect.soft(router.url, 'opens on the first child').toBe('/export');
+    expect.soft(screen.getByRole('link', { name: 'Chart' }).getAttribute('href'), 'leads to Markets while no instrument is committed').toBe('/markets');
+    expect.soft(screen.queryByRole('link', { name: 'Explore' }), 'has no Explore tab: the chart moved to the instrument place').toBeNull();
     expect.soft(screen.getByRole('link', { name: 'Build dataset' }), 'renders the Build dataset tab').toBeTruthy();
     expect.soft(screen.getByRole('link', { name: 'Returns study' }), 'renders the Returns study tab').toBeTruthy();
-    expect.soft(screen.getByText('explore-stub'), 'redirects /data-lab to explore: renders the explore child').toBeTruthy();
+    expect.soft(screen.getByText('export-stub'), 'renders the first child').toBeTruthy();
     expect.soft(store.indicators().length, 'seeds the thirteen-indicator default recipe into a fresh workspace').toBe(13);
 
     const group = screen.getByRole('group', { name: 'Quick ranges' });
@@ -238,7 +235,7 @@ describe('DataLabComponent (shell)', () => {
     );
   });
 
-  it('keeps the Returns study when a legacy scope arrives on it, instead of moving to Explore', async () => {
+  it('keeps the Returns study when a legacy scope arrives on it, instead of moving it to the chart', async () => {
     const { navSpy, fixture } = await renderDirectShell('/data-lab/returns?ticker=SPY&from=2026-04-15&to=2026-05-15');
     fixture.componentInstance.runLegacyIngress();
 
@@ -247,7 +244,7 @@ describe('DataLabComponent (shell)', () => {
   });
 
   it('leaves a canonical child whose legacy mode names another where it is, and says the mode is ignored', async () => {
-    const { navSpy, fixture } = await renderDirectShell('/data-lab/explore?mode=build&ticker=AAPL');
+    const { navSpy, fixture } = await renderDirectShell('/data-lab/returns?mode=build&ticker=AAPL');
     fixture.componentInstance.runLegacyIngress();
     fixture.detectChanges();
 
@@ -256,8 +253,19 @@ describe('DataLabComponent (shell)', () => {
     expect(screen.getByText(/Ignored mode "build"/)).toBeTruthy();
   });
 
+  it('points Chart at the committed instrument with its window, timeframe and session', async () => {
+    const { store, fixture } = await renderRoutedShell();
+    store.patchDraft({ ticker: 'AAPL', window: { startMsUtc: Date.UTC(2026, 3, 15), endMsUtc: Date.UTC(2026, 4, 15) + 86_399_999 }, timespan: 'minute', multiplier: 5, session: 'extended' });
+    store.commitScope();
+    fixture.detectChanges();
+
+    expect(screen.getByRole('link', { name: 'Chart' }).getAttribute('href')).toBe(
+      '/markets/AAPL/chart?from=2026-04-15&to=2026-05-15&session=extended&timeframe=5m',
+    );
+  });
+
   it('surfaces ingress warnings in a dismissible banner', async () => {
-    const { fixture } = await renderDirectShell('/data-lab?mode=bogus&frobnicate=1');
+    const { fixture } = await renderDirectShell('/data-lab/returns?mode=bogus&frobnicate=1');
     fixture.componentInstance.runLegacyIngress();
     fixture.detectChanges();
 
@@ -411,7 +419,6 @@ describe('DataLabComponent (shell)', () => {
     await fixture.whenStable();
 
     expect(store.committedWindow()).toBeNull();
-    expect(store.chartRefreshRequests()).toBe(0);
   });
 
   it('shows a clicked quick range over an end date the field had refused (#2858)', async () => {
@@ -449,7 +456,7 @@ describe('DataLabComponent (shell)', () => {
     expect(store.draft().window).toEqual(held);
   });
 
-  it('applies a preset verbatim: server window committed, chart refresh requested', async () => {
+  it('applies a preset verbatim: the server window is committed', async () => {
     const { store, fixture } = await renderRoutedShell();
     store.patchDraft({ ticker: 'SPY' });
     fixture.detectChanges();
@@ -461,7 +468,6 @@ describe('DataLabComponent (shell)', () => {
       startMsUtc: preset6M.start_ms_utc,
       endMsUtc: preset6M.end_ms_utc,
     });
-    expect(store.chartRefreshRequests()).toBe(1);
     // The matching chip is marked active — visually and for assistive
     // technology; the other is not.
     expect(screen.getByRole('button', { name: '6M' }).getAttribute('aria-pressed')).toBe('true');
@@ -491,7 +497,6 @@ describe('DataLabComponent (shell)', () => {
       startMsUtc: moved6M.start_ms_utc,
       endMsUtc: moved6M.end_ms_utc,
     });
-    expect(store.chartRefreshRequests()).toBe(1);
   });
 
   it('still applies the clicked preset when the apply-time re-resolve fails', async () => {
@@ -511,7 +516,6 @@ describe('DataLabComponent (shell)', () => {
       startMsUtc: preset6M.start_ms_utc,
       endMsUtc: preset6M.end_ms_utc,
     });
-    expect(store.chartRefreshRequests()).toBe(1);
   });
 
   it('gives the 1D preset an intraday default timeframe so it is not one candle', async () => {
@@ -526,16 +530,14 @@ describe('DataLabComponent (shell)', () => {
     expect(draft.timespan).toBe('minute');
     expect(draft.multiplier).toBe(5);
     // A single-day window must commit — its ms anchors name one trading
-    // date (midnight → 23:59:59.999 UTC), not an empty range — and trigger
-    // the chart refresh.
+    // date (midnight → 23:59:59.999 UTC), not an empty range.
     expect(store.committedWindow()).toEqual({
       startMsUtc: preset1D.start_ms_utc,
       endMsUtc: preset1D.end_ms_utc,
     });
-    expect(store.chartRefreshRequests()).toBe(1);
   });
 
-  it('leaves a blank-ticker preset click in the draft with the commit error, no refresh', async () => {
+  it('leaves a blank-ticker preset click in the draft with the commit error', async () => {
     const { store, fixture } = await renderRoutedShell();
 
     await userEvent.click(screen.getByRole('button', { name: '6M' }));
@@ -546,7 +548,6 @@ describe('DataLabComponent (shell)', () => {
       startMsUtc: preset6M.start_ms_utc,
       endMsUtc: preset6M.end_ms_utc,
     });
-    expect(store.chartRefreshRequests()).toBe(0);
     expect(screen.getByText('Ticker is required')).toBeTruthy();
   });
 
@@ -571,7 +572,7 @@ describe('DataLabComponent (shell)', () => {
     expect(store.draft().window.endMsUtc).toBe(Date.UTC(2026, 4, 16) + 86_400_000 - 1);
   });
 
-  it('requests a chart refresh when Apply scope commits successfully', async () => {
+  it('commits the scope when Apply scope is pressed on a usable one', async () => {
     const { store, fixture } = await renderRoutedShell();
     store.patchDraft({
       ticker: 'SPY',
@@ -582,7 +583,7 @@ describe('DataLabComponent (shell)', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Apply scope' }));
     fixture.detectChanges();
 
-    expect(store.chartRefreshRequests()).toBe(1);
+    expect(store.committedWindow()).toEqual({ startMsUtc: preset6M.start_ms_utc, endMsUtc: preset6M.end_ms_utc });
     expect(screen.queryByText('Ticker is required')).toBeNull();
   });
 });

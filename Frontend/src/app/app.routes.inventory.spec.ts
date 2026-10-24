@@ -59,8 +59,13 @@ const ROWS: Readonly<Record<string, Row>> = {
   '': { group: null },
 
   // ── Markets ──────────────────────────────────────────────────────────────
-  'data-lab': { group: MARKETS, lands: '/data-lab/explore' },
-  'data-lab/explore': { group: MARKETS },
+  markets: { group: MARKETS },
+  'markets/:symbol': { group: MARKETS, lands: '/markets/SPY/chart' },
+  'markets/:symbol/chart': { group: MARKETS },
+  'markets/:symbol/chart/news': { group: MARKETS },
+  // The chart moved under the instrument; with no instrument named, an old address leads to the list.
+  'data-lab': { group: MARKETS, lands: '/markets' },
+  'data-lab/explore': { group: MARKETS, lands: '/markets' },
   'data-lab/export': { group: MARKETS },
   'data-lab/returns': { group: MARKETS },
   'options-lab': { group: MARKETS, lands: '/options-lab/chain' },
@@ -69,7 +74,7 @@ const ROWS: Readonly<Record<string, Row>> = {
   'broker/options-chain': { group: MARKETS },
   'broker/options-surface': { group: MARKETS },
   'pricing-lab': { group: MARKETS },
-  'research-lab/market/news': { group: MARKETS },
+  'research-lab/market/news': { group: MARKETS, lands: '/markets' },
 
   // ── Research ─────────────────────────────────────────────────────────────
   'research-lab': { group: RESEARCH, lands: '/research-lab/features/validate' },
@@ -221,6 +226,7 @@ const SAMPLE_PARAMS: Readonly<Record<string, string>> = {
   accountId: 'PA9',
   sid: 'sid-1',
   kind: 'run',
+  symbol: 'SPY',
 };
 
 /** The query and fragment every direct load carries, to prove neither is lost. */
@@ -400,7 +406,7 @@ describe('the route inventory (T01)', () => {
       const nextEnd = () => firstValueFrom(router.events.pipe(filter((event) => event instanceof NavigationEnd)));
 
       await router.navigateByUrl('/options-evidence/run/7?view=lineage');
-      await router.navigateByUrl('/data-lab/explore?ticker=SPY');
+      await router.navigateByUrl('/markets/SPY/chart?from=2026-01-02&to=2026-02-27');
 
       const back = nextEnd();
       location.back();
@@ -411,7 +417,7 @@ describe('the route inventory (T01)', () => {
       const forward = nextEnd();
       location.forward();
       await forward;
-      expect(router.url).toBe('/data-lab/explore?ticker=SPY');
+      expect(router.url).toBe('/markets/SPY/chart?from=2026-01-02&to=2026-02-27');
       expect(activeMenuNodeFor(router.url)?.group.title).toBe('Markets');
     });
 
@@ -431,7 +437,15 @@ describe('the route inventory (T01)', () => {
       // Validate left Data Lab, so a mode that names it goes to Operations with its scope.
       ['/data-lab?mode=validate', '/operations/data-checks/tradingview'],
       ['/data-lab?mode=validate&ticker=SPY&from=2026-01-02&to=2026-03-31', '/operations/data-checks/tradingview?ticker=SPY&from=2026-01-02&to=2026-03-31'],
-      ['/data-lab?mode=bogus&ticker=SPY', '/data-lab/explore?mode=bogus&ticker=SPY'],
+      ['/data-lab/explore?ticker=QQQ&mode=validate', '/operations/data-checks/tradingview?ticker=QQQ'],
+      ['/data-lab?mode=bogus&ticker=SPY', '/markets/SPY/chart?mode=bogus'],
+      ['/data-lab?mode=explore&ticker=spy&from=2026-01-02&to=2026-02-27&trading-session=extended#top', '/markets/SPY/chart?from=2026-01-02&to=2026-02-27&session=extended#top'],
+      ['/data-lab/explore?ticker=QQQ&from=2026-01-02&to=2026-02-27', '/markets/QQQ/chart?from=2026-01-02&to=2026-02-27'],
+      // The old news page named no instrument in its address; a ticker in the query is the instrument, and with none it leads to the list.
+      ['/research-lab/market/news?ticker=SPY&from=2026-01-02&to=2026-02-27#top', '/markets/SPY/chart/news?from=2026-01-02&to=2026-02-27#top'],
+      ['/research-lab/market/news', '/markets'],
+      // A symbol this app cannot hold is carried to the instrument's address, where it fails in place; it is never swapped for another.
+      ['/data-lab/explore?ticker=%24%24%24', '/markets/$$$/chart'],
     ])('lands the legacy Data Lab address %s on %s in one navigation', async (url, landsOn) => {
       const { router, ended, cancelled } = await load(url);
 
