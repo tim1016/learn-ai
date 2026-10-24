@@ -1,3 +1,9 @@
+<app-workspace-header
+  [title]="title"
+  purpose="How several strategies' recent trades compare, one lane per symbol. Open it from a strategy to look at that one."
+  [breadcrumb]="breadcrumb"
+/>
+
 <div class="page">
   <app-recency-launch-config (launchCompleted)="onLaunchCompleted()"></app-recency-launch-config>
   <app-recency-launches (resumeCompleted)="onLaunchCompleted()"></app-recency-launches>
@@ -17,15 +23,22 @@
           </label>
         }
       </fieldset>
-      <fieldset>
-        <legend>Strategies</legend>
-        @for (strategyKey of distinctStrategies(); track strategyKey) {
-          <label>
-            <input type="checkbox" [checked]="isStrategyVisible(strategyKey)" (change)="toggleStrategy(strategyKey)" />
-            {{ strategyKey }}
-          </label>
-        }
-      </fieldset>
+      @if (focusedStrategy(); as focus) {
+        <p class="focus">
+          Showing only <code>{{ focus }}</code> ·
+          <a [routerLink]="allStrategiesRoute">Show all strategies</a>
+        </p>
+      } @else {
+        <fieldset>
+          <legend>Strategies</legend>
+          @for (strategyKey of distinctStrategies(); track strategyKey) {
+            <label>
+              <input type="checkbox" [checked]="isStrategyVisible(strategyKey)" (change)="toggleStrategy(strategyKey)" />
+              {{ strategyKey }}
+            </label>
+          }
+        </fieldset>
+      }
       <p class="mode-indicator">{{ displayMode() === 'single-symbol' ? 'Single-symbol' : 'All-symbols' }} view</p>
     </section>
 
@@ -37,6 +50,10 @@
         </button>
       }
     </section>
+
+    @if (focusHasNoTrades()) {
+      <p class="status">No timeline trades are recorded for <code>{{ focusedStrategy() }}</code> yet. Launch one above, or show all strategies.</p>
+    }
 
     <div class="chart-and-focus">
       <app-recency-swimlane

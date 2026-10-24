@@ -1,6 +1,7 @@
 import { ComponentFixture, TestBed } from "@angular/core/testing";
 import { provideZonelessChangeDetection, signal } from "@angular/core";
 import { HttpClient } from "@angular/common/http";
+import { provideRouter } from "@angular/router";
 import { MessageService } from "primeng/api";
 import { of } from "rxjs";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -60,6 +61,7 @@ async function renderPage(
   trades: RecencyTrade[] = [makeTrade()],
   heroes: RecencyHero[] | null = null,
   softDeleteImpl: ReturnType<typeof vi.fn> = vi.fn(async (_id: number) => undefined),
+  inputs: Record<string, unknown> = {},
 ): Promise<ComponentFixture<RecencyChartPageComponent>> {
   // heroes defaults to "one hero per distinct (symbol, strategyKey, paramsHash)
   // seen in trades" so tests that don't care about fold/unfold don't need to
@@ -79,6 +81,7 @@ async function renderPage(
     imports: [RecencyChartPageComponent],
     providers: [
       provideZonelessChangeDetection(),
+      provideRouter([]),
       { provide: RecencyChartService, useValue: { trades: tradesMock, heroes: heroesMock, softDeleteRun: softDeleteMock, launches: () => of([]) } },
       { provide: HttpClient, useValue: { get: () => of([]) } },
       { provide: JobsService, useValue: { startJob: vi.fn(async () => "job-1") } },
@@ -89,6 +92,7 @@ async function renderPage(
   }).compileComponents();
 
   const fixture = TestBed.createComponent(RecencyChartPageComponent);
+  for (const [name, value] of Object.entries(inputs)) fixture.componentRef.setInput(name, value);
   fixture.detectChanges();
   await fixture.whenStable();
   fixture.detectChanges();
@@ -141,6 +145,36 @@ describe("RecencyChartPageComponent", () => {
 
     expect(screen.queryByTestId("lane-AAPL")).toBeNull();
     expect(screen.getByTestId("lane-SPY")).not.toBeNull();
+  });
+
+  it("compares several strategies at once, and a strategy workspace can narrow it to one without making it a per-strategy page", async () => {
+    const trades = [
+      makeTrade({ fingerprint: "a", symbol: "SPY", strategyKey: "ema_crossover_signal" }),
+      makeTrade({ fingerprint: "b", symbol: "AAPL", strategyKey: "sma_crossover" }),
+    ];
+    const compared = await renderPage(trades);
+
+    expect(screen.getByTestId("lane-SPY")).not.toBeNull();
+    expect(screen.getByTestId("lane-AAPL")).not.toBeNull();
+    expect(screen.getByRole("checkbox", { name: /sma_crossover/i })).not.toBeNull();
+    compared.destroy();
+    TestBed.resetTestingModule();
+
+    await renderPage(trades, null, undefined, { strategy: "sma_crossover" });
+
+    expect(screen.getByTestId("lane-AAPL")).not.toBeNull();
+    expect(screen.queryByTestId("lane-SPY")).toBeNull();
+    expect(screen.getByText(/showing only/i).textContent).toContain("sma_crossover");
+    expect(screen.getByRole("link", { name: /show all strategies/i }).getAttribute("href")).toBe("/signal-strategies/recency");
+    // Heroes are read for the one strategy only.
+    expect((heroesMock.mock.calls[0][0] as RecencyWindowQuery).strategies).toEqual(["sma_crossover"]);
+  });
+
+  it("says a focused strategy has no timeline trades yet, rather than drawing an empty chart", async () => {
+    await renderPage([makeTrade({ strategyKey: "ema_crossover_signal" })], null, undefined, { strategy: "rsi_mean_reversion" });
+
+    expect(screen.getByText(/no timeline trades are recorded for/i).textContent).toContain("rsi_mean_reversion");
+    expect(screen.queryByTestId("lane-SPY")).toBeNull();
   });
 
   it("narrowing to a single visible symbol unlocks a trade older than the all-symbols window cap", async () => {
@@ -256,6 +290,7 @@ describe("RecencyChartPageComponent", () => {
       imports: [RecencyChartPageComponent],
       providers: [
         provideZonelessChangeDetection(),
+        provideRouter([]),
         { provide: RecencyChartService, useValue: { trades: tradesMock, heroes: heroesMock, softDeleteRun: vi.fn(), launches: () => of([]) } },
         { provide: HttpClient, useValue: { get: () => of(strategies) } },
         {

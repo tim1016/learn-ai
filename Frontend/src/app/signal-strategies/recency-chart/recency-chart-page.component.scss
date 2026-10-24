@@ -33,6 +33,17 @@
   }
 }
 
+.focus {
+  margin: 0;
+  font-size: 0.875rem;
+  color: $text-secondary;
+
+  code {
+    font-family: $font-mono;
+    font-size: 0.75rem;
+  }
+}
+
 .mode-indicator {
   font-family: $font-mono;
   font-size: 0.75rem;

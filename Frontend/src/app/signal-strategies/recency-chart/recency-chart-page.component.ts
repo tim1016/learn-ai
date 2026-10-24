@@ -1,8 +1,12 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from "@angular/core";
+import { ChangeDetectionStrategy, Component, computed, inject, input, signal } from "@angular/core";
 import { rxResource } from "@angular/core/rxjs-interop";
+import { RouterLink } from "@angular/router";
 import { MessageService } from "primeng/api";
 
 import { RecencyChartService, type RecencyHero, type RecencyTrade } from "../../services/recency-chart.service";
+import { WorkspaceHeaderComponent, type WorkspaceBreadcrumbItem } from "../../shared/workspace/workspace-header.component";
+import { menuLabelFor } from "../../shell/app-menu";
+import { SIGNAL_STRATEGIES_RECENCY_ROUTE, SIGNAL_STRATEGIES_ROUTE } from "../signal-strategy-tabs";
 import { RecencySwimlaneComponent } from "./recency-swimlane/recency-swimlane.component";
 import type { RecencySwimlaneTrade } from "./recency-swimlane/recency-swimlane-layout";
 import { RecencyLaunchConfigComponent } from "./recency-launch-config/recency-launch-config.component";
@@ -27,10 +31,23 @@ const MAX_FETCH_WINDOW_MS = 1000 * 60 * 60 * 24 * 30 * 24;
  * membership-aware refetch after mutation. A trade may belong to several
  * runs, so deleting one run must never hide evidence that still has a live
  * membership.
+ *
+ * It compares several strategies at once and lives under the Signal strategies
+ * list (PRD #3490 R27). A strategy workspace may open it with `?strategy=<key>`
+ * to look at that one strategy; the comparison is one link away
+ * ("Show all strategies"), and the strategy toggles below are the comparison's
+ * own, not a per-strategy page.
  */
 @Component({
   selector: "app-recency-chart-page",
-  imports: [RecencySwimlaneComponent, RecencyLaunchConfigComponent, RecencyLaunchesComponent, RecencyTradeFocusComponent],
+  imports: [
+    RecencySwimlaneComponent,
+    RecencyLaunchConfigComponent,
+    RecencyLaunchesComponent,
+    RecencyTradeFocusComponent,
+    RouterLink,
+    WorkspaceHeaderComponent,
+  ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: "./recency-chart-page.component.html",
   styleUrls: ["./recency-chart-page.component.scss"],
@@ -38,6 +55,17 @@ const MAX_FETCH_WINDOW_MS = 1000 * 60 * 60 * 24 * 30 * 24;
 export class RecencyChartPageComponent {
   private readonly recency = inject(RecencyChartService);
   private readonly messageService = inject(MessageService);
+
+  /** The strategy a workspace asked to look at (`?strategy=`), if any. */
+  readonly strategy = input<string | undefined>(undefined);
+
+  protected readonly title = menuLabelFor(SIGNAL_STRATEGIES_RECENCY_ROUTE);
+  protected readonly breadcrumb: readonly WorkspaceBreadcrumbItem[] = [
+    { label: menuLabelFor(SIGNAL_STRATEGIES_ROUTE), route: [SIGNAL_STRATEGIES_ROUTE] },
+    { label: this.title },
+  ];
+  protected readonly allStrategiesRoute = [SIGNAL_STRATEGIES_RECENCY_ROUTE];
+  protected readonly focusedStrategy = computed(() => this.strategy()?.trim() || null);
 
   private readonly fetchWindowEndMs = Date.now();
   private readonly fetchWindowStartMs = this.fetchWindowEndMs - MAX_FETCH_WINDOW_MS;
@@ -67,7 +95,8 @@ export class RecencyChartPageComponent {
   }
 
   isStrategyVisible(strategyKey: string): boolean {
-    return !this.hiddenStrategies().has(strategyKey);
+    const focus = this.focusedStrategy();
+    return (focus === null || focus === strategyKey) && !this.hiddenStrategies().has(strategyKey);
   }
 
   toggleSymbol(symbol: string): void {
@@ -96,15 +125,30 @@ export class RecencyChartPageComponent {
   });
 
   readonly visibleSymbols = computed<string[]>(() => this.distinctSymbols().filter((s) => this.isSymbolVisible(s)));
-  readonly visibleStrategies = computed<string[]>(() =>
-    this.distinctStrategies().filter((strategy) => this.isStrategyVisible(strategy)),
-  );
+  readonly visibleStrategies = computed<string[]>(() => {
+    const focus = this.focusedStrategy();
+    // A focused strategy is asked for by name, so heroes are never read for the others,
+    // and a strategy with no trades yet still has its (empty) answer.
+    return focus !== null ? [focus] : this.distinctStrategies().filter((strategy) => this.isStrategyVisible(strategy));
+  });
+
+  /** A focused strategy has no accumulated trades yet. */
+  readonly focusHasNoTrades = computed(() => {
+    const focus = this.focusedStrategy();
+    return focus !== null && !this.trades().some((trade) => trade.strategyKey === focus);
+  });
 
   private readonly toggleFilteredTrades = computed<RecencySwimlaneTrade[]>(() => {
     const hiddenSymbols = this.hiddenSymbols();
     const hiddenStrategies = this.hiddenStrategies();
-    if (hiddenSymbols.size === 0 && hiddenStrategies.size === 0) return this.trades();
-    return this.trades().filter((t) => !hiddenSymbols.has(t.symbol) && !hiddenStrategies.has(t.strategyKey));
+    const focus = this.focusedStrategy();
+    if (hiddenSymbols.size === 0 && hiddenStrategies.size === 0 && focus === null) return this.trades();
+    return this.trades().filter(
+      (t) =>
+        !hiddenSymbols.has(t.symbol) &&
+        !hiddenStrategies.has(t.strategyKey) &&
+        (focus === null || t.strategyKey === focus),
+    );
   });
 
   readonly displayMode = computed(() => computeDisplayMode(this.visibleSymbols()));
