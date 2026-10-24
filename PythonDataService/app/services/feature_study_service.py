@@ -19,11 +19,11 @@ and what it reads now, field by field:
   to the input data, not float rounding, whose effect on RSI and the mean IC
   grows as the price falls (measured at $150, $12 and $2 in the comparison test).
 * **Session.** Before and now: **extended hours** — every bar the provider
-  served, 04:00 to 20:00 ET. The browser sends ``session: "rth"`` and the
-  backend never read it; that label stays inert so this migration does not
-  silently change the sample. The session is now an explicit identity field
-  (``session_policy``, default ``extended``); asking for ``regular`` is opt-in.
-  Which session the study *should* use is an owner decision (D02). A session
+  served, 04:00 to 20:00 ET. The request's ``session`` is the one control and
+  defaults to ``extended``, so no caller's sample moves (the old route never
+  read the field the browser sent); ``rth`` is the scheduled session, named
+  ``regular`` in the identity (``session_policy``). Which session the study
+  *should* use is an owner decision (D02). A session
   counts as complete only once the vendor has delivered its whole tape (the
   close, plus four hours of after-hours for ``extended``, plus the vendor's
   15-minute delay), and a held day captured before that is captured again
