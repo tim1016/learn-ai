@@ -219,12 +219,29 @@ def data_source_block(
         "snapshot_digest": admitted.snapshot_digest if admitted is not None else None,
         "corporate_action_versions": dict(admitted.snapshot.corporate_action_versions) if admitted is not None else {},
         "coverage": coverage.as_dict() if coverage is not None else None,
-        "minute_bars_read": len(admitted.window_bars) if admitted is not None else None,
+        "minute_bars_read": len(admitted.warmup_bars) + len(admitted.window_bars) if admitted is not None else None,
         "bars_used": bars_used,
         "effective_window": (
             {"start_ms": et_midnight_ms(sessions[0]), "end_ms": et_midnight_ms(sessions[-1])} if sessions else None
         ),
         "cache": {"hit": cache_hit, "cached_at_ms": cached_at_ms},
+    }
+
+
+def refused_result(subject: Mapping[str, Any], refusal: StudyInputRefusal, *, data_source: dict[str, Any] | None) -> dict[str, Any]:
+    """What a refused study answers with: the reason, the sessions and counts admission reached, and the source it read.
+
+    A job parks it as its result; a synchronous route returns it as the body of its refusal status. Either way the
+    browser reads it with ``readLakeStudyRefusal``. ``subject`` is the request fields to echo (``ticker``, ...); it
+    comes first, so the keys the run sets itself (:data:`RESULT_KEYS`) always win over a field of the same name.
+    """
+    return {
+        **subject,
+        "success": False,
+        "status": "refused",
+        "error": refusal.reason,
+        "refusal": refusal.as_dict(),
+        "data_source": data_source,
     }
 
 
@@ -315,16 +332,13 @@ def run_lake_study(
         emit.failed(
             refusal.code,
             refusal.reason,
-            result={
-                **study.subject,
-                "success": False,
-                "status": "refused",
-                "error": refusal.reason,
-                "refusal": refusal.as_dict(),
-                "data_source": data_source_block(
+            result=refused_result(
+                study.subject,
+                refusal,
+                data_source=data_source_block(
                     identity, calculation_version=study.calculation_version, coverage=refusal.coverage
                 ),
-            },
+            ),
         )
         return None
 

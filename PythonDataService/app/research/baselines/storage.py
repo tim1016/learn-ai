@@ -19,7 +19,7 @@ Sibling layout to ``<root>/walk-forward/<wf_id>/`` (Phase C) and
 ``<root>/<run_id>/``. The per-baseline child runs are *not* persisted
 here — they're normal Phase A ``RunLedger``s under
 ``<root>/<baseline_run_id>/``, discoverable via
-``list_runs(parent_run_id=baseline_id)``.
+``list_ids(parent_run_id=baseline_id)`` on the runs store.
 
 Public exception classes (``BaselineNotFoundError``,
 ``BaselineAlreadyExistsError``, ``BaselineCorruptError``) are defined

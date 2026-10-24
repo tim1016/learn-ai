@@ -22,13 +22,13 @@ from app.engine.strategy.spec.tests._parity_helpers import (
 from app.research.runs import (
     RunCorruptError,
     RunRequest,
-    list_runs,
     load_run,
     run_date_to_ms,
     run_strategy_spec,
     save_run,
 )
 from app.research.runs.ledger import RunLedger
+from tests._helpers.run_ledgers import run_ids
 
 
 def _build_test_spec(
@@ -162,15 +162,6 @@ def test_load_corrupt_ledger_raises(tmp_path: Path, fake_data_factory):
 # ---------------------------------------------------------------------------
 # Listing & filtering.
 # ---------------------------------------------------------------------------
-def test_list_filter_by_symbol(tmp_path: Path, fake_data_factory):
-    spec = _build_test_spec()
-    ledger, result = _make_run(spec, fake_data_factory)
-    save_run(ledger, result, root=tmp_path)
-
-    assert list_runs(root=tmp_path, symbol="TEST")[0].run_id == ledger.run_id
-    assert list_runs(root=tmp_path, symbol="DOES_NOT_EXIST") == []
-
-
 def test_list_skips_corrupt_ledger(tmp_path: Path, fake_data_factory, caplog):
     """A single broken ledger should not blind the rest of the listing,
     and the corruption must be loud in the logs — silent skip would
@@ -209,8 +200,8 @@ def test_list_skips_corrupt_ledger(tmp_path: Path, fake_data_factory, caplog):
     (bad_payload_dir / "result.json").write_text("{}")
 
     with caplog.at_level(logging.WARNING):
-        listed = list_runs(root=tmp_path)
-    assert [lg.run_id for lg in listed] == [good_ledger.run_id]
+        listed = run_ids(tmp_path)
+    assert listed == [good_ledger.run_id]
     assert any(rec.message.startswith("[RUNS]") and "skipping corrupt" in rec.message for rec in caplog.records)
 
 

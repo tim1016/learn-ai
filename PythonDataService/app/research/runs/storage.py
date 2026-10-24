@@ -4,10 +4,7 @@ The mechanics — id regex, path-traversal guard, atomic tmp+rename,
 load-and-validate, scan+filter — live in
 ``app/research/artifact/store.py``. This module declares the runs/
 specific surface: function signatures the runner and router
-already call, plus the phase-specific filters
-(``spec_hash``, ``symbol``, ``status``, ``parent_spec_hash``) on
-``list_runs`` that the artifact store's generic ``list_ids``
-doesn't carry.
+already call.
 
 On-disk layout (unchanged from pre-seam — runs/ is the flat
 ``subdir=""`` shape):
@@ -26,7 +23,6 @@ router, tests) keep working.
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
 from app.research.artifact.store import ArtifactStore
@@ -39,9 +35,6 @@ from app.research.runs.errors import (
 from app.research.runs.ledger import RunLedger
 from app.research.runs.result import BacktestRunResult
 
-logger = logging.getLogger(__name__)
-
-
 # Re-exported for backwards compatibility with any caller that
 # imported these classes from ``app.research.runs.storage``
 # directly (``monte_carlo/runner.py`` and ``baselines/runner.py``
@@ -51,7 +44,6 @@ __all__ = [
     "RunAlreadyExistsError",
     "RunCorruptError",
     "RunNotFoundError",
-    "list_runs",
     "load_run",
     "save_run",
 ]
@@ -100,79 +92,3 @@ def load_run(
         config_type=RunLedger,
         result_type=BacktestRunResult,
     )
-
-
-def list_runs(
-    *,
-    root: Path | None = None,
-    spec_hash: str | None = None,
-    symbol: str | None = None,
-    status: str | None = None,
-    parent_run_id: str | None = None,
-    parent_spec_hash: str | None = None,
-    since_ms: int | None = None,
-    limit: int | None = None,
-) -> list[RunLedger]:
-    """Enumerate persisted runs, optionally filtered, newest first.
-
-    Returns ``RunLedger`` records — the pre-seam listing shape. Shared
-    filters (``parent_run_id``, ``since_ms``) are applied inside the
-    artifact store; the runs/-specific filters (``spec_hash``,
-    ``symbol``, ``status``, ``parent_spec_hash``) are applied here
-    because the store doesn't (and shouldn't) know about phase-
-    specific Pydantic fields. ``limit`` is enforced *after* the
-    phase-specific filters — matching the pre-seam behaviour where
-    every filter ran before the limit truncated.
-
-    Corrupt ledgers and ledgers that fail Pydantic validation are
-    skipped with a warning rather than raised; use ``load_run`` when
-    you need the failure to be loud.
-    """
-    store = _store(root)
-    # Pull the candidate ids (already filtered by ``parent_run_id``
-    # and ``since_ms``, already newest-first sorted) from the
-    # generic store. We don't pass ``limit`` here because the
-    # runs/-specific filters have to run before the cap.
-    ids = store.list_ids(
-        parent_run_id=parent_run_id,
-        since_ms=since_ms,
-        limit=None,
-    )
-
-    # Construct each ledger path via the store's ``_artifact_dir``,
-    # which re-validates the id against ``id_pattern`` and applies
-    # the resolved-path containment guard. ``list_ids`` already
-    # filters by pattern, but routing through ``_artifact_dir``
-    # makes the traversal defence visible to static analysis
-    # (CodeQL: uncontrolled data used in path expression) and
-    # provides defence in depth against any future caller that
-    # might bypass ``list_ids``.
-    out: list[RunLedger] = []
-    for run_id in ids:
-        ledger_path = store._artifact_dir(run_id) / RUNS_ARTIFACT.config_filename
-        try:
-            ledger = RunLedger.model_validate_json(
-                ledger_path.read_text(encoding="utf-8")
-            )
-        except Exception as exc:
-            logger.warning(
-                "[RUNS] skipping corrupt ledger at %s: %s",
-                ledger_path,
-                exc,
-            )
-            continue
-        if spec_hash is not None and ledger.strategy_spec_hash != spec_hash:
-            continue
-        if symbol is not None and ledger.symbol != symbol:
-            continue
-        if status is not None and ledger.status != status:
-            continue
-        if parent_spec_hash is not None and ledger.parent_spec_hash != parent_spec_hash:
-            continue
-        out.append(ledger)
-
-    # The store sorts ids by ``created_at_ms`` desc; phase-specific
-    # filtering preserves that order. Apply ``limit`` last.
-    if limit is not None:
-        out = out[:limit]
-    return out

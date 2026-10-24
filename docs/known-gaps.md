@@ -647,8 +647,8 @@ measured in `tests/research/test_feature_study_lake_vs_provider.py`.
 - **P2: a split announced after a day was captured stays invisible to that held day until a later capture of the
   symbol refreshes its adjusted history (accepted by the owner, 2026-10-24).** The provider path adjusted to the moment of the request. Price-level
   outputs (MACD signal, quantile-bin bounds) move by the split factor, not only the prices.
-- **P3: the pre-run count of sessions the lake lacks does not see a held early day.** The Feature page counts
-  missing sessions from the catalog, as the Data tab does, and there a day captured early is `ready`; the run still
+- **P3: the pre-run count of sessions the lake lacks does not see a held early day.** The Feature and Indicator
+  reliability pages count missing sessions from the catalog, as the Data tab does, and there a day captured early is `ready`; the run still
   refuses it (`captured_before_final`, naming the day) after the count warned of nothing. The count also treats today
   as forming until the New York date rolls, while a run admits it once the extended final instant plus the lease has
   passed (20:20 ET, or 17:20 on an early close), so between 20:20 ET and midnight the notice says nothing and the run fetches one session.

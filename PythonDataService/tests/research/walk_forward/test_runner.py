@@ -15,7 +15,7 @@ contract:
   * A degenerate split (window too short) produces a
     ``status='failed'`` WF result without raising.
   * Test runs are discoverable via the existing
-    ``list_runs(parent_run_id=…)`` filter.
+    runs store's ``parent_run_id`` filter.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from app.engine.strategy.spec.tests._parity_helpers import (
     closes_for_spy_ema,
 )
 from app.research.runs.result import RunMetrics
-from app.research.runs.storage import list_runs, load_run
+from app.research.runs.storage import load_run
 from app.research.runs.storage import save_run as real_save_run
 from app.research.walk_forward.result import FoldResult
 from app.research.walk_forward.runner import (
@@ -50,6 +50,7 @@ from app.research.walk_forward.splits import (
     RollingSplitPolicy,
     date_str_to_ms,
 )
+from tests._helpers.run_ledgers import run_ledgers
 
 
 def _build_test_spec() -> StrategySpec:
@@ -163,8 +164,7 @@ def test_chronological_split_emits_one_fold(tmp_path: Path, fake_factory_long):
     assert test_ledger.start_ms == fold.test_start_ms
 
     # And linked back to the WF.
-    listed = list_runs(root=tmp_path, parent_run_id=config.walk_forward_id)
-    assert [lg.run_id for lg in listed] == [fold.test_run_id]
+    assert [ledger.run_id for ledger in run_ledgers(tmp_path, parent_run_id=config.walk_forward_id)] == [fold.test_run_id]
 
 
 def test_chronological_split_records_correct_split_policy(tmp_path: Path, fake_factory_long):
@@ -274,7 +274,7 @@ def test_parameter_search_persists_train_receipts_and_freezes_winner_for_test(
     assert len(fold.training_candidates) == 2
     assert sum(candidate.eligible for candidate in fold.training_candidates) >= 1
 
-    persisted = list_runs(root=tmp_path, parent_run_id=config.walk_forward_id)
+    persisted = run_ledgers(tmp_path, parent_run_id=config.walk_forward_id)
     expected_ids = {
         fold.test_run_id,
         *(candidate.train_run_id for candidate in fold.training_candidates),
@@ -412,7 +412,7 @@ def test_cancellation_after_final_candidate_does_not_start_test_run(
             cancel_check=cancel_after_candidates,
         )
 
-    persisted = list_runs(root=tmp_path)
+    persisted = run_ledgers(tmp_path)
     assert len(persisted) == 2
     assert all(":train-" in ledger.strategy_spec_id for ledger in persisted)
 
@@ -611,7 +611,7 @@ def test_parent_run_id_is_recorded_on_walk_forward_result(tmp_path: Path, fake_f
     """When a parent run is supplied, the WF and its folds inherit it.
     The folds' parent_run_id is the WF id (not the user-supplied
     parent), which is the right shape for "give me every fold of this
-    WF" via list_runs.
+    WF" from the runs store.
     """
     request = WalkForwardRequest(
         spec=_build_test_spec(),
@@ -631,8 +631,8 @@ def test_parent_run_id_is_recorded_on_walk_forward_result(tmp_path: Path, fake_f
     assert result.parent_run_id == "abcabcabcabcabcabcabcabcabcabcab"
 
     # Folds carry the WF id as their parent (that's what lets
-    # ``list_runs(parent_run_id=wf_id)`` return them).
-    fold_ledgers = list_runs(root=tmp_path, parent_run_id=config.walk_forward_id)
+    # the runs store's ``parent_run_id=wf_id`` filter return them).
+    fold_ledgers = run_ledgers(tmp_path, parent_run_id=config.walk_forward_id)
     assert len(fold_ledgers) == 1
 
 

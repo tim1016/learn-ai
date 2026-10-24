@@ -1,4 +1,15 @@
+import type { components } from '../../../api/broker.types';
+
 // ─── Wire shapes of POST /api/research/indicator-reliability ───────────────
+
+/** The `data_source` of a reliability result: the shared lake block plus the warmup report (#3523). */
+export type ReliabilityDataSource = components['schemas']['ReliabilityDataSource-Output'];
+
+/** The body of the read that sizes a run's span: the instrument, window, bar size and indicator, and no session (#3523). */
+export type ReliabilitySpanRequest = components['schemas']['ReliabilitySpanRequest'];
+
+/** The sessions a run asks the lake for, warmup lead-in and window, as the server sizes them (#3523). */
+export type ReliabilitySpan = components['schemas']['ReliabilitySpan'];
 
 export type StrengthLabel = 'Noise' | 'Weak' | 'Moderate' | 'Strong';
 export type StabilityLabel = 'Low' | 'Moderate' | 'High';
@@ -122,4 +133,10 @@ export interface IndicatorReliabilityResponse {
   // Warnings
   warnings: string[];
   error: string | null;
+}
+
+/** What the server answers a run with: the result the report draws, and the lake input behind it (#3523). */
+export interface IndicatorReliabilityRun extends IndicatorReliabilityResponse {
+  /** The lake input behind this result: identity, admitted snapshot, coverage, warmup. */
+  data_source: ReliabilityDataSource;
 }
