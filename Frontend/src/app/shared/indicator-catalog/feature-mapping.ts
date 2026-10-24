@@ -35,3 +35,8 @@ export function findFeatureId(
     ) ?? null
   );
 }
+
+/** The pick behind a backend feature ID (a saved run names the feature it ran, not the pick), or null if none. */
+export function findMappingForFeature(featureId: string): FeatureMapping | null {
+  return FEATURE_MAPPINGS.find((m) => m.featureId === featureId) ?? null;
+}

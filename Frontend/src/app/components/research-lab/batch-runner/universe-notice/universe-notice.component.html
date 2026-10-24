@@ -1,0 +1,16 @@
+@let uni = universe();
+<div class="universe-notice" [attr.data-testid]="testId()">
+  <i class="pi pi-exclamation-triangle"></i>
+  <span>
+    <strong>{{ lead() }}</strong>
+    {{ text() }}
+    @for (e of uni.excluded; track e.ticker) {
+      <span class="block"><app-asset-identity [symbol]="e.ticker" size="xs" /> — {{ e.reason }}</span>
+    }
+    @for (d of uni.degraded; track d.ticker) {
+      <span class="block">
+        <app-asset-identity [symbol]="d.ticker" size="xs" /> — in the statistics, but {{ degradedReason(d) }}.
+      </span>
+    }
+  </span>
+</div>

@@ -1,113 +1,12 @@
 @use "../../../styles/tokens" as *;
-@use "../../../styles/eyebrow-heading" as *;
 
 :host {
   display: block;
-  background: $bg-canvas;
   color: $text-primary;
-  min-height: 100vh;
-}
-
-.route {
-  max-width: $container-lg;
-  margin: 0 auto;
-  padding: 16px;
-}
-
-/* ─── Route toolbar ─── */
-.route-toolbar {
-  display: flex; align-items: center; gap: 12px;
-  margin-bottom: 12px;
-  font-family: $font-mono; font-size: 11px;
-}
-.toolbar-spacer { flex: 1; }
-.tz { color: $text-muted; }
-
-/* ─── Coverage banner ─── */
-.coverage-banner {
-  background: linear-gradient(180deg, rgba(255,152,0,0.10), rgba(255,152,0,0.04));
-  border: 1px solid rgba(255,152,0,0.28);
-  border-left: 2px solid $warn;
-  border-radius: $radius;
-  padding: 10px 14px;
-  display: flex; gap: 12px; align-items: flex-start;
-  font-size: 12px; color: $text-secondary;
-  margin-bottom: 12px;
-
-  .pi { color: $warn; margin-top: 2px; }
-}
-.coverage-body { flex: 1; }
-.coverage-title { color: $text-primary; font-weight: 600; margin-bottom: 2px; }
-.coverage-meta {
-  font-size: 11px; color: $text-subtle;
-  code { color: $text-secondary; font-family: $font-mono; }
-}
-
-/* IV-pipeline-not-wired variant of the coverage banner */
-.banner-iv-missing {
-  background: linear-gradient(180deg, rgba(41,182,246,0.10), rgba(41,182,246,0.04));
-  border: 1px solid rgba(41,182,246,0.28);
-  border-left: 2px solid $info;
-  color: $text-secondary;
-
-  .pi { color: $info; }
-}
-
-/* IV-source + confidence (recorder fallback / health gating) */
-.banner-iv-confidence {
-  background: linear-gradient(180deg, rgba(38,166,154,0.10), rgba(38,166,154,0.04));
-  border: 1px solid rgba(38,166,154,0.28);
-  border-left: 2px solid $bull;
-  color: $text-secondary;
-
-  .pi { color: $bull; }
-}
-.banner-iv-confidence-warn {
-  background: linear-gradient(180deg, rgba(239,83,80,0.10), rgba(239,83,80,0.04));
-  border: 1px solid rgba(239,83,80,0.28);
-  border-left: 2px solid $bear;
-
-  .pi { color: $bear; }
-}
-.iv-conf-pill {
-  display: inline-block; margin-left: 10px;
-  padding: 1px 8px; border-radius: 999px;
-  background: rgba(255,255,255,0.06); color: $text-primary;
-  font-family: $font-mono; font-size: 11px;
-}
-.iv-conf-floor {
-  margin-left: 8px; color: $text-subtle;
-  font-family: $font-mono; font-size: 11px;
-}
-.iv-conf-imputed {
-  display: inline-block; margin-left: 8px;
-  padding: 1px 6px; border-radius: 999px;
-  background: rgba(255, 167, 38, 0.14);
-  border: 1px solid rgba(255, 167, 38, 0.32);
-  color: $text-secondary;
-  font-family: $font-mono; font-size: 10px;
-  text-transform: uppercase; letter-spacing: 0.05em;
-  cursor: help;
-}
-
-/* Data-source disclosure (Polygon Starter spread-synthesis policy) */
-.banner-data-source {
-  background: linear-gradient(180deg, rgba(120,120,120,0.08), rgba(120,120,120,0.03));
-  border: 1px solid rgba(255,255,255,0.08);
-  border-left: 2px solid $text-muted;
-  color: $text-secondary;
-
-  .pi { color: $text-muted; }
-  code { color: $text-primary; font-size: 0.85em; }
-  strong { color: $text-primary; }
 }
 
 /* ─── Form ─── */
 .form-card {
-  background: $bg-surface; border: 1px solid $border;
-  border-radius: $radius-md;
-  padding: 14px;
-  margin-bottom: 12px;
   display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap;
 }
 .field { display: flex; flex-direction: column; gap: 4px; min-width: 110px; }
@@ -137,27 +36,6 @@
     color: var(--ind-cat-volatility);
   }
 }
-.form-spacer { flex: 1; }
-.compute-btn {
-  height: 30px; padding: 0 12px;
-  background: $bull; border: none;
-  border-radius: 4px; color: #0b0e14;
-  font-size: 12px; font-weight: 600; cursor: pointer;
-  display: inline-flex; align-items: center; gap: 6px;
-
-  &:hover:not([disabled]) { filter: brightness(1.05); }
-  &[disabled] { opacity: 0.6; cursor: progress; }
-}
-
-.source-tag {
-  display: inline-flex; align-items: center;
-  padding: 4px 8px; border-radius: 999px;
-  font-family: $font-mono; font-size: 10px;
-  text-transform: uppercase; letter-spacing: 0.06em;
-  margin-left: 6px;
-
-  &.real { background: rgba(38, 166, 154, 0.15); color: $bull; border: 1px solid rgba(38, 166, 154, 0.4); }
-}
 
 .compute-error {
   background: rgba(239, 83, 80, 0.10);
@@ -168,103 +46,4 @@
   font-size: 12px;
   display: flex; align-items: center; gap: 8px;
   margin-bottom: 12px;
-}
-
-/* ─── Chart card ─── */
-.chart-card {
-  background: $bg-surface; border: 1px solid $border;
-  border-radius: $radius-md; padding: 12px; margin-bottom: 12px;
-  overflow-x: auto;
-}
-.chart-toggles {
-  display: flex; align-items: center; gap: 14px;
-  margin-bottom: 10px; flex-wrap: wrap;
-}
-.eyebrow {
-  @include eyebrow-heading;
-  font-family: $font-mono;
-}
-.toggle {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 3px 8px; border-radius: 4px;
-  background: transparent; border: 1px solid $border-light;
-  color: $text-subtle; font-size: 11px; cursor: pointer;
-  font-family: $font-mono;
-
-  &.on {
-    background: $bg-elevated; border-color: $border-strong; color: $text-primary;
-  }
-}
-.toggle-swatch {
-  width: 8px; height: 8px; border-radius: 2px;
-  border: 1px solid currentColor; background: transparent;
-
-  &.realtime.on { background: $bull; border-color: $bull; }
-  &.realtime    { border-color: $bull; }
-  &.generic.on  { background: $accent; border-color: $accent; }
-  &.generic     { border-color: $accent; }
-}
-.divider { width: 1px; height: 18px; background: $border; }
-.legend-spacer { flex: 1; }
-.legend-row {
-  display: inline-flex; align-items: center; gap: 14px;
-  font-size: 11px; font-family: $font-mono; color: $text-subtle;
-}
-.lg-line { display: inline-block; width: 9px; height: 2px; }
-.lg-line.iv { background: var(--ind-cat-volatility); }
-
-/* ─── Bottom grid ─── */
-.bottom-grid {
-  display: grid; grid-template-columns: 1.6fr 1fr; gap: 12px;
-
-  @media (max-width: 1100px) { grid-template-columns: 1fr; }
-}
-.bottom-card {
-  background: $bg-surface; border: 1px solid $border;
-  border-radius: $radius-md; padding: 12px;
-  overflow-x: auto;
-}
-.bottom-head {
-  display: flex; justify-content: space-between; align-items: center;
-  margin-bottom: 8px;
-}
-.bottom-meta {
-  font-size: 11px; color: $text-muted; font-family: $font-mono;
-}
-
-/* ─── Fields this study does not compute ─── */
-.unavailable-note {
-  margin: 0 0 8px;
-  font-family: $font-mono; font-size: 10px; color: $text-muted;
-}
-
-/* ─── Idle (nothing computed yet) ─── */
-.idle-card {
-  background: $bg-surface; border: 1px dashed $border-light;
-  border-radius: $radius-md; padding: 32px 16px;
-  text-align: center;
-
-  .idle-title { color: $text-primary; font-weight: 600; margin-bottom: 4px; }
-  .idle-meta { color: $text-subtle; font-size: 12px; }
-}
-
-.readout-action {
-  display: flex; align-items: baseline; gap: 12px; margin-top: 8px; margin-bottom: 8px;
-
-  .readout-action-text {
-    font-size: 26px; font-weight: 700; font-family: $font-mono;
-  }
-  .readout-meta {
-    color: $text-muted; font-size: 11px; font-family: $font-mono;
-  }
-}
-.readout-grid {
-  display: grid; grid-template-columns: auto 1fr;
-  gap: 4px 12px; font-family: $font-mono; font-size: 11px;
-
-  .r-key { color: $text-muted; }
-  .r-val { color: $text-primary; }
-  .r-blind { color: $warn; }
-  .r-unavailable { color: $text-muted; }
-  .r-meta { color: $text-subtle; margin-left: 6px; font-size: 10px; }
 }

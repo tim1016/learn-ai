@@ -1,0 +1,27 @@
+<div class="controls" role="toolbar" aria-label="Chain filters">
+  <div class="chips" role="group" aria-label="Strike range">
+    <span class="chip-label">Strikes</span>
+    @for (count of strikeRanges; track count) {
+      <button type="button" class="chip" [class.active]="strikeRange() === count && !showAllStrikes()" [attr.aria-pressed]="strikeRange() === count && !showAllStrikes()" (click)="setStrikeRange(count)">±{{ count }}</button>
+    }
+    <button type="button" class="chip" [class.active]="showAllStrikes()" [attr.aria-pressed]="showAllStrikes()" (click)="toggleShowAll()">All</button>
+  </div>
+  <div class="chips" role="group" aria-label="Column density">
+    @for (each of densities; track each) {
+      <button type="button" class="chip" [class.active]="density() === each" [attr.aria-pressed]="density() === each" (click)="setDensity(each)">{{ each === 'quick' ? 'Quick' : each === 'greeks' ? 'Greeks' : 'Flow' }}</button>
+    }
+  </div>
+</div>
+
+<app-expiration-ribbon
+  [expirations]="availableExpirations()"
+  [selectedExpiration]="selected()"
+  [loading]="expirationsLoading()"
+  (expirationSelected)="expiryPicked.emit($event)"
+/>
+
+@if (blocking(); as content) {
+  <app-workspace-state-block [state]="content" />
+} @else if (presentation(); as chain) {
+  <app-chain-view [chain]="chain" [state]="emptyState()" />
+}

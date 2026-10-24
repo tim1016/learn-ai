@@ -152,7 +152,7 @@ describe('StrategyBuilderComponent', () => {
   it('omits a broker identity and Greeks when multiple contracts match a hypothetical leg', async () => {
     const expiry = optionExpiryAnchorMs('2027-01-15');
     const snapshot: SnapshotContractResult = {
-      ticker: 'O:SPY270115C00590000', contractType: 'call', strikePrice: 590, expirationMs: expiry,
+      ticker: 'O:SPY270115C00590000', contractType: 'call', strikePrice: 590, expirationMs: expiry, standard: null,
       breakEvenPrice: null, impliedVolatility: 0.2, openInterest: null, greeks: { delta: 0.7, gamma: null, theta: null, vega: null },
       day: null, lastTrade: null, lastQuote: { bid: 3.1, ask: 3.2, bidSize: null, askSize: null, midpoint: 3.15, timeframe: null },
     };
@@ -180,7 +180,7 @@ describe('StrategyBuilderComponent', () => {
       prevDay: null, min: null, todaysChange: null, todaysChangePercent: null, updated: null,
     });
     component.allContracts.set([{
-      ticker: 'O:SPY270115C00585000', contractType: 'call', strikePrice: 585, expirationMs: expiry,
+      ticker: 'O:SPY270115C00585000', contractType: 'call', strikePrice: 585, expirationMs: expiry, standard: null,
       breakEvenPrice: null, impliedVolatility: 0.2, openInterest: null, greeks: null,
       day: null, lastTrade: null, lastQuote: null,
     }]);
@@ -271,7 +271,7 @@ describe('StrategyBuilderComponent', () => {
 
     function contract(strike: number): SnapshotContractResult {
       return {
-        ticker: `O:SPY${strike}C`, contractType: 'call', strikePrice: strike, expirationMs: 4_070_984_400_000,
+        ticker: `O:SPY${strike}C`, contractType: 'call', strikePrice: strike, expirationMs: 4_070_984_400_000, standard: null,
         breakEvenPrice: null, impliedVolatility: 0.2, openInterest: 10, greeks: null, day: null,
         lastTrade: null, lastQuote: { bid: 4.9, ask: 5.1, bidSize: 1, askSize: 1, midpoint: 5, timeframe: null },
       };
@@ -617,6 +617,7 @@ describe('StrategyBuilderComponent', () => {
         contractType: side,
         strikePrice: 590,
         expirationMs: 1_771_621_200_000,
+        standard: null,
         breakEvenPrice: 595,
         impliedVolatility: 0.20,
         openInterest: 1000,

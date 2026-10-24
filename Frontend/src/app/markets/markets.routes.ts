@@ -1,0 +1,54 @@
+import { Routes } from '@angular/router';
+
+import { OPTIONS_ROUTES } from './options/options.routes';
+
+/**
+ * The Markets place (ADR 0084): the list at `/markets`, and one instrument's
+ * place at `/markets/:symbol/<tab>`.
+ *
+ * The instrument's shell owns the context its tabs share, so it stays mounted
+ * while the tab or the instrument changes.
+ */
+export const MARKETS_ROUTES: Routes = [
+  {
+    path: '',
+    pathMatch: 'full',
+    loadComponent: () => import('./list/markets-list.component').then((m) => m.MarketsListComponent),
+  },
+  {
+    path: ':symbol',
+    loadComponent: () =>
+      import('./workspace/instrument-workspace.component').then((m) => m.InstrumentWorkspaceComponent),
+    children: [
+      // A relative redirect keeps the query and the fragment.
+      { path: '', pathMatch: 'full', redirectTo: 'chart' },
+      {
+        path: 'chart',
+        pathMatch: 'full',
+        loadComponent: () => import('./chart/instrument-chart.component').then((m) => m.InstrumentChartComponent),
+      },
+      {
+        path: 'chart/news',
+        pathMatch: 'full',
+        loadComponent: () => import('./news/news-page.component').then((m) => m.NewsPageComponent),
+      },
+      {
+        path: 'returns',
+        pathMatch: 'full',
+        loadComponent: () => import('./returns/instrument-returns.component').then((m) => m.InstrumentReturnsComponent),
+      },
+      {
+        path: 'data',
+        pathMatch: 'full',
+        loadComponent: () => import('./data/instrument-data.component').then((m) => m.InstrumentDataComponent),
+      },
+      {
+        // The dataset builder is an action on the instrument, not a tab: it sits under Data.
+        path: 'data/build',
+        pathMatch: 'full',
+        loadComponent: () => import('./data/dataset-builder/build-dataset.component').then((m) => m.BuildDatasetComponent),
+      },
+      ...OPTIONS_ROUTES,
+    ],
+  },
+];

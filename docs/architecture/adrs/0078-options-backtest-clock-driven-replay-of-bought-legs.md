@@ -406,7 +406,7 @@ Why. The lake moves on: a file can change, be replaced or go. A saved run that f
 - Option runs and the stock run history are separate lists.
 - Research schema versions 19 and 20 add the tables for saved setups and runs.
 - Two older lake fetchers still put the vendor key in the URL, and the lake work found that they can drop the paging cursor on a later page. Neither is changed here.
-- What an underlying had listed on a past date is asked one way: `GET /api/research/options-backtest/past-chain/…`. The Data Lab's options companion shows this page's Past chain tab (#3087), so the Data Lab inspector that scanned daily bars for same-day expiries at whole-dollar strikes is gone. What it showed from daily bars (open, close, previous close, change) and its minute-bar drill-down for one contract are not carried over: the route gives one price per contract, the last trade in the minute ending a time, and reads the lake only.
+- What an underlying had listed on a past date is asked one way: `GET /api/research/options-backtest/past-chain/…`. The Past chain is the Past · Archive mode of an instrument's Options chain (#3505, ADR 0084), and the Data Lab's options companion links to it (#3087), so the Data Lab inspector that scanned daily bars for same-day expiries at whole-dollar strikes is gone. What it showed from daily bars (open, close, previous close, change) and its minute-bar drill-down for one contract are not carried over: the route gives one price per contract, the last trade in the minute ending a time, and reads the lake only.
 
 ## Open questions for the owner
 

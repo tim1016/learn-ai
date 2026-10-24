@@ -454,6 +454,11 @@ class CoverageDay(BaseModel):
     #: Set only with ``status="needs_rebuild"``: the catalog row is complete,
     #: a run cannot read the session, and this names the evidence it refuses.
     rebuild_reason: AdjustedFileGap | None = None
+    #: Set only with ``status="failed"``: the reason the catalog row recorded
+    #: (an ``ArtifactFailureReason``, e.g. ``provider_no_data``). Open-ended
+    #: on purpose: a row written by an older build may carry a reason this one
+    #: does not name, and it still reaches the reader.
+    failure_reason: str | None = None
 
 
 class CoverageResponse(BaseModel):

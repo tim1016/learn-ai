@@ -36,6 +36,9 @@ from app.jobs.runner import run_in_thread
 from app.lean_sidecar.trading_calendar import expected_sessions
 from app.research import batch_runner, options_runner
 from app.research.options.option_input_ledger import OptionInputLedger
+from app.research.study_records.models import StudyRecordConfig, StudyRecordResult
+from app.research.study_records.recorder import keeps_job_record
+from app.research.study_records.store import StudyRecordStore
 from app.routers.jobs import CrossSectionalJobRequest, start_cross_sectional_job
 from app.services import cross_sectional_study_service as service
 from app.services.cross_sectional_study_service import CACHE_NAMESPACE, CrossSectionalParams, run_cross_sectional_job
@@ -67,6 +70,24 @@ class _Harness:
             )
 
         run_in_thread(job_id, work, thread_name=f"test-{job_id}").join(timeout=120)
+        return self.fake.hashes[f"job:{job_id}:state"]
+
+    def run_recorded(self, params: CrossSectionalParams, *, job_id: str, root: Path, force: bool = False) -> dict[str, str]:
+        """One job as the route starts it: the study's work wrapped to keep a History record under ``root``."""
+        request = CrossSectionalJobRequest(
+            job_id=job_id, symbols=list(params.symbols), from_date=params.from_date.isoformat(), to_date=params.to_date.isoformat(),
+            timespan=params.timespan, multiplier=params.multiplier, session="rth", feature_name=params.feature_name,
+            target_type=params.target_type, force=force,
+        )
+
+        def work(emit: ProgressEmitter, cancel: Any) -> dict | None:
+            return run_cross_sectional_job(
+                params, job_id=job_id, force=force, emit=emit, cancel=cancel, polygon_client=PolygonClientService(), now_ms=NOW_MS
+            )
+
+        run_in_thread(job_id, keeps_job_record("cross-sectional-study", request, work, root=root), thread_name=f"test-{job_id}").join(
+            timeout=120
+        )
         return self.fake.hashes[f"job:{job_id}:state"]
 
     def result(self, job_id: str) -> dict:
@@ -313,6 +334,77 @@ def test_a_no_iv_member_with_no_failed_request_is_excluded_as_a_deterministic_ou
     (excluded,) = harness.result("no-iv")["universe"]["excluded"]
     assert (excluded["code"], excluded["retryable"]) == ("no_iv_derived", False)
     assert len(harness.cache_keys()) == 1, "nothing in it could answer differently, so it may be reused"
+
+
+# ---------------------------------------------------------------------------
+# The History record: a lake run is kept with the sources it read, a refused or empty run with its reason
+# ---------------------------------------------------------------------------
+
+
+def saved_records(root: Path) -> list[tuple[StudyRecordConfig, StudyRecordResult]]:
+    store = StudyRecordStore("cross-sectional-study", root=root)
+    return [store.load(record_id) for record_id, _ in store.config_paths()]
+
+
+def test_a_completed_run_is_recorded_with_the_composite_data_source_block_it_returned(harness, tmp_path):
+    state = harness.run_recorded(params(), job_id="kept", root=tmp_path / "records")
+
+    result = harness.result("kept")
+    [(config, stored)] = saved_records(tmp_path / "records")
+    assert state["status"] == "completed" and config.status == "completed"
+    assert config.data_source == result["data_source"], "the composite block is the record's provenance, field for field"
+    assert config.data_source["kind"] == "composite" and config.data_source["stock_bars"]["kind"] == "lake"
+    assert config.headline is not None and config.headline.startswith("Aggregate IC ")
+    assert stored.result["tickers_valid"] == result["tickers_valid"] == 2, "what is stored is what the job delivered"
+    assert config.inputs["symbols"] == list(SYMBOLS) and config.inputs["session"] == "rth" and config.inputs["timespan"] == "day"
+    assert config.job_id == "kept"
+
+
+def test_a_universe_with_a_member_the_lake_could_not_supply_is_recorded_as_partial_with_the_member_named(harness, tmp_path):
+    del harness.tapes["IWM"][WINDOW[10]]
+
+    harness.run_recorded(params(symbols=("SPY", "QQQ", "IWM")), job_id="partial-kept", root=tmp_path / "records")
+
+    [(config, stored)] = saved_records(tmp_path / "records")
+    assert config.status == "partial" and config.status_detail == "2 of 3 members evaluated: 1 had no data"
+    assert stored.result["universe"]["excluded"][0]["ticker"] == "IWM"
+
+
+def test_a_universe_the_lake_refused_is_recorded_as_a_failed_run_with_its_refusal_and_members(harness, tmp_path):
+    harness.tapes["SPY"].clear()
+    harness.tapes["QQQ"].clear()
+
+    state = harness.run_recorded(params(), job_id="refused-kept", root=tmp_path / "records")
+
+    parked = harness.result("refused-kept")
+    [(config, stored)] = saved_records(tmp_path / "records")
+    assert state["status"] == "failed" and state["error_code"] == "data_unavailable_from_provider"
+    assert config.status == "failed" and config.status_detail == state["error_message"]
+    assert config.headline is None
+    assert stored.result == parked, "the record holds the refusal the page reads, as the job parked it"
+    assert [m["ticker"] for m in stored.result["refusal"]["members"]] == ["SPY", "QQQ"]
+    assert config.data_source == parked["data_source"]
+
+
+def test_a_study_in_which_no_member_is_evaluated_is_recorded_as_a_failed_run_with_its_universe(harness, tmp_path):
+    harness.iv_behaviour["SPY"] = harness.iv_behaviour["QQQ"] = builder_raises
+
+    state = harness.run_recorded(params(), job_id="none-kept", root=tmp_path / "records")
+
+    parked = harness.result("none-kept")
+    [(config, stored)] = saved_records(tmp_path / "records")
+    assert state["error_code"] == "no_member_evaluated"
+    assert config.status == "failed" and stored.result == parked
+    assert stored.result["status"] == "not_evaluated" and stored.result["universe"]["evaluated_count"] == 0
+
+
+def test_a_repeat_served_from_the_cache_is_not_recorded_a_second_time(harness, tmp_path):
+    harness.run_recorded(params(), job_id="first-kept", root=tmp_path / "records")
+
+    state = harness.run_recorded(params(), job_id="repeat-kept", root=tmp_path / "records")
+
+    assert state["cached"] == "1"
+    assert [config.job_id for config, _ in saved_records(tmp_path / "records")] == ["first-kept"]
 
 
 # ---------------------------------------------------------------------------

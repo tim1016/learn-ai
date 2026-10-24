@@ -1,6 +1,6 @@
 <div class="mc-detail">
   <header class="mcd-header">
-    <a routerLink="/research-lab" class="mcd-back">← Research Lab</a>
+    <a [routerLink]="['/research/history']" [queryParams]="{ type: 'spec-run' }" class="mcd-back">← History</a>
     @if (monteCarlo(); as data) {
       <div class="mcd-title">
         <h1>Monte Carlo</h1>
@@ -18,7 +18,7 @@
       </div>
       <div class="mcd-parent">
         <strong>Parent run:</strong>
-        <a [routerLink]="['/research-lab/strategy-runs', data.config.parent_run_id]">
+        <a [routerLink]="['/research/history/spec-run', data.config.parent_run_id]">
           <code>{{ shortHash(data.config.parent_run_id, 16) }}…</code>
         </a>
       </div>

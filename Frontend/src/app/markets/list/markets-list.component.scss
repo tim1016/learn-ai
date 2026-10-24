@@ -1,0 +1,70 @@
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.markets__search {
+  max-width: 28rem;
+  padding: var(--space-2) var(--space-4);
+}
+
+.markets__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+
+  th,
+  td {
+    padding: var(--space-2) var(--space-4);
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+  }
+
+  th {
+    color: var(--text-subtle);
+    font-size: var(--fs-xs);
+    font-weight: var(--fw-semi);
+  }
+
+  a {
+    color: var(--text-primary);
+    text-decoration: none;
+  }
+}
+
+// A span is two dates; wrapping it between them reads as two facts.
+.markets__span {
+  white-space: nowrap;
+}
+
+.markets__caption {
+  padding: var(--space-2) var(--space-4);
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+  text-align: left;
+}
+
+.markets__badge {
+  margin-left: var(--space-2);
+  padding: 0.05rem 0.4rem;
+  border-radius: var(--radius-pill);
+  background: var(--bg-sunken);
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+}
+
+.markets__note {
+  margin: var(--space-2) var(--space-4);
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+}
+
+.markets__link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-text);
+  font-size: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}

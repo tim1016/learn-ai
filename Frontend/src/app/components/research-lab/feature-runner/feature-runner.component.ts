@@ -3,6 +3,7 @@ import {
   signal,
   computed,
   inject,
+  input,
   ChangeDetectionStrategy,
   effect,
 } from '@angular/core';
@@ -10,24 +11,8 @@ import { CommonModule } from '@angular/common';
 import { HttpErrorResponse } from '@angular/common/http';
 import { FormsModule } from '@angular/forms';
 
-import {
-  ResearchResult,
-  QuantileBin,
-  Robustness,
-  MonthlyICBreakdown,
-  RollingTStatPoint,
-  RegimeIC,
-  TrainTestSplit,
-  StructuralBreakPoint,
-  FeatureValidationSpec,
-  FeatureValidationVerdict,
-  ValidationScreen,
-  MultipleTestingWarning,
-  CostViability,
-  IcCi,
-  FeatureStageInfo,
-  FeatureStageCriterion,
-} from '../../../services/research.service';
+import { ResearchResult } from '../../../services/research.service';
+import { FeatureResearchJobResultRaw, toResearchResult } from './feature-result.mapper';
 import { JobsService, JobState } from '../../../services/jobs.service';
 import {
   glyphForLevel,
@@ -36,7 +21,6 @@ import {
 } from '../../../utils/run-log-buffer';
 import { FeatureReportComponent } from '../feature-report/feature-report.component';
 import { RunProgressPanelComponent } from '../shared/run-progress-panel/run-progress-panel.component';
-import { ButtonModule } from 'primeng/button';
 import { MessageModule } from 'primeng/message';
 import { CheckboxModule } from 'primeng/checkbox';
 import { TagModule } from 'primeng/tag';
@@ -47,7 +31,7 @@ import {
 import {
   IndicatorCatalogService,
 } from '../../../shared/indicator-catalog/indicator-catalog.service';
-import { findFeatureId } from '../../../shared/indicator-catalog/feature-mapping';
+import { findFeatureId, findMappingForFeature } from '../../../shared/indicator-catalog/feature-mapping';
 import { ActiveIndicatorCardComponent } from '../../data-lab/active-indicator-card/active-indicator-card.component';
 import { IndicatorConfigModalComponent } from '../../data-lab/indicator-config-modal/indicator-config-modal.component';
 import { TickerRangePickerComponent } from '../../../shared/ticker-range-picker/ticker-range-picker.component';
@@ -55,60 +39,25 @@ import type {
   Resolution,
   TickerRange,
 } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
-import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
 import { tickerRangeToWire } from '../../../utils/ticker-wire';
+import { StudyPageComponent } from '../../../research/study-page/study-page.component';
+import { createRunGate } from '../../../research/run-gate';
+import { createRerunPrefill } from '../../../research/stored-study/rerun';
+import { StoredInputsError, type StoredInputs } from '../../../research/stored-study/stored-inputs';
+import { createResultInputTracker } from '../../../shared/workspace/previous-result';
+import type { DataSourceProvenance } from '../../../shared/workspace/data-source-provenance';
 import { LakeStudySourceComponent } from '../../../shared/lake-study/lake-study-source.component';
 import {
-  mapLakeStudyDataSource,
   readLakeStudyRefusal,
-  type LakeDataSourceRaw,
+  toDataSourceProvenance,
   type LakeStudyRefused,
 } from '../../../shared/lake-study/lake-study';
 
-/** Shape of the ``target`` payload emitted by ``_serialize_target`` in
- *  ``PythonDataService/app/routers/jobs.py``. Mirrors the view model's
- *  ``TargetMetadata`` so the mapper below can rename keys 1:1. */
-interface FeatureResearchTargetRaw {
-  target_name: string;
-  horizon_minutes: number;
-  horizon_bars: number;
-  bar_minutes: number;
-  timezone: string;
-  valid_count: number;
-  total_count: number;
-  valid_ratio: number;
-  invalid_reason_counts: { reason: string; count: number }[];
-}
-
-/** Snake-case shape returned by /api/jobs-internal/feature-research worker. */
-interface FeatureResearchJobResultRaw {
-  success: boolean;
-  ticker: string;
-  feature_name: string;
-  start_date: string;
-  end_date: string;
-  bars_used: number;
-  mean_ic: number;
-  ic_t_stat: number;
-  ic_p_value: number;
-  nw_t_stat: number;
-  nw_p_value: number;
-  effective_n: number;
-  ic_values: number[];
-  ic_dates: string[];
-  adf_pvalue: number;
-  kpss_pvalue: number;
-  is_stationary: boolean;
-  quantile_bins: unknown[];
-  is_monotonic: boolean;
-  monotonicity_ratio: number;
-  robustness: unknown;
-  feature_spec: unknown;
-  validation_verdict: unknown;
-  target?: FeatureResearchTargetRaw | null;
-  data_source?: LakeDataSourceRaw | null;
-  passed_validation: boolean;
-  error: string | null;
+/** What a Feature study's request is made from: the inputs a shown result answers. */
+interface FeatureStudyInputs {
+  readonly range: TickerRange;
+  readonly indicator: string;
+  readonly params: Record<string, number>;
 }
 
 @Component({
@@ -118,7 +67,6 @@ interface FeatureResearchJobResultRaw {
     FormsModule,
     FeatureReportComponent,
     RunProgressPanelComponent,
-    ButtonModule,
     MessageModule,
     CheckboxModule,
     TagModule,
@@ -126,7 +74,7 @@ interface FeatureResearchJobResultRaw {
     ActiveIndicatorCardComponent,
     IndicatorConfigModalComponent,
     TickerRangePickerComponent,
-    AssetIdentityComponent,
+    StudyPageComponent,
     LakeStudySourceComponent,
   ],
   templateUrl: './feature-runner.component.html',
@@ -136,6 +84,15 @@ interface FeatureResearchJobResultRaw {
 export class FeatureRunnerComponent {
   private jobsService = inject(JobsService);
   private catalog = inject(IndicatorCatalogService);
+
+  /** `?rerun=<saved run id>`: fill the inputs from that run. It runs nothing; Run study is still the reader's. */
+  readonly rerun = input<string>();
+  private readonly prefill = createRerunPrefill({
+    study: 'feature-study',
+    id: this.rerun,
+    apply: (stored) => this.fillFrom(stored),
+  });
+  readonly prefillNotice = this.prefill.notice;
 
   /** Catalog passed to the picker. Exposed as a getter so the template can
    *  read the service signal directly without leaking the service. */
@@ -156,12 +113,10 @@ export class FeatureRunnerComponent {
     multiplier: 1,
   });
   /**
-   * The bars the backend accepts: minute bars whose length divides the study's
-   * 15-minute forward target (`SUPPORTED_BAR_MINUTES` in
-   * `feature_study_service.py`). Hourly, daily and the other multiples are
-   * refused up front, so the page does not offer them.
+   * The study looks 15 minutes ahead, so a bar must divide 15 minutes: hour,
+   * daily, ×60 and ×240 bars always fail (#3527), and are not offered.
    */
-  readonly availableMultipliers: readonly number[] = [1, 3, 5, 15];
+  readonly availableMultipliers: readonly number[] = [1, 5, 15];
   readonly availableResolutions: readonly Resolution[] = ['minute'];
 
   /** Catalog-driven selection: indicator key + params (matches data-lab's
@@ -209,7 +164,15 @@ export class FeatureRunnerComponent {
   readonly error = signal<string | null>(null);
   /** Why the lake could not supply the window, when the run failed on that; read from the payload the failed job parked. */
   readonly refusal = signal<LakeStudyRefused | null>(null);
-  readonly formCollapsed = signal(false);
+
+  /**
+   * The data-source line for what is on screen: the shown result's lake source, or the source a refused run was
+   * refused against. `undefined` before either exists, which leaves the study's own pre-run line.
+   */
+  readonly dataSource = computed<DataSourceProvenance | undefined>(() => {
+    const source = this.result()?.dataSource ?? this.refusal()?.dataSource ?? null;
+    return source === null ? undefined : toDataSourceProvenance(source);
+  });
 
   /** Rolling FIFO log buffer (cap 500). */
   readonly logBuffer = new RunLogBuffer();
@@ -228,11 +191,32 @@ export class FeatureRunnerComponent {
 
   readonly cached = computed<boolean>(() => this.job()?.cached === true);
 
+  /** One press starts one run: a second click before the job is accepted is dropped. */
+  private readonly gate = createRunGate();
+  readonly starting = this.gate.starting;
+
+  /** The inputs the shown result answers; a result is "previous" once these change. */
+  private readonly enteredInputs = computed<FeatureStudyInputs>(() => ({
+    range: this.range(),
+    indicator: this.selectedIndicator(),
+    params: this.selectedParams(),
+  }));
+  readonly inputs = createResultInputTracker(this.enteredInputs, ({ range, indicator, params }) => ({
+    key: JSON.stringify([range.symbol.toUpperCase(), range.from, range.to, range.resolution, range.multiplier ?? 1, indicator, params]),
+    facts: [
+      { label: 'Instrument', value: range.symbol.toUpperCase() },
+      { label: 'Window', value: `${range.from} to ${range.to}` },
+      { label: 'Bars', value: `${range.multiplier ?? 1} minute` },
+      { label: 'Indicator', value: `${indicator} ${JSON.stringify(params)}` },
+    ],
+  }));
+  private submitted: FeatureStudyInputs | null = null;
+
   // ── Range guard ─────────────────────────────────────
-  // A minute-resolution study is capped at 180 calendar days. The cap is older
-  // than the lake path (it was sized to the provider fetch's connection window)
-  // and is kept as it was; only minute bars are offered now.
-  private readonly MAX_RANGE_DAYS = 180;
+  // A minute-bar study is capped at 180 calendar days. The cap is older than the
+  // lake path (it was sized to the provider fetch's connection window) and is kept
+  // as it was; minute bars are the only bars this study offers (#3527).
+  private static readonly MAX_RANGE_DAYS = 180;
 
   readonly rangeDays = computed<number | null>(() => {
     const r = this.range();
@@ -244,8 +228,10 @@ export class FeatureRunnerComponent {
 
   readonly rangeWarning = computed<string | null>(() => {
     const days = this.rangeDays();
-    if (days === null || days <= this.MAX_RANGE_DAYS) return null;
-    return `Minute-bar research is capped at ${this.MAX_RANGE_DAYS} days (you selected ${days} days). Shorten the range.`;
+    if (days === null) return null;
+    const cap = FeatureRunnerComponent.MAX_RANGE_DAYS;
+    if (days <= cap) return null;
+    return `Minute-bar research is capped at ${cap} days (you selected ${days} days). Shorten the range.`;
   });
 
   canRun = computed(() => {
@@ -256,7 +242,8 @@ export class FeatureRunnerComponent {
       r.from.trim().length > 0 &&
       r.to.trim().length > 0 &&
       this.rangeWarning() === null &&
-      !this.loading()
+      !this.loading() &&
+      !this.starting()
     );
   });
 
@@ -272,9 +259,43 @@ export class FeatureRunnerComponent {
     return this.featureMapping()?.label ?? this.selectedIndicator().toUpperCase();
   }
 
-  get runSummary(): string {
+  /** What step 3 says is about to run. */
+  readonly readySummary = computed(() => {
     const r = this.range();
-    return `${this.selectedFeatureLabel} on ${r.symbol.toUpperCase()} (${r.from} to ${r.to})`;
+    return `${this.selectedFeatureLabel} on ${r.symbol.toUpperCase()}, ${r.from} to ${r.to}`;
+  });
+
+  /** Why Run study cannot start, in words that point at the step to fix. */
+  readonly blockedReason = computed<string | null>(() => {
+    if (this.canRun() || this.loading() || this.starting()) return null;
+    if (this.rangeWarning() !== null) return 'Shorten the window to run.';
+    if (this.featureMapping() === null) return 'Pick an indicator the study supports.';
+    return 'Choose an instrument and both dates.';
+  });
+
+  /** Anything past the idle state is on screen: a job, an error or a result. */
+  readonly hasOutput = computed(
+    () => this.job() !== null || this.error() !== null || this.result() !== null,
+  );
+
+  /** Sets the inputs from a saved run's. Everything is read first, so a field it cannot read leaves the page as it was. */
+  private fillFrom(stored: StoredInputs): void {
+    const name = stored.text('feature_name');
+    const mapping = findMappingForFeature(name);
+    if (mapping === null) throw new StoredInputsError(`"${name}" is not an indicator this page offers`);
+    const multiplier = stored.number('multiplier');
+    if (stored.text('timespan') !== 'minute' || !this.availableMultipliers.includes(multiplier)) {
+      throw new StoredInputsError(`${multiplier} ${stored.text('timespan')} bars are not offered here`);
+    }
+    this.range.set({
+      symbol: stored.text('symbol').toUpperCase(),
+      from: stored.text('from_date'),
+      to: stored.text('to_date'),
+      resolution: 'minute',
+      multiplier,
+    });
+    this.selectedIndicator.set(mapping.indicator);
+    this.selectedParams.set({ ...mapping.params });
   }
 
   /** Picker (add) in this host = single-select replace. The picker fires
@@ -355,10 +376,16 @@ export class FeatureRunnerComponent {
     });
   }
 
-  async runResearch(): Promise<void> {
+  /** Run study. A press while an earlier press is still starting its job is dropped. */
+  runResearch(): Promise<void> {
+    return this.gate.press(() => this.startResearch());
+  }
+
+  private async startResearch(): Promise<void> {
     this.error.set(null);
     this.refusal.set(null);
     this.result.set(null);
+    this.inputs.clear();
     this.logBuffer.clear();
 
     try {
@@ -371,19 +398,24 @@ export class FeatureRunnerComponent {
       // Python's FeatureResearchJobRequest inherits TickerRequest in PR
       // (ii); legacy aliases are still accepted until PR (iii)'s
       // alias-removal commit.
-      // The session is named, not defaulted: this study has always computed on extended hours (04:00-20:00 ET),
-      // and which session it should use is an open owner decision (D02 of PRD #3490). The page offers no
-      // session choice until that is decided.
+      const submitted = this.enteredInputs();
+      // The study has always computed on extended hours (04:00-20:00 ET), and which session it should use is an open
+      // owner decision (D02 of PRD #3490). It is named, not defaulted: the run admits exactly this session from the
+      // lake, and the saved run says "extended" rather than the "rth" the wire would fill in.
       const wire = tickerRangeToWire({
-        ...this.range(),
-        symbol: this.range().symbol.toUpperCase(),
+        ...submitted.range,
+        symbol: submitted.range.symbol.toUpperCase(),
         session: 'extended',
       });
+      const parent = this.prefill.parent();
       const id = await this.jobsService.startJob('feature_research', {
         ...wire,
         feature_name: featureId,
         force: this.forceRun(),
+        ...(parent === null ? {} : { rerun_of: parent }),
       });
+      this.prefill.started();
+      this.submitted = submitted;
       this.jobId.set(id);
     } catch (err: unknown) {
       const msg =
@@ -417,23 +449,6 @@ export class FeatureRunnerComponent {
     }
   }
 
-  toggleForm(): void {
-    this.formCollapsed.update(v => !v);
-  }
-
-  newRun(): void {
-    const id = this.jobId();
-    if (id) {
-      this.jobsService.dismiss(id);
-    }
-    this.jobId.set(null);
-    this.result.set(null);
-    this.error.set(null);
-    this.refusal.set(null);
-    this.formCollapsed.set(false);
-    this.logBuffer.clear();
-  }
-
   /**
    * A run the lake refused parks its reason and counts as the job's result (`status: "refused"`). A run that failed
    * for any other reason parks nothing, and the result route answers 404: the failure message already shown is all
@@ -461,10 +476,10 @@ export class FeatureRunnerComponent {
   private async handleCompleted(id: string): Promise<void> {
     try {
       const raw = await this.jobsService.fetchResult<FeatureResearchJobResultRaw>(id);
-      const mapped = this.toResearchResult(raw);
+      const mapped = toResearchResult(raw);
       this.result.set(mapped);
       if (mapped.success) {
-        this.formCollapsed.set(true);
+        if (this.submitted !== null) this.inputs.capture(this.submitted);
       } else if (mapped.error) {
         this.error.set(mapped.error);
       }
@@ -479,211 +494,5 @@ export class FeatureRunnerComponent {
           : 'Failed to fetch research result';
       this.error.set(msg);
     }
-  }
-
-  /** Map snake_case worker payload → camelCase ResearchResult. */
-  private toResearchResult(raw: FeatureResearchJobResultRaw): ResearchResult {
-    return {
-      success: raw.success,
-      ticker: raw.ticker,
-      featureName: raw.feature_name,
-      startDate: raw.start_date,
-      endDate: raw.end_date,
-      barsUsed: raw.bars_used,
-      meanIC: raw.mean_ic,
-      icTStat: raw.ic_t_stat,
-      icPValue: raw.ic_p_value,
-      nwTStat: raw.nw_t_stat,
-      nwPValue: raw.nw_p_value,
-      effectiveN: raw.effective_n,
-      icValues: raw.ic_values ?? [],
-      icDates: raw.ic_dates ?? [],
-      adfPvalue: raw.adf_pvalue,
-      kpssPvalue: raw.kpss_pvalue,
-      isStationary: raw.is_stationary,
-      quantileBins: this.mapQuantileBins(raw.quantile_bins),
-      isMonotonic: raw.is_monotonic,
-      monotonicityRatio: raw.monotonicity_ratio,
-      passedValidation: raw.passed_validation,
-      robustness: raw.robustness ? this.mapRobustness(raw.robustness as Record<string, unknown>) : undefined,
-      featureSpec: raw.feature_spec ? this.mapFeatureSpec(raw.feature_spec as Record<string, unknown>) : undefined,
-      validationVerdict: raw.validation_verdict
-        ? this.mapValidationVerdict(raw.validation_verdict as Record<string, unknown>)
-        : undefined,
-      targetMetadata: raw.target
-        ? {
-            targetName: raw.target.target_name,
-            horizonMinutes: raw.target.horizon_minutes,
-            horizonBars: raw.target.horizon_bars,
-            barMinutes: raw.target.bar_minutes,
-            timezone: raw.target.timezone,
-            validCount: raw.target.valid_count,
-            totalCount: raw.target.total_count,
-            validRatio: raw.target.valid_ratio,
-            invalidReasonCounts: raw.target.invalid_reason_counts,
-          }
-        : null,
-      dataSource: raw.data_source ? mapLakeStudyDataSource(raw.data_source) : null,
-      error: raw.error ?? undefined,
-    };
-  }
-
-  private mapQuantileBins(raw: unknown[]): QuantileBin[] {
-    if (!Array.isArray(raw)) return [];
-    return (raw as Record<string, unknown>[]).map(b => ({
-      binNumber: b['bin_number'] as number,
-      lowerBound: b['lower_bound'] as number,
-      upperBound: b['upper_bound'] as number,
-      meanReturn: b['mean_return'] as number,
-      count: b['count'] as number,
-    }));
-  }
-
-  private mapRobustness(r: Record<string, unknown>): Robustness {
-    const monthly = (r['monthly_breakdown'] as Record<string, unknown>[] | null) ?? [];
-    const rolling = (r['rolling_t_stat'] as Record<string, unknown>[] | null) ?? [];
-    const volRegimes = (r['volatility_regimes'] as Record<string, unknown>[] | null) ?? [];
-    const trendRegimes = (r['trend_regimes'] as Record<string, unknown>[] | null) ?? [];
-    const breaks = (r['structural_breaks'] as Record<string, unknown>[] | null) ?? [];
-    const tt = r['train_test'] as Record<string, unknown> | null;
-
-    return {
-      monthlyBreakdown: monthly.map((m): MonthlyICBreakdown => ({
-        month: m['month'] as string,
-        meanIC: m['mean_ic'] as number,
-        tStat: m['t_stat'] as number,
-        observationCount: m['observation_count'] as number,
-      })),
-      pctPositiveMonths: r['pct_positive_months'] as number,
-      pctSignificantMonths: r['pct_significant_months'] as number,
-      bestMonthIC: r['best_month_ic'] as number,
-      worstMonthIC: r['worst_month_ic'] as number,
-      stabilityLabel: r['stability_label'] as string,
-      pctSignConsistentMonths: r['pct_sign_consistent_months'] as number,
-      signConsistentStabilityLabel: r['sign_consistent_stability_label'] as string,
-      rollingTStat: rolling.map((p): RollingTStatPoint => ({
-        month: p['month'] as string,
-        tStatSmoothed: p['t_stat_smoothed'] as number,
-      })),
-      volatilityRegimes: volRegimes.map((v): RegimeIC => ({
-        regimeLabel: v['regime_label'] as string,
-        meanIC: v['mean_ic'] as number,
-        tStat: v['t_stat'] as number,
-        observationCount: v['observation_count'] as number,
-      })),
-      trendRegimes: trendRegimes.map((v): RegimeIC => ({
-        regimeLabel: v['regime_label'] as string,
-        meanIC: v['mean_ic'] as number,
-        tStat: v['t_stat'] as number,
-        observationCount: v['observation_count'] as number,
-      })),
-      trainTest: tt
-        ? {
-            trainStart: tt['train_start'] as string,
-            trainEnd: tt['train_end'] as string,
-            testStart: tt['test_start'] as string,
-            testEnd: tt['test_end'] as string,
-            trainMeanIC: tt['train_mean_ic'] as number,
-            trainTStat: tt['train_t_stat'] as number,
-            trainDays: tt['train_days'] as number,
-            testMeanIC: tt['test_mean_ic'] as number,
-            testTStat: tt['test_t_stat'] as number,
-            testDays: tt['test_days'] as number,
-            overfitFlag: tt['overfit_flag'] as boolean,
-            oosRetention: tt['oos_retention'] as number,
-            oosRetentionLabel: tt['oos_retention_label'] as string,
-          } satisfies TrainTestSplit
-        : null,
-      structuralBreaks: breaks.map((b): StructuralBreakPoint => ({
-        date: b['date'] as string,
-        icBefore: b['ic_before'] as number,
-        icAfter: b['ic_after'] as number,
-        tStat: b['t_stat'] as number,
-        significant: b['significant'] as boolean,
-      })),
-    };
-  }
-
-  private mapFeatureSpec(r: Record<string, unknown>): FeatureValidationSpec {
-    return {
-      featureName: r['feature_name'] as string,
-      defaultTarget: r['default_target'] as string,
-      expectedDirection: r['expected_direction'] as string,
-      expectedShape: r['expected_shape'] as string,
-      stationarityRequired: r['stationarity_required'] as boolean,
-      monotonicityRequired: r['monotonicity_required'] as boolean,
-      isSignedTargetAppropriate: r['is_signed_target_appropriate'] as boolean,
-      intent: r['intent'] as string,
-      notes: (r['notes'] as string[]) ?? [],
-    };
-  }
-
-  private mapScreen(r: Record<string, unknown>): ValidationScreen {
-    return {
-      name: r['name'] as string,
-      description: r['description'] as string,
-      passed: r['passed'] as boolean,
-      requiredForStage1: r['required_for_stage1'] as boolean,
-      failureReasons: (r['failure_reasons'] as string[]) ?? [],
-    };
-  }
-
-  private mapValidationVerdict(r: Record<string, unknown>): FeatureValidationVerdict {
-    const mt = r['multiple_testing'] as Record<string, unknown>;
-    const cv = r['cost_viability'] as Record<string, unknown>;
-    const ci = r['ic_ci'] as Record<string, unknown>;
-    const si = r['stage_info'] as Record<string, unknown>;
-    const criteria = (si['advance_criteria'] as Record<string, unknown>[]) ?? [];
-
-    return {
-      statisticalScreen: this.mapScreen(r['statistical_screen'] as Record<string, unknown>),
-      economicScreen: this.mapScreen(r['economic_screen'] as Record<string, unknown>),
-      oosScreen: this.mapScreen(r['oos_screen'] as Record<string, unknown>),
-      multipleTestingScreen: this.mapScreen(r['multiple_testing_screen'] as Record<string, unknown>),
-      regimeStabilityScreen: this.mapScreen(r['regime_stability_screen'] as Record<string, unknown>),
-      multipleTesting: {
-        rawNwPValue: mt['raw_nw_p_value'] as number,
-        holmPValue: mt['holm_p_value'] as number,
-        nFamily: mt['n_family'] as number,
-        note: mt['note'] as string,
-      } satisfies MultipleTestingWarning,
-      costViability: {
-        grossSpreadBpsSigned: cv['gross_spread_bps_signed'] as number,
-        directionalSpreadBps: cv['directional_spread_bps'] as number,
-        costAssumptionOneWayBps: cv['cost_assumption_one_way_bps'] as number,
-        costErasureOneWayBps: cv['cost_erasure_one_way_bps'] as number,
-        netSpreadBpsAtAssumption: cv['net_spread_bps_at_assumption'] as number,
-        viableAtAssumption: cv['viable_at_assumption'] as boolean,
-        specDirection: cv['spec_direction'] as string,
-        note: cv['note'] as string,
-      } satisfies CostViability,
-      icCi: {
-        point: ci['point'] as number,
-        se: ci['se'] as number,
-        ciLower: ci['ci_lower'] as number,
-        ciUpper: ci['ci_upper'] as number,
-        confidenceLevel: ci['confidence_level'] as number,
-        nEffUsed: ci['n_eff_used'] as number,
-        valid: ci['valid'] as boolean,
-        seApproximationNote: ci['se_approximation_note'] as string,
-      } satisfies IcCi,
-      directionMatchesSpec: r['direction_matches_spec'] as boolean,
-      targetSignedAppropriate: r['target_signed_appropriate'] as boolean,
-      stageInfo: {
-        stage: si['stage'] as 0 | 1 | 2 | 3,
-        label: si['label'] as string,
-        description: si['description'] as string,
-        nextStageLabel: si['next_stage_label'] as string,
-        advanceCriteria: criteria.map((c): FeatureStageCriterion => ({
-          name: c['name'] as string,
-          description: c['description'] as string,
-          currentValue: c['current_value'] as number,
-          requiredRepr: c['required_repr'] as string,
-          met: c['met'] as boolean,
-        })),
-        failedScreens: (si['failed_screens'] as string[]) ?? [],
-      } satisfies FeatureStageInfo,
-      finalDecision: r['final_decision'] as string,
-    };
   }
 }

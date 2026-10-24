@@ -1,0 +1,35 @@
+<section class="data-gaps" aria-label="Gaps in the window">
+  <h3 class="data-gaps__heading">Gaps</h3>
+  @if (stretches().length === 0) {
+    <p class="data-gaps__none">No gaps: every finished session in this window is ready.</p>
+  } @else {
+    <p class="data-gaps__count">{{ stretches().length }} {{ stretches().length === 1 ? 'stretch' : 'stretches' }} of sessions a run cannot read.</p>
+    <div class="data-gaps__scroll">
+      <table class="data-gaps__table">
+        <thead>
+          <tr>
+            <th scope="col">Sessions</th>
+            <th scope="col">Count</th>
+            <th scope="col">State</th>
+            <th scope="col">Why, and what a Fill does</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (stretch of stretches(); track stretch.firstMs) {
+            <tr [attr.data-fetchable]="stretch.fetchable">
+              <td>
+                {{ stretch.firstMs | timestampDisplay: 'date-et' : 'date' }}
+                @if (stretch.lastMs !== stretch.firstMs) {
+                  to {{ stretch.lastMs | timestampDisplay: 'date-et' : 'date' }}
+                }
+              </td>
+              <td>{{ stretch.count }}</td>
+              <td>{{ stateLabel(stretch) }}</td>
+              <td>{{ causeText(stretch) }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+</section>

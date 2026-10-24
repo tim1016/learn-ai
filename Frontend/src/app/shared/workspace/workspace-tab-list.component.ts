@@ -10,7 +10,9 @@ export interface WorkspaceTabItem<Id extends string = string> extends WorkspaceT
    * workspace still shows what it has rather than quietly shrinking to what
    * this instance can reach. */
   readonly route: readonly string[] | null;
-  /** Why the tab has no address. Read out beside the greyed tab; never drawn. */
+  /** Query the tab's link carries, for a workspace whose context rides in the address. */
+  readonly queryParams?: Readonly<Record<string, string>>;
+  /** Why the tab has no address. Read out beside the greyed tab, and shown as its tooltip. */
   readonly unavailableReason?: string;
 }
 

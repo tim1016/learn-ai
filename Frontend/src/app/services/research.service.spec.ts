@@ -7,43 +7,6 @@ import { environment } from '../../environments/environment';
 
 const BASE = `${environment.pythonServiceUrl}/api/research`;
 
-const EXPERIMENT_ROW = {
-  id: 1,
-  ticker: 'AAPL',
-  feature_name: 'momentum_5m',
-  start_date: '2024-01-01',
-  end_date: '2024-03-31',
-  bars_used: 200,
-  mean_ic: 0.15,
-  ic_t_stat: 2.5,
-  ic_p_value: 0.02,
-  adf_p_value: 0.001,
-  kpss_p_value: 0.3,
-  is_stationary: true,
-  passed_validation: true,
-  monotonicity_ratio: 1.0,
-  is_monotonic: true,
-  created_at_ms: Date.UTC(2024, 3, 1),
-};
-
-const SIGNAL_ROW = {
-  id: 7,
-  ticker: 'AAPL',
-  feature_name: 'momentum_5m',
-  start_date: '2024-01-01',
-  end_date: '2024-03-31',
-  bars_used: 200,
-  overall_grade: 'B',
-  status_label: 'Candidate',
-  overall_passed: true,
-  mean_oos_sharpe: 0.8,
-  best_threshold: 1.0,
-  best_cost_bps: 5,
-  flip_sign: true,
-  regime_gate_enabled: true,
-  created_at_ms: Date.UTC(2024, 3, 1),
-};
-
 /** A report with every optional block present, so each mapper has something to read. */
 const FULL_REPORT = {
   success: true,
@@ -142,61 +105,6 @@ describe('ResearchService', () => {
 
   afterEach(() => {
     httpMock.verify();
-  });
-
-  describe('getExperiments', () => {
-    it('reads the ticker\'s experiments and maps them to the camelCase view model with the instant in ms', async () => {
-      const pending = firstValueFrom(service.getExperiments('AAPL'));
-
-      const req = httpMock.expectOne(r => r.url === `${BASE}/experiments`);
-      expect(req.request.method).toBe('GET');
-      expect(req.request.params.get('ticker')).toBe('AAPL');
-      req.flush([EXPERIMENT_ROW]);
-
-      await expect(pending).resolves.toEqual([{
-        id: 1, ticker: 'AAPL', featureName: 'momentum_5m', startDate: '2024-01-01', endDate: '2024-03-31', barsUsed: 200,
-        meanIC: 0.15, icTStat: 2.5, icPValue: 0.02, adfPValue: 0.001, kpssPValue: 0.3, isStationary: true,
-        passedValidation: true, monotonicityRatio: 1.0, isMonotonic: true, createdAt: Date.UTC(2024, 3, 1),
-      }]);
-    });
-
-    it('rejects with Python\'s sentence when the store is unreachable', async () => {
-      const pending = firstValueFrom(service.getExperiments('AAPL'));
-
-      httpMock.expectOne(r => r.url === `${BASE}/experiments`).flush(
-        { detail: { code: 'RESEARCH_EXPERIMENTS_STORE_UNAVAILABLE', message: 'The stored experiments could not be reached.' } },
-        { status: 503, statusText: 'Service Unavailable' },
-      );
-
-      await expect(pending).rejects.toThrow('Could not load the experiment history: The stored experiments could not be reached.');
-    });
-  });
-
-  describe('getSignalExperiments', () => {
-    it('reads the ticker\'s signal experiments and maps their headline fields', async () => {
-      const pending = firstValueFrom(service.getSignalExperiments('AAPL'));
-
-      const req = httpMock.expectOne(r => r.url === `${BASE}/signal-experiments`);
-      expect(req.request.params.get('ticker')).toBe('AAPL');
-      req.flush([SIGNAL_ROW]);
-
-      await expect(pending).resolves.toEqual([{
-        id: 7, ticker: 'AAPL', featureName: 'momentum_5m', startDate: '2024-01-01', endDate: '2024-03-31', barsUsed: 200,
-        overallGrade: 'B', statusLabel: 'Candidate', overallPassed: true, meanOosSharpe: 0.8, bestThreshold: 1.0,
-        bestCostBps: 5, flipSign: true, regimeGateEnabled: true, createdAt: Date.UTC(2024, 3, 1),
-      }]);
-    });
-
-    it('rejects with a refused ticker\'s validation reason', async () => {
-      const pending = firstValueFrom(service.getSignalExperiments(''));
-
-      httpMock.expectOne(r => r.url === `${BASE}/signal-experiments`).flush(
-        { detail: [{ msg: 'String should have at least 1 character' }] },
-        { status: 422, statusText: 'Unprocessable Entity' },
-      );
-
-      await expect(pending).rejects.toThrow('Could not load the signal history: String should have at least 1 character');
-    });
   });
 
   describe('getSignalExperimentReport', () => {

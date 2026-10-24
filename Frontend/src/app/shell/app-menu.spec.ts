@@ -13,7 +13,7 @@ import { HELP_DOCUMENTS } from '../shared/help/help-documents';
 
 describe('app menu projections', () => {
   it('projects the canonical menu: six groups in order, each a trigger, none for documents, Accounts offering only Accounts', () => {
-    const groups = menuItemsFor('/data-lab');
+    const groups = menuItemsFor('/markets');
 
     for (const group of groups) {
       expect.soft(group.routerLink, `keeps the ${group.label} group a trigger, never a destination`).toBeUndefined();
@@ -58,22 +58,24 @@ describe('app menu projections', () => {
     expect(APP_MENU[0].title).toBe('Markets');
   });
 
-  it('marks the active group and entry, including Edge pages nested within Research', () => {
-    const groups = menuItemsFor('/pricing-lab');
+  it('marks the active group and entry, including demonstrations nested within Research', () => {
+    const groups = menuItemsFor('/markets/SPY/options/pricing');
     const markets = groups.find((group) => group.label === 'Markets');
 
     expect.soft(markets?.styleClass, 'marks the active group').toBe(ACTIVE_GROUP_CLASS);
-    expect.soft(markets?.items?.find((item) => item.label === 'Pricing Lab')?.styleClass, 'marks the active entry').toBe(ACTIVE_ITEM_CLASS);
-    expect.soft(markets?.items?.find((item) => item.label === 'Options Lab')?.styleClass, 'leaves the other entries unmarked').toBeUndefined();
+    expect.soft(markets?.items?.find((item) => item.label === 'Markets')?.styleClass, 'marks the active entry').toBe(ACTIVE_ITEM_CLASS);
+    const otherGroupsEntries = groups.filter((group) => group.label !== 'Markets').flatMap((group) => group.items ?? []);
+    expect.soft(otherGroupsEntries.filter((item) => item.styleClass !== undefined), 'leaves the other entries unmarked').toEqual([]);
     expect.soft(groups.filter((group) => group.styleClass === ACTIVE_GROUP_CLASS), 'marks exactly one group').toHaveLength(1);
 
-    const edgeGroups = menuItemsFor('/edge/regimes');
-    const research = edgeGroups.find((group) => group.label === 'Research');
+    const demoGroups = menuItemsFor('/research/demos/regimes');
+    const research = demoGroups.find((group) => group.label === 'Research');
 
-    expect.soft(edgeGroups.map((group) => group.label), 'nests Edge Analysis within Research instead of a separate top-level group').not.toContain('Edge Analysis');
-    expect.soft(research?.items?.find((item) => item.label === 'Edge Analysis')?.routerLink, 'links Edge Analysis from Research').toBe('/edge');
-    expect.soft(research?.items?.find((item) => item.label === 'Regimes')?.styleClass, 'marks the Regimes entry active').toBe(ACTIVE_ITEM_CLASS);
-    expect.soft(research?.styleClass, 'marks the Research group active for an Edge page').toBe(ACTIVE_GROUP_CLASS);
+    expect.soft(demoGroups.map((group) => group.label), 'nests the demonstrations within Research instead of a separate top-level group').not.toContain('Edge Analysis');
+    expect.soft(research?.items?.find((item) => item.label === 'Studies')?.routerLink, 'opens Research on its study list').toBe('/research');
+    expect.soft(research?.items?.find((item) => item.label === 'Regimes demo')?.styleClass, 'marks the Regimes demo entry active').toBe(ACTIVE_ITEM_CLASS);
+    expect.soft(research?.items?.find((item) => item.label === 'Studies')?.styleClass, 'leaves the list entry unmarked inside a study').toBeUndefined();
+    expect.soft(research?.styleClass, 'marks the Research group active for a demonstration').toBe(ACTIVE_GROUP_CLASS);
   });
 
   it('marks the group but no entry for a page the menu does not list', () => {
@@ -89,7 +91,7 @@ describe('app menu projections', () => {
     expect(menuItemsFor('/unlisted-page').every((group) => group.styleClass === undefined)).toBe(true);
   });
 
-  it('places the Operations tabs in Operations and the Return Distribution study in Markets', () => {
+  it('places the Operations tabs in Operations', () => {
     const operations = menuItemsFor('/operations/backups').find((group) => group.label === 'Operations');
 
     expect.soft(
@@ -103,23 +105,11 @@ describe('app menu projections', () => {
     expect.soft(windowTitleFor('/operations/lake'), 'titles the window for the Lake tab').toBe(`${operationsTabLabel('lake')} · Operations`);
     expect.soft(windowTitleFor('/operations/math-checks'), 'titles the window for the Math checks tab').toBe(`${operationsTabLabel('math-checks')} · Operations`);
     expect.soft(windowTitleFor('/operations/data-checks/pre-flight'), 'titles a check by the tab that holds it').toBe(`${operationsTabLabel('data-checks')} · Operations`);
-
-    // The study route is longer than the Stocks entry, so the longest-match
-    // resolution must prefer it — the page highlights its own item.
-    const returnsEntry = menuItemsFor('/data-lab/returns')
-      .find((group) => group.label === 'Markets')
-      ?.items?.find((item) => item.label === 'Return Distribution');
-
-    expect.soft(returnsEntry?.routerLink, 'links the Return Distribution entry to /data-lab/returns').toBe('/data-lab/returns');
-    expect.soft(returnsEntry?.styleClass, 'marks the Return Distribution entry active').toBe(ACTIVE_ITEM_CLASS);
-    expect.soft(activeMenuNodeFor('/data-lab/returns')?.item.route, 'resolves /data-lab/returns to its own menu node').toBe('/data-lab/returns');
-    expect.soft(windowTitleFor('/data-lab/returns'), 'titles the window for Return Distribution').toBe('Return Distribution · Markets');
   });
 
   it('titles the window Page · Group, and an account page by its group alone', () => {
     expect.soft(windowTitleFor('/options-backtest'), 'Options Backtest sits in Options setups').toBe('Options Backtest · Options setups');
-    expect.soft(windowTitleFor('/pricing-lab'), 'Pricing Lab sits in Markets').toBe('Pricing Lab · Markets');
-    expect.soft(windowTitleFor('/data-lab'), 'the Data Lab route is presented as Stocks').toBe('Stocks · Markets');
+    expect.soft(windowTitleFor('/markets'), 'the Markets list is titled by its menu label, once').toBe('Markets');
     expect.soft(windowTitleFor('/brokers/alpaca?deploy='), 'the account list says Accounts once').toBe('Accounts');
     expect.soft(windowTitleFor('/unlisted-page'), 'a page outside every group has no menu title').toBeNull();
     expect.soft(activeMenuNodeFor('/unlisted-page'), 'highlights nothing for a route outside the menu').toBeNull();
@@ -129,17 +119,25 @@ describe('app menu projections', () => {
   // declared route, direct-loaded). These rows pin the entry the menu lights,
   // where it is not simply the route's own listed name.
   it.each([
-    // A shell's children light the shell's entry.
-    ['/data-lab/export', 'Markets', 'Stocks'],
-    ['/options-lab/chain', 'Markets', 'Options Lab'],
+    // A shell's children light the shell's entry; an instrument's place, on
+    // any tab or sub-page, lights Markets.
+    ['/markets/SPY/chart', 'Markets', 'Markets'],
+    ['/markets/SPY/chart/news', 'Markets', 'Markets'],
+    ['/markets/SPY/data/build', 'Markets', 'Markets'],
     ['/options-lab/strategy-finder', 'Markets', 'Options Lab'],
-    ['/research-lab/strategy-runs/run-42', 'Research', 'Research Lab'],
-    ['/edge/regimes', 'Research', 'Regimes'],
+    // A spec run is Research evidence at its native address, never a registry strategy's.
+    ['/research/history/spec-run/run-42', 'Research', 'History'],
+    ['/research', 'Research', 'Studies'],
+    ['/research/feature', 'Research', 'Feature study'],
+    ['/research/realized-vs-iv', 'Research', 'Realized vs implied vol'],
+    ['/research/demos/regimes', 'Research', 'Regimes demo'],
+    ['/research/rule-sandbox', 'Research', 'Rule sandbox'],
+    ['/research/history', 'Research', 'History'],
+    ['/research/history/signal-report/42', 'Research', 'History'],
     ['/golden-search/study-9', 'Signal strategies', 'Golden Search'],
     ['/options-golden-search/study-9', 'Options setups', 'Options Golden Search'],
     // Pages the menu does not list, though another place's shell still hosts them:
-    // instrument headlines are Markets', the multi-strategy comparison Signal strategies'.
-    ['/research-lab/market/news', 'Markets', 'Ticker News'],
+    // the multi-strategy comparison is Signal strategies'.
     ['/research-lab/backtests/recency-chart', 'Signal strategies', 'Recency Chart'],
     // The analytical builder is an Options Lab tab, filed under Options setups (R32).
     ['/options-lab/strategy-builder', 'Options setups', 'Strategy Builder'],

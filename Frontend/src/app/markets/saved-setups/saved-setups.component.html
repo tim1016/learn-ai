@@ -1,0 +1,61 @@
+<section class="saved-setups" aria-label="Saved setups">
+  <div class="saved-setups__head">
+    <h2>Saved setups</h2>
+    <button type="button" (click)="closed.emit()" aria-label="Close saved setups">Close</button>
+  </div>
+
+  <div class="saved-setups__save">
+    <input
+      type="text"
+      name="saved-setup-name"
+      placeholder="Setup name"
+      [value]="setups.name()"
+      (input)="onNameInput($event)"
+    />
+    <button type="button" (click)="setups.save()" [disabled]="setups.saving() || !setups.canSave()">
+      {{ setups.activeId() ? 'Update setup' : 'Save setup' }}
+    </button>
+    <button type="button" (click)="setups.saveAsNew()" [disabled]="setups.saving() || !setups.canSave()">
+      Save as new
+    </button>
+    @if (setups.activeId()) {
+      <button type="button" (click)="setups.detach()">Detach</button>
+    }
+  </div>
+
+  @if (setups.error(); as err) {
+    <p class="saved-setups__error" role="alert">{{ err }}</p>
+  }
+
+  <ul class="saved-setups__list">
+    @for (session of setups.list(); track session.id) {
+      <li class="saved-setups__row">
+        @if (renamingId() === session.id) {
+          <input
+            type="text"
+            name="saved-setup-rename"
+            [value]="renameValue()"
+            (input)="onRenameInput($event)"
+            (keydown.enter)="confirmRename(session.id)"
+            (keydown.escape)="renamingId.set(null)"
+          />
+          <button type="button" (click)="confirmRename(session.id)">Save</button>
+          <button type="button" (click)="renamingId.set(null)">Cancel</button>
+        } @else {
+          <button type="button" class="saved-setups__open" (click)="open(session.id)">
+            <app-asset-identity [symbol]="session.ticker" [size]="'sm'" />
+            <span class="saved-setups__name">{{ session.name }}</span>
+            <span class="saved-setups__meta">
+              {{ session.fromDate }} → {{ session.toDate }} · {{ session.indicatorCount }} indicators ·
+              {{ session.updatedAtMs | timestampDisplay: 'local' : 'datetime' }}
+            </span>
+          </button>
+          <button type="button" aria-label="Rename setup" (click)="startRenaming(session)">Rename</button>
+          <button type="button" aria-label="Delete setup" (click)="setups.remove(session.id)">Delete</button>
+        }
+      </li>
+    } @empty {
+      <li class="saved-setups__empty">No saved setups yet.</li>
+    }
+  </ul>
+</section>
