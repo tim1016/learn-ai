@@ -392,7 +392,7 @@ test.describe('Account-first Alpaca navigation', () => {
 
     // The account list: one heading, one card per account, no chooser.
     await page.goto('/brokers/alpaca');
-    await expect(page.getByRole('heading', { name: 'Alpaca' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Accounts', level: 1 })).toBeVisible();
     await expect(page.getByRole('list', { name: 'Alpaca accounts' })).toBeVisible();
     await expect(page.getByRole('heading')).toHaveCount(1);
 
@@ -515,7 +515,7 @@ test.describe('Account-first Alpaca navigation', () => {
     // nest a second <main> in the shell's; AXE runs here once the route has
     // rendered, every rule, so the landmark rules see the real shell (#2689).
     await page.goto('/data-lab');
-    await expect(page.getByRole('heading', { name: 'Data Lab', level: 1 })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Stocks', level: 1 })).toBeVisible();
     const axe = await new AxeBuilder({ page }).analyze();
     expect(
       axe.violations.map(({ id, nodes }) => `${id}: ${nodes.map((node) => node.target.join(' ')).join(' | ')}`),
@@ -527,14 +527,15 @@ test.describe('Account-first Alpaca navigation', () => {
     await expect(page.getByRole('region', { name: 'Home' })).toBeVisible();
   });
 
-  test('offers Alpaca as Accounts alone, and retires the broker-wide surfaces', async ({ page }) => {
+  test('offers the Accounts group as Accounts alone, and retires the broker-wide surfaces', async ({ page }) => {
     await installFleetBoundary(page);
 
     await page.goto('/data-lab');
-    await page.getByRole('menuitem', { name: 'Alpaca' }).click();
-    const alpaca = page.getByRole('menuitem', { name: 'Alpaca' });
-    await expect(alpaca.getByRole('menuitem')).toHaveCount(1);
-    await expect(alpaca.getByRole('menuitem', { name: 'Accounts' })).toBeVisible();
+    // The group and its one entry share a name; the group comes first in the tree.
+    const accounts = page.getByRole('menuitem', { name: 'Accounts', exact: true }).first();
+    await accounts.click();
+    await expect(accounts.getByRole('menuitem')).toHaveCount(1);
+    await expect(accounts.getByRole('menuitem', { name: 'Accounts', exact: true })).toBeVisible();
 
     // The chooser bookmarks — and the retired `?surface=` hints that fold
     // onto them — land on the account list rather than 404-ing.
@@ -546,7 +547,7 @@ test.describe('Account-first Alpaca navigation', () => {
     ]) {
       await page.goto(path);
       await expect(page).toHaveURL('/brokers/alpaca');
-      await expect(page.getByRole('heading', { name: 'Alpaca' })).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Accounts', level: 1 })).toBeVisible();
     }
   });
 });

@@ -2,7 +2,6 @@ import { fireEvent, render, screen } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
 
 import { HELP_DOCUMENTS } from '../shared/help/help-documents';
-import { menuItemsFor } from './app-menu';
 import { HelpIndexComponent } from './help-index.component';
 
 async function openIndex() {
@@ -35,18 +34,6 @@ describe('HelpIndexComponent', () => {
     }
     expect(linkOf('Architecture Manual').getAttribute('href')).toBe('/docs/architecture-manual');
     expect(linkOf('Legal Notices').getAttribute('href')).toBe('/legal/notices');
-  });
-
-  it('offers the documents the Documentation menu offers, at the same addresses', async () => {
-    await openIndex();
-    const documentation = menuItemsFor('/data-lab').find((group) => group.label === 'Documentation');
-
-    const menu = (documentation?.items ?? []).map((item) => [item.label, item.routerLink]);
-    const index = screen.getAllByRole('link').map((link) => [
-      link.querySelector('.panel__title')?.textContent,
-      link.getAttribute('href'),
-    ]);
-    expect(index).toEqual(menu);
   });
 
   it('closes when a document is chosen or a press lands elsewhere', async () => {

@@ -1,7 +1,10 @@
+import { inject } from '@angular/core';
+import { Router, type RedirectFunction } from '@angular/router';
+
 /* Legacy Data Lab URL ingress adapter.
  *
  * Pure resolver for pre-redesign /data-lab and /data-quality URLs. It maps a
- * legacy URL to one of the three canonical child routes plus a validated,
+ * legacy URL to one of the canonical child routes plus a validated,
  * string-only param bag. Unknown keys are dropped with a warning; invalid
  * values (bad mode, non-UUID sessionId, malformed recipe entries) are dropped
  * or ignored with warnings rather than failing the redirect. Resolved state
@@ -11,7 +14,11 @@
  * Indicator recipe params are treated opaquely for now (Phase 1): known keys
  * are kept verbatim, everything else is dropped with a warning. */
 
-export type DataLabRoute = '/data-lab/explore' | '/data-lab/export' | '/data-lab/validate';
+export type DataLabRoute =
+  | '/data-lab/explore'
+  | '/data-lab/export'
+  | '/data-lab/validate'
+  | '/data-lab/returns';
 
 export interface LegacyDataLabResolution {
   route: DataLabRoute;
@@ -37,6 +44,33 @@ const MODE_TO_ROUTE: Readonly<Record<string, DataLabRoute>> = {
   export: '/data-lab/export',
   validate: '/data-lab/validate',
 };
+
+/** The child a legacy `mode` names, or `undefined` for a value that names none. */
+function routeForMode(mode: unknown): DataLabRoute | undefined {
+  return typeof mode === 'string' && Object.hasOwn(MODE_TO_ROUTE, mode) ? MODE_TO_ROUTE[mode] : undefined;
+}
+
+/**
+ * The redirect for a legacy Data Lab address (`/data-lab`, `/data-quality`).
+ *
+ * It goes straight to the child the address names — `mode` decides, else
+ * `fallback` — in the navigation the router is already making. Everything
+ * else the bookmark carried stays in the URL: the query, which the shell
+ * reads to populate the workspace and to name what it ignored, and the
+ * fragment (`#option-archive-…`). Only a `mode` that names a child is spent,
+ * because the path now says it; one that names none stays so the shell can
+ * report it.
+ */
+export function redirectLegacyDataLab(fallback: DataLabRoute): RedirectFunction {
+  return ({ queryParams, fragment }) => {
+    const named = routeForMode(queryParams['mode']);
+    const { mode: _spent, ...rest } = queryParams;
+    return inject(Router).createUrlTree([named ?? fallback], {
+      queryParams: named === undefined ? queryParams : rest,
+      fragment: fragment ?? undefined,
+    });
+  };
+}
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -67,11 +101,11 @@ export function resolveLegacyDataLabUrl(url: string): LegacyDataLabResolution {
   // /data-lab/validate redirect preserves the query string, so the shell
   // first sees the REDIRECTED URL — keying only on the original legacy
   // paths would drop the bookmark's ticker/range before this runs.
-  const canonical = /^\/data-lab\/(explore|export|validate)$/.exec(path);
+  const canonical = /^\/data-lab\/(explore|export|validate|returns)$/.exec(path);
   if (canonical) route = canonical[0] as DataLabRoute;
   const mode = query.get('mode');
   if (mode !== null) {
-    const mapped = MODE_TO_ROUTE[mode];
+    const mapped = routeForMode(mode);
     if (mapped) route = mapped;
     else warnings.push(`Dropped invalid mode "${mode}"`);
   } else if (isQualityPath) {

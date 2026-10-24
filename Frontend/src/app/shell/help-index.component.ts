@@ -5,8 +5,9 @@ import { HELP_DOCUMENTS } from '../shared/help/help-documents';
 /**
  * The top bar's "?": an index of every served document.
  *
- * Each link opens its document, at the address the Documentation menu uses,
- * in a new browser tab. The page being read keeps its selected symbol and
+ * Each link opens its document, at the address the document is served at, in a
+ * new browser tab. This index is the only way to every document from the shell:
+ * the menu has no Documentation group (ADR 0084). The page being read keeps its selected symbol and
  * dates, which live in memory and not in the URL, so closing the tab is the
  * way back to the task.
  */
