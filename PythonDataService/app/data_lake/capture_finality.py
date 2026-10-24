@@ -27,6 +27,10 @@ early when that earliest possible request precedes the final instant.
 renewed by a retry or a re-capture, so it could not clear once a day is captured
 again, and it dates a retried fetch from its first, failed attempt.
 
+A consumer that captures for itself must therefore start a lease after the final
+instant (``capture_final_ms + CLAIM_LEASE_MS``): every claim still live then was taken
+after it, and every capture the consumer makes is final under this rule.
+
 Canonical implementation: this file. The calendar owns ``close``; the tail, the
 delay and the lease are the vendor's and the lake's, named here once, and so is
 the pre-market head that bounds the extended tape from the other side (finality
