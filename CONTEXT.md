@@ -1628,6 +1628,20 @@ these are the others.
   it. A registered program that trades options is still a signal strategy.
   _Avoid_: strategy (alone, when an options setup could be meant), algo, bot (a bot
   is a deployed run).
+- **Explore** — a signal strategy's tab for trying its settings out: **Backtest**
+  (one saved run, with Strategy Lab's workbench and history), **Sweep** (a Grid
+  Search over a grid of settings) and **Walk-forward** (a study that tests each
+  training winner on the window after it), each with its own history. Everything in
+  it is exploratory and in-sample, and nothing in it approves settings: approval is
+  Golden's. A run or search opens only under the strategy that produced it.
+  _Avoid_: Strategy Lab, Engine Lab, the Grid Search page (the old tool names; their
+  addresses redirect to the owning strategy's Explore).
+- **Handoff** — the move from one Explore tool to the next (Backtest to Sweep to
+  Walk-forward). It carries what the next tool can take, lists what it cannot and
+  why, names what is left to choose, and starts nothing: the next tool opens its
+  form on the carried values, checks them against its own schema, and runs only
+  when the owner launches it.
+  _Avoid_: promote (a handoff approves nothing), send to (it starts nothing).
 - **Options setup** — one saved setup (see Options Backtest) as a place, with its
   tabs: Overview, Define, Explore and Golden. The saved name addresses the current
   draft; an approved version is addressed by its Golden Options ID and exact
