@@ -1,32 +1,26 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
+import { ActivatedRoute, convertToParamMap } from '@angular/router';
+import { of } from 'rxjs';
 import { render, screen, waitFor } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
 import { environment } from '../../../../environments/environment';
 import { ValidateComponent } from './validate.component';
-import { createDataLabWorkspaceStore, DataLabWorkspaceStore } from '../data-lab-workspace-store';
 
-async function renderValidate() {
+async function renderValidate(query: Record<string, string> = { ticker: 'SPY' }) {
+  const paramMap = convertToParamMap(query);
   const result = await render(ValidateComponent, {
     providers: [
-      provideRouter([]),
       provideHttpClient(),
       provideHttpClientTesting(),
-      { provide: DataLabWorkspaceStore, useFactory: createDataLabWorkspaceStore },
+      { provide: ActivatedRoute, useValue: { queryParamMap: of(paramMap), snapshot: { queryParamMap: paramMap } } },
     ],
   });
   const http = TestBed.inject(HttpTestingController);
-  const store = result.fixture.componentInstance.store;
-  store.patchDraft({
-    ticker: 'SPY',
-    window: { startMsUtc: Date.UTC(2026, 3, 15), endMsUtc: Date.UTC(2026, 4, 15) },
-  });
-  store.commitScope();
-  return { ...result, http, store, component: result.fixture.componentInstance };
+  return { ...result, http, component: result.fixture.componentInstance };
 }
 
 describe('ValidateComponent', () => {

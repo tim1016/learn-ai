@@ -4,7 +4,7 @@ import {
   exportTimeZoneOptions,
   toggleExportColumn,
   type ExportColumnSelection,
-} from '../export-csv-options';
+} from '../../../../components/data-lab/export-csv-options';
 
 /**
  * dataset.csv column and time choices (owner decision 2026-09-19).

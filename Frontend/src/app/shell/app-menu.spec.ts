@@ -115,7 +115,7 @@ describe('app menu projections', () => {
     // any tab or sub-page, lights Markets.
     ['/markets/SPY/chart', 'Markets', 'Markets'],
     ['/markets/SPY/chart/news', 'Markets', 'Markets'],
-    ['/data-lab/export', 'Markets', 'Build dataset'],
+    ['/markets/SPY/data/build', 'Markets', 'Markets'],
     ['/options-lab/chain', 'Markets', 'Options Lab'],
     ['/options-lab/strategy-finder', 'Markets', 'Options Lab'],
     ['/research-lab/strategy-runs/run-42', 'Research', 'Research Lab'],

@@ -11,11 +11,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { environment } from '../../../environments/environment';
 import { DataLabRangePresetsService, type ChartRangePreset } from '../../services/data-lab-range-presets.service';
 import { DataLabWorkspaceStore } from '../../components/data-lab/data-lab-workspace-store';
+import { RunSessionService } from '../../services/run-session.service';
 import { fakePickerWorld, pickSymbol } from '../../shared/symbol-picker/testing/fake-picker-world';
 import type { VendorSymbolEntry } from '../../shared/symbol-catalog/vendor-catalog.service';
 import { DataLabChartComponent } from '../chart/data-lab-chart/data-lab-chart.component';
 import { InstrumentContextService } from '../instrument-context.service';
 import { MARKETS_ROUTES } from '../markets.routes';
+import { idleRunSession } from '../testing/instrument-place';
 import { InstrumentWorkspaceComponent } from './instrument-workspace.component';
 
 // The canvas chart is not exercised here — what it was asked for and shown is.
@@ -120,6 +122,7 @@ async function open(url: string, pickers = world(), presets: () => Promise<reado
       provideHttpClientTesting(),
       ...pickers.providers,
       { provide: DataLabRangePresetsService, useValue: { presets: vi.fn(presets) } },
+      { provide: RunSessionService, useValue: idleRunSession() },
     ],
   });
   const harness = await RouterTestingHarness.create();

@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
-import type { ExportColumnSelection } from '../export-csv-options';
+import type { ExportColumnSelection } from '../../../../components/data-lab/export-csv-options';
 import { ExportColumnPickerComponent } from './export-column-picker.component';
 
 const COLUMNS = ['open', 'high', 'low', 'close', 'volume', 'rsi_length14'];

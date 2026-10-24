@@ -1,4 +1,4 @@
-// Data Lab Build dataset — one column, document scroll.
+// Build dataset — one column, document scroll.
 @use '../../../styles/tokens' as *;
 
 :host {
@@ -7,20 +7,25 @@
   max-width: 64rem;
 }
 
-.export__muted {
+.build-dataset__title {
+  margin: 0 0 0.25rem;
+  font-size: 1.15rem;
+}
+
+.build-dataset__muted {
   margin: 0 0 0.5rem;
   color: $text-secondary;
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
-.export__error {
+.build-dataset__error {
   color: var(--bear);
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
-.export__stale {
+.build-dataset__stale {
   margin-left: 0.5rem;
   padding: 0.1rem 0.45rem;
   border-radius: 6px;
@@ -31,7 +36,7 @@
   vertical-align: middle;
 }
 
-.export__section {
+.build-dataset__section {
   min-width: 0;
   margin-bottom: 1rem;
   padding: 0.75rem;
@@ -50,7 +55,7 @@
   }
 }
 
-.export__kv {
+.build-dataset__kv {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
   gap: 0.25rem 0.75rem;
@@ -68,7 +73,7 @@
   }
 }
 
-.export__inline {
+.build-dataset__inline {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
@@ -76,7 +81,7 @@
   min-height: 44px;
 }
 
-.export__options-grid {
+.build-dataset__options-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 14rem), 1fr));
   gap: 0.4rem;
@@ -102,7 +107,7 @@
   }
 }
 
-.export__disclosure {
+.build-dataset__disclosure {
   min-width: 0;
   margin-bottom: 0.5rem;
   border: 1px solid $border-light;
@@ -122,27 +127,27 @@
   }
 }
 
-.export__receipt {
+.build-dataset__receipt {
   min-width: 0;
   padding: 0.5rem;
   border: 1px dashed $border-light;
   border-radius: 6px;
 }
 
-.export__cols {
+.build-dataset__cols {
   min-width: 0;
   font-family: ui-monospace, monospace;
   font-size: 0.8rem;
   overflow-wrap: anywhere;
 }
 
-.export__warnings {
+.build-dataset__warnings {
   margin: 0.5rem 0 0;
   padding-left: 1.25rem;
   color: var(--warn);
 }
 
-.export__pre {
+.build-dataset__pre {
   min-width: 0;
   margin: 0;
   padding: 0.5rem;
@@ -152,11 +157,11 @@
   font-size: 0.8rem;
 }
 
-.export__plan-actions {
+.build-dataset__plan-actions {
   margin-bottom: 0.5rem;
 }
 
-.export__secondary {
+.build-dataset__secondary {
   min-height: 44px;
   padding: 0.35rem 0.9rem;
   border: 1px solid $border-light;
@@ -170,7 +175,7 @@
   }
 }
 
-.export__primary {
+.build-dataset__primary {
   min-height: 44px;
   padding: 0.35rem 1.25rem;
   border: 1px solid $accent;

@@ -2,9 +2,9 @@ import type { QuickRangeKey, QuickRangeOffer } from '../../shared/date-picker';
 import type { ChartRangePreset } from '../../services/data-lab-range-presets.service';
 import { utcMsToIsoDate } from './data-lab-request-mapper';
 
-/* The scope vocabulary the Data Lab shell and the instrument workspace share:
- * bar timeframes, the shared quick-range labels for Python's presets, and the
- * one place a calendar date becomes an int64 ms UTC window boundary. Pure. */
+/* The scope vocabulary the instrument place and its saved setups share: bar
+ * timeframes, the shared quick-range labels for Python's presets, and the one
+ * place a calendar date becomes an int64 ms UTC window boundary. Pure. */
 
 export type PolygonTimespan = 'minute' | 'hour' | 'day' | 'week' | 'month';
 
@@ -90,15 +90,10 @@ export function presetQuickRanges(presets: readonly ChartRangePreset[]): readonl
   });
 }
 
-/** The UTC calendar date of a window boundary; empty for ms 0, which is "no window yet", not 1970. */
-export function isoOrEmpty(ms: number): string {
-  return ms > 0 ? utcMsToIsoDate(ms) : '';
-}
-
 /** Parse a strict YYYY-MM-DD string to int64 ms UTC at UTC midnight. The
  *  shared `parseYmd` builds LOCAL-midnight Dates, which would make stored
  *  MsUtc window boundaries shift with the viewer's timezone — every
- *  YMD→ms boundary in this shell therefore goes through `Date.UTC`. Pure;
+ *  YMD→ms boundary here therefore goes through `Date.UTC`. Pure;
  *  returns null for malformed or impossible calendar dates. */
 export function parseYmdMsUtc(s: string): number | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;

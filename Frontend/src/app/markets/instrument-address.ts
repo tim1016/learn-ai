@@ -84,6 +84,16 @@ export function instrumentTabOf(url: string): InstrumentTab | null {
   return INSTRUMENT_TABS.tabs.find((candidate) => candidate.id === tab)?.id ?? null;
 }
 
+/**
+ * The page of an instrument address below its symbol (`['data', 'build']`), or
+ * `null` for any other address or a tab this place's saved setups do not open on.
+ */
+export function instrumentPageOf(url: string): readonly string[] | null {
+  if (instrumentSymbolOf(url) === null) return null;
+  const [, , , tab, ...rest] = routePathOf(url).split('/');
+  return tab === 'chart' || tab === 'returns' || tab === 'data' ? [tab, ...rest] : null;
+}
+
 /** The symbol an address opens, or `null` when the URL is not an instrument address. */
 export function instrumentSymbolOf(url: string): string | null {
   const segments = routePathOf(url).split('/');

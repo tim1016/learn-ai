@@ -1,10 +1,14 @@
-import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
 
 import { DataLabWorkspaceStore, createDataLabWorkspaceStore, seedDefaultIndicators } from '../../components/data-lab/data-lab-workspace-store';
 import { AssetIdentityComponent } from '../../shared/asset-identity';
 import { HowThisWorksLinkComponent } from '../../shared/help/how-this-works-link.component';
 import { formatReceiptLabel } from '../../shared/pipes/receipt-label.pipe';
+import { RunDockComponent } from '../../shared/run-dock/run-dock.component';
+import { RUN_DOCK_SOURCE, RUN_DOCK_STORAGE_KEY } from '../../shared/run-dock/run-dock-source';
+import { RunSessionService } from '../../services/run-session.service';
+import type { WorkspaceAction } from '../../shared/workspace/workspace-action';
 import { WorkspaceHeaderComponent, type WorkspaceBreadcrumbItem } from '../../shared/workspace/workspace-header.component';
 import { WorkspaceStateBlockComponent } from '../../shared/workspace/workspace-state-block.component';
 import { WorkspaceTabListComponent, type WorkspaceTabItem } from '../../shared/workspace/workspace-tab-list.component';
@@ -15,11 +19,18 @@ import { MARKETS_ROUTE, instrumentCommands, instrumentTabOf } from '../instrumen
 import { InstrumentAdmissionService, type InstrumentAdmission } from '../instrument-admission.service';
 import { InstrumentDataStore } from '../data/instrument-data.store';
 import { ReturnsStudyHold } from '../returns/returns-study-hold';
+import { unreadQueryKeys } from '../instrument-context';
 import { InstrumentContextService } from '../instrument-context.service';
 import { INSTRUMENT_TABS, UNAVAILABLE_INSTRUMENT_TABS } from '../instrument-tabs';
+import { SavedSetupsComponent } from '../saved-setups/saved-setups.component';
+import { SavedSetupsService } from '../saved-setups/saved-setups.service';
 import { InstrumentContextBarComponent } from './instrument-context-bar.component';
+import { MigrationNoticeComponent } from './migration-notice.component';
 
 const BACK_TO_MARKETS = { id: 'markets', label: 'Back to Markets', route: [MARKETS_ROUTE] } as const;
+
+/** The tabs whose addresses say which query keys they ignore; another tab (Options) reads keys of its own. */
+const TABS_THAT_NAME_IGNORED_KEYS: ReadonlySet<string> = new Set(['chart', 'returns', 'data']);
 
 /**
  * One instrument's place (ADR 0084): `/markets/:symbol/<tab>`.
@@ -31,6 +42,10 @@ const BACK_TO_MARKETS = { id: 'markets', label: 'Back to Markets', route: [MARKE
  * the answers the Returns and Data tabs hold, so they live as long as the
  * place does: a tab change keeps them, and so does a move to another
  * instrument.
+ *
+ * It also hosts what belongs to the instrument and not to a tab: Build dataset
+ * (an action in the header, a page under Data), the saved setups, and the run
+ * dock, so a dataset job started on one tab stays in view on the others.
  *
  * An address that names no instrument the lake can hold fails in place, with
  * the way back to Markets. Nothing opens in its place.
@@ -45,15 +60,23 @@ const BACK_TO_MARKETS = { id: 'markets', label: 'Back to Markets', route: [MARKE
     WorkspaceStateBlockComponent,
     WorkspaceTabListComponent,
     InstrumentContextBarComponent,
+    MigrationNoticeComponent,
+    SavedSetupsComponent,
+    RunDockComponent,
   ],
   providers: [
     // Component-scoped by construction: the store dies with the place.
     { provide: DataLabWorkspaceStore, useFactory: createDataLabWorkspaceStore },
     InstrumentContextService,
     InstrumentAdmissionService,
+    SavedSetupsService,
     // What the Returns and Data tabs hold, so a tab change asks for nothing it already has.
     ReturnsStudyHold,
     InstrumentDataStore,
+    // The dock shows the dataset job Build dataset starts. Its expanded/collapsed choice keeps the key
+    // the Data Lab used, so a person's saved choice is still read.
+    { provide: RUN_DOCK_SOURCE, useExisting: RunSessionService },
+    { provide: RUN_DOCK_STORAGE_KEY, useValue: 'run-dock-expanded:data-lab' },
   ],
   templateUrl: './instrument-workspace.component.html',
   styleUrl: './instrument-workspace.component.scss',
@@ -63,6 +86,7 @@ export class InstrumentWorkspaceComponent {
   private readonly context = inject(InstrumentContextService);
   private readonly admission = inject(InstrumentAdmissionService);
   private readonly url = inject(CurrentUrlService).url;
+  protected readonly setups = inject(SavedSetupsService);
 
   protected readonly symbol = this.context.symbol;
   protected readonly admitted = this.admission.state;
@@ -81,6 +105,37 @@ export class InstrumentWorkspaceComponent {
   ]);
 
   protected readonly activeTab = computed(() => instrumentTabOf(this.url()));
+
+  protected readonly setupsOpen = signal(false);
+
+  /** Build dataset is an action on the instrument, so it is in the header on every tab; it opens only for an instrument that opens. */
+  protected readonly headerActions = computed<readonly WorkspaceAction[]>(() =>
+    this.admitted().kind === 'ready'
+      ? [
+          { id: 'saved-setups', label: 'Saved setups' },
+          {
+            id: 'build-dataset',
+            label: 'Build dataset',
+            route: instrumentCommands(this.symbol(), 'data', ['build']),
+            queryParams: this.context.carriedQuery(),
+          },
+        ]
+      : [],
+  );
+
+  /** What the Chart, Returns and Data tabs do not read in this address, as the notes the old Data Lab gave for a link it migrated. */
+  private readonly dismissedKeys = signal('');
+  protected readonly ignoredKeys = computed(() => {
+    const tab = this.activeTab();
+    return tab !== null && TABS_THAT_NAME_IGNORED_KEYS.has(tab) ? unreadQueryKeys(this.context.queryKeys()) : [];
+  });
+  protected readonly ignoredNotes = computed(() => {
+    const keys = this.ignoredKeys();
+    return keys.join('|') === this.dismissedKeys() ? [] : keys.map((key) => `Ignored unknown query key "${key}"`);
+  });
+
+  /** What stands in place of the tabs while a saved setup is being opened. */
+  protected readonly openingState: WorkspaceStateContent = { kind: 'checking', happened: 'Opening the saved setup.' };
 
   /** Every declared tab; one this place does not route yet stays in the strip, greyed, with its reason. */
   protected readonly tabs = computed<readonly WorkspaceTabItem[]>(() => {
@@ -125,6 +180,14 @@ export class InstrumentWorkspaceComponent {
   constructor() {
     // A fresh place starts with the product's default indicator recipe; seeding fetches nothing.
     seedDefaultIndicators(inject(DataLabWorkspaceStore));
+  }
+
+  protected onHeaderAction(id: string): void {
+    if (id === 'saved-setups') this.setupsOpen.update((open) => !open);
+  }
+
+  protected dismissIgnored(): void {
+    this.dismissedKeys.set(this.ignoredKeys().join('|'));
   }
 
   protected onAction(id: string): void {

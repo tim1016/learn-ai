@@ -66,9 +66,6 @@ export const APP_MENU: readonly AppMenuGroup[] = [
       { title: 'Options Surface (3D)', route: '/broker/options-surface' },
       { title: 'Pricing Lab', route: '/pricing-lab' },
     ],
-    // The dataset builder: a tab the Data Lab shell still hosts until the
-    // instrument place does.
-    pages: [{ title: 'Build dataset', route: '/data-lab/export' }],
   },
   {
     id: 'research',

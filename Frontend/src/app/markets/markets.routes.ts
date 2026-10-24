@@ -42,6 +42,12 @@ export const MARKETS_ROUTES: Routes = [
         pathMatch: 'full',
         loadComponent: () => import('./data/instrument-data.component').then((m) => m.InstrumentDataComponent),
       },
+      {
+        // The dataset builder is an action on the instrument, not a tab: it sits under Data.
+        path: 'data/build',
+        pathMatch: 'full',
+        loadComponent: () => import('./data/dataset-builder/build-dataset.component').then((m) => m.BuildDatasetComponent),
+      },
     ],
   },
 ];

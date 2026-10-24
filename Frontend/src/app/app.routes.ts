@@ -166,9 +166,8 @@ export const routes: Routes = [
       import("./markets/markets.routes").then((m) => m.MARKETS_ROUTES),
   },
   {
-    // Data Lab shell (export / validate / returns child routes; the chart moved
-    // to the instrument place). The route config owns the component-scoped
-    // workspace store — see components/data-lab/data-lab.routes.ts.
+    // What is left of the Data Lab: redirects to the instrument place its pages
+    // moved to, and Validate — see components/data-lab/data-lab.routes.ts.
     path: "data-lab",
     loadChildren: () =>
       import("./components/data-lab/data-lab.routes").then(
@@ -193,9 +192,8 @@ export const routes: Routes = [
       ).then((m) => m.DataLabDocsComponent),
   },
   {
-    // Legacy /data-quality bookmark → the Validate child route (or the child
-    // its `mode` names). Query and fragment go with it in the same
-    // navigation; the Data Lab shell applies that query after landing.
+    // Legacy /data-quality bookmark → the Validate page (or the page its
+    // `mode` names). Query and fragment go with it in the same navigation.
     path: "data-quality",
     redirectTo: redirectLegacyDataLab("/data-lab/validate"),
     pathMatch: "full",

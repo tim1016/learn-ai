@@ -1,10 +1,11 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { RouterLink } from '@angular/router';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { ActivatedRoute, RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 
 import { environment } from '../../../../environments/environment';
-import { DataLabWorkspaceStore } from '../data-lab-workspace-store';
+import { MARKETS_ROUTE, instrumentCommands } from '../../../markets/instrument-address';
 
 interface ValidationResponse {
   success: boolean;
@@ -26,7 +27,8 @@ interface ValidationResponse {
 })
 export class ValidateComponent {
   private readonly http = inject(HttpClient);
-  readonly store = inject(DataLabWorkspaceStore);
+  private readonly route = inject(ActivatedRoute);
+  private readonly query = toSignal(this.route.queryParamMap, { initialValue: this.route.snapshot.queryParamMap });
 
   readonly ourCsvFile = signal<File | null>(null);
   readonly tvCsvFile = signal<File | null>(null);
@@ -34,9 +36,17 @@ export class ValidateComponent {
   readonly validationError = signal('');
   readonly validationReport = signal('');
 
-  /** Ticker the validation requests are labeled with — defaults to the
-   *  committed workspace ticker; editable for one-off comparisons. */
-  readonly ticker = computed(() => this.store.committedTicker() || 'SPY');
+  /** The instrument the address names (a `/data-quality?ticker=…` bookmark does), or null. */
+  private readonly named = computed(() => this.query().get('ticker')?.trim().toUpperCase() || null);
+
+  /** Ticker the validation requests are labeled with — the named one, else SPY. */
+  readonly ticker = computed(() => this.named() ?? 'SPY');
+
+  /** Where Build dataset lives for the named instrument; with none named, the list that picks one. */
+  protected readonly buildDataset = computed(() => {
+    const named = this.named();
+    return named === null ? [MARKETS_ROUTE] : instrumentCommands(named, 'data', ['build']);
+  });
 
   readonly canRunValidation = computed(
     () => !!this.ourCsvFile() && !!this.tvCsvFile() && !this.loadingValidation(),

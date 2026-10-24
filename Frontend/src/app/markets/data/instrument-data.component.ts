@@ -6,6 +6,7 @@ import { formatReceiptLabel } from '../../shared/pipes/receipt-label.pipe';
 import type { WorkspaceStateContent } from '../../shared/workspace/workspace-state';
 import { WorkspaceStateBlockComponent } from '../../shared/workspace/workspace-state-block.component';
 import { TimestampDisplayPipe } from '../../shared/timestamp';
+import { ADJUSTMENT_QUERY_KEY as TREE_QUERY_KEY } from '../instrument-context';
 import { InstrumentContextService } from '../instrument-context.service';
 import { DataFillComponent } from './data-fill.component';
 import { DataGapsComponent } from './data-gaps.component';
@@ -14,8 +15,7 @@ import type { AdjustmentTree } from './instrument-data';
 import { InstrumentDataStore, type InspectionRequest } from './instrument-data.store';
 import { QualityEvidenceComponent } from './quality-evidence/quality-evidence.component';
 
-/** The query key the tab keeps its tree in; the context's own keys are the shell's. */
-const TREE_QUERY_KEY = 'adjustment';
+/** The tab keeps its tree in `TREE_QUERY_KEY`; the context's own keys are the shell's. */
 const DEFAULT_TREE: AdjustmentTree = 'polygon_split_adjusted';
 
 const TREE_CHOICES: readonly { readonly value: AdjustmentTree; readonly label: string }[] = [

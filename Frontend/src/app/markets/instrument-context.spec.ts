@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { readInstrumentContext, sameContext } from './instrument-context';
+import { readInstrumentContext, sameContext, unreadQueryKeys } from './instrument-context';
 
 function read(query: Record<string, string>) {
   return readInstrumentContext({ get: (name) => query[name] ?? null });
@@ -62,5 +62,19 @@ describe('sameContext', () => {
     ['the session', { session: 'extended' as const }],
   ])('is a different request when %s differs', (_name, change) => {
     expect(sameContext(base, { ...base, ...change })).toBe(false);
+  });
+});
+
+describe('unreadQueryKeys', () => {
+  it('names the keys the Chart, Returns and Data tabs do not read, once each, in address order', () => {
+    expect(unreadQueryKeys(['theme', 'from', 'to', 'timeframe', 'session', 'adjustment', 'sessionId', 'indicators', 'theme'])).toEqual([
+      'theme',
+      'indicators',
+    ]);
+  });
+
+  it('names nothing for an address that carries only keys they read', () => {
+    expect(unreadQueryKeys(['from', 'to'])).toEqual([]);
+    expect(unreadQueryKeys([])).toEqual([]);
   });
 });

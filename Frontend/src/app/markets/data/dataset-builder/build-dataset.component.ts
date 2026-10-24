@@ -10,46 +10,50 @@ import {
 import { RouterLink } from '@angular/router';
 
 import { RunSessionService } from '../../../services/run-session.service';
-import { PastChainTabComponent } from '../../options-backtest/past-chain/past-chain-tab.component';
+import { PastChainTabComponent } from '../../../components/options-backtest/past-chain/past-chain-tab.component';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
 
-import { DataLabWorkspaceStore } from '../data-lab-workspace-store';
-import type { DataLabCompanionSettings } from '../data-lab-workspace-store';
+import { DataLabWorkspaceStore } from '../../../components/data-lab/data-lab-workspace-store';
+import type { DataLabCompanionSettings } from '../../../components/data-lab/data-lab-workspace-store';
 import {
   buildDatasetPlanPayload,
   buildGenerateZipPayload,
   type GenerateZipMapperInput,
   type OptionsCompanionWireConfig,
-} from '../data-lab-request-mapper';
+} from '../../../components/data-lab/data-lab-request-mapper';
+import { instrumentCommands } from '../../instrument-address';
 import { DataLabPlanService, type DataLabPlanReceipt } from './data-lab-plan.service';
 import { ExportColumnPickerComponent } from './export-column-picker/export-column-picker.component';
-import { columnsForPayload } from './export-csv-options';
+import { columnsForPayload } from '../../../components/data-lab/export-csv-options';
 
 /**
- * Data Lab Build dataset.
+ * Build dataset (ADR 0084: `/markets/:symbol/data/build`).
  *
  * NEVER mounts DataLabChartComponent and never calls the chart endpoint.
- * The recipe is a progressive four-section form over the shared
- * workspace state; columns/sessions/estimates come from the Python plan
- * receipt rendered verbatim; generation goes through
- * `RunSessionService.start()` — the ONLY submission path.
+ * The recipe is a progressive four-section form over the instrument place's
+ * workspace state: the committed instrument, window and bar policy, and the
+ * indicator recipe the Chart tab holds. Columns/sessions/estimates come from
+ * the Python plan receipt rendered verbatim; generation goes through
+ * `RunSessionService.start()` — the ONLY submission path, and only the
+ * Generate button reaches it: opening the page asks for a plan and nothing
+ * else.
  * The plan re-runs by itself whenever the recipe changes, so the
  * dataset.csv column picker always lists the current columns (owner
  * decision 2026-09-19).
  */
 @Component({
-  selector: 'app-data-lab-export',
+  selector: 'app-build-dataset',
   imports: [
     RouterLink,
     PastChainTabComponent,
     AssetIdentityComponent,
     ExportColumnPickerComponent,
   ],
-  templateUrl: './export.component.html',
-  styleUrls: ['./export.component.scss'],
+  templateUrl: './build-dataset.component.html',
+  styleUrl: './build-dataset.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
-export class ExportComponent {
+export class BuildDatasetComponent {
   readonly store = inject(DataLabWorkspaceStore);
   private readonly planService = inject(DataLabPlanService);
   readonly runSession = inject(RunSessionService);
@@ -166,10 +170,13 @@ export class ExportComponent {
   readonly scopeSummary = computed(() => {
     const ticker = this.store.committedTicker();
     const window = this.store.committedWindow();
-    if (!ticker || !window) return 'Commit a scope first (the shell scope bar).';
+    if (!ticker || !window) return 'No instrument context is committed yet.';
     const d = this.store.draft();
     return `${ticker} · ${d.multiplier} ${d.timespan} bars · ${d.session} session`;
   });
+
+  /** The instrument's Data tab, which the builder's header and the quality note lead back to. */
+  readonly dataTab = computed(() => instrumentCommands(this.store.committedTicker(), 'data'));
 
   readonly indicatorSummary = computed(() => {
     const count = this.store.indicators().length;
@@ -263,10 +270,6 @@ export class ExportComponent {
     this.generateStarting.set(true);
     try {
       await this.runSession.start(payload);
-      const sessionId = this.runSession.sessionId();
-      if (sessionId) {
-        this.store.setGenerationRun({ id: sessionId, status: this.runSession.state() });
-      }
     } catch (e: unknown) {
       this.generateError.set(e instanceof Error ? e.message : String(e));
     } finally {

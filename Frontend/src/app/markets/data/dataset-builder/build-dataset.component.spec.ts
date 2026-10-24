@@ -15,10 +15,10 @@ import { environment } from '../../../../environments/environment';
 import { RunSessionService } from '../../../services/run-session.service';
 import { etMidnightMs } from '../../../shared/date/et-midnight';
 import { fakePickerWorld } from '../../../shared/symbol-picker/testing/fake-picker-world';
-import { PastChainService } from '../../options-backtest/past-chain/past-chain.service';
-import { fakeChainService } from '../../options-backtest/past-chain/testing/render-chain';
-import { ExportComponent } from './export.component';
-import { createDataLabWorkspaceStore, DataLabWorkspaceStore } from '../data-lab-workspace-store';
+import { PastChainService } from '../../../components/options-backtest/past-chain/past-chain.service';
+import { fakeChainService } from '../../../components/options-backtest/past-chain/testing/render-chain';
+import { BuildDatasetComponent } from './build-dataset.component';
+import { createDataLabWorkspaceStore, DataLabWorkspaceStore } from '../../../components/data-lab/data-lab-workspace-store';
 
 const WINDOW = {
   startMsUtc: Date.UTC(2026, 3, 15),
@@ -40,8 +40,8 @@ function mockRunSession(state: 'idle' | 'fetching' = 'idle') {
 /** The Options companion shows the Options Backtest page's Past chain, which reads through its own service and takes the shared pickers. */
 const CHAIN = fakeChainService(vi);
 
-async function renderExport(runSession = mockRunSession()) {
-  const result = await render(ExportComponent, {
+async function renderBuilder(runSession = mockRunSession()) {
+  const result = await render(BuildDatasetComponent, {
     providers: [
       provideRouter([]),
       provideHttpClient(),
@@ -77,9 +77,9 @@ async function generatePayload(runSession: ReturnType<typeof mockRunSession>) {
   return runSession.start.mock.calls[0][0] as Record<string, unknown>;
 }
 
-describe('ExportComponent', () => {
+describe('BuildDatasetComponent', () => {
   it('never mounts the chart and never calls the chart endpoint', async () => {
-    const { http } = await renderExport();
+    const { http } = await renderBuilder();
     expect(document.querySelector('app-data-lab-chart')).toBeNull();
 
     await answerPlan(http);
@@ -88,7 +88,7 @@ describe('ExportComponent', () => {
   });
 
   it('loads the plan by itself and renders the receipt verbatim', async () => {
-    const { http } = await renderExport();
+    const { http } = await renderBuilder();
     await answerPlan(http, {
       ticker: 'SPY',
       window_start_ms_utc: WINDOW.startMsUtc,
@@ -133,7 +133,7 @@ describe('ExportComponent', () => {
   });
 
   it('asks the plan for the chosen time zone and never sends it the column selection', async () => {
-    const { http, store, fixture } = await renderExport();
+    const { http, store, fixture } = await renderBuilder();
     const first = await answerPlan(http);
     expect(first.request.body['time_zone']).toBe('America/Chicago');
     expect('columns' in first.request.body).toBe(false);
@@ -150,14 +150,14 @@ describe('ExportComponent', () => {
   });
 
   it('disables generate while a run is active', async () => {
-    const { runSession } = await renderExport(mockRunSession('fetching'));
+    const { runSession } = await renderBuilder(mockRunSession('fetching'));
     const button = screen.getByRole('button', { name: /Run in progress/ });
     expect((button as HTMLButtonElement).disabled).toBe(true);
     expect(runSession.start).not.toHaveBeenCalled();
   });
 
   it('waits for the column list to finish updating before generating', async () => {
-    const { http, runSession } = await renderExport();
+    const { http, runSession } = await renderBuilder();
     const button = await screen.findByRole('button', { name: 'Updating column list…' });
     expect((button as HTMLButtonElement).disabled).toBe(true);
 
@@ -167,7 +167,7 @@ describe('ExportComponent', () => {
   });
 
   it('submits generation only through RunSessionService.start with the mapped payload', async () => {
-    const { http, runSession } = await renderExport();
+    const { http, runSession } = await renderBuilder();
     await answerPlan(http);
     const payload = await generatePayload(runSession);
 
@@ -184,7 +184,7 @@ describe('ExportComponent', () => {
   });
 
   it('exports only the ticked columns and no readable time when the zone is None', async () => {
-    const { http, runSession } = await renderExport();
+    const { http, runSession } = await renderBuilder();
     await answerPlan(http);
     await userEvent.click(await screen.findByRole('checkbox', { name: 'high' }));
     await userEvent.selectOptions(screen.getByRole('combobox', { name: /Readable time column/ }), 'None');
@@ -198,7 +198,7 @@ describe('ExportComponent', () => {
   });
 
   it('sends adjust_for_dividends when the toggle is on', async () => {
-    const { http, runSession } = await renderExport();
+    const { http, runSession } = await renderBuilder();
     await answerPlan(http);
     await userEvent.click(screen.getByRole('checkbox', { name: /server-side dividend adjustment/ }));
     await answerPlan(http);
@@ -208,7 +208,7 @@ describe('ExportComponent', () => {
 
   it('shows the Past chain of the Options Backtest page in the options companion, on the committed ticker and the last day of the window', async () => {
     CHAIN.day.mockClear();
-    const { http } = await renderExport();
+    const { http } = await renderBuilder();
     await answerPlan(http);
     await userEvent.click(screen.getByText('Options companion'));
     await userEvent.click(screen.getByRole('checkbox', { name: /include options companion/ }));
@@ -221,7 +221,7 @@ describe('ExportComponent', () => {
   });
 
   it('sends no options-companion rate until one is typed, so Python solves at its default', async () => {
-    const { http, runSession } = await renderExport();
+    const { http, runSession } = await renderBuilder();
     await answerPlan(http);
     await userEvent.click(screen.getByText('Options companion'));
     await userEvent.click(screen.getByRole('checkbox', { name: /include options companion/ }));
@@ -234,7 +234,7 @@ describe('ExportComponent', () => {
   });
 
   it('sends the options-companion rate the user typed', async () => {
-    const { http, runSession } = await renderExport();
+    const { http, runSession } = await renderBuilder();
     await answerPlan(http);
     await userEvent.click(screen.getByText('Options companion'));
     await userEvent.click(screen.getByRole('checkbox', { name: /include options companion/ }));
@@ -248,7 +248,7 @@ describe('ExportComponent', () => {
   });
 
   it('re-plans by itself when the recipe changes; a new column starts unticked after an edit', async () => {
-    const { http, store, runSession } = await renderExport();
+    const { http, store, runSession } = await renderBuilder();
     await answerPlan(http);
     await userEvent.click(await screen.findByRole('checkbox', { name: 'high' }));
 
@@ -264,7 +264,7 @@ describe('ExportComponent', () => {
   });
 
   it('ignores a slower answer to an older plan request', async () => {
-    const { http, store } = await renderExport();
+    const { http, store } = await renderBuilder();
     const older = await waitFor(() => http.expectOne(PLAN_URL));
     // The first request is still pending when the recipe changes.
     store.addIndicator('atr', { length: 14 });
@@ -278,7 +278,7 @@ describe('ExportComponent', () => {
   });
 
   it('keeps generate disabled while the column list is out of date', async () => {
-    const { http, store, runSession } = await renderExport();
+    const { http, store, runSession } = await renderBuilder();
     await answerPlan(http);
     store.addIndicator('atr', { length: 14 });
     const failed = await waitFor(() => http.expectOne(PLAN_URL));
@@ -294,7 +294,7 @@ describe('ExportComponent', () => {
   });
 
   it('labels the receipt out of date and offers Try again when a re-plan fails', async () => {
-    const { http, store } = await renderExport();
+    const { http, store } = await renderBuilder();
     await answerPlan(http);
     store.addIndicator('atr', { length: 14 });
     const failed = await waitFor(() => http.expectOne(PLAN_URL));
