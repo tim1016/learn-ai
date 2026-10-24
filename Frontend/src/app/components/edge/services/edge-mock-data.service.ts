@@ -1,106 +1,22 @@
 import { Injectable } from "@angular/core";
+import type {
+  Candle, EdgeComponents, EdgeSampleData, HeatmapStat, PerRegime, Trade,
+} from "./edge-data.model";
 
-export interface Candle { o: number; h: number; l: number; c: number; v: number; }
-export interface SignalMark { i: number; dir: "long" | "short"; }
-export interface EdgeComponents { vrp: number; regime: number; iv: number; trend: number; }
-export interface VrpBin { x0: number; x1: number; count: number; }
-export interface HeatmapStat { sharpe: number; n_trades: number; win_rate: number; max_dd: number; }
-export interface PerRegime { id: number; name: string; sharpe: number; pnl: number; }
-export interface Trade {
-  n: number; ts: string; side: "LONG VOL" | "SHORT VOL";
-  entry: number; exit: number; hold: number;
-  gross: number; spread: number; slip: number; comm: number; tradable: boolean;
-}
-export interface CostAttribution {
-  gross: number; spread: number; slip: number; comm: number; net: number; netTradable: number;
-}
-
-export interface LiveIv30Marker {
-  method: "vix_style" | "parametric";
-  /** Solver-native ACT/365 IV30 value (decimal, e.g. 0.213 for 21.3%). */
-  iv30Act365: number;
-  snapshotTsMs: number;
-  spot: number;
-  /** Provenance signals piped through for the readout strip. */
-  varianceContributionSynthetic: number;
-  strikeCoverageScore: number;
-}
-
-export interface IvConfidenceSummary {
-  ivSource: "caller_supplied" | "recorder" | "absent";
-  latestConfidence: number | null;
-  floor: number | null;
-  gatedNow: boolean | null;
-  /** Total bars in the response with floor_gated=true; 0 when the gating
-   *  signal isn't present in the response. */
-  nGated: number;
-  /** True when the latest bar's `health_score` was imputed (the recorder
-   *  row lacked it, so confidence dropped the health factor). Null when
-   *  confidence wasn't computed for the run. Surface this so the UI can
-   *  flag "confidence is based on imputed health" rather than presenting
-   *  the number as fully evidence-backed. See ADR 0071 decision 11. */
-  healthImputed: boolean | null;
-}
-
-export interface EdgeData {
-  N: number;
-  dates: Date[];
-  candles: Candle[];
-  iv30: number[];
-  ivVol: number[];
-  skew: number[];
-  termSlope: number[];
-  rvCloseClose: number[];
-  rvParkinson: number[];
-  rvGK: number[];
-  rvYZ: number[];
-  rvForward: number[];
-  /** RV used for VRP — HF two-component on 15m bars, falls back to YZ-21 on daily. TRD/252 basis. */
-  rvHf21d: number[];
-  /** IV30 in TRD/252 basis (post Step 1 conversion). Aligned for headline VRP. */
-  iv30Trd252: number[];
-  vrpForward: number[];
-  vrpZ: number[];
-  vrpHistogram: VrpBin[];
-  regimePath: number[];
-  transitionMatrix: number[][];
-  edgeScore: number[];
-  edgeComponents: EdgeComponents[];
-  signals: SignalMark[];
-  oracleSignals: SignalMark[];
-  coverage: { bars_total: number; forward_blind_tail: number; iv_first_ts: string; };
-  /** Populated only when /api/edge/realized-vs-iv/series returned IV with
-   *  provenance; null for synthetic mock data and the legacy "absent" path. */
-  ivConfidence?: IvConfidenceSummary | null;
-  /** Live IV30 snapshot from /api/edge/iv30/{vix-style,parametric}; null
-   *  when both endpoints errored or for synthetic mock data. */
-  liveIv30?: LiveIv30Marker | null;
-  assets: string[];
-  periods: string[];
-  sharpeMatrix: number[][];
-  heatmapStats: HeatmapStat[][];
-  equityCurves: number[][];
-  perRegime: PerRegime[];
-  stability: number[];
-  trades: Trade[];
-  equityFromTrades: number[];
-  costAttribution: CostAttribution;
-  sparklines: { vrp: number[]; equity: number[]; stability: number[]; };
-}
-
-/** Synthetic but shape-correct Edge data — matches the contract the live
- *  /api/edge/* endpoints return, so the UI can render before the wire-up
- *  layer lands. Replaces window.EDGE_DATA from the design prototype. */
+/** Generated demonstration data for the Edge hub, Cross-asset, Regimes and
+ *  the two drawers (replaces window.EDGE_DATA from the design prototype).
+ *  Nothing here is measured: the dataset says `provenance: "sample"`, and every
+ *  surface that renders it shows that. Real studies do not read from it. */
 @Injectable({ providedIn: "root" })
 export class EdgeMockDataService {
-  private cached: EdgeData | null = null;
+  private cached: EdgeSampleData | null = null;
 
-  get(): EdgeData {
+  get(): EdgeSampleData {
     if (!this.cached) this.cached = this.build();
     return this.cached;
   }
 
-  private build(): EdgeData {
+  private build(): EdgeSampleData {
     const N = 250;
     const r = mulberry32(20260424);
     const regimePath: number[] = [];
@@ -117,12 +33,9 @@ export class EdgeMockDataService {
 
     let price = 542.18;
     const candles: Candle[] = [];
-    const rvCloseClose: number[] = []; const rvParkinson: number[] = [];
-    const rvGK: number[] = []; const rvYZ: number[] = [];
-    const iv30: number[] = []; const ivVol: number[] = [];
-    const skew: number[] = []; const termSlope: number[] = [];
-    const dates: Date[] = []; const trendSlope: number[] = []; const atrPct: number[] = []; const volZ: number[] = [];
-    const start = new Date(2025, 4, 1);
+    const iv30: number[] = [];
+    const dates: Date[] = []; const trendSlope: number[] = [];
+    const start = new Date(Date.UTC(2025, 4, 1, 14));
 
     for (let i = 0; i < N; i++) {
       const reg = regimePath[i];
@@ -149,21 +62,14 @@ export class EdgeMockDataService {
       }
       cc = Math.sqrt(cc / w * 252);
       pk = Math.sqrt(pk / w * 252);
-      const gk = pk * 0.94 + cc * 0.06;
       const yz = pk * 0.85 + cc * 0.15 + 0.001 * nrand(r);
-      rvCloseClose.push(cc); rvParkinson.push(pk); rvGK.push(gk); rvYZ.push(yz);
 
       iv30.push(Math.max(0.05, yz + 0.04 + 0.018 * nrand(r)));
-      ivVol.push(0.014 + 0.005 * Math.abs(nrand(r)));
-      skew.push(-0.04 + 0.012 * nrand(r));
-      termSlope.push(0.005 + 0.004 * nrand(r));
 
       trendSlope.push(reg === 0 ? 0.4 + 0.1 * nrand(r) : reg === 2 ? 0.6 + 0.1 * nrand(r) : -0.1 + 0.2 * nrand(r));
-      atrPct.push(sigma * 100 * (1 + 0.1 * nrand(r)));
-      volZ.push(reg === 1 ? 1.2 + 0.3 * nrand(r) : -0.2 + 0.3 * nrand(r));
 
       const d = new Date(start.getTime());
-      d.setDate(start.getDate() + i + Math.floor(i / 5) * 2);
+      d.setUTCDate(start.getUTCDate() + i + Math.floor(i / 5) * 2);
       dates.push(d);
       price = close;
     }
@@ -183,21 +89,6 @@ export class EdgeMockDataService {
     const mean = valid.reduce((a, b) => a + b, 0) / valid.length;
     const std = Math.sqrt(valid.reduce((a, b) => a + (b - mean) ** 2, 0) / valid.length);
     const vrpZ = vrpForward.map((v) => Number.isNaN(v) ? NaN : (v - mean) / std);
-
-    const vrpHistogram = histogram(valid, 20);
-
-    const signals: SignalMark[] = [];
-    const oracleSignals: SignalMark[] = [];
-    for (let i = 0; i < N; i++) {
-      if (Number.isNaN(vrpZ[i])) continue;
-      if (vrpZ[i] > 1) signals.push({ i, dir: "short" });
-      else if (vrpZ[i] < -1) signals.push({ i, dir: "long" });
-    }
-    for (let i = 0; i < N - 21; i++) {
-      const fwdZ = (vrpForward[i] - mean) / std;
-      if (fwdZ > 0.8 && i % 4 === 0) oracleSignals.push({ i, dir: "short" });
-      else if (fwdZ < -0.8 && i % 5 === 0) oracleSignals.push({ i, dir: "long" });
-    }
 
     const edgeComponents: EdgeComponents[] = [];
     const edgeScore: number[] = [];
@@ -244,6 +135,12 @@ export class EdgeMockDataService {
       return out;
     });
 
+    const regimeCentroids = [
+      [0.85, 0.30, 0.25, 0.20, 0.45, 0.50, 0.55],
+      [0.20, 0.80, 0.85, 0.90, 0.85, 0.30, 0.40],
+      [0.75, 0.65, 0.60, 0.50, 0.70, 0.55, 0.50],
+    ];
+
     const perRegime: PerRegime[] = [
       { id: 0, name: "Trending · low vol", sharpe: 1.32, pnl: 184 },
       { id: 1, name: "Choppy · high vol", sharpe: -0.42, pnl: -64 },
@@ -273,7 +170,7 @@ export class EdgeMockDataService {
       const comm = -0.20;
       const tradable = r() > 0.18;
       trades.push({
-        n, ts: dates[i].toISOString().slice(0, 10),
+        n, ts: dates[i].getTime(),
         side, entry, exit, hold,
         gross, spread, slip, comm, tradable,
       });
@@ -285,22 +182,19 @@ export class EdgeMockDataService {
     }
 
     const sparklines = {
-      vrp: vrpZ.slice(-30).map((v) => Number.isNaN(v) ? 0 : v),
+      vrp: vrpZ.filter((v) => !Number.isNaN(v)).slice(-30),
       equity: equityCurves[0].slice(-30),
       stability: stability.slice(-30),
     };
 
     return {
-      N, dates, candles, iv30, ivVol, skew, termSlope,
-      rvCloseClose, rvParkinson, rvGK, rvYZ, rvForward,
-      // Mock: HF RV + IV30(TRD/252) tracked from the same synthetic series.
-      // Live data overrides via the api response.
-      rvHf21d: rvForward.slice(),
-      iv30Trd252: iv30.slice(),
-      vrpForward, vrpZ, vrpHistogram,
-      regimePath, transitionMatrix, edgeScore, edgeComponents,
-      signals, oracleSignals,
-      coverage: { bars_total: N, forward_blind_tail: 21, iv_first_ts: dates[14].toISOString().slice(0, 10) },
+      provenance: "sample",
+      N, dates, candles,
+      regimePath, transitionMatrix, regimeCentroids, edgeScore, edgeComponents,
+      headline: {
+        edgeComposite: 0.41, robustness: 0.62, dsrMean: 0.74, pbo: 0.31,
+        contributions: { vrp: 0.30, regime: 0.16, iv: -0.04, trend: -0.01 },
+      },
       assets, periods, sharpeMatrix, heatmapStats, equityCurves,
       perRegime, stability,
       trades, equityFromTrades,
@@ -328,17 +222,4 @@ function nrand(r: () => number): number {
   while (u === 0) u = r();
   while (v === 0) v = r();
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
-}
-
-function histogram(values: number[], bins: number): VrpBin[] {
-  const lo = Math.min(...values); const hi = Math.max(...values);
-  const w = (hi - lo) / bins;
-  const out: VrpBin[] = [];
-  for (let i = 0; i < bins; i++) {
-    const x0 = lo + i * w; const x1 = x0 + w;
-    let count = 0;
-    for (const v of values) if (v >= x0 && (v < x1 || i === bins - 1)) count++;
-    out.push({ x0, x1, count });
-  }
-  return out;
 }

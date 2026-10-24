@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from "@angular/core";
+import { SampleDataBannerComponent } from "../../../shared/sample-data/sample-data-banner.component";
 import {
   EDGE_TOK,
   EdgeMiniLineComponent,
@@ -20,6 +21,7 @@ type Composite = "per-asset" | "equal-weight" | "vol-weighted";
     EdgeSharpeHeatmapComponent,
     EdgeScoreDrawerComponent,
     TradeSimDrawerComponent,
+    SampleDataBannerComponent,
   ],
   templateUrl: "./cross-asset.component.html",
   styleUrls: ["./cross-asset.component.scss"],

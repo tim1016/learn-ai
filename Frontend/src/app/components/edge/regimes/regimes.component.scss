@@ -53,12 +53,9 @@
 }
 .divider { width: 1px; height: 30px; background: $border; }
 .form-row { display: flex; gap: 6px; }
-.sel {
-  height: 28px; padding: 0 8px;
-  background: $bg-elevated; border: 1px solid $border-light;
-  border-radius: 4px; color: $text-primary; font-size: 12px;
-  outline: none; cursor: pointer;
-  &.mono { font-family: $font-mono; }
+.states-fixed {
+  display: inline-flex; align-items: center; height: 28px;
+  color: $text-primary; font-size: 12px; font-family: $font-mono;
 }
 .seg { display: flex; gap: 0; }
 .seg-btn {

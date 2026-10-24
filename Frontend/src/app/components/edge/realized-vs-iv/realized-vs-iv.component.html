@@ -1,99 +1,9 @@
 <section class="route">
-  <!-- Route action bar — score + simulator (breadcrumb now in shell sub-nav) -->
+  <!-- Route action bar (breadcrumb now in shell sub-nav) -->
   <header class="route-toolbar">
     <div class="toolbar-spacer"></div>
-    <button class="score-pill" type="button" (click)="scoreOpen.set(true)">
-      <span class="score-dot" [style.background]="currentScoreColor()"></span>
-      <span>edge_score</span>
-      <span class="score-val" [style.color]="currentScoreColor()">{{ currentScoreLabel() }}</span>
-    </button>
-    <button class="run-sim-btn" type="button" (click)="tradeSimOpen.set(true)">
-      ↻ Run trade simulator
-    </button>
     <span class="tz">America/New_York</span>
   </header>
-
-  <!-- Coverage banner -->
-  @if (ivPipelineMissing()) {
-    <div class="coverage-banner banner-iv-missing">
-      <i class="pi pi-info-circle"></i>
-      <div class="coverage-body">
-        <div class="coverage-title">IV pipeline not wired yet — RV-only view</div>
-        <div class="coverage-meta">
-          Live RV ({{ rvLastValue() }}) renders against the right axis labelled
-          <code>RV YZ</code>. IV30 line, RV-vs-IV bands, VRP histogram, and
-          long/short-vol signal triangles will appear once
-          <code>/api/edge/realized-vs-iv/series</code> back-solves IV from
-          <code>OptionIvSnapshots</code> — F1 step 4 in the design doc.
-        </div>
-      </div>
-      <button class="coverage-action" type="button">View coverage probe →</button>
-    </div>
-  } @else {
-    <div class="coverage-banner">
-      <i class="pi pi-exclamation-triangle"></i>
-      <div class="coverage-body">
-        <div class="coverage-title">Forward RV unavailable for last 21 trading days</div>
-        <div class="coverage-meta">
-          VRP signals after <code>{{ blindStartDate() }}</code> are blind to the future — rendered as a
-          hatched band on the chart. IV30 series begins
-          <code>{{ data().coverage.iv_first_ts }}</code> (gap of 14 trading days at the head).
-        </div>
-      </div>
-      <button class="coverage-action" type="button">View coverage probe →</button>
-    </div>
-  }
-
-  <!-- IV-source + confidence banner. Renders only when the response carried
-       provenance fields (iv_source) — synthetic mock data shows nothing. -->
-  @let ivc = ivConfidence();
-  @if (ivc) {
-    <div class="coverage-banner banner-iv-confidence"
-         [class.banner-iv-confidence-warn]="ivConfidenceTone() === 'warn'"
-         data-testid="iv-confidence-banner">
-      <i class="pi" [class.pi-shield]="ivConfidenceTone() === 'info'"
-                   [class.pi-exclamation-triangle]="ivConfidenceTone() === 'warn'"></i>
-      <div class="coverage-body">
-        <div class="coverage-title">
-          IV source: <code data-testid="iv-source">{{ ivSourceLabels[ivc.ivSource] }}</code>
-          @if (ivc.latestConfidence !== null) {
-            <span class="iv-conf-pill" data-testid="iv-confidence-value">
-              confidence {{ (ivc.latestConfidence * 100).toFixed(0) }}%
-            </span>
-          }
-          @if (ivc.floor !== null) {
-            <span class="iv-conf-floor">floor {{ (ivc.floor * 100).toFixed(0) }}%</span>
-          }
-          @if (ivc.healthImputed === true) {
-            <span class="iv-conf-imputed"
-                  data-testid="iv-confidence-imputed"
-                  title="Recorder row lacked an explicit health_score; the
-                         health factor is dropped and confidence collapses
-                         to (1 − vcs). The bar is flagged so you can see
-                         it is not backed by evidence-derived stability."
-                  aria-label="health score imputed (drop-health-factor branch)">
-              imputed
-            </span>
-          }
-        </div>
-        <div class="coverage-meta">
-          @if (ivc.gatedNow === true) {
-            <strong data-testid="iv-gated-now">Latest bar gated</strong> — confidence below floor;
-            VRP signals forced to 0.
-          } @else if (ivc.gatedNow === false) {
-            Latest bar above floor — VRP signal active.
-          } @else {
-            Confidence not computed for this run (no
-            <code>variance_contribution_synthetic</code> in the IV series).
-          }
-          @if (ivc.nGated > 0) {
-            · <span data-testid="iv-n-gated">{{ ivc.nGated }} bar{{ ivc.nGated === 1 ? '' : 's' }}</span>
-            gated overall.
-          }
-        </div>
-      </div>
-    </div>
-  }
 
   <!-- Polygon Starter spread-synthesis caveat -->
   <div class="coverage-banner banner-data-source">
@@ -182,163 +92,204 @@
         Compute
       }
     </button>
-    @if (liveSource()) {
-      <span class="source-tag live">live · {{ symbol() }}</span>
-    } @else {
-      <span class="source-tag mock">synthetic</span>
+    @if (data(); as d) {
+      <span class="source-tag real" data-testid="rviv-source-tag">real data · {{ d.symbol }}</span>
     }
   </div>
 
   @if (errorMsg()) {
-    <div class="compute-error">
+    <div class="compute-error" data-testid="rviv-error">
       <i class="pi pi-times-circle"></i>
       Compute failed — {{ errorMsg() }}
     </div>
   }
 
-  <!-- Main chart -->
-  <div class="chart-card">
-    <div class="chart-toggles">
-      <span class="eyebrow">SIGNALS</span>
-      <button type="button" class="toggle"
-              [class.on]="showRealtime()"
-              (click)="showRealtime.set(!showRealtime())">
-        <span class="toggle-swatch realtime" [class.on]="showRealtime()"></span>
-        Realtime
-      </button>
-      <button type="button" class="toggle"
-              [class.on]="showOracle()"
-              (click)="showOracle.set(!showOracle())">
-        <span class="toggle-swatch oracle" [class.on]="showOracle()"></span>
-        Oracle (ex-post)
-      </button>
-
-      <span class="divider"></span>
-      <span class="eyebrow">LAYERS</span>
-      <button type="button" class="toggle" [class.on]="rvBands()" (click)="rvBands.set(!rvBands())">
-        <span class="toggle-swatch generic" [class.on]="rvBands()"></span>
-        RV bands 5/10/30
-      </button>
-      <button type="button" class="toggle" [class.on]="edgeStrip()" (click)="edgeStrip.set(!edgeStrip())">
-        <span class="toggle-swatch generic" [class.on]="edgeStrip()"></span>
-        Edge Score strip
-      </button>
-
-      <span class="legend-spacer"></span>
-      <span class="legend-row">
-        <span class="lg-line iv"></span><span>IV30</span>
-        <svg width="9" height="9"><polygon points="4.5,1 8,8 1,8" [attr.fill]="TOK.bull" /></svg>
-        <span>long-vol signal</span>
-        <svg width="9" height="9"><polygon points="4.5,8 8,1 1,1" [attr.fill]="TOK.bear" /></svg>
-        <span>short-vol signal</span>
-      </span>
-    </div>
-
-    @if (edgeStrip()) {
-      <div class="edge-strip-legend" aria-label="Edge Score colormap legend">
-        <span class="esl-eyebrow">EDGE SCORE STRIP</span>
-        <span class="esl-key">
-          <span class="esl-swatch" style="background: rgba(38,166,154,0.85)"></span>
-          long-vol
-        </span>
-        <span class="esl-key">
-          <span class="esl-swatch" style="background: rgba(38,166,154,0.35)"></span>
-          weak long-vol
-        </span>
-        <span class="esl-key">
-          <span class="esl-swatch" style="background: rgba(120,120,120,0.18)"></span>
-          ≈ 0
-        </span>
-        <span class="esl-key">
-          <span class="esl-swatch" style="background: rgba(239,83,80,0.35)"></span>
-          weak short-vol
-        </span>
-        <span class="esl-key">
-          <span class="esl-swatch" style="background: rgba(239,83,80,0.85)"></span>
-          short-vol
-        </span>
-        <span class="esl-meta">opacity = |score| · range [-1, +1]</span>
+  @if (data(); as d) {
+    <!-- Coverage banner -->
+    @if (ivMissing()) {
+      <div class="coverage-banner banner-iv-missing">
+        <i class="pi pi-info-circle"></i>
+        <div class="coverage-body">
+          <div class="coverage-title">No IV30 at these bars — RV-only view</div>
+          <div class="coverage-meta">
+            No recorded IV30 falls on these bars' timestamps, so the IV30 line,
+            RV-vs-IV bands, VRP histogram and long/short-vol signal triangles
+            cannot be drawn. Realized vol ({{ rvLastValue() }} latest) renders
+            against the right axis labelled <code>RV YZ</code>.
+          </div>
+        </div>
+      </div>
+    } @else {
+      <div class="coverage-banner">
+        <i class="pi pi-exclamation-triangle"></i>
+        <div class="coverage-body">
+          <div class="coverage-title">Forward RV unavailable for last {{ d.coverage.forwardBlindTail }} bars</div>
+          <div class="coverage-meta">
+            VRP signals after <code>{{ blindStartMs() | timestampDisplay:'date-et' }}</code> are blind to the future — rendered as a
+            hatched band on the chart. IV30 series begins
+            <code>{{ d.coverage.ivFirstTsMs | timestampDisplay:'date-et' }}</code>.
+          </div>
+        </div>
       </div>
     }
-    <app-edge-price-iv-chart
-      [width]="1340" [height]="420"
-      [data]="data()"
-      [showOracle]="showOracle()"
-      [showRealtime]="showRealtime()"
-      [layers]="layers()"
-      [barSize]="barSize()"
-      [hoverIdx]="hoverIdx()"
-      (hover)="hoverIdx.set($event)" />
-  </div>
 
-  <!-- Histogram + readout -->
-  <div class="bottom-grid">
-    <div class="bottom-card">
-      <div class="bottom-head">
-        <span class="eyebrow">VRP_FORWARD HISTOGRAM</span>
-        <span class="bottom-meta">
-          n={{ data().vrpHistogram.length ? readoutHistogramN() : 0 }} ·
-          5–95% band shaded · current marker → today's vrp_forward
+    <!-- IV-source + confidence banner. Renders only when the response carried
+         provenance fields (iv_source). -->
+    @let ivc = ivConfidence();
+    @if (ivc) {
+      <div class="coverage-banner banner-iv-confidence"
+           [class.banner-iv-confidence-warn]="ivConfidenceTone() === 'warn'"
+           data-testid="iv-confidence-banner">
+        <i class="pi" [class.pi-shield]="ivConfidenceTone() === 'info'"
+                     [class.pi-exclamation-triangle]="ivConfidenceTone() === 'warn'"></i>
+        <div class="coverage-body">
+          <div class="coverage-title">
+            IV source: <code data-testid="iv-source">{{ ivSourceLabels[ivc.ivSource] }}</code>
+            @if (ivc.latestConfidence !== null) {
+              <span class="iv-conf-pill" data-testid="iv-confidence-value">
+                confidence {{ (ivc.latestConfidence * 100).toFixed(0) }}%
+              </span>
+            }
+            @if (ivc.floor !== null) {
+              <span class="iv-conf-floor">floor {{ (ivc.floor * 100).toFixed(0) }}%</span>
+            }
+            @if (ivc.healthImputed === true) {
+              <span class="iv-conf-imputed"
+                    data-testid="iv-confidence-imputed"
+                    title="Recorder row lacked an explicit health_score; the
+                           health factor is dropped and confidence collapses
+                           to (1 − vcs). The bar is flagged so you can see
+                           it is not backed by evidence-derived stability."
+                    aria-label="health score imputed (drop-health-factor branch)">
+                imputed
+              </span>
+            }
+          </div>
+          <div class="coverage-meta">
+            @if (ivc.gatedNow === true) {
+              <strong data-testid="iv-gated-now">Latest bar gated</strong> — confidence below floor;
+              VRP signals forced to 0.
+            } @else if (ivc.gatedNow === false) {
+              Latest bar above floor — VRP signal active.
+            } @else {
+              Confidence not computed for this run (no
+              <code>variance_contribution_synthetic</code> in the IV series).
+            }
+            @if (ivc.nGated > 0) {
+              · <span data-testid="iv-n-gated">{{ ivc.nGated }} bar{{ ivc.nGated === 1 ? '' : 's' }}</span>
+              gated overall.
+            }
+          </div>
+        </div>
+      </div>
+    }
+
+    <!-- Main chart -->
+    <div class="chart-card">
+      <div class="chart-toggles">
+        <span class="eyebrow">SIGNALS</span>
+        <button type="button" class="toggle"
+                [class.on]="showRealtime()"
+                (click)="showRealtime.set(!showRealtime())">
+          <span class="toggle-swatch realtime" [class.on]="showRealtime()"></span>
+          Realtime
+        </button>
+
+        <span class="divider"></span>
+        <span class="eyebrow">LAYERS</span>
+        <button type="button" class="toggle" [class.on]="rvBands()" (click)="rvBands.set(!rvBands())">
+          <span class="toggle-swatch generic" [class.on]="rvBands()"></span>
+          RV bands 5/10/30
+        </button>
+
+        <span class="legend-spacer"></span>
+        <span class="legend-row">
+          <span class="lg-line iv"></span><span>IV30</span>
+          <svg width="9" height="9"><polygon points="4.5,1 8,8 1,8" [attr.fill]="TOK.bull" /></svg>
+          <span>long-vol signal</span>
+          <svg width="9" height="9"><polygon points="4.5,8 8,1 1,1" [attr.fill]="TOK.bear" /></svg>
+          <span>short-vol signal</span>
         </span>
       </div>
-      <app-edge-vrp-histogram
-        [width]="820" [height]="170"
-        [data]="data()"
-        [currentIdx]="currentIdx()" />
+      <p class="unavailable-note" data-testid="rviv-unavailable-note">
+        Edge Score strip and Oracle (ex-post) signals: unavailable. This study does not compute them.
+      </p>
+      <app-edge-price-iv-chart
+        [width]="1340" [height]="420"
+        [data]="d"
+        [showRealtime]="showRealtime()"
+        [rvBands]="rvBands()"
+        [barSize]="barSize()"
+        [hoverIdx]="hoverIdx()"
+        (hover)="hoverIdx.set($event)" />
     </div>
 
-    <div class="bottom-card">
-      <div class="eyebrow">SIGNAL READOUT</div>
-      @let r = readout();
-      <div class="readout-action">
-        <span class="readout-action-text" [style.color]="r.color">{{ r.action }}</span>
-        <span class="readout-meta">
-          @ vrp_z={{ r.z !== r.z ? '—' : r.z.toFixed(2) }} · trigger ±1.0σ
-        </span>
+    <!-- Histogram + readout -->
+    <div class="bottom-grid">
+      <div class="bottom-card">
+        <div class="bottom-head">
+          <span class="eyebrow">VRP_FORWARD HISTOGRAM</span>
+          <span class="bottom-meta">
+            n={{ readoutHistogramN() }} ·
+            5–95% band shaded · current marker → today's vrp_forward
+          </span>
+        </div>
+        <app-edge-vrp-histogram
+          [width]="820" [height]="170"
+          [data]="d"
+          [currentIdx]="currentIdx()" />
       </div>
-      <div class="readout-grid">
-        <span class="r-key" title="IV30 in solver-native ACT/365 basis. Display only.">iv30</span>
-        <span class="r-val">{{ fmtPct(r.iv30) }}</span>
-        <span class="r-key" title="IV30 converted to TRD/252 basis (NYSE calendar). Used for VRP.">iv30_trd252</span>
-        <span class="r-val">{{ fmtPct(r.iv30Trd252) }}</span>
-        <span class="r-key" title="Trailing 30-bar Yang-Zhang on daily bars. Chip-driven, NOT VRP-driving.">rv_yz_30_daily</span>
-        <span class="r-val">{{ fmtPct(r.rvYzDaily) }}</span>
-        <span class="r-key" title="HF two-component estimator over 21 trading days. Drives VRP. Session-aware.">rv_hf_21d</span>
-        @if (r.rvHf21d !== r.rvHf21d) {
-          <span class="r-val r-blind">blind · forward window</span>
-        } @else {
-          <span class="r-val">{{ fmtPct(r.rvHf21d) }}</span>
-        }
-        <span class="r-key">vrp_forward</span>
-        <span class="r-val">{{ fmtPct(r.vrpForward, 2) }}</span>
-        <span class="r-key">edge_score</span>
-        <span class="r-val" [style.color]="r.edgeScore >= 0 ? TOK.bull : TOK.bear">
-          {{ fmtSigned(r.edgeScore) }}
-        </span>
-        @let live = liveIv30();
-        @if (live) {
-          <span class="r-key"
-                title="Live IV30 from /api/edge/iv30/{vix-style,parametric}, captured alongside the realized series. Marker is drawn on the chart at the rightmost x.">
-            live_iv30
-          </span>
-          <span class="r-val" data-testid="live-iv30-readout">
-            {{ fmtPct(live.iv30Act365) }}
-            <span class="r-meta" data-testid="live-iv30-method">· {{ live.method === 'vix_style' ? 'vix-style' : 'parametric' }}</span>
-            <span class="r-meta" data-testid="live-iv30-synth">· synth {{ (live.varianceContributionSynthetic * 100).toFixed(0) }}%</span>
-          </span>
+
+      <div class="bottom-card">
+        <div class="eyebrow">SIGNAL READOUT</div>
+        @let r = readout();
+        @if (r) {
+          <div class="readout-action">
+            <span class="readout-action-text" [style.color]="r.color">{{ r.action }}</span>
+            <span class="readout-meta">
+              @ vrp_z={{ r.z !== r.z ? '—' : r.z.toFixed(2) }} · trigger ±1.0σ
+            </span>
+          </div>
+          <div class="readout-grid" data-testid="rviv-readout">
+            <span class="r-key" title="IV30 in solver-native ACT/365 basis. Display only.">iv30</span>
+            <span class="r-val">{{ fmtPct(r.iv30) }}</span>
+            <span class="r-key" title="IV30 converted to TRD/252 basis (NYSE calendar). Used for VRP.">iv30_trd252</span>
+            <span class="r-val">{{ fmtPct(r.iv30Trd252) }}</span>
+            <span class="r-key" title="Trailing 30-bar Yang-Zhang on daily bars. Chip-driven, NOT VRP-driving.">rv_yz_30_daily</span>
+            <span class="r-val">{{ fmtPct(r.rvYzDaily) }}</span>
+            <span class="r-key" title="HF two-component estimator over 21 trading days. Drives VRP. Session-aware.">rv_hf_21d</span>
+            @if (r.rvHf21d !== r.rvHf21d) {
+              <span class="r-val r-blind">blind · forward window</span>
+            } @else {
+              <span class="r-val">{{ fmtPct(r.rvHf21d) }}</span>
+            }
+            <span class="r-key">vrp_forward</span>
+            <span class="r-val">{{ fmtPct(r.vrpForward, 2) }}</span>
+            <span class="r-key">edge_score</span>
+            <span class="r-val r-unavailable" data-testid="rviv-edge-score-unavailable">unavailable</span>
+            @let live = liveIv30();
+            @if (live) {
+              <span class="r-key"
+                    title="Live IV30 from /api/edge/iv30/{vix-style,parametric}, captured alongside the realized series. Marker is drawn on the chart at the rightmost x.">
+                live_iv30
+              </span>
+              <span class="r-val" data-testid="live-iv30-readout">
+                {{ fmtPct(live.iv30Act365) }}
+                <span class="r-meta" data-testid="live-iv30-method">· {{ live.method === 'vix_style' ? 'vix-style' : 'parametric' }}</span>
+                <span class="r-meta" data-testid="live-iv30-synth">· synth {{ (live.varianceContributionSynthetic * 100).toFixed(0) }}%</span>
+              </span>
+            }
+          </div>
         }
       </div>
     </div>
-  </div>
-
-  <!-- Drawers -->
-  <app-edge-score-drawer
-    [data]="data()"
-    [open]="scoreOpen()"
-    [idx]="currentIdx()"
-    (closed)="scoreOpen.set(false)" />
-  <app-trade-sim-drawer
-    [data]="data()"
-    [open]="tradeSimOpen()"
-    (closed)="tradeSimOpen.set(false)" />
+  } @else if (!errorMsg()) {
+    <div class="idle-card" data-testid="rviv-idle">
+      <div class="idle-title">No study computed yet</div>
+      <div class="idle-meta">
+        Pick a symbol, bar size and tenor, then press Compute. Charts and
+        readouts come only from the response; nothing is drawn beforehand.
+      </div>
+    </div>
+  }
 </section>

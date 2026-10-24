@@ -1,15 +1,137 @@
-import { ComponentFixture, TestBed } from "@angular/core/testing";
 import { provideHttpClient } from "@angular/common/http";
-import { provideHttpClientTesting } from "@angular/common/http/testing";
+import { HttpTestingController, provideHttpClientTesting } from "@angular/common/http/testing";
+import { TestBed } from "@angular/core/testing";
 import { provideRouter } from "@angular/router";
-import { RealizedVsIvComponent } from "./realized-vs-iv.component";
+import { render, screen } from "@testing-library/angular";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it } from "vitest";
 import { fakePickerWorld } from "../../../shared/symbol-picker/testing/fake-picker-world";
-import {
-  EdgeMockDataService,
-  type EdgeData,
-  type IvConfidenceSummary,
-  type LiveIv30Marker,
-} from "../services/edge-mock-data.service";
+import type {
+  IvConfidenceSummary,
+  LiveIv30Marker,
+  RealizedVsIvData,
+} from "../services/edge-data.model";
+import { answerCompute, failBarsFetch, tick } from "../testing/edge-compute-world";
+import { RealizedVsIvComponent } from "./realized-vs-iv.component";
+
+async function renderPage() {
+  const view = await render(RealizedVsIvComponent, {
+    providers: [
+      ...fakePickerWorld().providers,
+      provideHttpClient(),
+      provideHttpClientTesting(),
+      provideRouter([]),
+    ],
+  });
+  return { ...view, http: TestBed.inject(HttpTestingController), user: userEvent.setup() };
+}
+
+/** A real-shaped result, for states that are easier to set than to drive
+ *  through three HTTP round trips. */
+function realData(overrides: Partial<RealizedVsIvData> = {}): RealizedVsIvData {
+  const N = 12;
+  const flat = (v: number) => Array.from({ length: N }, () => v);
+  return {
+    provenance: "real",
+    symbol: "SPY",
+    N,
+    dates: Array.from({ length: N }, (_, i) => new Date(Date.UTC(2026, 0, 5 + i, 14))),
+    candles: Array.from({ length: N }, (_, i) => ({ o: 500 + i, h: 503 + i, l: 498 + i, c: 501 + i, v: 1e6 })),
+    iv30: flat(0.21),
+    iv30Trd252: flat(0.2),
+    rvYZ: flat(0.14),
+    rvHf21d: flat(0.15),
+    vrpForward: flat(0.05),
+    vrpZ: flat(0),
+    vrpHistogram: [],
+    signals: [],
+    coverage: { forwardBlindTail: 2, ivFirstTsMs: Date.UTC(2026, 0, 6, 14) },
+    ivConfidence: null,
+    liveIv30: null,
+    ...overrides,
+  };
+}
+
+const chartCount = () => document.querySelectorAll("canvas").length;
+
+describe("RealizedVsIvComponent — opens idle", () => {
+  it("shows no study, no chart and no sample label before anything is computed", async () => {
+    await renderPage();
+
+    expect(screen.getByTestId("rviv-idle")).toBeTruthy();
+    expect(chartCount(), "no chart is drawn from placeholder values").toBe(0);
+    expect(screen.queryByTestId("rviv-readout")).toBeNull();
+    expect(screen.queryByTestId("rviv-source-tag")).toBeNull();
+    expect(screen.queryByTestId("sample-data-banner")).toBeNull();
+    expect(screen.queryByTestId("rviv-error")).toBeNull();
+  });
+});
+
+describe("RealizedVsIvComponent — real response", () => {
+  it("draws the returned study and reads edge score as unavailable, not zero", async () => {
+    const { http, user, fixture } = await renderPage();
+
+    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await answerCompute(http);
+    fixture.detectChanges();
+
+    expect(screen.getByTestId("rviv-source-tag").textContent).toContain("SPY");
+    expect(screen.queryByTestId("rviv-idle")).toBeNull();
+    expect(chartCount(), "price chart and VRP histogram").toBe(2);
+    const readout = screen.getByTestId("rviv-readout").textContent ?? "";
+    expect.soft(readout, "values come from the response").toContain("21.0%");
+    expect.soft(readout, "values come from the response").toContain("14.0%");
+    expect(screen.getByTestId("rviv-edge-score-unavailable").textContent).toBe("unavailable");
+    expect(readout, "no zero or default masquerading as a measurement").not.toMatch(/edge_score\s*[+-]?0\.00/);
+    expect(screen.getByTestId("rviv-unavailable-note")).toBeTruthy();
+    expect(screen.queryByTestId("sample-data-banner"), "nothing on this page is synthetic").toBeNull();
+  });
+
+  it("says there is no IV30 when the response carries none, rather than drawing an IV line", async () => {
+    const { http, user, fixture } = await renderPage();
+
+    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await answerCompute(http, { ivPresent: false });
+    fixture.detectChanges();
+
+    expect(document.querySelector(".banner-iv-missing")).not.toBeNull();
+    expect(screen.getByTestId("rviv-readout").textContent).toContain("—");
+  });
+});
+
+describe("RealizedVsIvComponent — failed request", () => {
+  it("shows the error and no numbers", async () => {
+    const { http, user, fixture } = await renderPage();
+
+    await user.click(screen.getByRole("button", { name: "Compute" }));
+    failBarsFetch(http, "Polygon is unavailable");
+    await tick();
+    fixture.detectChanges();
+
+    expect(screen.getByTestId("rviv-error").textContent).toContain("Polygon is unavailable");
+    expect(chartCount(), "no chart on error").toBe(0);
+    expect(screen.queryByTestId("rviv-readout")).toBeNull();
+    expect(screen.queryByTestId("rviv-source-tag")).toBeNull();
+    expect(screen.queryByTestId("sample-data-banner")).toBeNull();
+  });
+
+  it("drops an earlier result when a later Compute fails, so it never reads as this request's answer", async () => {
+    const { http, user, fixture } = await renderPage();
+    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await answerCompute(http);
+    fixture.detectChanges();
+    expect(screen.getByTestId("rviv-readout")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Compute" }));
+    failBarsFetch(http, "Polygon is unavailable");
+    await tick();
+    fixture.detectChanges();
+
+    expect(screen.getByTestId("rviv-error")).toBeTruthy();
+    expect(chartCount()).toBe(0);
+    expect(screen.queryByTestId("rviv-readout")).toBeNull();
+  });
+});
 
 /**
  * Banner-rendering tests for the IV-source/confidence panel added in
@@ -17,33 +139,14 @@ import {
  * DOM (data-testid hooks), not on private signal values.
  */
 describe("RealizedVsIvComponent — IV confidence banner", () => {
-  let fixture: ComponentFixture<RealizedVsIvComponent>;
-  let component: RealizedVsIvComponent;
-
-  beforeEach(async () => {
-    await TestBed.configureTestingModule({
-      imports: [RealizedVsIvComponent],
-      providers: [
-        ...fakePickerWorld().providers,
-        provideHttpClient(),
-        provideHttpClientTesting(),
-        provideRouter([]),
-      ],
-    }).compileComponents();
-
-    fixture = TestBed.createComponent(RealizedVsIvComponent);
-    component = fixture.componentInstance;
-  });
-
-  function setIvConfidence(iv: IvConfidenceSummary | null): void {
-    const base = TestBed.inject(EdgeMockDataService).get();
-    const next: EdgeData = { ...base, ivConfidence: iv };
-    component.data.set(next);
+  async function renderWithConfidence(iv: IvConfidenceSummary | null): Promise<void> {
+    const { fixture } = await renderPage();
+    fixture.componentInstance.data.set(realData({ ivConfidence: iv }));
     fixture.detectChanges();
   }
 
   function banner(): HTMLElement | null {
-    return fixture.nativeElement.querySelector('[data-testid="iv-confidence-banner"]');
+    return screen.queryByTestId("iv-confidence-banner");
   }
 
   function bannerOrThrow(): HTMLElement {
@@ -58,13 +161,13 @@ describe("RealizedVsIvComponent — IV confidence banner", () => {
     return node.textContent ?? "";
   }
 
-  it("does not render the banner when ivConfidence is null", () => {
-    setIvConfidence(null);
+  it("does not render the banner when ivConfidence is null", async () => {
+    await renderWithConfidence(null);
     expect(banner()).toBeNull();
   });
 
-  it("renders the recorder-fallback label and confidence, and no imputed pill, for a recorder IV with real evidence", () => {
-    setIvConfidence({
+  it("renders the recorder-fallback label and confidence, and no imputed pill, for a recorder IV with real evidence", async () => {
+    await renderWithConfidence({
       ivSource: "recorder",
       latestConfidence: 0.83,
       floor: 0.5,
@@ -86,8 +189,8 @@ describe("RealizedVsIvComponent — IV confidence banner", () => {
       .toBeNull();
   });
 
-  it("flips to the warn variant and surfaces the gated-now copy when gatedNow=true", () => {
-    setIvConfidence({
+  it("flips to the warn variant and surfaces the gated-now copy when gatedNow=true", async () => {
+    await renderWithConfidence({
       ivSource: "caller_supplied",
       latestConfidence: 0.32,
       floor: 0.5,
@@ -102,8 +205,8 @@ describe("RealizedVsIvComponent — IV confidence banner", () => {
     expect(textOf(el, '[data-testid="iv-n-gated"]')).toContain("4 bars");
   });
 
-  it("uses singular bar wording when exactly one bar is gated", () => {
-    setIvConfidence({
+  it("uses singular bar wording when exactly one bar is gated", async () => {
+    await renderWithConfidence({
       ivSource: "recorder",
       latestConfidence: 0.6,
       floor: 0.5,
@@ -112,15 +215,14 @@ describe("RealizedVsIvComponent — IV confidence banner", () => {
       healthImputed: false,
     });
 
-    const el = bannerOrThrow();
-    const text = textOf(el, '[data-testid="iv-n-gated"]');
+    const text = textOf(bannerOrThrow(), '[data-testid="iv-n-gated"]');
     expect(text).toContain("1 bar");
     // Make sure it's not the plural "bars" form.
     expect(text).not.toContain("bars");
   });
 
-  it("hides the gated-now copy, the confidence value and the imputed pill when confidence wasn't computed", () => {
-    setIvConfidence({
+  it("hides the gated-now copy, the confidence value and the imputed pill when confidence wasn't computed", async () => {
+    await renderWithConfidence({
       ivSource: "absent",
       latestConfidence: null,
       floor: null,
@@ -149,8 +251,8 @@ describe("RealizedVsIvComponent — IV confidence banner", () => {
   // flags this so the consumer doesn't treat the confidence number as
   // evidence-backed.
 
-  it("renders the imputed pill when healthImputed=true", () => {
-    setIvConfidence({
+  it("renders the imputed pill when healthImputed=true", async () => {
+    await renderWithConfidence({
       ivSource: "recorder",
       latestConfidence: 0.6,
       floor: 0.5,
@@ -159,8 +261,7 @@ describe("RealizedVsIvComponent — IV confidence banner", () => {
       healthImputed: true,
     });
 
-    const el = bannerOrThrow();
-    const pill = el.querySelector('[data-testid="iv-confidence-imputed"]');
+    const pill = bannerOrThrow().querySelector('[data-testid="iv-confidence-imputed"]');
     expect(pill).not.toBeNull();
     expect(pill?.textContent).toContain("imputed");
     // Accessible name surfaces the rationale for screen-reader users.
@@ -169,38 +270,19 @@ describe("RealizedVsIvComponent — IV confidence banner", () => {
 });
 
 describe("RealizedVsIvComponent — live IV30 readout", () => {
-  let fixture: ComponentFixture<RealizedVsIvComponent>;
-  let component: RealizedVsIvComponent;
-
-  beforeEach(async () => {
-    await TestBed.configureTestingModule({
-      imports: [RealizedVsIvComponent],
-      providers: [
-        ...fakePickerWorld().providers,
-        provideHttpClient(),
-        provideHttpClientTesting(),
-        provideRouter([]),
-      ],
-    }).compileComponents();
-
-    fixture = TestBed.createComponent(RealizedVsIvComponent);
-    component = fixture.componentInstance;
-  });
-
-  function setLiveIv30(live: LiveIv30Marker | null): void {
-    const base = TestBed.inject(EdgeMockDataService).get();
-    const next: EdgeData = { ...base, liveIv30: live };
-    component.data.set(next);
+  async function renderWithLive(live: LiveIv30Marker | null): Promise<void> {
+    const { fixture } = await renderPage();
+    fixture.componentInstance.data.set(realData({ liveIv30: live }));
     fixture.detectChanges();
   }
 
-  it("does not render the live_iv30 readout row when liveIv30 is null", () => {
-    setLiveIv30(null);
-    expect(fixture.nativeElement.querySelector('[data-testid="live-iv30-readout"]')).toBeNull();
+  it("does not render the live_iv30 readout row when liveIv30 is null", async () => {
+    await renderWithLive(null);
+    expect(screen.queryByTestId("live-iv30-readout")).toBeNull();
   });
 
-  it("renders the live IV30 percent and the vix-style method label", () => {
-    setLiveIv30({
+  it("renders the live IV30 percent and the vix-style method label", async () => {
+    await renderWithLive({
       method: "vix_style",
       iv30Act365: 0.213,
       snapshotTsMs: 1_700_000_000_000,
@@ -209,21 +291,14 @@ describe("RealizedVsIvComponent — live IV30 readout", () => {
       strikeCoverageScore: 0.92,
     });
 
-    const readout = fixture.nativeElement.querySelector('[data-testid="live-iv30-readout"]');
-    if (!readout) throw new Error("live-iv30-readout not rendered");
+    const readout = screen.getByTestId("live-iv30-readout");
     expect(readout.textContent).toContain("21.3%");
-
-    const method = readout.querySelector('[data-testid="live-iv30-method"]');
-    if (!method) throw new Error("live-iv30-method not rendered");
-    expect(method.textContent).toContain("vix-style");
-
-    const synth = readout.querySelector('[data-testid="live-iv30-synth"]');
-    if (!synth) throw new Error("live-iv30-synth not rendered");
-    expect(synth.textContent).toContain("4%");
+    expect(screen.getByTestId("live-iv30-method").textContent).toContain("vix-style");
+    expect(screen.getByTestId("live-iv30-synth").textContent).toContain("4%");
   });
 
-  it("labels the parametric fallback when method=parametric", () => {
-    setLiveIv30({
+  it("labels the parametric fallback when method=parametric", async () => {
+    await renderWithLive({
       method: "parametric",
       iv30Act365: 0.18,
       snapshotTsMs: 1_700_000_000_000,
@@ -232,8 +307,7 @@ describe("RealizedVsIvComponent — live IV30 readout", () => {
       strikeCoverageScore: 0.5,
     });
 
-    const method = fixture.nativeElement.querySelector('[data-testid="live-iv30-method"]');
-    if (!method) throw new Error("live-iv30-method not rendered");
+    const method = screen.getByTestId("live-iv30-method");
     expect(method.textContent).toContain("parametric");
     expect(method.textContent).not.toContain("vix-style");
   });
