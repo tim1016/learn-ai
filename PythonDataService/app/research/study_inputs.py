@@ -27,6 +27,17 @@ A retained day older than the provider's history floor stays readable; a
 missing one is ``unavailable_from_provider`` and is never asked of the provider
 (the request would be refused, and a refused day ends a whole backfill).
 
+Lead-in. A study that warms up on sessions before its window may let the
+lead-in start late (``lead_in="trim_unsupplied_prefix"``): the oldest lead-in
+sessions the vendor answered with no bars at all (``provider_no_data``) are
+dropped from the front, because a symbol cannot be asked for bars from before it
+traded. Nothing else is dropped. A rate limit, an API error, an unknown symbol or
+a tape the lake's publication gate rejected says nothing about whether the symbol
+traded, so it still refuses, and so does a hole after a session that has bars. The
+dropped sessions stay in the counts (``unavailable_from_provider``) and in
+:attr:`StudyCoverage.dropped`; the admitted identity carries the lead-in that was
+read.
+
 Fold. The lake holds minute bars; a coarser study resolution is folded from
 them by :func:`fold_minute_bars` — never by the chart's resampler, which fills
 missing minutes forward.
@@ -41,7 +52,7 @@ from __future__ import annotations
 import logging
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from decimal import Decimal
 from hashlib import sha256
@@ -97,7 +108,14 @@ RefusalCode = Literal[
     "data_building",
     "data_missing",
     "lake_unavailable",
+    # A study's own: admission read what the policy asked for, and the lead-in is still shorter than its sizing
+    # (the provider's history floor, a late listing, sparse sessions), which the study's warmup policy does not allow.
+    "warmup_shortened",
 ]
+
+#: What a study does when the vendor has no bars for its oldest lead-in sessions: ``require_all`` refuses; the other
+#: drops the unsupplied prefix and reads the lead-in that exists (see the module docstring).
+LeadIn = Literal["require_all", "trim_unsupplied_prefix"]
 
 #: Sessions named in a refusal payload; the total is always reported beside them.
 MAX_LISTED_SESSIONS = 25
@@ -271,6 +289,15 @@ class StudyCoverage:
     artifacts_reused: int = 0
     artifacts_refreshed: int = 0
     issues: tuple[SessionIssue, ...] = ()
+    #: Lead-in sessions dropped from the front under ``lead_in="trim_unsupplied_prefix"`` (oldest first): the vendor
+    #: answered each with no bars. They are still counted in the warmup group (``unavailable_from_provider``, so
+    #: ``failed``) and still listed in ``issues``; they are not what stops a run.
+    dropped: tuple[date, ...] = ()
+
+    @property
+    def blocking(self) -> tuple[SessionIssue, ...]:
+        """The sessions that keep the run from going ahead: every issue except the lead-in prefix that was dropped."""
+        return tuple(issue for issue in self.issues if issue.trading_date not in self.dropped)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -497,6 +524,7 @@ def admit_minute_inputs(
     requester: str,
     now_ms: int | None = None,
     check_cancelled: Callable[[], None] = _no_check,
+    lead_in: LeadIn = "require_all",
 ) -> AdmittedMinuteInputs:
     """Read every session once, have the materializer capture what the lake lacks, or refuse with counts.
 
@@ -513,7 +541,10 @@ def admit_minute_inputs(
     cross to the shared background loop). ``now_ms`` fixes the clock for the
     completed-session check and the provider floor; production passes none.
     ``check_cancelled`` is called between the steps that can be abandoned and
-    raises to abandon the study.
+    raises to abandon the study. ``lead_in`` says what to do when the vendor has
+    no bars for the oldest lead-in sessions: refuse (the default), or drop that
+    prefix and admit the lead-in that exists (see the module docstring); the
+    identity on the result is then the lead-in actually read.
     """
     now = now_ms_utc() if now_ms is None else now_ms
     symbol = identity.symbol
@@ -624,12 +655,13 @@ def admit_minute_inputs(
                 fetched=materialization is not None,
             )
 
+    dropped = _unsupplied_prefix(lead, final, failures) if lead_in == "trim_unsupplied_prefix" else []
     issues = tuple(
         SessionIssue(
             "warmup" if day in lead else "window",
             day,
             final[day],
-            reasons[day],
+            f"{reasons[day]}; dropped from the start of the lead-in" if day in dropped else reasons[day],
             failure_reason=failures[day].reason if day in failures else None,
         )
         for day in required
@@ -642,18 +674,21 @@ def admit_minute_inputs(
         artifacts_reused=materialization.reused_artifact_count if materialization else 0,
         artifacts_refreshed=materialization.refreshed_artifact_count if materialization else 0,
         issues=issues,
+        dropped=tuple(dropped),
     )
-    if issues:
-        outcomes = {issue.outcome for issue in issues}
+    if coverage.blocking:
+        outcomes = {issue.outcome for issue in coverage.blocking}
         code: RefusalCode = next(refusal for outcome, refusal in _REFUSAL_PRECEDENCE if outcome in outcomes)
         raise StudyInputRefusal(
             code,
-            f"The lake cannot admit this window: {_summarise(issues, len(required))}.",
+            f"The lake cannot admit this window: {_summarise(coverage.blocking, len(required) - len(dropped))}.",
             coverage=coverage,
         )
 
+    kept = lead[len(dropped) :]
+    admitted_days = [*kept, *window]
     receipts: dict[str, str] = {}
-    for day in required:
+    for day in admitted_days:
         receipts.update(reads[day].receipts)
     # An admitted managed file proves the root has an identity marker (admission refuses one without).
     marker = read_marker(root.parent.parent)
@@ -662,20 +697,39 @@ def admit_minute_inputs(
     snapshot = DataSnapshot(
         symbol=symbol,
         resolution="minute",
-        data_start=required[0],
-        data_end=required[-1],
-        sessions=tuple(required),
+        data_start=admitted_days[0],
+        data_end=admitted_days[-1],
+        sessions=tuple(admitted_days),
         artifacts=receipts,
         corporate_action_versions=dict(reader.adjustment_guard.versions),
     )
     return AdmittedMinuteInputs(
-        identity=identity,
-        warmup_bars=tuple(bar for day in lead for bar in reads[day].bars),
+        identity=replace(identity, warmup_sessions=len(kept)) if dropped else identity,
+        warmup_bars=tuple(bar for day in kept for bar in reads[day].bars),
         window_bars=tuple(bar for day in window for bar in reads[day].bars),
         snapshot=snapshot,
         data_root_id=marker.data_root_id,
         coverage=coverage,
     )
+
+
+def _unsupplied_prefix(
+    lead: Sequence[date], final: Mapping[date, SessionOutcome], failures: Mapping[date, ArtifactFailure]
+) -> list[date]:
+    """The oldest lead-in sessions the vendor answered with no bars at all: an empty answer, never a failure.
+
+    ``provider_no_data`` is the materializer's own word for it. A rate limit, an API or auth error, an unknown symbol
+    or a tape the lake's publication gate rejected (``validation_failed``) says nothing about whether the symbol traded
+    that day, so none of them is ever read as 'the history starts here'. The prefix ends at the first session that is
+    not one, so a hole after a session with bars is a gap and stays a refusal.
+    """
+    prefix: list[date] = []
+    for day in lead:
+        failure = failures.get(day)
+        if final[day] != "unavailable_from_provider" or failure is None or failure.reason != "provider_no_data":
+            break
+        prefix.append(day)
+    return prefix
 
 
 # ---------------------------------------------------------------------------

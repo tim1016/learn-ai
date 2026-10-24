@@ -83,13 +83,13 @@ def identity(
     return MinuteWindowIdentity(symbol, mode, session, days[0], days[-1], warmup)  # type: ignore[arg-type]
 
 
-def admit(ident: MinuteWindowIdentity, *, now_ms: int = NOW_MS):
-    return admit_minute_inputs(ident, requester="test", now_ms=now_ms)
+def admit(ident: MinuteWindowIdentity, *, now_ms: int = NOW_MS, **options):
+    return admit_minute_inputs(ident, requester="test", now_ms=now_ms, **options)
 
 
-def refusal_of(ident: MinuteWindowIdentity, *, now_ms: int = NOW_MS) -> StudyInputRefusal:
+def refusal_of(ident: MinuteWindowIdentity, *, now_ms: int = NOW_MS, **options) -> StudyInputRefusal:
     with pytest.raises(StudyInputRefusal) as raised:
-        admit(ident, now_ms=now_ms)
+        admit(ident, now_ms=now_ms, **options)
     return raised.value
 
 
@@ -745,6 +745,110 @@ def test_raw_and_split_adjusted_windows_are_different_identities_with_different_
     assert raw_in.snapshot.corporate_action_versions == {}
     assert set(adjusted_in.snapshot.corporate_action_versions) == {"SPY"}
     assert raw_in.data_root_id == adjusted_in.data_root_id
+
+
+# ---------------------------------------------------------------------------
+# Lead-in: only an empty vendor answer lets it start late (#3523 review M1)
+# ---------------------------------------------------------------------------
+
+TRIM = {"lead_in": "trim_unsupplied_prefix"}
+LEAD_WINDOW = MARCH[2:]  # Mar 11-13: a lead-in of three sessions is Mar 6, 7 and 8
+
+
+@respx.mock
+def test_the_oldest_lead_in_sessions_the_vendor_has_no_bars_for_are_dropped_and_stay_in_the_counts(catalog, lake):
+    mock_launcher()
+    lead = lead_in_sessions(LEAD_WINDOW[0], 3)
+    tape = vendor_history([*lead, *LEAD_WINDOW])
+    del tape[lead[0]]
+    mock_vendor("SPY", tape)
+
+    admitted = admit(identity(LEAD_WINDOW, warmup=3), **TRIM)
+    refused_by_default = refusal_of(identity(LEAD_WINDOW, warmup=3))
+
+    assert refused_by_default.code == "data_unavailable_from_provider", "without the option the same lead-in refuses"
+    assert admitted.identity.warmup_sessions == 2, "the identity is the lead-in that was read"
+    assert admitted.coverage.dropped == (lead[0],)
+    assert counts(admitted.coverage.warmup) == (0, 2, 0, 1) and admitted.coverage.warmup.expected == 3
+    assert admitted.coverage.warmup.unavailable_from_provider == 1, "the dropped session is counted, not zeroed"
+    assert counts(admitted.coverage.window) == (0, len(LEAD_WINDOW), 0, 0)
+    assert admitted.snapshot.sessions == (lead[1], lead[2], *LEAD_WINDOW)
+    assert admitted.window_sessions == tuple(LEAD_WINDOW)
+    assert [(i.group, i.trading_date, i.failure_reason) for i in admitted.coverage.issues] == [
+        ("warmup", lead[0], "provider_no_data")
+    ]
+    assert admitted.coverage.issues[0].reason.endswith("dropped from the start of the lead-in")
+    assert admitted.coverage.blocking == ()
+
+
+@respx.mock
+def test_a_symbol_with_no_bars_before_its_window_gets_an_empty_lead_in(catalog, lake):
+    mock_launcher()
+    mock_vendor("SPY", vendor_history(LEAD_WINDOW))
+
+    admitted = admit(identity(LEAD_WINDOW, warmup=3), **TRIM)
+
+    assert admitted.identity.warmup_sessions == 0 and admitted.warmup_bars == ()
+    assert len(admitted.coverage.dropped) == 3 and admitted.coverage.warmup.unavailable_from_provider == 3
+    assert admitted.snapshot.sessions == tuple(LEAD_WINDOW)
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "provider_rate_limited", "provider_api_error", "provider_auth_error", "provider_entitlement_error",
+        "unknown_symbol", "validation_failed",
+    ],
+)
+def test_a_vendor_failure_on_the_oldest_lead_in_session_is_never_read_as_a_symbol_that_lists_late(
+    catalog, lake, monkeypatch, reason
+):
+    """Every outcome the vendor can give that is not an empty answer says nothing about whether the symbol traded."""
+    mock_launcher()
+    lead = lead_in_sessions(LEAD_WINDOW[0], 3)
+    mock_vendor("SPY", vendor_history([*lead, *LEAD_WINDOW]))
+    admit(identity([*lead[1:], *LEAD_WINDOW]))  # everything but the oldest lead-in session is held
+    _contention_on(lead[0], monkeypatch, reason=reason)
+
+    refusal = refusal_of(identity(LEAD_WINDOW, warmup=3), **TRIM)
+
+    assert refusal.code == "data_unavailable_from_provider"
+    assert refusal.coverage.dropped == ()
+    assert [(i.group, i.trading_date, i.failure_reason) for i in refusal.coverage.issues] == [("warmup", lead[0], reason)]
+    assert refusal.coverage.warmup.unavailable_from_provider == 1
+
+
+@respx.mock
+def test_only_the_unbroken_prefix_is_dropped_and_a_later_hole_still_refuses_with_both_in_the_counts(catalog, lake):
+    mock_launcher()
+    lead = lead_in_sessions(LEAD_WINDOW[0], 3)
+    tape = vendor_history([*lead, *LEAD_WINDOW])
+    del tape[lead[0]], tape[lead[2]]  # no bars for the oldest session, a hole after a session that has them
+    mock_vendor("SPY", tape)
+
+    refusal = refusal_of(identity(LEAD_WINDOW, warmup=3), **TRIM)
+
+    assert refusal.code == "data_unavailable_from_provider"
+    assert refusal.coverage.dropped == (lead[0],)
+    assert [i.trading_date for i in refusal.coverage.blocking] == [lead[2]]
+    assert lead[2].isoformat() in refusal.reason and lead[0].isoformat() not in refusal.reason, "the reason names what blocks"
+    assert refusal.coverage.warmup.unavailable_from_provider == 2, "both are counted"
+    assert [s["trading_date_ms"] for s in refusal.as_dict()["sessions"]] == [session_open_ms_utc(lead[0]), session_open_ms_utc(lead[2])]
+
+
+@respx.mock
+def test_a_window_session_the_vendor_has_no_bars_for_is_never_dropped(catalog, lake):
+    mock_launcher()
+    lead = lead_in_sessions(LEAD_WINDOW[0], 3)
+    tape = vendor_history([*lead, *LEAD_WINDOW])
+    del tape[LEAD_WINDOW[0]]
+    mock_vendor("SPY", tape)
+
+    refusal = refusal_of(identity(LEAD_WINDOW, warmup=3), **TRIM)
+
+    assert refusal.code == "data_unavailable_from_provider" and refusal.coverage.dropped == ()
+    assert [(i.group, i.trading_date) for i in refusal.coverage.issues] == [("window", LEAD_WINDOW[0])]
 
 
 @respx.mock
