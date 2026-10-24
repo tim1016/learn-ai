@@ -11,7 +11,7 @@ and what it reads now, field by field:
   size by ``fold_minute_bars`` — never the chart's resampler, which fills missing
   minutes forward.
 * **Resolution.** The API accepts minute, hour and day; the browser always sends
-  one-minute bars (its Sampling card is hidden). Now: minute bars whose length divides
+  one-minute bars (its Sampling card offers no other size). Now: minute bars whose length divides
   the hour (1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60) and one hour, so every bar
   starts on a wall-clock boundary. Anything else is refused up front with a reason.
   The study reads **minute artifacts only**: it neither reads nor waits on the lake's
@@ -21,16 +21,22 @@ and what it reads now, field by field:
   the lake's ``polygon_split_adjusted`` mode, named in the identity. Prices sit on the
   lake's 1/10,000 grid (rounded half-up), and carry the corporate actions known at the
   lake's latest capture of the symbol rather than at request time.
-* **Session.** Regular hours, before and now. Before: ``filter_session(df, "rth")``
-  after the fetch, called without the ``timespan`` and ``multiplier`` of the bars
-  (#3527), so an hour request lost the bar holding the open and a daily request lost
-  every bar. Now: the lake reader's regular session — canonical calendar windows, early
-  closes respected — is applied to the minute bars *before* the fold, so a bar of any
-  length holds exactly the regular-hours minutes inside it. A bar that straddles the
-  open (lengths that do not divide 30 minutes: 4, 12, 20, 60) holds only those minutes;
-  the vendor's aggregate for the same bucket also held the pre-open trades. The
-  request's ``session`` field was ignored before; it now accepts only ``rth``, the one
-  session the study has ever computed on.
+* **Session.** Regular hours before #3523, and the default now (the owner's choice on #3523: no
+  number moves unless the person picks the other session). The request's ``session`` is the one control:
+  ``rth`` reads the scheduled session, named ``regular`` in the identity (``session_policy``), and ``extended``
+  reads every bar the provider served, pre-market and after-hours included. They are different samples with
+  different identities. Before: ``filter_session(df, "rth")`` after the fetch, called without the ``timespan`` and
+  ``multiplier`` of the bars (#3527), so an hour request lost the bar holding the open and a daily request lost
+  every bar; the request's ``session`` was ignored. Now the lake reader's session — canonical calendar windows,
+  early closes respected — is applied to the minute bars *before* the fold, so a bar of any length holds exactly the
+  session's minutes inside it. Under ``rth`` a bar that straddles the open (lengths that do not divide 30 minutes: 4,
+  12, 20, 60) holds only the minutes from 09:30; the vendor's aggregate for the same bucket also held the pre-open
+  trades. Under ``extended`` the rule does not apply: the bar holds every minute the lake has in it. A session counts
+  as complete only once the vendor has delivered its whole tape for the session read (the close, plus four hours of
+  after-hours for ``extended``, plus the vendor's 15-minute delay), and a held day captured before that is refused
+  (``captured_before_final``) rather than read as complete (``app.data_lake.capture_finality``). The lake keeps one
+  copy of a day for every reader, so an ``rth`` run that would have to capture a day waits for the extended tape too
+  (``window_not_complete``).
 * **Window.** The scheduled sessions in ``[from_date, to_date]`` (canonical calendar).
   A window that ends on a session that has not finished is refused: the lake holds
   completed sessions only, where the provider path computed on the forming session's
@@ -48,14 +54,25 @@ and what it reads now, field by field:
   publication gate rejected — refuses, as does a hole after the first admitted session.
   ``warmup_policy`` decides what a shortfall may do. ``allow_shortened`` (the default,
   what the study always did, now reported) computes on the lead-in that exists.
-  ``require_full`` refuses any shortfall with ``warmup_shortened``.
+  ``require_full`` refuses any shortfall with ``warmup_shortened``. The sizing counts the bars a
+  session is guaranteed to hold in regular hours, so an ``extended`` run reads the same sessions
+  and gets at least as many lead-in bars.
 * **Look-forward.** Horizons of 1 to 100 bars (default 1, 5, 10, 15, 30). A forward
-  return that crosses a UTC date is masked, nothing is read past ``to_date`` so the last
+  return that crosses a New York date is masked, nothing is read past ``to_date`` so the last
   bars of the window have no label, and the IC decay curve runs to the largest horizon
-  plus ten. Unchanged.
+  plus ten. The mask read the UTC date before ``extended`` was offered; for regular hours the
+  two dates are the same, so no ``rth`` number moved, and under ``extended`` in standard time
+  the 19:00 to 20:00 ET bars (00:00 to 01:00 UTC) are no longer given a return that reaches
+  into the next pre-market. The daily IC (:mod:`app.research.validation.ic`, shared with the
+  Feature study) and the train and test dates still group by UTC date, so under ``extended`` in
+  standard time those late after-hours bars count with the next day.
+* **Annualizing.** The IR and Sharpe proxies scale by the bars a trading year holds. Regular hours:
+  390 one-minute bars a day, as before. Extended: the 04:00 to 20:00 ET span, 960 one-minute
+  bars a day, counted by the scheduled span and not by the minutes that traded (as the regular
+  figure is).
 * **Guards.** "Insufficient data" (fewer bars than lookback plus the largest horizon,
   and fewer than 100 bars after the warmup is trimmed) are unchanged except that the
-  first now counts the regular-hours bars the study uses, where it counted every bar
+  first now counts the bars of the session the study reads, where it counted every bar
   the provider served.
 * **Cache and result.** None before, none now: the study is synchronous and has never
   cached, and its random baseline is an unseeded Monte Carlo draw, so a stored result
@@ -64,6 +81,11 @@ and what it reads now, field by field:
   input identity, the admitted snapshot's digest, the data root and the calculation
   version, under :data:`RESULT_NAMESPACE`. A repaired lake gives the same request a new
   snapshot digest; a changed policy gives it a new identity digest.
+
+* **Span.** :func:`reliability_span` names the sessions a run asks the lake for (the warmup lead-in
+  and the window) from the calendar and the warmup sizing alone, reading no bar, so the page can count
+  how many the lake lacks before the run. The lead-in is sized here, in one place, and the browser derives
+  none of it.
 
 The shared lake-study pieces (:mod:`app.research.lake_study`) this study uses: the
 identity (:class:`~app.research.lake_study.FoldedStudyIdentity`), the ``data_source``
@@ -88,7 +110,12 @@ from typing import Any, Literal
 import pandas as pd
 
 from app.lean_sidecar.trading_calendar import expected_sessions
-from app.models.indicator_reliability_models import ReliabilityWarmup, WarmupPolicy, WarmupShortfallCause
+from app.models.indicator_reliability_models import (
+    ReliabilitySpan,
+    ReliabilityWarmup,
+    WarmupPolicy,
+    WarmupShortfallCause,
+)
 from app.research.indicator_reliability import DEFAULT_VOL_WINDOW, MAX_DECAY_HORIZON, RANDOM_SIMULATIONS, TRAIN_RATIO
 from app.research.lake_study import FoldedStudyIdentity, cache_key, data_source_block
 from app.research.runs.hashing import hash_payload
@@ -96,14 +123,21 @@ from app.research.study_inputs import (
     AdmittedMinuteInputs,
     MinuteWindowIdentity,
     RefusalCode,
+    SessionPolicy,
     StudyCoverage,
     StudyInputRefusal,
     admit_minute_inputs,
     bars_as_rows,
     fold_minute_bars,
 )
-from app.services.dataset_service import INDICATOR_CONFIGS, bar_minutes_for, resolve_indicator_window
+from app.services.dataset_service import (
+    INDICATOR_CONFIGS,
+    IndicatorWindow,
+    bar_minutes_for,
+    resolve_indicator_window,
+)
 from app.services.indicator_warmup_policy import requested_indicator_warmup_lookback
+from app.utils.session_anchors import et_midnight_ms
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -144,6 +178,8 @@ class ReliabilityParams:
     horizons: tuple[int, ...]
     include_slope: bool = False
     warmup_policy: WarmupPolicy = "allow_shortened"
+    #: ``regular`` is the scheduled session, the one the study has always computed on; ``extended`` is every bar served.
+    session_policy: SessionPolicy = "regular"
     price_adjustment_mode: Literal["raw", "polygon_split_adjusted"] = "polygon_split_adjusted"
 
 
@@ -323,7 +359,7 @@ def reliability_data_source(
 
 @dataclass(frozen=True, eq=False)
 class AdmittedReliabilityInputs:
-    """The study's bars — warmup lead-in and window, regular hours, at its resolution — with their receipt.
+    """The study's bars — warmup lead-in and window, the session it reads, at its resolution — with their receipt.
 
     ``frame`` holds ``timestamp`` (bar start, ``int64 ms UTC``), ``open``, ``high``, ``low``, ``close`` and
     ``volume``. Rows before ``window_start_ms`` (ET midnight of ``from_date``) are the warmup lead-in: the
@@ -355,6 +391,70 @@ def _lead_in_aware(refusal: StudyInputRefusal, from_date: date) -> str:
     return f"{refusal.reason} Every failed session lies in the warmup lead-in before {from_date.isoformat()}."
 
 
+@dataclass(frozen=True)
+class WarmupSizing:
+    """What the warmup sizing asks for: the bar length, the indicator's lookback, the window and the lead-in sessions."""
+
+    bar_minutes: int
+    max_lookback: int
+    window: IndicatorWindow
+    lead_in: list[date]
+
+
+def size_warmup(
+    *,
+    indicator_name: str,
+    indicator_params: Mapping[str, int | float],
+    from_date: date,
+    timespan: str,
+    multiplier: int,
+    now_ms: int,
+) -> WarmupSizing:
+    """Size the lead-in the run asks for, or refuse a bar size the lake cannot form. Calendar only: reads no bar."""
+    bar_minutes = study_bar_minutes(timespan, multiplier)
+    indicator_entry = {"name": indicator_name, "params": dict(indicator_params)}
+    max_lookback = requested_indicator_warmup_lookback([indicator_entry], INDICATOR_CONFIGS)
+    window = resolve_indicator_window(
+        from_date.isoformat(),
+        max_lookback=max_lookback,
+        bar_minutes=bar_minutes_for(timespan, multiplier),
+        now_ms=now_ms,
+    )
+    fetch_from = date.fromisoformat(window.fetch_from)
+    lead = expected_sessions(fetch_from, from_date - timedelta(days=1)) if fetch_from < from_date else []
+    return WarmupSizing(bar_minutes=bar_minutes, max_lookback=max_lookback, window=window, lead_in=lead)
+
+
+def reliability_span(
+    *,
+    indicator_name: str,
+    indicator_params: Mapping[str, int | float],
+    from_date: date,
+    to_date: date,
+    timespan: str,
+    multiplier: int,
+    now_ms: int | None = None,
+) -> ReliabilitySpan:
+    """The span of scheduled sessions a run of this request asks the lake for: its lead-in and its window.
+
+    The same sizing :func:`admit_reliability_inputs` runs, so the page's count and the run cannot disagree about the
+    lead-in. Raises :class:`ReliabilityRefusal` for a bar size the lake cannot form.
+    """
+    sizing = size_warmup(
+        indicator_name=indicator_name,
+        indicator_params=indicator_params,
+        from_date=from_date,
+        timespan=timespan,
+        multiplier=multiplier,
+        now_ms=now_ms_utc() if now_ms is None else now_ms,
+    )
+    return ReliabilitySpan(
+        start_ms=et_midnight_ms(sizing.lead_in[0] if sizing.lead_in else from_date),
+        end_ms=et_midnight_ms(to_date),
+        warmup_sessions=len(sizing.lead_in),
+    )
+
+
 def admit_reliability_inputs(params: ReliabilityParams, *, now_ms: int | None = None) -> AdmittedReliabilityInputs:
     """Size the warmup, admit the lake inputs for it and the window, and hand over the study's bars — or refuse.
 
@@ -362,24 +462,21 @@ def admit_reliability_inputs(params: ReliabilityParams, *, now_ms: int | None = 
     Raises :class:`ReliabilityRefusal`; nothing is computed on a series that admission did not complete, and a
     shortfall in the lead-in is either reported or refused, never silent.
     """
-    bar_minutes = study_bar_minutes(params.timespan, params.multiplier)
     now = now_ms_utc() if now_ms is None else now_ms
-
-    indicator_entry = {"name": params.indicator_name, "params": dict(params.indicator_params)}
-    max_lookback = requested_indicator_warmup_lookback([indicator_entry], INDICATOR_CONFIGS)
-    window = resolve_indicator_window(
-        params.from_date.isoformat(),
-        max_lookback=max_lookback,
-        bar_minutes=bar_minutes_for(params.timespan, params.multiplier),
+    sizing = size_warmup(
+        indicator_name=params.indicator_name,
+        indicator_params=params.indicator_params,
+        from_date=params.from_date,
+        timespan=params.timespan,
+        multiplier=params.multiplier,
         now_ms=now,
     )
-    fetch_from = date.fromisoformat(window.fetch_from)
-    lead = expected_sessions(fetch_from, params.from_date - timedelta(days=1)) if fetch_from < params.from_date else []
+    bar_minutes, max_lookback, window, lead = sizing.bar_minutes, sizing.max_lookback, sizing.window, sizing.lead_in
 
     requested_inputs = MinuteWindowIdentity(
         symbol=params.symbol,
         price_adjustment_mode=params.price_adjustment_mode,
-        session_policy="regular",
+        session_policy=params.session_policy,
         window_start=params.from_date,
         window_end=params.to_date,
         warmup_sessions=len(lead),

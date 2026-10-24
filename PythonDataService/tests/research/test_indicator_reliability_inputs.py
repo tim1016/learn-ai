@@ -524,6 +524,36 @@ def test_hourly_bars_keep_the_bar_that_holds_the_open_and_a_sixty_minute_request
 
 
 @respx.mock
+def test_extended_hours_bars_hold_every_minute_in_them_where_regular_hours_bars_hold_the_minutes_from_the_open(world):
+    """Under ``rth`` the 09:00 hourly bar holds 09:30 to 09:59 only; under ``extended`` it holds 09:00 to 09:59."""
+    day = JULY[0]
+    tape = full_tape(JULY, regular_keep=1.0, extended_keep=1.0)
+    mock_vendor("SPY", tape)
+    open_ms = session_open_ms_utc(day)
+    bucket = open_ms - 30 * 60_000
+
+    regular = admit(params(JULY, timespan="minute", multiplier=60)).frame
+    extended = admit(params(JULY, timespan="minute", multiplier=60, session_policy="extended")).frame
+
+    def volume(frame, start: int) -> float:
+        return float(frame.loc[frame["timestamp"] == start, "volume"].iloc[0])
+
+    from_the_open = sum(b["v"] for b in tape[day] if open_ms <= b["t"] < bucket + 3_600_000)
+    whole_bucket = sum(b["v"] for b in tape[day] if bucket <= b["t"] < bucket + 3_600_000)
+    assert whole_bucket > from_the_open > 0
+    assert volume(regular, bucket) == pytest.approx(from_the_open, abs=1e-9, rel=0)
+    assert volume(extended, bucket) == pytest.approx(whole_bucket, abs=1e-9, rel=0)
+    assert extended["timestamp"].is_monotonic_increasing and extended["timestamp"].is_unique
+
+    def hours_on_day(frame) -> list[str]:
+        local = [datetime.fromtimestamp(t / 1000, ET) for t in frame["timestamp"]]
+        return [t.strftime("%H") for t in local if t.date() == day]
+
+    assert hours_on_day(regular) == ["09", "10", "11", "12", "13", "14", "15"]
+    assert hours_on_day(extended) == [f"{hour:02d}" for hour in range(4, 20)], "a bar at every hour from 04:00 to 19:00 ET"
+
+
+@respx.mock
 def test_no_bar_is_read_past_the_requested_end_so_the_last_horizon_bars_have_no_forward_return(world):
     window = MARCH[:5]
     calls = VendorCalls()
@@ -651,6 +681,7 @@ def test_an_identical_repeat_has_the_identity_it_had(world):
         pytest.param({"include_slope": True}, id="slope"),
         pytest.param({"multiplier": 5}, id="bar_length"),
         pytest.param({"price_adjustment_mode": "raw"}, id="adjustment"),
+        pytest.param({"session_policy": "extended"}, id="session"),
         pytest.param({"to_date": MARCH[-2]}, id="window_end"),
     ],
 )

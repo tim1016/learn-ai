@@ -83,7 +83,7 @@ Research Lab sub-nav). This document is organised by concept, not by tranche.
 | Symbol | Meaning |
 |--------|---------|
 | $C_t$ | Close price at bar $t$ |
-| $r_t^{(h)} = \ln(C_{t+h} / C_t)$ | $h$-bar forward log return; NaN where bars $t$ and $t+h$ straddle a session boundary |
+| $r_t^{(h)} = \ln(C_{t+h} / C_t)$ | $h$-bar forward log return; NaN where bars $t$ and $t+h$ fall on different New York dates |
 | $f_t$ | Indicator value at bar $t$ |
 | $d$ | A calendar date (session) |
 | $\mathcal{B}_d$ | Set of bars belonging to date $d$ |
@@ -440,6 +440,10 @@ bars_per_year(timespan, multiplier) =
 | day      | 1        |
 | week     | 0.2      |
 | month    | 1/21     |
+
+These are regular-hours figures. A run on extended hours (04:00–20:00 ET) counts
+960 minute bars and 16 hour bars a day instead, by the scheduled span and not by
+the minutes that traded; the other units do not depend on the session.
 
 **IR proxy via breadth** — Grinold (1989) / Grinold & Kahn (1999):
 

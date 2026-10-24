@@ -1,4 +1,4 @@
-"""Indicator reliability inputs: the old provider path against the admitted lake path, on one pinned vendor payload (#3523; R14, T08, D02).
+"""Indicator reliability inputs: the old provider path against the admitted lake path, on one pinned vendor payload (#3523; R14, T08).
 
 Slice 33 of the UX redesign moves the study's bars from Polygon aggregates (``fetch_bars_chunked``, the regular-hours
 filter, the warmup lead-in) to the lake. This module is the receipt for what that move changes, case by case. Both paths
@@ -14,7 +14,7 @@ read the *same* pinned vendor payload:
 Each case records changed timestamps, prices, counts and derived outputs (the indicator's values; the in- and
 out-of-sample mean IC of every horizon), and names the cause with the reconcile categories (``timestamp``, ``warmup``,
 ``precision``, ``off-by-one``, ``data-quality``). A case that moves nothing says so by asserting zero. Unexplained drift
-fails here; an *intentional* divergence is the owner's decision (D02) and is listed in the PR.
+fails here; an *intentional* divergence is one the owner accepted on #3523 and is named in the case that pins it.
 
 The lake's 1/10,000 price grid is ``data-quality``, never ``precision``: it changes the input data, and ``precision`` is
 floating-point accumulation. A tolerance may loosen only for the latter, so each output the grid moves is pinned at its
@@ -394,8 +394,10 @@ def test_prices_finer_than_the_lake_grid_move_each_output_by_its_measured_amount
     the provider path does not. That changes the input data, so it is not ``precision``: the movement is a fact about the
     data and is pinned at its measured value. What ``precision`` (float accumulation) adds on top of it is the tolerance.
 
-    A lake encoding change that moved the IC by 1e-3 would fail here, as would one that moved it by 1e-9. The table above
-    is what D02 is decided on.
+    A lake encoding change that moved the IC by 1e-3 would fail here, as would one that moved it by 1e-9. The owner
+    accepted the grid on #3523: the table above comes from synthetic tapes priced finer than the grid, and a
+    real tape does not move (the vendor's split-adjusted WMT minutes for 2024-02-20 to 23 held no price finer than it,
+    measured for #3522), so the lake path and the provider path agree on a tape the vendor really serves.
     """
     tape = tape_for(DST_WINDOW, start_price=start_price, decimals=decimals)
     mock_vendor("SPY", tape, adjusted=tape)

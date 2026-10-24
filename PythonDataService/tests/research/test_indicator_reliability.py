@@ -126,6 +126,28 @@ class TestComputeForwardReturn:
         valid_count = fwd.notna().sum()
         assert valid_count < len(df) - 15
 
+    def test_the_overnight_mask_follows_the_new_york_date_so_late_after_hours_bars_get_no_next_day_return(self):
+        """In standard time 19:00 ET is 00:00 UTC, so the evening and the next pre-market share one UTC date (#3523)."""
+        et = pd.Timestamp("2024-01-08", tz="America/New_York")
+        evening = [et + pd.Timedelta(hours=19, minutes=58), et + pd.Timedelta(hours=19, minutes=59)]
+        morning = [et + pd.Timedelta(days=1, hours=4), et + pd.Timedelta(days=1, hours=4, minutes=1)]
+        stamps = [int(t.timestamp() * 1000) for t in (*evening, *morning)]
+        assert pd.to_datetime(stamps, unit="ms", utc=True).date.tolist() == [pd.Timestamp("2024-01-09").date()] * 4
+        df = pd.DataFrame({"timestamp": stamps, "close": [100.0, 101.0, 102.0, 103.0]})
+
+        fwd = compute_forward_return(df, horizon=2, mask_overnight=True)
+
+        assert fwd.isna().all(), "both evening bars look across the overnight gap, and the New York dates differ"
+        assert np.isclose(compute_forward_return(df, horizon=2, mask_overnight=False).iloc[0], np.log(102 / 100), atol=1e-12, rtol=0)
+
+    def test_a_regular_hours_series_is_masked_exactly_as_it_was_when_the_mask_read_the_utc_date(self):
+        df = _create_test_df(500)
+        by_utc_date = df.assign(date=pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.date)
+
+        pd.testing.assert_series_equal(
+            compute_forward_return(df, horizon=15), compute_forward_return(by_utc_date, horizon=15), atol=0, rtol=0
+        )
+
 
 class TestComputeIndicatorReliabilityWithOos:
     """Tests for compute_indicator_reliability_with_oos (IS/OOS pipeline)."""
@@ -391,6 +413,19 @@ class TestBarsPerYear:
     )
     def test_bars_per_year(self, timespan, multiplier, expected):
         assert bars_per_year(timespan, multiplier) == pytest.approx(expected), "bars per year for the timespan and multiplier"
+
+    @pytest.mark.parametrize(
+        ("timespan", "multiplier", "session", "expected"),
+        [
+            pytest.param("minute", 1, "rth", 252 * 390, id="minute_regular"),
+            pytest.param("minute", 1, "extended", 252 * 960, id="minute_extended_is_the_16_hour_span"),
+            pytest.param("minute", 5, "extended", 252 * 960 / 5, id="multiplier_scales_inversely_in_extended"),
+            pytest.param("hour", 1, "extended", 252 * 16, id="hour_extended"),
+            pytest.param("day", 1, "extended", 252, id="a_daily_bar_does_not_depend_on_the_session"),
+        ],
+    )
+    def test_the_bars_a_year_holds_depend_on_the_session_the_bars_are_drawn_from(self, timespan, multiplier, session, expected):
+        assert bars_per_year(timespan, multiplier, session) == pytest.approx(expected, abs=1e-9, rel=0)
 
 
 class TestIRProxy:

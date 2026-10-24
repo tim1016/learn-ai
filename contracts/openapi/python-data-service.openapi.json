@@ -33872,9 +33872,13 @@
             "title": "Rerun Of"
           },
           "session": {
-            "const": "rth",
             "default": "rth",
-            "title": "Session"
+            "enum": [
+              "rth",
+              "extended"
+            ],
+            "title": "Session",
+            "type": "string"
           },
           "symbol": {
             "maxLength": 20,
@@ -56918,6 +56922,112 @@
           "ticker"
         ],
         "title": "ReliabilityRefusedResult",
+        "type": "object"
+      },
+      "ReliabilitySpan": {
+        "description": "The scheduled sessions a run of this request asks the lake for: the warmup lead-in and the window.\n\nAnswered from the calendar and the warmup sizing alone; no bar and no lake row is read. ``start_ms`` and ``end_ms``\nare ET midnights (``int64 ms UTC``), like the ``data_source`` block's requested bounds. The lead-in is sized before\nthe lake is asked, so a symbol that lists inside it shortens it later: this is the span the run *asks* for.",
+        "properties": {
+          "end_ms": {
+            "description": "ET midnight of the window's last date",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "start_ms": {
+            "description": "ET midnight of the first session the run admits: the lead-in's first, or the window's start when there is none",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Start Ms",
+            "type": "integer"
+          },
+          "warmup_sessions": {
+            "description": "Lead-in sessions the sizing asks for, never before the provider's history floor",
+            "title": "Warmup Sessions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start_ms",
+          "end_ms",
+          "warmup_sessions"
+        ],
+        "title": "ReliabilitySpan",
+        "type": "object"
+      },
+      "ReliabilitySpanRequest": {
+        "additionalProperties": false,
+        "description": "The part of a reliability request that decides which sessions a run asks the lake for.",
+        "properties": {
+          "from_date": {
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "title": "From Date",
+            "type": "string"
+          },
+          "indicator_name": {
+            "description": "pandas-ta indicator name (e.g., 'rsi', 'ema')",
+            "title": "Indicator Name",
+            "type": "string"
+          },
+          "indicator_params": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            "description": "Indicator parameters (e.g., {'length': 14}); the lookback they imply sizes the warmup lead-in",
+            "title": "Indicator Params",
+            "type": "object"
+          },
+          "multiplier": {
+            "default": 1,
+            "minimum": 1.0,
+            "title": "Multiplier",
+            "type": "integer"
+          },
+          "session": {
+            "default": "rth",
+            "enum": [
+              "rth",
+              "extended"
+            ],
+            "title": "Session",
+            "type": "string"
+          },
+          "symbol": {
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Symbol",
+            "type": "string"
+          },
+          "timespan": {
+            "default": "minute",
+            "enum": [
+              "minute",
+              "hour",
+              "day"
+            ],
+            "title": "Timespan",
+            "type": "string"
+          },
+          "to_date": {
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "title": "To Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from_date",
+          "to_date",
+          "symbol",
+          "indicator_name"
+        ],
+        "title": "ReliabilitySpanRequest",
         "type": "object"
       },
       "ReliabilityWarmup": {
@@ -96237,7 +96347,7 @@
     },
     "/api/research/indicator-reliability": {
       "post": {
-        "description": "Analyze indicator reliability using IC with OOS validation.\n\nThis endpoint:\n1. Admits regular-hours OHLCV bars for the ticker and date range (warmup lead-in included) from the data\n   lake, materializing what it lacks; a window the lake cannot admit is refused with a typed code and the\n   coverage counts (409, or 503 when the lake cannot be asked), never computed on a shorter series\n2. Calculates the specified indicator using pandas-ta\n3. Splits data into 70% train / 30% test\n4. Computes IC on both splits for each horizon\n5. Applies Bonferroni and FDR multiple testing corrections\n6. Compares against random baseline (100 shuffled signals)\n7. Returns warnings about overfit risk and data issues\n\nIMPORTANT: This is time-series IC for a single asset, NOT cross-sectional factor IC.",
+        "description": "Analyze indicator reliability using IC with OOS validation.\n\nThis endpoint:\n1. Admits OHLCV bars of the requested session (regular hours by default, or extended) for the ticker and\n   date range (warmup lead-in included) from the data lake, materializing what it lacks; a window the lake\n   cannot admit is refused with a typed code and the coverage counts (409, or 503 when the lake cannot be\n   asked), never computed on a shorter series\n2. Calculates the specified indicator using pandas-ta\n3. Splits data into 70% train / 30% test\n4. Computes IC on both splits for each horizon\n5. Applies Bonferroni and FDR multiple testing corrections\n6. Compares against random baseline (100 shuffled signals)\n7. Returns warnings about overfit risk and data issues\n\nIMPORTANT: This is time-series IC for a single asset, NOT cross-sectional factor IC.",
         "operationId": "calculate_indicator_reliability_api_research_indicator_reliability_post",
         "requestBody": {
           "content": {
@@ -96292,6 +96402,58 @@
           }
         },
         "summary": "Calculate Indicator Reliability",
+        "tags": [
+          "research"
+        ]
+      }
+    },
+    "/api/research/indicator-reliability/span": {
+      "post": {
+        "description": "The scheduled sessions a run of this request asks the lake for: the warmup lead-in and the window.\n\nA read: it answers from the calendar and the warmup sizing and touches neither a bar nor the lake. The page counts\nthe sessions of this span that the lake does not hold yet, so its slow-first-run warning covers the lead-in the\nrun admits with the window, which the browser has no calendar to derive.",
+        "operationId": "read_indicator_reliability_span_api_research_indicator_reliability_span_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReliabilitySpanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReliabilitySpan"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReliabilityRefusedResult"
+                }
+              }
+            },
+            "description": "The request names a bar size the lake cannot form, so no span is asked of it; same body as a refused run."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Indicator Reliability Span",
         "tags": [
           "research"
         ]

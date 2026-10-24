@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.models.lake_study_models import LakeDataSource, LakeRefusedResult
+from app.models.lake_study_models import LakeDataSource, LakeRefusedResult, TimestampMs
 from app.research.study_records.models import RecordId
 from app.schemas.ticker_request import TickerRequest
 
@@ -66,9 +66,7 @@ class IndicatorReliabilityRequest(TickerRequest):
             "the vendor failed to supply (rather than answered with no bars) refuses under either policy."
         ),
     )
-    # The study has always computed on regular hours only and ignored this field. A value it cannot honour is refused
-    # at validation instead of answered with a sample the caller did not ask for.
-    session: Literal["rth"] = "rth"
+    # ``session`` is inherited: ``rth`` (the default, the session the study has always computed on) or ``extended``.
     rerun_of: RecordId | None = Field(
         default=None,
         description="The saved run this one was prefilled from (the History's Rerun); lineage only, never an input.",
@@ -322,6 +320,31 @@ class ReliabilityRefusedResult(LakeRefusedResult):
     data_source: ReliabilityDataSource | None = Field(
         ..., description="Null when the refusal came before anything was read"
     )
+
+
+class ReliabilitySpanRequest(TickerRequest):
+    """The part of a reliability request that decides which sessions a run asks the lake for."""
+
+    indicator_name: str = Field(..., description="pandas-ta indicator name (e.g., 'rsi', 'ema')")
+    indicator_params: dict[str, int | float] = Field(
+        default_factory=dict,
+        description="Indicator parameters (e.g., {'length': 14}); the lookback they imply sizes the warmup lead-in",
+    )
+
+
+class ReliabilitySpan(BaseModel):
+    """The scheduled sessions a run of this request asks the lake for: the warmup lead-in and the window.
+
+    Answered from the calendar and the warmup sizing alone; no bar and no lake row is read. ``start_ms`` and ``end_ms``
+    are ET midnights (``int64 ms UTC``), like the ``data_source`` block's requested bounds. The lead-in is sized before
+    the lake is asked, so a symbol that lists inside it shortens it later: this is the span the run *asks* for.
+    """
+
+    start_ms: TimestampMs = Field(
+        ..., description="ET midnight of the first session the run admits: the lead-in's first, or the window's start when there is none"
+    )
+    end_ms: TimestampMs = Field(..., description="ET midnight of the window's last date")
+    warmup_sessions: int = Field(..., description="Lead-in sessions the sizing asks for, never before the provider's history floor")
 
 
 class IndicatorInfo(BaseModel):

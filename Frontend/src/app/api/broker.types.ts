@@ -6473,9 +6473,10 @@ export interface paths {
          * @description Analyze indicator reliability using IC with OOS validation.
          *
          *     This endpoint:
-         *     1. Admits regular-hours OHLCV bars for the ticker and date range (warmup lead-in included) from the data
-         *        lake, materializing what it lacks; a window the lake cannot admit is refused with a typed code and the
-         *        coverage counts (409, or 503 when the lake cannot be asked), never computed on a shorter series
+         *     1. Admits OHLCV bars of the requested session (regular hours by default, or extended) for the ticker and
+         *        date range (warmup lead-in included) from the data lake, materializing what it lacks; a window the lake
+         *        cannot admit is refused with a typed code and the coverage counts (409, or 503 when the lake cannot be
+         *        asked), never computed on a shorter series
          *     2. Calculates the specified indicator using pandas-ta
          *     3. Splits data into 70% train / 30% test
          *     4. Computes IC on both splits for each horizon
@@ -6486,6 +6487,30 @@ export interface paths {
          *     IMPORTANT: This is time-series IC for a single asset, NOT cross-sectional factor IC.
          */
         post: operations["calculate_indicator_reliability_api_research_indicator_reliability_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/indicator-reliability/span": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read Indicator Reliability Span
+         * @description The scheduled sessions a run of this request asks the lake for: the warmup lead-in and the window.
+         *
+         *     A read: it answers from the calendar and the warmup sizing and touches neither a bar nor the lake. The page counts
+         *     the sessions of this span that the lake does not hold yet, so its slow-first-run warning covers the lead-in the
+         *     run admits with the window, which the browser has no calendar to derive.
+         */
+        post: operations["read_indicator_reliability_span_api_research_indicator_reliability_span_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -21214,9 +21239,9 @@ export interface components {
             /**
              * Session
              * @default rth
-             * @constant
+             * @enum {string}
              */
-            session?: "rth";
+            session?: "rth" | "extended";
             /** Symbol */
             symbol: string;
             /**
@@ -29904,6 +29929,72 @@ export interface components {
             success: false;
             /** Ticker */
             ticker: string;
+        };
+        /**
+         * ReliabilitySpan
+         * @description The scheduled sessions a run of this request asks the lake for: the warmup lead-in and the window.
+         *
+         *     Answered from the calendar and the warmup sizing alone; no bar and no lake row is read. ``start_ms`` and ``end_ms``
+         *     are ET midnights (``int64 ms UTC``), like the ``data_source`` block's requested bounds. The lead-in is sized before
+         *     the lake is asked, so a symbol that lists inside it shortens it later: this is the span the run *asks* for.
+         */
+        ReliabilitySpan: {
+            /**
+             * End Ms
+             * @description ET midnight of the window's last date
+             */
+            end_ms: number;
+            /**
+             * Start Ms
+             * @description ET midnight of the first session the run admits: the lead-in's first, or the window's start when there is none
+             */
+            start_ms: number;
+            /**
+             * Warmup Sessions
+             * @description Lead-in sessions the sizing asks for, never before the provider's history floor
+             */
+            warmup_sessions: number;
+        };
+        /**
+         * ReliabilitySpanRequest
+         * @description The part of a reliability request that decides which sessions a run asks the lake for.
+         */
+        ReliabilitySpanRequest: {
+            /** From Date */
+            from_date: string;
+            /**
+             * Indicator Name
+             * @description pandas-ta indicator name (e.g., 'rsi', 'ema')
+             */
+            indicator_name: string;
+            /**
+             * Indicator Params
+             * @description Indicator parameters (e.g., {'length': 14}); the lookback they imply sizes the warmup lead-in
+             */
+            indicator_params?: {
+                [key: string]: number;
+            };
+            /**
+             * Multiplier
+             * @default 1
+             */
+            multiplier?: number;
+            /**
+             * Session
+             * @default rth
+             * @enum {string}
+             */
+            session?: "rth" | "extended";
+            /** Symbol */
+            symbol: string;
+            /**
+             * Timespan
+             * @default minute
+             * @enum {string}
+             */
+            timespan?: "minute" | "hour" | "day";
+            /** To Date */
+            to_date: string;
         };
         /**
          * ReliabilityWarmup
@@ -48653,6 +48744,48 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReliabilityRefusedResult"];
+                };
+            };
+        };
+    };
+    read_indicator_reliability_span_api_research_indicator_reliability_span_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReliabilitySpanRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReliabilitySpan"];
+                };
+            };
+            /** @description The request names a bar size the lake cannot form, so no span is asked of it; same body as a refused run. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReliabilityRefusedResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

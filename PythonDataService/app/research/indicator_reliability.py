@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -436,17 +436,19 @@ def compute_forward_return(
     horizon : int
         Number of bars to look forward.
     mask_overnight : bool
-        If True, mask returns that span across trading days.
+        If True, mask returns that span across New York dates.
 
     Returns
     -------
     pd.Series
-        Forward log returns; NaN where horizon crosses day boundary.
+        Forward log returns; NaN where horizon crosses a New York date boundary. A regular-hours bar has the same UTC
+        and New York date, so the mask is the same for it as when it read the UTC date; an extended-hours bar after
+        19:00 ET falls on the next UTC date in standard time, which the New York date does not do (#3523).
     """
     df = df.sort_values("timestamp").reset_index(drop=True)
 
     if "date" not in df.columns:
-        df["date"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.date
+        df["date"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_convert(SESSION_TZ).dt.date
 
     close = df["close"].values
     dates = df["date"].values
@@ -1015,7 +1017,7 @@ def compute_regime_ic(
 
 # ─── Tranche 3: IR proxy, tradeability, next-steps ─────────────────────────
 
-# Equity markets: 252 trading days * 390 minutes/day = 98280 minute bars/year.
+# Regular hours: 252 trading days * 390 minutes/day = 98280 minute bars/year.
 _BARS_PER_TRADING_DAY = {
     "minute": 390,
     "hour": 6.5,
@@ -1023,12 +1025,17 @@ _BARS_PER_TRADING_DAY = {
     "week": 0.2,  # 1 bar per 5 trading days
     "month": 1 / 21,
 }
+# Extended hours: the 04:00 to 20:00 ET span, 16 hours, whether or not every minute traded (as 390 is for regular
+# hours). Only the intraday units depend on the session.
+_BARS_PER_TRADING_DAY_EXTENDED = {**_BARS_PER_TRADING_DAY, "minute": 960, "hour": 16}
 _TRADING_DAYS_PER_YEAR = 252
 
 
-def bars_per_year(timespan: str, multiplier: int) -> float:
-    """Approximate number of bars per trading year for the given timespan."""
-    per_day = _BARS_PER_TRADING_DAY.get(timespan.lower(), 1)
+def bars_per_year(timespan: str, multiplier: int, session: Literal["rth", "extended"] = "rth") -> float:
+    """Approximate number of bars per trading year for the given timespan, in the session the bars are drawn from."""
+    per_day = (_BARS_PER_TRADING_DAY_EXTENDED if session == "extended" else _BARS_PER_TRADING_DAY).get(
+        timespan.lower(), 1
+    )
     mult = max(int(multiplier), 1)
     return float(_TRADING_DAYS_PER_YEAR * per_day / mult)
 

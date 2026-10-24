@@ -25,6 +25,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport
 
 from app.data_lake import run_materialization
+from app.data_lake.capture_finality import CLAIM_LEASE_MS, capture_final_ms
 from app.data_lake.catalog_client import CatalogUnavailableError
 from app.lean_sidecar.trading_calendar import expected_sessions, session_close_ms_utc, session_open_ms_utc
 from app.research import indicator_reliability as reliability_math
@@ -36,7 +37,7 @@ from app.services import dataset_service, indicator_reliability_service
 from app.services.polygon_client import PolygonClientService
 from app.utils.session_anchors import et_midnight_ms
 from tests._helpers.fake_lake_catalog import install_fake_catalog, mock_launcher, point_lake_writer_at_tmp
-from tests._helpers.lake_study import commit_bars, corrected_day
+from tests._helpers.lake_study import commit_bars, corrected_day, leave_early_capture
 from tests._helpers.pinned_vendor import VendorBar, mock_vendor, vendor_history
 from tests._helpers.reliability_provider_path import provider_frame, seeded_baseline
 
@@ -47,6 +48,8 @@ LEAD = lead_in_sessions(WINDOW[0], 3)  # more sessions than any test's warmup as
 #: Jun 19 and Jul 4 are holidays and Jul 3 closes at 13:00: 18 sessions, 123 hourly bars, past the study's 100-bar guard.
 HOURLY_WINDOW = expected_sessions(date(2024, 6, 17), date(2024, 7, 12))
 HOURLY_INDICATOR = {"indicator_name": "rsi", "indicator_params": {"length": 5}}  # 50 warmup bars: nine hourly sessions
+
+EMA_200_INDICATOR = {"indicator_name": "ema", "indicator_params": {"length": 200}}  # three lead-in sessions
 
 #: Dense enough that every minute of the regular session trades, so bar counts are exact.
 DENSE = {"regular_keep": 1.0, "extended_keep": 0.9}
@@ -130,17 +133,188 @@ async def test_a_completed_study_carries_a_lake_data_source_with_coverage_warmup
     assert source["window_start_ms"] == et_midnight_ms(WINDOW[0]) and source["window_end_ms"] == et_midnight_ms(WINDOW[-1])
 
 
+# ---------------------------------------------------------------------------
+# The session is the person's choice: regular hours by default, extended through the same admission (#3523)
+# ---------------------------------------------------------------------------
+
+
+def served_bars(vendor: dict[date, list[VendorBar]], *days: date) -> int:
+    return sum(len(vendor[day]) for day in days)
+
+
 @pytest.mark.asyncio
-async def test_a_session_the_study_cannot_compute_on_is_refused_not_answered_with_regular_hours(api, world):
-    """The study has only ever computed on regular hours (#3523); ``extended`` used to be accepted and ignored."""
+async def test_a_request_that_names_no_session_runs_on_regular_hours_so_no_number_moves_unless_extended_is_picked(api, world):
     mock_vendor("SPY", tape(WINDOW))
+    unnamed = {key: value for key, value in body().items() if key != "session"}
+
+    default = await post(api, unnamed)
+    named = await post(api, body(session="rth"))
+
+    assert default.status_code == named.status_code == 200
+    assert default.json()["data_source"]["session_policy"] == "regular"
+    assert default.json()["data_source"]["identity_digest"] == named.json()["data_source"]["identity_digest"]
+    assert default.json()["bar_count"] == named.json()["bar_count"]
+    assert [r["is_mean_ic"] for r in default.json()["results"]] == [r["is_mean_ic"] for r in named.json()["results"]]
+
+
+@pytest.mark.asyncio
+async def test_an_extended_run_computes_on_every_bar_served_and_says_extended_in_its_data_source(api, world):
+    vendor = tape(WINDOW)
+    mock_vendor("SPY", vendor)
+
+    extended = await post(api, body(session="extended"))
+    regular = await post(api, body(session="rth"))
+
+    assert extended.status_code == 200, extended.text
+    assert regular.status_code == 200, regular.text
+    ext, reg = extended.json(), regular.json()
+    assert ext["data_source"]["session_policy"] == "extended" and reg["data_source"]["session_policy"] == "regular"
+    assert ext["bar_count"] == served_bars(vendor, *WINDOW), "every bar the vendor served inside the window, pre-market and after-hours included"
+    assert reg["bar_count"] == regular_bars(vendor, *WINDOW)
+    assert ext["bar_count"] > reg["bar_count"]
+    first_bar = min(b["t"] for b in vendor[WINDOW[0]])
+    assert datetime.fromtimestamp(first_bar / 1000, ET).hour < 9, "the extended sample opens before the regular session"
+    assert ext["data_source"]["minute_bars_read"] == ext["bar_count"] + served_bars(vendor, *LEAD[-1:])
+    assert ext["data_source"]["warmup"]["admitted_bars"] >= reg["data_source"]["warmup"]["admitted_bars"]
+    assert ext["data_source"]["bars_used"] == ext["bar_count"]
+
+
+@pytest.mark.asyncio
+async def test_the_two_sessions_are_different_identities_over_the_same_held_bytes(api, world):
+    """One copy of a day serves both readers: the second run captures nothing, and the sessions' identities differ."""
+    mock_vendor("SPY", tape(WINDOW))
+
+    extended = (await post(api, body(session="extended"))).json()["data_source"]
+    regular = (await post(api, body(session="rth"))).json()["data_source"]
+    extended_again = (await post(api, body(session="extended"))).json()["data_source"]
+
+    assert regular["coverage"]["window"]["added"] == 0 and regular["coverage"]["window"]["reused"] == len(WINDOW)
+    assert extended["identity_digest"] != regular["identity_digest"]
+    assert extended["result_identity_digest"] != regular["result_identity_digest"]
+    assert extended["snapshot_digest"] == regular["snapshot_digest"], "the same files were admitted"
+    assert extended_again["identity_digest"] == extended["identity_digest"]
+    assert extended_again["result_identity_digest"] == extended["result_identity_digest"]
+
+
+@pytest.mark.asyncio
+async def test_a_day_captured_before_its_after_hours_tape_finished_is_refused_for_extended_and_read_for_regular(api, world):
+    """The extended early-capture gate (``capture_finality``): final at the close, plus four hours, plus the vendor delay."""
+    catalog, lake = world
+    vendor = tape(WINDOW)
+    mock_vendor("SPY", vendor)
+    assert (await post(api, body(session="rth"))).status_code == 200
+    early = WINDOW[4]
+    leave_early_capture(
+        catalog, lake, vendor, early, completed_at_ms=capture_final_ms(early, "regular") + CLAIM_LEASE_MS, mode="polygon_split_adjusted"
+    )
 
     regular = await post(api, body(session="rth"))
     extended = await post(api, body(session="extended"))
 
-    assert regular.status_code == 200 and regular.json()["data_source"]["session_policy"] == "regular"
-    assert extended.status_code == 422
-    assert any("session" in str(err["loc"]) for err in extended.json()["detail"])
+    assert regular.status_code == 200, regular.text
+    assert extended.status_code == 409
+    refusal = extended.json()["refusal"]
+    assert refusal["code"] == "captured_before_final"
+    assert [(s["group"], s["outcome"], s["trading_date_ms"]) for s in refusal["sessions"]] == [
+        ("window", "captured_before_final", session_open_ms_utc(early))
+    ]
+    assert extended.json()["data_source"]["session_policy"] == "extended"
+    assert extended.json()["data_source"]["snapshot_digest"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_session_still_receiving_its_after_hours_tape_is_complete_for_regular_hours_and_forming_for_extended(api, world, monkeypatch):
+    mock_vendor("SPY", tape(WINDOW))
+    assert (await post(api, body(session="extended"))).status_code == 200
+    last = WINDOW[-1]
+    monkeypatch.setattr(
+        indicator_reliability_service, "now_ms_utc", lambda: capture_final_ms(last, "regular") + CLAIM_LEASE_MS + 60_000
+    )
+
+    regular = await post(api, body(session="rth"))
+    extended = await post(api, body(session="extended"))
+
+    assert regular.status_code == 200, regular.text
+    assert extended.status_code == 409
+    assert extended.json()["refusal"]["code"] == "window_not_complete"
+
+
+# ---------------------------------------------------------------------------
+# The span a run asks the lake for: the lead-in it admits with the window, named by the server alone
+# ---------------------------------------------------------------------------
+
+
+async def read_span(api: FastAPI, **overrides: Any) -> httpx.Response:
+    """The light read the page makes before a run: no bar, no lake row."""
+    payload = {
+        key: value
+        for key, value in body(**overrides).items()
+        if key in {"symbol", "from_date", "to_date", "timespan", "multiplier", "session", "indicator_name", "indicator_params"}
+    }
+    async with httpx.AsyncClient(transport=ASGITransport(app=api), base_url="http://test", timeout=120) as client:
+        return await client.post("/api/research/indicator-reliability/span", json=payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("indicator", "lead_in_sessions_asked"), [({"indicator_name": "rsi", "indicator_params": {"length": 14}}, 1), (EMA_200_INDICATOR, 3)])
+async def test_the_span_read_names_the_lead_in_the_run_then_admits_with_the_window(api, world, indicator, lead_in_sessions_asked):
+    """The page counts what the lake lacks over this span, so it must be the one the run admits: lead-in included."""
+    mock_vendor("SPY", tape(WINDOW))
+
+    span = await read_span(api, **indicator)
+    run = await post(api, body(**indicator, horizons=[1]))
+
+    assert span.status_code == 200, span.text
+    assert span.json() == {
+        "start_ms": et_midnight_ms(LEAD[-lead_in_sessions_asked]),
+        "end_ms": et_midnight_ms(WINDOW[-1]),
+        "warmup_sessions": lead_in_sessions_asked,
+    }
+    assert run.status_code == 200, run.text
+    admitted = run.json()["data_source"]
+    assert admitted["warmup"]["requested_sessions"] == span.json()["warmup_sessions"]
+    held = {row["trading_date"] for row in world[0].rows.values() if row["resolution"] == "minute"}
+    assert (et_midnight_ms(min(held)), et_midnight_ms(max(held))) == (span.json()["start_ms"], span.json()["end_ms"]), (
+        "the lake holds the span's sessions, the first of them in the lead-in, once the run has admitted them"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_span_read_touches_neither_the_vendor_nor_the_lake(api, world):
+    """No route is mocked for the vendor, so any call to it would fail; the catalog stays empty."""
+    unreachable = AssertionError("the span read asked for bars")
+    with patch.object(PolygonClientService, "fetch_aggregates", side_effect=unreachable):
+        response = await read_span(api, **EMA_200_INDICATOR)
+
+    assert response.status_code == 200 and response.json()["warmup_sessions"] == 3
+    assert world[0].rows == {}
+
+
+@pytest.mark.asyncio
+async def test_a_window_the_provider_history_begins_in_has_no_lead_in_and_the_span_starts_at_the_window(api, world, monkeypatch):
+    now = et_midnight_ms(date(2029, 3, 6))  # the provider's history begins on Friday Mar 8; the window opens on Mar 11
+    monkeypatch.setattr(indicator_reliability_service, "now_ms_utc", lambda: now)
+    window = expected_sessions(date(2024, 3, 11), date(2024, 3, 15))
+
+    response = await read_span(api, from_date=window[0].isoformat(), to_date=window[-1].isoformat(), **EMA_200_INDICATOR)
+    floor_limited = await read_span(
+        api, from_date=date(2024, 3, 8).isoformat(), to_date=window[-1].isoformat(), **EMA_200_INDICATOR
+    )
+
+    assert response.json() == {"start_ms": et_midnight_ms(date(2024, 3, 8)), "end_ms": et_midnight_ms(window[-1]), "warmup_sessions": 1}
+    assert floor_limited.json() == {
+        "start_ms": et_midnight_ms(date(2024, 3, 8)), "end_ms": et_midnight_ms(window[-1]), "warmup_sessions": 0
+    }, "a window that opens on the provider's first day has nothing to warm up on"
+
+
+@pytest.mark.asyncio
+async def test_the_span_of_a_bar_size_the_lake_cannot_form_is_refused_as_a_run_would_be(api, world):
+    response = await read_span(api, timespan="day", multiplier=1)
+
+    assert response.status_code == 409
+    refused = response.json()
+    assert (refused["success"], refused["status"], refused["refusal"]["code"]) == (False, "refused", "resolution_unsupported")
+    assert refused["data_source"] is None
 
 
 # ---------------------------------------------------------------------------

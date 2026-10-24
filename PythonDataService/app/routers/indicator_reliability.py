@@ -26,6 +26,8 @@ from app.models.indicator_reliability_models import (
     RegimeICPoint,
     RegimeResults,
     ReliabilityRefusedResult,
+    ReliabilitySpan,
+    ReliabilitySpanRequest,
     VerdictModel,
 )
 from app.research.indicator_reliability import (
@@ -49,7 +51,7 @@ from app.research.indicator_reliability import (
     generate_warnings,
     get_indicator_category,
 )
-from app.research.lake_study import refused_result
+from app.research.lake_study import SESSION_POLICY_FOR_REQUEST, refused_result
 from app.research.study_records.recorder import capture_request, keeps_route_record
 from app.services.dataset_service import (
     calculate_dynamic_indicators,
@@ -60,6 +62,7 @@ from app.services.indicator_reliability_service import (
     ReliabilityParams,
     ReliabilityRefusal,
     admit_reliability_inputs,
+    reliability_span,
 )
 
 router = APIRouter()
@@ -180,9 +183,10 @@ async def calculate_indicator_reliability(
     """Analyze indicator reliability using IC with OOS validation.
 
     This endpoint:
-    1. Admits regular-hours OHLCV bars for the ticker and date range (warmup lead-in included) from the data
-       lake, materializing what it lacks; a window the lake cannot admit is refused with a typed code and the
-       coverage counts (409, or 503 when the lake cannot be asked), never computed on a shorter series
+    1. Admits OHLCV bars of the requested session (regular hours by default, or extended) for the ticker and
+       date range (warmup lead-in included) from the data lake, materializing what it lacks; a window the lake
+       cannot admit is refused with a typed code and the coverage counts (409, or 503 when the lake cannot be
+       asked), never computed on a shorter series
     2. Calculates the specified indicator using pandas-ta
     3. Splits data into 70% train / 30% test
     4. Computes IC on both splits for each horizon
@@ -227,6 +231,7 @@ async def calculate_indicator_reliability(
             horizons=tuple(request.horizons),
             include_slope=request.include_slope,
             warmup_policy=request.warmup_policy,
+            session_policy=SESSION_POLICY_FOR_REQUEST[request.session],
         )
         try:
             # Admission can wait on the provider for minutes; keep it off the event loop.
@@ -286,7 +291,7 @@ async def calculate_indicator_reliability(
         )
 
         # Populate IR proxy on every HorizonICAnalysis (cheap arithmetic).
-        bpy = bars_per_year(request.timespan, request.multiplier)
+        bpy = bars_per_year(request.timespan, request.multiplier, request.session)
         for r in raw_results:
             ir, sharpe, breadth = compute_ir_proxy(r.is_mean_ic, r.horizon, bpy)
             r.annualized_ir = ir
@@ -450,6 +455,39 @@ async def calculate_indicator_reliability(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Indicator reliability analysis failed: {e}",
+        )
+
+
+@router.post(
+    "/indicator-reliability/span",
+    response_model=ReliabilitySpan,
+    responses={
+        status.HTTP_409_CONFLICT: {
+            "model": ReliabilityRefusedResult,
+            "description": "The request names a bar size the lake cannot form, so no span is asked of it; same body as a refused run.",
+        },
+    },
+)
+async def read_indicator_reliability_span(request: ReliabilitySpanRequest) -> ReliabilitySpan | JSONResponse:
+    """The scheduled sessions a run of this request asks the lake for: the warmup lead-in and the window.
+
+    A read: it answers from the calendar and the warmup sizing and touches neither a bar nor the lake. The page counts
+    the sessions of this span that the lake does not hold yet, so its slow-first-run warning covers the lead-in the
+    run admits with the window, which the browser has no calendar to derive.
+    """
+    try:
+        return reliability_span(
+            indicator_name=request.indicator_name,
+            indicator_params=request.indicator_params,
+            from_date=date.fromisoformat(request.from_date),
+            to_date=date.fromisoformat(request.to_date),
+            timespan=request.timespan,
+            multiplier=request.multiplier,
+        )
+    except ReliabilityRefusal as refusal:
+        return JSONResponse(
+            status_code=_refusal_status(refusal.code),
+            content=refused_result({"ticker": request.symbol}, refusal, data_source=None),
         )
 
 
