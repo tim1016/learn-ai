@@ -54553,7 +54553,7 @@
       },
       "RealizedVsIvJobRequest": {
         "additionalProperties": false,
-        "description": "Body of POST /api/jobs-internal/realized-vs-iv.\n\nThe worker reads the study's bars from the data lake itself, materializing what the lake lacks: the browser\nsends the symbol and the study's settings, never bars. Unless ``window_start_ms`` and ``window_end_ms`` (ET\nmidnight of the first and last session, ``int64 ms UTC``) name a window, it is the fewest sessions whose bars let a\nVRP z-score exist, ending at the last session the study can read (``GET /api/edge/realized-vs-iv/window`` says which);\nsee ``app.services.realized_vs_iv_study_service``.\n\n``bar_size`` is ``15m`` or ``1d``. Anything else is accepted here and refused by the job with\n``resolution_unsupported`` and a reason, so the answer is a typed refusal a page can show rather than a 422.\n\n``session`` is which bars the study folds from: ``extended`` (04:00-20:00 ET) or ``rth``. Omitted, it is the session\neach bar size has always read (``extended`` for ``15m``, ``rth`` for ``1d``; #3525). ``hf_session`` is the HF\nestimator's own ETH/RTH filter and is unchanged.",
+        "description": "Body of POST /api/jobs-internal/realized-vs-iv.\n\nThe worker reads the study's bars from the data lake itself, materializing what the lake lacks: the browser\nsends the symbol and the study's settings, never bars. Unless ``window_start_ms`` and ``window_end_ms`` (ET\nmidnight of the first and last session, ``int64 ms UTC``) name a window, it is the fewest sessions whose bars let a\nVRP z-score exist, ending at the last session the study can read (``GET /api/edge/realized-vs-iv/window`` says which);\nsee ``app.services.realized_vs_iv_study_service``.\n\n``bar_size`` is ``15m`` or ``1d``. Anything else is accepted here and refused by the job with\n``resolution_unsupported`` and a reason, so the answer is a typed refusal a page can show rather than a 422.\n\n``session`` is which bars the study folds from: ``extended`` (04:00-20:00 ET) or ``rth``. Omitted, it is the session\neach bar size has always read (``extended`` for ``15m``, ``rth`` for ``1d``; #3525). ``hf_session`` is the HF\nestimator's own ETH/RTH filter and follows the session (``rth`` is RTH, ``extended`` is ETH): omitted, it is derived\nfor ``15m`` bars and recorded as derived, and one that disagrees with the session, or ``extended`` with ``1d``,\nfails the job with ``resolution_unsupported`` and the reason (``resolve_session_choice``).",
         "properties": {
           "barSize": {
             "default": "1d",
@@ -54588,13 +54588,19 @@
             "type": "boolean"
           },
           "hfSession": {
-            "default": "ETH",
-            "enum": [
-              "ETH",
-              "RTH"
+            "anyOf": [
+              {
+                "enum": [
+                  "ETH",
+                  "RTH"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "title": "Hfsession",
-            "type": "string"
+            "title": "Hfsession"
           },
           "ivSeries": {
             "anyOf": [
@@ -55465,6 +55471,20 @@
       },
       "RecordedSnapshotItem": {
         "properties": {
+          "asked_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the vendor was asked, int64 ms UTC",
+            "title": "Asked At Ms"
+          },
           "dividend_source": {
             "title": "Dividend Source",
             "type": "string"
@@ -55521,6 +55541,12 @@
             "title": "Iv Provenance",
             "type": "object"
           },
+          "quote_ts_derived": {
+            "default": false,
+            "description": "True when the chain carried no quote time and the asking time less the vendor's delay stands in",
+            "title": "Quote Ts Derived",
+            "type": "boolean"
+          },
           "rate": {
             "title": "Rate",
             "type": "number"
@@ -55534,6 +55560,9 @@
             "type": "string"
           },
           "snapshot_ts_ms": {
+            "description": "The quote time: the instant the chain's quotes describe, int64 ms UTC",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
             "title": "Snapshot Ts Ms",
             "type": "integer"
           },
@@ -89322,7 +89351,7 @@
     },
     "/api/edge/realized-vs-iv/window": {
       "get": {
-        "description": "The window a run of ``bar_size`` reads when it names none, and the session it reads it in.",
+        "description": "The window a run of ``bar_size`` reads when it names none, and the session it reads it in.\n\nA bar size and session the study does not offer (extended-hours daily bars) is a 422 whose detail carries the\nrefusal's ``code`` and ``reason``, the answer a run of the same inputs would give.",
         "operationId": "get_default_window_api_edge_realized_vs_iv_window_get",
         "parameters": [
           {

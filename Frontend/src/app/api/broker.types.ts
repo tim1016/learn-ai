@@ -4760,6 +4760,9 @@ export interface paths {
         /**
          * Get Default Window
          * @description The window a run of ``bar_size`` reads when it names none, and the session it reads it in.
+         *
+         *     A bar size and session the study does not offer (extended-hours daily bars) is a 422 whose detail carries the
+         *     refusal's ``code`` and ``reason``, the answer a run of the same inputs would give.
          */
         get: operations["get_default_window_api_edge_realized_vs_iv_window_get"];
         put?: never;
@@ -29105,7 +29108,9 @@ export interface components {
          *
          *     ``session`` is which bars the study folds from: ``extended`` (04:00-20:00 ET) or ``rth``. Omitted, it is the session
          *     each bar size has always read (``extended`` for ``15m``, ``rth`` for ``1d``; #3525). ``hf_session`` is the HF
-         *     estimator's own ETH/RTH filter and is unchanged.
+         *     estimator's own ETH/RTH filter and follows the session (``rth`` is RTH, ``extended`` is ETH): omitted, it is derived
+         *     for ``15m`` bars and recorded as derived, and one that disagrees with the session, or ``extended`` with ``1d``,
+         *     fails the job with ``resolution_unsupported`` and the reason (``resolve_session_choice``).
          */
         RealizedVsIvJobRequest: {
             /**
@@ -29125,12 +29130,8 @@ export interface components {
              * @default false
              */
             force?: boolean;
-            /**
-             * Hfsession
-             * @default ETH
-             * @enum {string}
-             */
-            hfSession?: "ETH" | "RTH";
+            /** Hfsession */
+            hfSession?: ("ETH" | "RTH") | null;
             /** Ivseries */
             ivSeries?: components["schemas"]["IvPointPayload"][] | null;
             /** Jobid */
@@ -29450,6 +29451,11 @@ export interface components {
         };
         /** RecordedSnapshotItem */
         RecordedSnapshotItem: {
+            /**
+             * Asked At Ms
+             * @description When the vendor was asked, int64 ms UTC
+             */
+            asked_at_ms?: number | null;
             /** Dividend Source */
             dividend_source: string;
             /** Dividend Yield */
@@ -29464,13 +29470,22 @@ export interface components {
             iv30_vix_style: number | null;
             /** Iv Provenance */
             iv_provenance: Record<string, never>;
+            /**
+             * Quote Ts Derived
+             * @description True when the chain carried no quote time and the asking time less the vendor's delay stands in
+             * @default false
+             */
+            quote_ts_derived?: boolean;
             /** Rate */
             rate: number;
             /** Rate Source */
             rate_source: string;
             /** Slot */
             slot: string;
-            /** Snapshot Ts Ms */
+            /**
+             * Snapshot Ts Ms
+             * @description The quote time: the instant the chain's quotes describe, int64 ms UTC
+             */
             snapshot_ts_ms: number;
             /** Spot */
             spot: number;
