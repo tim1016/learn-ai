@@ -116,7 +116,7 @@ describe("GoldenValidationWorkbenchComponent", () => {
     const user = userEvent.setup();
 
     await user.click(await screen.findByRole("button", { name: "Select as baseline run" }));
-    expect(screen.getByText(/Explain why this is the selected validation baseline/i)).toBeTruthy();
+    expect(screen.getByText(/Explain why this is the selected baseline run/i)).toBeTruthy();
 
     await user.type(screen.getByRole("textbox", { name: /Why is this/i }), "Selected after parameter exploration.");
     await user.click(screen.getByRole("button", { name: "Select as baseline run" }));
@@ -340,7 +340,7 @@ describe("GoldenValidationWorkbenchComponent", () => {
     await user.click(screen.getByRole("button", { name: "Select as baseline run" }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("could not be designated");
+    expect(alert.textContent).toContain("could not be selected as the baseline run");
     expect(alert.textContent).not.toContain("Only completed Python baselines");
   });
 
