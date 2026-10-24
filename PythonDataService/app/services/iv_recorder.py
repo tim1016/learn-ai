@@ -7,9 +7,9 @@ forward-only from the day this recorder ships.
 
 The cron that called this module was a Quartz job in the C# backend (ADR 0071
 decision 6); it was retired with that backend (ADR 0081). Its replacement for the
-closing snapshot is ``app/services/iv_recorder_schedule.py`` (#3525); the other
-slots stay unscheduled, and ``POST /api/iv-recorder/snapshot`` still records any
-slot on request. ADR 0071 decision 8 explains why this is a JSONL file store today
+15:55 slot is ``app/services/iv_recorder_schedule.py`` (#3525); the other slots stay
+unscheduled, and ``POST /api/iv-recorder/snapshot`` still records any slot on
+request. ADR 0071 decision 8 explains why this is a JSONL file store today
 (Postgres after burn-in).
 
 This module exposes:
@@ -19,6 +19,20 @@ This module exposes:
 - ``JsonlIvSnapshotStore`` — production-pragmatic JSONL file store.
 - ``InMemoryIvSnapshotStore`` — for tests.
 
+**Time.** A row's ``snapshot_ts_ms`` is the *quote time*: the instant the chain's
+quotes describe, which is what a study places the row on a bar by. The vendor's
+options snapshot runs ``OPTIONS_SNAPSHOT_DELAY_MS`` behind the market on this plan, so
+it is not the moment the vendor was asked (``asked_at_ms``, kept beside it). The
+quote time is the latest ``last_quote.last_updated`` in the chain, ingested to the
+closest ``int64 ms UTC`` here at the vendor boundary; a chain that carries none gets
+the asking time less the delay, and ``quote_ts_derived`` says so.
+
+**Storage.** The series is one small JSONL per ticker: a row per snapshot with
+everything a study reads and a digest and relative path for the raw chain, so reading a
+year of rows never reads a chain. The raw chain, which is megabytes, sits in its own file
+beside it, written first (atomic) and named by its digest, then the series row is
+appended. Nothing that reads the series reads a chain.
+
 **Sovereignty rule:** we store raw bid/ask per contract and the
 *internal-solver* IV. Polygon's IV field is never stored as an
 authoritative IV value — even when it appears in the snapshot response,
@@ -27,12 +41,13 @@ it is dropped here. See ADR 0071 decision 1.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import threading
 from abc import ABC, abstractmethod
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass, fields
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -41,6 +56,8 @@ from app.engine.live.identity import confine_path_to_root
 from app.routers.iv30 import _normalized_quotes_by_expiry, _pick_straddle_pair, snapshot_around_target
 from app.services.polygon_client import PolygonClientService
 from app.services.rate_dividend_service import get_rate_and_dividend
+from app.utils.atomic_file import atomic_write_bytes
+from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import to_ms_utc
 from app.volatility.iv30_health import compute_iv30_health_normalized
 from app.volatility.iv_provenance import IvProvenance
@@ -58,14 +75,22 @@ IV30 stability before deciding whether to swap). All four are persisted;
 the 15:55 vs 16:00 decision is downstream of measurement."""
 
 
-@dataclass(frozen=True)
-class RecordedIvSnapshot:
-    """One captured slot.
+#: How far behind the market the vendor's options snapshot runs on this plan: asked at ``T``, it shows the quotes of about
+#: ``T`` less this. The plan's delayed snapshot is stated in ``app/services/instrument_facts_service.py``. It is named
+#: apart from ``app.data_lake.capture_finality.VENDOR_DELAY_MS``, the stock minute bars' delivery delay: two vendor facts
+#: that are both 15 minutes today and change separately.
+OPTIONS_SNAPSHOT_DELAY_MS = 15 * 60_000
 
-    All scalar timestamps are int64 ms UTC. The
-    ``raw_chain`` field is the per-contract bid/ask we ingested, so a
-    future solver upgrade can re-derive IV without re-fetching from
-    Polygon.
+
+@dataclass(frozen=True, kw_only=True)
+class IvSeriesRow:
+    """One captured slot as the series keeps it: everything a study reads, and where the raw chain is.
+
+    All scalar timestamps are int64 ms UTC. ``snapshot_ts_ms`` is the quote time (see the module docstring); the instant
+    the vendor was asked is ``asked_at_ms``. ``quote_ts_derived`` is true when the chain carried no quote time and the
+    row's time is the asking time less ``OPTIONS_SNAPSHOT_DELAY_MS``. ``raw_chain_path`` (relative to the store) and
+    ``raw_chain_sha256`` name the per-contract bid/ask this row was solved from, so a future solver upgrade can re-derive
+    IV without re-fetching; both are ``None`` when no chain was kept (an error row before any chain arrived).
     """
 
     ticker: str
@@ -79,15 +104,29 @@ class RecordedIvSnapshot:
     iv30_vix_style: float | None
     iv30_parametric: float | None
     iv_provenance: dict
-    raw_chain: list[dict]
     error: str | None = None
     # Stability score in [0, 1] computed at write time via the IV30 health
     # suite. None on error rows and on legacy rows that
     # pre-date this field — readers take the drop-health-factor branch in
     # ``_parse_iv_series`` (confidence = 1 - vcs) and surface the missing
     # evidence via ``health_imputed_now``. Defaulted so back-compat JSONL
-    # rows reconstruct cleanly via ``RecordedIvSnapshot(**d)``.
+    # rows reconstruct cleanly via ``IvSeriesRow(**d)``.
     health_score: float | None = None
+    asked_at_ms: int | None = None
+    quote_ts_derived: bool = False
+    raw_chain_path: str | None = None
+    raw_chain_sha256: str | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class RecordedIvSnapshot(IvSeriesRow):
+    """A captured slot as the recorder produces it: the series row plus the raw chain it was solved from.
+
+    The ``raw_chain`` field is the per-contract bid/ask we ingested. A store keeps it apart from the series; reading the
+    series never returns it (see :meth:`IvSnapshotStore.read_raw_chain`).
+    """
+
+    raw_chain: list[dict]
 
 
 # ── Persistence interface ───────────────────────────────────────────────────
@@ -110,7 +149,12 @@ class IvSnapshotStore(ABC):
         *,
         start_ms: int | None = None,
         end_ms: int | None = None,
-    ) -> list[RecordedIvSnapshot]: ...
+    ) -> list[IvSeriesRow]:
+        """The series rows whose quote time is in ``[start_ms, end_ms]``, oldest write first. Reads no raw chain."""
+
+    @abstractmethod
+    def read_raw_chain(self, row: IvSeriesRow) -> list[dict]:
+        """The raw chain ``row`` was solved from; ``[]`` for a row that kept none. Raises if the stored chain is not the one the row names."""
 
 
 class InMemoryIvSnapshotStore(IvSnapshotStore):
@@ -130,7 +174,7 @@ class InMemoryIvSnapshotStore(IvSnapshotStore):
         *,
         start_ms: int | None = None,
         end_ms: int | None = None,
-    ) -> list[RecordedIvSnapshot]:
+    ) -> list[IvSeriesRow]:
         with self._lock:
             return [
                 r
@@ -140,9 +184,18 @@ class InMemoryIvSnapshotStore(IvSnapshotStore):
                 and (end_ms is None or r.snapshot_ts_ms <= end_ms)
             ]
 
+    def read_raw_chain(self, row: IvSeriesRow) -> list[dict]:
+        if not isinstance(row, RecordedIvSnapshot):
+            raise ValueError("this store keeps whole snapshots; the row was not read from it")
+        return list(row.raw_chain)
+
+
+#: Where a ticker's raw chains sit under the store's directory.
+_RAW_CHAIN_DIR = "raw"
+
 
 class JsonlIvSnapshotStore(IvSnapshotStore):
-    """Append-only JSONL file store. One file per ticker.
+    """Append-only JSONL series per ticker, with each raw chain in a file of its own.
 
     Rationale (ADR 0071 decision 8): single Postgres table is the
     eventual production target, but adding ``asyncpg`` + a migration
@@ -150,6 +203,11 @@ class JsonlIvSnapshotStore(IvSnapshotStore):
     schema, append-only writes, and a reversible upgrade path: the
     Postgres implementation will read this directory once at cutover
     and bulk-load.
+
+    Layout: ``<TICKER>.jsonl`` holds one small row per snapshot; ``raw/<TICKER>/<ET date>_<slot>_<digest>.json`` holds that
+    snapshot's raw chain, named by the first 16 hex digits of its sha256 and written (atomically) before the row that
+    names it is appended. A crash between the two leaves an unreferenced chain file and no row; a torn append leaves a
+    partial last line, which :meth:`read_series` skips and the next :meth:`write` ends (both log it).
     """
 
     def __init__(self, base_dir: str | Path) -> None:
@@ -166,13 +224,30 @@ class JsonlIvSnapshotStore(IvSnapshotStore):
         # ``../`` ticker must not read or append outside ``base_dir``.
         return confine_path_to_root(self.base_dir / f"{ticker}.jsonl", self.base_dir, label="IV recorder ticker")
 
+    def _publish_raw_chain(self, snapshot: RecordedIvSnapshot) -> tuple[str | None, str | None]:
+        """Write the raw chain atomically and return its relative path and digest, or ``(None, None)`` for no chain."""
+        if not snapshot.raw_chain:
+            return None, None
+        payload = json.dumps(snapshot.raw_chain, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        digest = hashlib.sha256(payload).hexdigest()
+        day = et_date_at_ms(snapshot.asked_at_ms if snapshot.asked_at_ms is not None else snapshot.snapshot_ts_ms)
+        relative = Path(_RAW_CHAIN_DIR) / snapshot.ticker / f"{day.isoformat()}_{snapshot.slot.replace(':', '')}_{digest[:16]}.json"
+        atomic_write_bytes(confine_path_to_root(self.base_dir / relative, self.base_dir, label="IV recorder raw chain"), payload)
+        return relative.as_posix(), digest
+
     def write(self, snapshot: RecordedIvSnapshot) -> None:
         self.base_dir.mkdir(parents=True, exist_ok=True)
-        line = json.dumps(asdict(snapshot), separators=(",", ":"))
-        with self._lock, open(self._file_for(snapshot.ticker), "a") as f:
-            f.write(line + "\n")
-            f.flush()
-            os.fsync(f.fileno())
+        series_path = self._file_for(snapshot.ticker)
+        raw_chain_path, raw_chain_sha256 = self._publish_raw_chain(snapshot)
+        row = {f.name: getattr(snapshot, f.name) for f in fields(IvSeriesRow)}
+        row["raw_chain_path"], row["raw_chain_sha256"] = raw_chain_path, raw_chain_sha256
+        line = json.dumps(row, separators=(",", ":"))
+        with self._lock:
+            _end_torn_tail(series_path)
+            with open(series_path, "a") as f:
+                f.write(line + "\n")
+                f.flush()
+                os.fsync(f.fileno())
 
     def read_series(
         self,
@@ -180,24 +255,74 @@ class JsonlIvSnapshotStore(IvSnapshotStore):
         *,
         start_ms: int | None = None,
         end_ms: int | None = None,
-    ) -> list[RecordedIvSnapshot]:
+    ) -> list[IvSeriesRow]:
         path = self._file_for(ticker)
         if not path.exists():
             return []
-        out: list[RecordedIvSnapshot] = []
-        with self._lock, open(path) as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
+        with self._lock:
+            lines = path.read_text().split("\n")
+        last = max((i for i, line in enumerate(lines) if line.strip()), default=-1)
+        out: list[IvSeriesRow] = []
+        for i, line in enumerate(lines):
+            if not line.strip():
+                continue
+            try:
                 d = json.loads(line)
-                ts = int(d["snapshot_ts_ms"])
-                if start_ms is not None and ts < start_ms:
+            except json.JSONDecodeError as exc:
+                if i == last:
+                    logger.warning(
+                        "IV recorder series ends in a partial line (a torn append); it is skipped",
+                        extra={"action": "iv_series_torn_last_line_skipped", "ticker": ticker, "line": i + 1},
+                    )
                     continue
-                if end_ms is not None and ts > end_ms:
-                    continue
-                out.append(RecordedIvSnapshot(**d))
+                raise ValueError(f"{path.name} line {i + 1} is not JSON, and it is not the last line: {exc}") from exc
+            try:
+                row = IvSeriesRow(**d)
+            except TypeError as exc:
+                raise ValueError(f"{path.name} line {i + 1} is not an IV series row: {exc}") from exc
+            if start_ms is not None and row.snapshot_ts_ms < start_ms:
+                continue
+            if end_ms is not None and row.snapshot_ts_ms > end_ms:
+                continue
+            out.append(row)
         return out
+
+    def read_raw_chain(self, row: IvSeriesRow) -> list[dict]:
+        if row.raw_chain_path is None or row.raw_chain_sha256 is None:
+            return []
+        payload = confine_path_to_root(self.base_dir / row.raw_chain_path, self.base_dir, label="IV recorder raw chain").read_bytes()
+        if hashlib.sha256(payload).hexdigest() != row.raw_chain_sha256:
+            raise ValueError(f"{row.raw_chain_path} is not the chain its series row names (sha256 differs)")
+        return json.loads(payload)
+
+
+def _end_torn_tail(path: Path) -> None:
+    """Make the series end on a line break before a row is appended, so a torn append cannot swallow the next row.
+
+    A last line without its break is either a complete row that lost only the break (keep it, add the break) or a
+    partial one (drop it: it never was a row). Either is logged.
+    """
+    if not path.exists():
+        return
+    data = path.read_bytes()
+    if not data or data.endswith(b"\n"):
+        return
+    cut = data.rfind(b"\n") + 1
+    try:
+        json.loads(data[cut:])
+    except json.JSONDecodeError:
+        os.truncate(path, cut)
+        logger.warning(
+            "IV recorder series ended in a partial line (a torn append); it is dropped before the next row",
+            extra={"action": "iv_series_torn_tail_dropped", "path": path.name, "dropped_bytes": len(data) - cut},
+        )
+        return
+    with open(path, "ab") as f:
+        f.write(b"\n")
+    logger.warning(
+        "IV recorder series ended in a whole row without its line break; the break is added",
+        extra={"action": "iv_series_missing_line_break_added", "path": path.name},
+    )
 
 
 # ── Default store singleton ─────────────────────────────────────────────────
@@ -235,9 +360,9 @@ def record_iv_snapshot(
 ) -> RecordedIvSnapshot:
     """Capture one slot for one ticker, persist, and return the row.
 
-    Idempotent on ``(ticker, snapshot_ts_ms)``: callers should pass
-    the same ``asof`` if they retry; the store decides how to handle
-    duplicates (the JSONL store appends, which is acceptable for the
+    ``asof`` is the moment the vendor is asked (default now). The row is filed at the chain's quote time instead (see
+    the module docstring). Idempotent on ``(ticker, snapshot_ts_ms)``: callers should pass the same ``asof`` if they
+    retry; the store decides how to handle duplicates (the JSONL store appends, which is acceptable for the
     forward-only history use case).
 
     On failure (Polygon outage, no straddle, solver failure), the row is
@@ -248,7 +373,7 @@ def record_iv_snapshot(
         raise ValueError(f"slot must be one of {SLOT_CHOICES}, got {slot!r}")
 
     asof = asof or datetime.now(tz=UTC)
-    snapshot_ts = to_ms_utc(asof)
+    asked_ms = to_ms_utc(asof)
 
     snapshot: dict = {}
     try:
@@ -258,7 +383,7 @@ def record_iv_snapshot(
         return _persist_error(
             store,
             ticker=ticker,
-            snapshot_ts_ms=snapshot_ts,
+            asked_ms=asked_ms,
             slot=slot,
             error=f"polygon_fetch_failed: {exc}",
         )
@@ -270,10 +395,13 @@ def record_iv_snapshot(
         return _persist_error(
             store,
             ticker=ticker,
-            snapshot_ts_ms=snapshot_ts,
+            asked_ms=asked_ms,
             slot=slot,
             error=f"insufficient_snapshot: spot={spot} contracts={len(contracts)}",
         )
+
+    vendor_quote_ms = latest_quote_ms(contracts, asked_ms=asked_ms)
+    quote_ms = vendor_quote_ms if vendor_quote_ms is not None else asked_ms - OPTIONS_SNAPSHOT_DELAY_MS
 
     # The rate always resolves. Rows store a failed dividend lookup as q=0
     # with source "unknown" (#2764).
@@ -308,14 +436,14 @@ def record_iv_snapshot(
             logger.warning(
                 "[iv-threshold] dominance_gate ticker=%s ts=%d max_share_after=%.3f iter=%d hard_failed=%s",
                 ticker,
-                snapshot_ts,
+                quote_ms,
                 prov.max_single_strike_share,
                 prov.single_strike_dropped,
                 prov.single_strike_hard_failed,
                 extra={
                     "event": "iv_dominance_gate",
                     "ticker": ticker,
-                    "snapshot_ts_ms": snapshot_ts,
+                    "snapshot_ts_ms": quote_ms,
                     "max_share_after": prov.max_single_strike_share,
                     "iterations": prov.single_strike_dropped,
                     "hard_failed": prov.single_strike_hard_failed,
@@ -353,7 +481,9 @@ def record_iv_snapshot(
 
     row = RecordedIvSnapshot(
         ticker=ticker,
-        snapshot_ts_ms=snapshot_ts,
+        snapshot_ts_ms=quote_ms,
+        asked_at_ms=asked_ms,
+        quote_ts_derived=vendor_quote_ms is None,
         slot=slot,
         spot=spot,
         rate=rd.rate,
@@ -406,17 +536,38 @@ def _extract_raw_chain(contracts: list[dict]) -> list[dict]:
     return out
 
 
+def latest_quote_ms(contracts: list[dict], *, asked_ms: int) -> int | None:
+    """The chain's latest quote time as ``int64 ms UTC``, or ``None`` when no contract carries a usable one.
+
+    The vendor stamps ``last_quote.last_updated`` in nanoseconds since the epoch. It becomes the closest millisecond here,
+    at the vendor boundary, and nothing downstream sees the vendor's unit. A stamp that is not an integer, is not after
+    the epoch, or is later than the moment the vendor was asked cannot be a quote the vendor had, so it is not used.
+    """
+    latest: int | None = None
+    for contract in contracts:
+        quote = contract.get("last_quote")
+        stamp = quote.get("last_updated") if isinstance(quote, dict) else None
+        if type(stamp) is not int:
+            continue
+        ms = (stamp + 500_000) // 1_000_000
+        if 0 < ms <= asked_ms and (latest is None or ms > latest):
+            latest = ms
+    return latest
+
+
 def _persist_error(
     store: IvSnapshotStore,
     *,
     ticker: str,
-    snapshot_ts_ms: int,
+    asked_ms: int,
     slot: str,
     error: str,
 ) -> RecordedIvSnapshot:
     row = RecordedIvSnapshot(
         ticker=ticker,
-        snapshot_ts_ms=snapshot_ts_ms,
+        snapshot_ts_ms=asked_ms - OPTIONS_SNAPSHOT_DELAY_MS,
+        asked_at_ms=asked_ms,
+        quote_ts_derived=True,
         slot=slot,
         spot=0.0,
         rate=0.0,

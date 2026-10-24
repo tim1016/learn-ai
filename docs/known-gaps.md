@@ -89,9 +89,13 @@ previously tracked items (issues #1655, #1671, #1672, #1674, #1677, #1664,
   - *Recorded rows carry no tenor (P2).* The recorder defaults to a 30-day target, and the scheduled snapshots are 30-day
     ones, but a row does not say so, so the Tenor control (7, 14, 30 or 60 days) converts a recorded 30-day IV to
     TRD/252 as if it were the tenor chosen. Tag each row with its target and read only the rows that match.
-  - *A once-a-day recorder gives a 15-minute run no z-score (P3).* The z-score needs IV on 252 consecutive bars, and a
-    daily snapshot lands on one 15-minute bar a day, so only daily bars can show it (after 252 recorded days). The page
-    says why from the window's counts.
+  - *A once-a-day recorder gives a 15-minute run no z-score (P3).* The z-score needs IV on 252 consecutive bars. The
+    recorder files one snapshot a day at its quote time (before the 16:00 close: the 15:45 bar of the regular and the
+    extended session alike), so a 15-minute run holds IV on one bar a day and only daily bars can show a z-score (after
+    252 recorded days). The page says why from the window's counts.
+  - *The recorded IV history is not in the nightly backup (P2).* `artifacts/iv_recorder` cannot be bought back, and
+    the option archive's backup copies only the lake roots and the catalog as one checked pair, so a lost artifacts volume
+    loses it. It needs its own copy; ADR 0071's 2026-10-24 amendment says why the lake backup cannot take it as it is.
   - *Unverified assumptions:* Polygon's own 15-minute and day aggregates equal a fold of its minute aggregates, and a
     day bar is the regular session. Both are asserted against an independent stand-in, not live data.
 - **Temporal wire/storage contracts outside Alpaca V2 remain non-numeric

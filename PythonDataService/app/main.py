@@ -1156,7 +1156,7 @@ async def _service_lifespan(
         if option_archive_service.config.ENABLED:
             await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(option_archive_service.start(), background_loop()))
 
-    # The IV30 recorder's clock: one closing snapshot per trading day for IV_RECORDER_SYMBOLS (#3525). Only the
+    # The IV30 recorder's clock: one 15:55 snapshot per trading day for IV_RECORDER_SYMBOLS (#3525). Only the
     # data-plane core runs it, so one process owns each fire.
     iv_recorder_schedule = None
     if _ROLE_RUNS_DATA_PLANE_CORE:
@@ -1514,7 +1514,7 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     app.include_router(iv30.router)
     # IV recorder (POST /api/iv-recorder/snapshot, GET .../series/{ticker}) —
     # Step D of IV-ownership plan. The .NET cron that called it was retired
-    # (ADR 0081); the data plane's own clock records the closing snapshot
+    # (ADR 0081); the data plane's own clock records the 15:55 slot
     # (app.services.iv_recorder_schedule, #3525).
     app.include_router(iv_recorder.router)
     # The window a Realized vs IV run reads when its request names none (#3525).

@@ -19,6 +19,7 @@ against live data.
 
 from __future__ import annotations
 
+import asyncio
 import math
 from datetime import date, datetime
 from typing import Any
@@ -226,8 +227,8 @@ def test_a_daily_bar_is_stamped_at_et_midnight_of_its_session_one_per_session_wi
 
 @pytest.mark.parametrize(
     ("bar_size", "hf_session", "session_policy"),
-    [("15m", "ETH", "extended"), ("15m", "RTH", "extended"), ("15m", "RTH", "regular"), ("1d", "ETH", "regular")],
-    ids=["15m-ETH-extended", "15m-RTH-extended", "15m-RTH-regular", "1d"],
+    [("15m", "ETH", "extended"), ("15m", "RTH", "regular"), ("1d", "ETH", "regular")],
+    ids=["15m-ETH-extended", "15m-RTH-regular", "1d"],
 )
 def test_the_whole_series_is_the_same_on_lake_bars_as_on_the_vendors_bars(lake_vendor, recorder_store, bar_size, hf_session, session_policy):
     p = params(bar_size, hf_session=hf_session, session_policy=session_policy)
@@ -369,16 +370,15 @@ def test_fifteen_minute_bars_start_on_the_wall_clock_quarter_hours_across_the_ds
         assert last < session_close_ms_utc(day) + 240 * 60_000
 
 
-@pytest.mark.parametrize("policy", ["regular", "extended"])
-def test_the_early_close_day_is_one_daily_bar_that_ends_with_the_calendars_close(lake_vendor, policy):
-    p = params("1d", window=(HALF_DAY_WINDOW[0], HALF_DAY_WINDOW[-1]), session_policy=policy)
+def test_the_early_close_day_is_one_daily_bar_that_ends_with_the_calendars_close(lake_vendor):
+    p = params("1d", window=(HALF_DAY_WINDOW[0], HALF_DAY_WINDOW[-1]))
     run = study_run(p)
     half_day = date(2024, 7, 3)
 
     (row,) = [r for r in run.rows if r["timestamp"] == et_midnight_ms(half_day)]
-    in_policy = [b for b in lake_vendor[half_day] if policy == "extended" or b["t"] < session_close_ms_utc(half_day)]
-    assert row["close"] == in_policy[-1]["c"], "the close is the last minute the policy admits"
-    assert row["high"] == max(b["h"] for b in in_policy)
+    regular = [b for b in lake_vendor[half_day] if b["t"] < session_close_ms_utc(half_day)]
+    assert row["close"] == regular[-1]["c"], "the close is the last regular-hours minute: the one before 13:00"
+    assert row["high"] == max(b["h"] for b in regular)
     assert et_midnight_ms(date(2024, 7, 4)) not in [r["timestamp"] for r in run.rows], "the holiday has no bar"
     assert session_close_ms_utc(half_day) == session_open_ms_utc(half_day) + 210 * 60_000, "13:00 ET: the calendar's close"
 
@@ -406,12 +406,11 @@ def test_a_gap_in_the_minute_tape_is_not_filled_so_a_bucket_with_no_minutes_has_
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("policy", ["regular", "extended"])
-def test_the_daily_fold_matches_an_independent_pandas_reference_across_dst_and_an_early_close(lake_vendor, policy):
+def test_the_daily_fold_matches_an_independent_pandas_reference_across_dst_and_an_early_close(lake_vendor):
     window = sorted({*expected_sessions(date(2024, 3, 7), date(2024, 3, 13)), *HALF_DAY_WINDOW})
     bars = []
     for chunk in (expected_sessions(date(2024, 3, 7), date(2024, 3, 13)), HALF_DAY_WINDOW):
-        identity = realized_vs_iv_identity(params("1d", window=(chunk[0], chunk[-1]), session_policy=policy), now_ms=NOW_MS)
+        identity = realized_vs_iv_identity(params("1d", window=(chunk[0], chunk[-1])), now_ms=NOW_MS)
         bars.extend(admit_minute_inputs(identity.inputs, requester="test", now_ms=NOW_MS).window_bars)
 
     folded = fold_minute_bars(bars, DAY_BAR_MINUTES)
@@ -467,13 +466,15 @@ def test_the_window_ends_on_the_last_session_the_study_can_read_or_capture(now, 
     assert last_final_session(now) == expected
 
 
-@pytest.mark.parametrize("policy", ["regular", "extended"])
-def test_the_default_window_never_ends_on_a_session_admission_would_refuse_as_forming(lake_vendor, policy):
+@pytest.mark.parametrize(
+    ("bar_size", "policy"), [("1d", "regular"), ("15m", "regular"), ("15m", "extended")]
+)
+def test_the_default_window_never_ends_on_a_session_admission_would_refuse_as_forming(lake_vendor, bar_size, policy):
     """Around the close the default end is a day admission accepts as complete, for either session."""
     for hour, minute in ((16, 14), (16, 15), (16, 20), (19, 0), (20, 19), (20, 20), (23, 59)):
         now = at_et(date(2024, 4, 5), hour, minute)
-        end = resolve_window("1d", policy, now)[1]  # type: ignore[arg-type]
-        identity = realized_vs_iv_identity(RealizedVsIvParams("SPY", "1d", session_policy=policy, window=(end, end)), now_ms=now)  # type: ignore[arg-type]
+        end = resolve_window(bar_size, policy, now)[1]  # type: ignore[arg-type]
+        identity = realized_vs_iv_identity(RealizedVsIvParams("SPY", bar_size, session_policy=policy, window=(end, end)), now_ms=now)  # type: ignore[arg-type]
 
         assert now >= capture_final_ms(end, "extended") + CLAIM_LEASE_MS, (hour, minute)
         assert identity.inputs.window_end == end
@@ -544,24 +545,25 @@ def digest(p: RealizedVsIvParams) -> str:
 
 
 @pytest.mark.parametrize(
-    "change",
+    ("bar_size", "change"),
     [
-        pytest.param({"session_policy": "extended"}, id="session_policy"),
-        pytest.param({"tenor_days": 60}, id="tenor"),
-        pytest.param({"windows": (5, 10)}, id="windows"),
-        pytest.param({"estimators": ("yz", "ctc")}, id="estimators"),
-        pytest.param({"confidence_floor": 0.2}, id="confidence_floor"),
-        pytest.param({"price_adjustment_mode": "raw"}, id="adjustment"),
-        pytest.param({"window": (DAILY_WINDOW[0], DAILY_WINDOW[-2])}, id="window_end"),
-        pytest.param({"iv_series": [{"ts": et_midnight_ms(DAILY_WINDOW[3]), "iv30": 0.2}]}, id="iv"),
+        # Daily bars are regular hours only, so the session is changed on 15-minute bars.
+        pytest.param("15m", {"session_policy": "regular"}, id="session_policy"),
+        pytest.param("1d", {"tenor_days": 60}, id="tenor"),
+        pytest.param("1d", {"windows": (5, 10)}, id="windows"),
+        pytest.param("1d", {"estimators": ("yz", "ctc")}, id="estimators"),
+        pytest.param("1d", {"confidence_floor": 0.2}, id="confidence_floor"),
+        pytest.param("1d", {"price_adjustment_mode": "raw"}, id="adjustment"),
+        pytest.param("1d", {"window": (DAILY_WINDOW[0], DAILY_WINDOW[-2])}, id="window_end"),
+        pytest.param("1d", {"iv_series": [{"ts": et_midnight_ms(DAILY_WINDOW[3]), "iv30": 0.2}]}, id="iv"),
     ],
 )
-def test_a_changed_policy_or_scientific_input_is_a_new_identity(change):
-    assert digest(params("1d", **change)) != digest(params("1d"))
+def test_a_changed_policy_or_scientific_input_is_a_new_identity(bar_size, change):
+    assert digest(params(bar_size, **change)) != digest(params(bar_size))
 
 
 def test_the_hf_session_is_part_of_a_fifteen_minute_identity_and_not_of_a_daily_one_which_has_no_hf_estimator():
-    assert digest(params("15m", hf_session="RTH")) != digest(params("15m", hf_session="ETH"))
+    assert digest(params("15m", session_policy="regular", hf_session="RTH")) != digest(params("15m", session_policy="extended", hf_session="ETH"))
     assert digest(params("1d", hf_session="RTH")) == digest(params("1d", hf_session="ETH")), "a choice nothing reads is not an input"
     assert realized_vs_iv_identity(params("1d", hf_session="RTH"), now_ms=NOW_MS).as_dict()["hf_session"] is None
 
@@ -621,7 +623,7 @@ def test_recorder_slots_reach_the_daily_bar_of_their_session_and_the_latest_slot
     assert ours["coverage"]["iv_first_ts"] == et_midnight_ms(day) and ours["coverage"]["iv_last_ts"] == et_midnight_ms(other)
 
 
-def test_recorder_slots_reach_the_fifteen_minute_bar_that_contains_them_and_the_close_slot_needs_an_extended_bar(lake_vendor, recorder_store):
+def test_recorder_slots_reach_the_fifteen_minute_bar_that_contains_them_and_a_16_00_snapshot_needs_an_extended_bar(lake_vendor, recorder_store):
     day = INTRADAY_WINDOW[4]
     for slot, iv in (("09:35", 0.20), ("12:30", 0.21), ("15:55", 0.22), ("16:00", 0.23)):
         recorder_store.write(snapshot_at(day, slot, iv))
@@ -639,6 +641,94 @@ def test_recorder_slots_reach_the_fifteen_minute_bar_that_contains_them_and_the_
     assert held(extended) == {"09:30": 0.20, "12:30": 0.21, "15:45": 0.22, "16:00": 0.23}
     assert held(regular) == {"09:30": 0.20, "12:30": 0.21, "15:45": 0.22}, "no regular bar holds 16:00:01"
     assert regular["coverage"]["iv_alignment"]["outside_bars"] == 1 and regular["coverage"]["iv_alignment"]["bars_with_iv"] == 3
+
+
+def test_the_scheduled_snapshot_reaches_the_regular_the_extended_and_the_daily_bar_of_its_day(lake_vendor, recorder_store):
+    """The clock asks at 16:10 on the delayed plan; the row sits at the quotes' own time, before the close (#3525).
+
+    One day, three bar sets: the regular-hours 15:45 bar, the extended 15:45 bar and the day's bar each hold the one
+    row. Filed at the asking time it would have fallen in no regular bar, so a regular-hours run would never get IV.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from app.services.iv_recorder import record_iv_snapshot
+    from app.services.iv_recorder_schedule import SNAPSHOT_SLOT, IvRecorderSchedule, snapshot_due_ms
+    from app.services.rate_dividend_service import RateAndDividend
+    from tests._helpers.iv_chain import bs_chain_payload
+
+    day = INTRADAY_WINDOW[4]
+    asked_ms = snapshot_due_ms(day)
+    quote_ms = at_et(day, 15, 54) + 58_500
+    polygon = MagicMock()
+    polygon.list_snapshot_options_chain.return_value = bs_chain_payload(
+        spot=150.0, sigma=0.21, rate=0.04, asof=datetime.fromtimestamp(asked_ms / 1000, ET),
+        expiry_days=[21, 28, 35, 42], strikes=[float(k) for k in range(100, 201, 5)], quote_ns=quote_ms * 1_000_000,
+    )
+    schedule = IvRecorderSchedule(
+        symbols=("SPY",), store=recorder_store, clock=lambda: asked_ms,
+        record=lambda ticker, asof: record_iv_snapshot(ticker=ticker, slot=SNAPSHOT_SLOT, store=recorder_store, polygon=polygon, asof=asof),
+    )
+
+    with patch(
+        "app.services.iv_recorder.get_rate_and_dividend",
+        return_value=RateAndDividend(rate=0.04, dividend_yield=0.0, source_rate="t", source_dividend="t"),
+    ):
+        asyncio.run(schedule.tick())
+    (recorded,) = recorder_store.read_series("SPY")
+    assert recorded.error is None and recorded.iv30_vix_style is not None
+    assert (recorded.snapshot_ts_ms, recorded.asked_at_ms, recorded.quote_ts_derived) == (quote_ms, asked_ms, False)
+
+    def held(result: dict) -> dict[str, float]:
+        return {
+            datetime.fromtimestamp(t / 1000, ET).strftime("%Y-%m-%d %H:%M"): v
+            for t, v in zip(result["ts"], result["iv30"], strict=True)
+            if v is not None
+        }
+
+    for session_policy in ("regular", "extended"):
+        result = result_of(params("15m", session_policy=session_policy))
+        assert held(result) == {f"{day} 15:45": recorded.iv30_vix_style}, session_policy
+        assert result["coverage"]["iv_alignment"] == {
+            "rule": "snapshot_in_bar_latest", "snapshots_read": 1, "bars_with_iv": 1, "superseded": 0, "outside_bars": 0,
+        }
+    daily = result_of(params("1d"))
+    assert held(daily) == {f"{day} 00:00": recorded.iv30_vix_style}
+    assert daily["coverage"]["iv_alignment"]["bars_with_iv"] == 1 and daily["coverage"]["iv_alignment"]["outside_bars"] == 0
+
+
+def test_the_scheduled_snapshot_of_an_early_close_reaches_the_bar_before_the_close(lake_vendor, recorder_store):
+    """On 2024-07-03 the close is 13:00, so the slot is 12:55 and the row sits in the regular 12:45 bar."""
+    from unittest.mock import MagicMock, patch
+
+    from app.services.iv_recorder import record_iv_snapshot
+    from app.services.iv_recorder_schedule import SNAPSHOT_SLOT, IvRecorderSchedule, snapshot_due_ms
+    from app.services.rate_dividend_service import RateAndDividend
+    from tests._helpers.iv_chain import bs_chain_payload
+
+    day = HALF_DAY_WINDOW[2]
+    assert day == date(2024, 7, 3)
+    asked_ms = snapshot_due_ms(day)
+    assert asked_ms == at_et(day, 13, 10)
+    polygon = MagicMock()
+    polygon.list_snapshot_options_chain.return_value = bs_chain_payload(
+        spot=150.0, sigma=0.21, rate=0.04, asof=datetime.fromtimestamp(asked_ms / 1000, ET),
+        expiry_days=[21, 28, 35, 42], strikes=[float(k) for k in range(100, 201, 5)], quote_ns=(at_et(day, 12, 54) + 59_000) * 1_000_000,
+    )
+    schedule = IvRecorderSchedule(
+        symbols=("SPY",), store=recorder_store, clock=lambda: asked_ms,
+        record=lambda ticker, asof: record_iv_snapshot(ticker=ticker, slot=SNAPSHOT_SLOT, store=recorder_store, polygon=polygon, asof=asof),
+    )
+
+    with patch(
+        "app.services.iv_recorder.get_rate_and_dividend",
+        return_value=RateAndDividend(rate=0.04, dividend_yield=0.0, source_rate="t", source_dividend="t"),
+    ):
+        asyncio.run(schedule.tick())
+
+    result = result_of(params("15m", session_policy="regular", window=(HALF_DAY_WINDOW[0], HALF_DAY_WINDOW[-1])))
+    held = {datetime.fromtimestamp(t / 1000, ET).strftime("%Y-%m-%d %H:%M") for t, v in zip(result["ts"], result["iv30"], strict=True) if v is not None}
+    assert held == {"2024-07-03 12:45"}
+    assert result["coverage"]["iv_alignment"]["bars_with_iv"] == 1 and result["coverage"]["iv_alignment"]["outside_bars"] == 0
 
 
 def test_iv_stamped_at_bar_starts_is_unchanged_by_the_alignment_so_input_that_already_lined_up_still_does(lake_vendor):
