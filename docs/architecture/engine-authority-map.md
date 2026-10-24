@@ -169,7 +169,7 @@ drain/rollback follow `docs/runbooks/research-runtime-capacity.md`.
 | Path | Role today | Replacement | Migration plan reference |
 |---|---|---|---|
 | `Frontend/src/app/components/strategy-lab/` | **Active** interactive backtest and analytical-results UI | Engine Lab / `lean-lab` compatibility routes redirect to `strategy-lab` | Current product surface; do not treat the historical Phase 3 removal plan as implementation state |
-| `Frontend/src/app/utils/black-scholes.ts` | Retained render/comparison helper for Pricing Lab and Strategy Builder; not an authority | Python options services | **legacy-ok render helper** |
+| `Frontend/src/app/utils/black-scholes.ts` | Retained render/comparison helper for the Pricing view (an instrument's Options tab) and Strategy Builder; not an authority | Python options services | **legacy-ok render helper** |
 
 ## Validation-only paths (not deprecated; have a clean separate purpose)
 
