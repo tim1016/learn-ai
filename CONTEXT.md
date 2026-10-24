@@ -1627,6 +1627,18 @@ these are the others.
   and a picker commits it by moving the address, so Back, Forward and a reload keep
   it. A complete, distinct context loads once; the same one again loads nothing.
   _Avoid_: scope, draft scope, Apply, Refresh.
+- **Chain mode** — how an instrument's Options chain is asked: **Now · Snapshot**
+  (the provider's current snapshot, with the time it arrived and whether the provider
+  labels it delayed), **Now · Live IBKR** (the retained read-only IBKR feed: it shows the
+  connection, what is known of entitlement and the subscription, subscribes only when Start is
+  pressed, and compares IBKR's delta with the engine's per contract; it is unavailable, with the
+  data plane's reason, when no Gateway session is held), **Past · Archive** (what the data lake's archive held on a session date
+  and instant) and **Past · Live IBKR**, which does not exist: IBKR streams the present
+  only, so a past date is never read from it and today's chain is never shown under
+  one. A mode that is not available stays on the strip, disabled, with its reason. The
+  mode, the expiry, and for the past the session date and instant live in the address
+  (`?source=&expiry=&date=&at=`), apart from the instrument context's window.
+  _Avoid_: live/historical toggle, source switch.
 - **Signal strategy** — one registry-selected Signal Program as a place, with its
   tabs: Overview, Define, Explore, Golden and Proof. Its identity is the registry
   key; the exact program version, symbol and parameters identify evidence inside
@@ -2117,7 +2129,8 @@ backtest still stands (Option structures).
   listed on one trading date. The past chain is what the past-chain routes give of
   it: every listed expiry with its series, and, for one expiry at one instant of
   that session, the calls and puts around the money with the price each last
-  traded at. It reads only what the lake holds and fills in nothing.
+  traded at. It reads only what the lake holds and fills in nothing. It is shown as the
+  **Past · Archive** chain mode of an instrument's Options tab.
   _Avoid_: chain for the live set of quoted contracts, contract listing (the
   broker's reference, Option structures).
 - **Price state (past chain)** — for a contract: **traded** (the close of the last

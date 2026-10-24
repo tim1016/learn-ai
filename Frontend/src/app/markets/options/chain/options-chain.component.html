@@ -1,0 +1,36 @@
+<app-chain-mode-switch [active]="active()" (picked)="requests.chooseMode($event)" />
+
+@let current = request();
+@switch (current.kind) {
+  @case ('snapshot') {
+    <app-snapshot-chain
+      [symbol]="symbol()"
+      [expiryMs]="current.expiryMs"
+      (expiryPicked)="requests.pickExpiry($event)"
+      (expiryAdopted)="requests.adoptExpiry($event)"
+    />
+  }
+  @case ('archive') {
+    <app-archive-chain
+      [symbol]="symbol()"
+      [date]="current.date"
+      [atMs]="current.atMs"
+      [expiryMs]="current.expiryMs"
+      (datePicked)="requests.pickDate($event.date, $event.atMs)"
+      (timePicked)="requests.pickTime($event)"
+      (expiryPicked)="requests.pickExpiry($event)"
+    />
+  }
+  @case ('live') {
+    <app-live-chain
+      [symbol]="symbol()"
+      [expiryMs]="current.expiryMs"
+      (expiryPicked)="requests.pickExpiry($event)"
+      (expiryAdopted)="requests.adoptExpiry($event)"
+    />
+  }
+  @case ('past-live') { <app-workspace-state-block [state]="pastLiveState" /> }
+  @default {
+    @if (invalidState(); as state) { <app-workspace-state-block [state]="state" /> }
+  }
+}

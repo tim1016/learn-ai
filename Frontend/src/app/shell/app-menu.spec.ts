@@ -64,7 +64,7 @@ describe('app menu projections', () => {
 
     expect.soft(markets?.styleClass, 'marks the active group').toBe(ACTIVE_GROUP_CLASS);
     expect.soft(markets?.items?.find((item) => item.label === 'Pricing Lab')?.styleClass, 'marks the active entry').toBe(ACTIVE_ITEM_CLASS);
-    expect.soft(markets?.items?.find((item) => item.label === 'Options Lab')?.styleClass, 'leaves the other entries unmarked').toBeUndefined();
+    expect.soft(markets?.items?.find((item) => item.label === 'Return Distribution')?.styleClass, 'leaves the other entries unmarked').toBeUndefined();
     expect.soft(groups.filter((group) => group.styleClass === ACTIVE_GROUP_CLASS), 'marks exactly one group').toHaveLength(1);
 
     const edgeGroups = menuItemsFor('/edge/regimes');
@@ -123,7 +123,6 @@ describe('app menu projections', () => {
     ['/markets/SPY/chart', 'Markets', 'Markets'],
     ['/markets/SPY/chart/news', 'Markets', 'Markets'],
     ['/markets/SPY/data/build', 'Markets', 'Markets'],
-    ['/options-lab/chain', 'Markets', 'Options Lab'],
     ['/options-lab/strategy-finder', 'Markets', 'Options Lab'],
     ['/research-lab/strategy-runs/run-42', 'Research', 'Research Lab'],
     ['/edge/regimes', 'Research', 'Regimes'],

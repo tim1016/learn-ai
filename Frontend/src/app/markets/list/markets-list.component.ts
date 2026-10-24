@@ -15,6 +15,7 @@ import { FactsBoard } from '../facts/facts-board';
 import { InstrumentFactsService } from '../facts/instrument-facts.service';
 import { QuoteFactComponent } from '../facts/quote-fact.component';
 import { MARKETS_ROUTE, instrumentCommands, openableTab } from '../instrument-address';
+import { INSTRUMENT_TABS } from '../instrument-tabs';
 
 /** Rows drawn at first, and added by each "Show more"; a row's facts are asked for only once it is drawn. */
 export const PAGE_SIZE = 20;
@@ -64,6 +65,8 @@ export class MarketsListComponent {
 
   protected readonly title = menuLabelFor(MARKETS_ROUTE);
   protected readonly tab = computed(() => openableTab(this.then()));
+  /** The tab a pick opens when it is not Chart: an address that asked for one (an old chain address) says so, as no instrument was named. */
+  protected readonly asked = computed(() => (this.tab() === 'chart' ? null : INSTRUMENT_TABS.label(this.tab())));
 
   /** What the search holds: empty, because the picker is where a symbol is chosen, not a place that remembers one. */
   protected readonly picked = signal('');

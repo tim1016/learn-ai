@@ -1,5 +1,7 @@
 import { Routes } from '@angular/router';
 
+import { OPTIONS_ROUTES } from './options/options.routes';
+
 /**
  * The Markets place (ADR 0084): the list at `/markets`, and one instrument's
  * place at `/markets/:symbol/<tab>`.
@@ -48,6 +50,7 @@ export const MARKETS_ROUTES: Routes = [
         pathMatch: 'full',
         loadComponent: () => import('./data/dataset-builder/build-dataset.component').then((m) => m.BuildDatasetComponent),
       },
+      ...OPTIONS_ROUTES,
     ],
   },
 ];

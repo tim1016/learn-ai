@@ -29,8 +29,8 @@ const MONEY_SURFACES = [
   // The Options Backtest page shows a run's dollars from its run and history folders (#3030); no file there is named for money.
   "src/app/components/options-backtest/run/run-headline.component",
   "src/app/components/options-backtest/history/history-tab.component",
-  // The Past chain tab shows option prices and strikes from its folder (#3030).
-  "src/app/components/options-backtest/past-chain/past-chain-table.component",
+  // The Past · Archive chain shows option prices and strikes from its folder (#3030, #3505).
+  "src/app/markets/options/chain/archive/archive-chain.component",
   // The closer look at a run (#3030): trades, one day and a comparison, from the run-detail folder.
   "src/app/components/options-backtest/run-detail/trades/trade-table.component",
   "src/app/components/options-backtest/run-detail/session/session-view.component",

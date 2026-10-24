@@ -1,0 +1,26 @@
+@if (gate().kind === 'ready') {
+  <div class="controls" role="toolbar" aria-label="Live subscription">
+    <button type="button" class="action primary" [disabled]="!canStart()" (click)="start()">Start</button>
+    <button type="button" class="action" [disabled]="!canPause()" (click)="togglePause()">{{ paused() ? 'Resume' : 'Pause' }}</button>
+    <span class="words">Pressing Start subscribes to the strikes picked below, and nothing else does. Changing the expiry or the underlying releases the subscription.</span>
+  </div>
+  <app-expiration-ribbon
+    [expirations]="expirations()"
+    [selectedExpiration]="selected()"
+    [loading]="expirationsLoading()"
+    (expirationSelected)="expiryPicked.emit($event)"
+  />
+  @if (chainExpiry() !== null) {
+    <app-live-strike-picker
+      [strikes]="availableStrikes()"
+      [selected]="selectedStrikes()"
+      [loading]="strikesLoading()"
+      [bandDollars]="bandDollars"
+      [bandUnavailable]="bandUnavailable()"
+      (toggled)="toggleStrike($event)"
+      (bandPicked)="selectBand()"
+      (cleared)="clearStrikes()"
+    />
+  }
+}
+<app-chain-view [chain]="chain()" [state]="blocking()" (actionTriggered)="onAction($event)" />

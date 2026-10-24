@@ -3,6 +3,10 @@
   purpose="Instruments the lake holds, and search over every listed US-equity symbol. A symbol the lake does not hold is filled first, then opens."
 />
 
+@if (asked(); as tab) {
+  <p class="markets__note" role="status">Pick an instrument. It opens on its {{ tab }} tab.</p>
+}
+
 <section class="markets__search" aria-label="Search instruments">
   <app-symbol-picker label="Search any listed symbol" [symbol]="picked()" (symbolChange)="onPicked($event)" />
 </section>

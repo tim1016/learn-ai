@@ -13,10 +13,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { environment } from '../../../../environments/environment';
 import { RunSessionService } from '../../../services/run-session.service';
-import { etMidnightMs } from '../../../shared/date/et-midnight';
 import { fakePickerWorld } from '../../../shared/symbol-picker/testing/fake-picker-world';
-import { PastChainService } from '../../../components/options-backtest/past-chain/past-chain.service';
-import { fakeChainService } from '../../../components/options-backtest/past-chain/testing/render-chain';
 import { BuildDatasetComponent } from './build-dataset.component';
 import { createDataLabWorkspaceStore, DataLabWorkspaceStore } from '../../../components/data-lab/data-lab-workspace-store';
 
@@ -37,9 +34,6 @@ function mockRunSession(state: 'idle' | 'fetching' = 'idle') {
   };
 }
 
-/** The Options companion shows the Options Backtest page's Past chain, which reads through its own service and takes the shared pickers. */
-const CHAIN = fakeChainService(vi);
-
 async function renderBuilder(runSession = mockRunSession()) {
   const result = await render(BuildDatasetComponent, {
     providers: [
@@ -47,7 +41,6 @@ async function renderBuilder(runSession = mockRunSession()) {
       provideHttpClient(),
       provideHttpClientTesting(),
       ...fakePickerWorld().providers,
-      { provide: PastChainService, useValue: CHAIN },
       { provide: RunSessionService, useValue: runSession },
       { provide: DataLabWorkspaceStore, useFactory: createDataLabWorkspaceStore },
     ],
@@ -206,18 +199,16 @@ describe('BuildDatasetComponent', () => {
     expect(payload['adjust_for_dividends']).toBe(true);
   });
 
-  it('shows the Past chain of the Options Backtest page in the options companion, on the committed ticker and the last day of the window', async () => {
-    CHAIN.day.mockClear();
+  it('links the options companion to the instrument\'s Past · Archive chain, on the committed ticker and the last day of the window', async () => {
     const { http } = await renderBuilder();
     await answerPlan(http);
     await userEvent.click(screen.getByText('Options companion'));
     await userEvent.click(screen.getByRole('checkbox', { name: /include options companion/ }));
     await answerPlan(http);
 
-    await screen.findByRole('table', { name: /Every expiry the listing held/ });
-    expect(CHAIN.day).toHaveBeenCalledTimes(1);
-    // The window ends at 2026-05-15 00:00 UTC, a Friday: the chain is read for that New York trading date.
-    expect(CHAIN.day.mock.calls[0]?.[0]).toEqual({ underlying: 'SPY', tradingDateMs: etMidnightMs('2026-05-15') });
+    const link = screen.getByRole('link', { name: /Options tab, Past · Archive/ });
+    // The window ends at 2026-05-15 00:00 UTC, a Friday: the chain opens on that session date.
+    expect(link.getAttribute('href')).toBe('/markets/SPY/options/chain?source=archive&date=2026-05-15');
   });
 
   it('sends no options-companion rate until one is typed, so Python solves at its default', async () => {

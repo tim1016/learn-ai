@@ -66,7 +66,7 @@
 <details class="validate__disclosure">
   <summary>Options past-chain inspection</summary>
   <p class="validate__muted">
-    Past-chain inspection stays with the options companion on
-    <a [routerLink]="buildDataset()">Build dataset</a> — open its options disclosure there.
+    Past-chain inspection is on an instrument's Options tab, in Past · Archive.
+    <a [routerLink]="pastChain()" [queryParams]="{ source: 'archive' }">Open {{ symbol() || 'SPY' }}'s Options tab</a>.
   </p>
 </details>

@@ -1,0 +1,31 @@
+<dl class="facts">
+  @for (fact of facts(); track fact.label) {
+    @let value = fact.value;
+    <div class="fact" [attr.data-tone]="fact.tone ?? null">
+      <dt>{{ fact.label }}</dt>
+      <dd>
+        @switch (value.kind) {
+          @case ('text') { {{ value.text }} }
+          @case ('instant') { <app-timestamp-display [value]="value.ms" [mode]="value.mode" [granularity]="value.granularity" /> }
+          @case ('date') { <app-timestamp-display [value]="value.ms" mode="date-et" granularity="date" /> }
+          @case ('expiry') {
+            <app-timestamp-display [value]="value.ms" mode="date-et" granularity="date" />
+            @if (value.tag; as tag) { <app-chain-expiry-tag [tag]="tag" [evidence]="true" /> }
+          }
+          @case ('field') {
+            @let field = value.field;
+            @if (field.kind === 'value') {
+              {{ field.text }}
+              @if (field.atMs !== null) { <span class="when">in the minute ending <app-timestamp-display [value]="field.atMs" mode="et" granularity="minute" /></span> }
+            } @else {
+              {{ wordsOf(field) }}
+            }
+          }
+        }
+      </dd>
+    </div>
+  }
+</dl>
+@for (note of notes(); track note) {
+  <p class="note">{{ note }}</p>
+}

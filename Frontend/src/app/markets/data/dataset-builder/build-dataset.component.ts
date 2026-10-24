@@ -10,7 +10,7 @@ import {
 import { RouterLink } from '@angular/router';
 
 import { RunSessionService } from '../../../services/run-session.service';
-import { PastChainTabComponent } from '../../../components/options-backtest/past-chain/past-chain-tab.component';
+import { instrumentCommands } from '../../instrument-address';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
 
 import { DataLabWorkspaceStore } from '../../../components/data-lab/data-lab-workspace-store';
@@ -45,7 +45,6 @@ import { columnsForPayload } from '../../../components/data-lab/export-csv-optio
   selector: 'app-build-dataset',
   imports: [
     RouterLink,
-    PastChainTabComponent,
     AssetIdentityComponent,
     ExportColumnPickerComponent,
   ],
@@ -384,11 +383,18 @@ export class BuildDatasetComponent {
     { key: 'includeStockQuotes', label: 'stock_quotes.csv' },
   ];
 
-  /** Latest committed window date, `YYYY-MM-DD`: the day the options companion's Past chain opens on. */
+  /** Latest committed window date, `YYYY-MM-DD`: the session the past chain the options companion links to opens on. */
   readonly analysisDate = computed(() => {
     const window = this.store.committedWindow();
     if (!window) return '';
     return new Date(window.endMsUtc).toISOString().slice(0, 10);
+  });
+
+  /** The instrument's Options tab, where the Past · Archive chain shows what the archive listed for the companion's ticker. */
+  readonly pastChainCommands = computed(() => instrumentCommands(this.store.committedTicker(), 'options', ['chain']));
+  readonly pastChainQuery = computed(() => {
+    const date = this.analysisDate();
+    return date === '' ? { source: 'archive' } : { source: 'archive', date };
   });
 }
 

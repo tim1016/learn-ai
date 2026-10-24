@@ -14,6 +14,4 @@ export const INSTRUMENT_TABS = defineWorkspaceTabs<InstrumentTab>(
  * `/markets/:symbol/<tab>`; the strip, the labels and the window title need
  * no other edit.
  */
-export const UNAVAILABLE_INSTRUMENT_TABS: Readonly<Partial<Record<InstrumentTab, string>>> = {
-  options: 'Not in this place yet. Options Lab, in the Markets menu, still shows the chain.',
-};
+export const UNAVAILABLE_INSTRUMENT_TABS: Readonly<Partial<Record<InstrumentTab, string>>> = {};

@@ -37,5 +37,8 @@ async def position_preview(
         )
         raise HTTPException(
             status_code=503,
-            detail="The preview's market data could not be read. Retry, or check the selected session in Past chain.",
+            detail=(
+                "The preview's market data could not be read. "
+                "Retry, or check the selected session in Past · Archive on the instrument's Options tab."
+            ),
         ) from exc

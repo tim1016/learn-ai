@@ -66,15 +66,18 @@ const ROWS: Readonly<Record<string, Row>> = {
   'markets/:symbol/returns': { group: MARKETS },
   'markets/:symbol/data': { group: MARKETS },
   'markets/:symbol/data/build': { group: MARKETS },
+  'markets/:symbol/options': { group: MARKETS, lands: '/markets/SPY/options/chain' },
+  'markets/:symbol/options/chain': { group: MARKETS },
   // The chart, the Returns study and the dataset builder moved under the instrument; with no instrument named, an old address leads to the list.
   'data-lab': { group: MARKETS, lands: '/markets' },
   'data-lab/explore': { group: MARKETS, lands: '/markets' },
   'data-lab/export': { group: MARKETS, lands: '/markets' },
   'data-lab/returns': { group: MARKETS, lands: '/markets' },
-  'options-lab': { group: MARKETS, lands: '/options-lab/chain' },
-  'options-lab/chain': { group: MARKETS },
+  // The chain moved into the instrument's Options tab; with no instrument named, an old address asks for one.
+  'options-lab': { group: MARKETS, lands: '/markets?then=options' },
+  'options-lab/chain': { group: MARKETS, lands: '/markets?then=options' },
   'options-lab/strategy-finder': { group: MARKETS },
-  'broker/options-chain': { group: MARKETS },
+  'broker/options-chain': { group: MARKETS, lands: '/markets?then=options' },
   'broker/options-surface': { group: MARKETS },
   'pricing-lab': { group: MARKETS },
   'research-lab/market/news': { group: MARKETS, lands: '/markets' },
@@ -475,6 +478,27 @@ describe('the route inventory (T01)', () => {
       expect(router.url).toBe(landsOn);
       expect(ended).toHaveLength(1);
       expect(cancelled).toEqual([]);
+    });
+
+    // The chain moved into the instrument's Options tab: the old chain pages carry no symbol of their own, so one a bookmark
+    // adds in its query is the instrument, and with none the address asks for one rather than guessing SPY.
+    it.each([
+      ['/options-lab/chain?symbol=SPY&expiry=4070984400000&source=archive&date=2026-10-09&at=1791576000000#top', '/markets/SPY/options/chain?expiry=4070984400000&source=archive&date=2026-10-09&at=1791576000000#top'],
+      ['/options-lab/chain?ticker=qqq&source=snapshot', '/markets/QQQ/options/chain?source=snapshot'],
+      ['/broker/options-chain?symbol=SPY&expiry=4070984400000', '/markets/SPY/options/chain?expiry=4070984400000'],
+      ['/broker/options-chain?symbol=SPY&source=live', '/markets/SPY/options/chain?source=live'],
+      ['/options-lab?ticker=SPY', '/markets/SPY/options/chain'],
+      ['/options-lab/chain', '/markets?then=options'],
+      ['/options-lab/chain?expiry=4070984400000&source=archive#top', '/markets?expiry=4070984400000&source=archive&then=options#top'],
+      ['/broker/options-chain', '/markets?then=options'],
+      ['/options-lab', '/markets?then=options'],
+    ])('lands the old chain address %s on %s in one navigation', async (url, landsOn) => {
+      const { router, ended, cancelled, failed } = await load(url);
+
+      expect(router.url).toBe(landsOn);
+      expect(ended).toHaveLength(1);
+      expect(cancelled).toEqual([]);
+      expect(failed).toEqual([]);
     });
 
     it('fails in place on a Data check it does not have, rather than opening the first', async () => {

@@ -15,8 +15,8 @@ interface ValidationResponse {
 /**
  * Operations → Data checks → TradingView comparison — one readable column:
  * pandas-ta CSV vs TradingView CSV comparison, with the report to read and
- * download. The past-chain inspector stays under the Build dataset options
- * companion — linked from here.
+ * download. The past-chain inspector is an instrument's Options tab (Past ·
+ * Archive) — linked from here.
  *
  * The comparison reads only the two uploaded files, so it has a symbol (it
  * labels the request and the report) and no dates. The quality evidence that
@@ -39,8 +39,8 @@ export class TradingviewCheckComponent {
 
   /** The picker's value. A link carrying a new symbol replaces it; an edit holds until then. */
   protected readonly symbol = linkedSignal(() => (this.ticker() ?? '').trim().toUpperCase() || 'SPY');
-  /** Where Build dataset is for the instrument the picker holds. */
-  protected readonly buildDataset = computed(() => instrumentCommands(this.symbol() || 'SPY', 'data', ['build']));
+  /** Where the Options chain is for the instrument the picker holds, to be opened on Past · Archive. */
+  protected readonly pastChain = computed(() => instrumentCommands(this.symbol() || 'SPY', 'options', ['chain']));
 
   readonly ourCsvFile = signal<File | null>(null);
   readonly tvCsvFile = signal<File | null>(null);

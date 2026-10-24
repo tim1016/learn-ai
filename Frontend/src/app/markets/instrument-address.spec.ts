@@ -38,8 +38,7 @@ describe('openableTab', () => {
     expect(openableTab('chart')).toBe('chart');
     expect(openableTab('returns')).toBe('returns');
     expect(openableTab('data')).toBe('data');
-    // Options is in the strip but not routed yet.
-    expect(openableTab('options')).toBe('chart');
+    expect(openableTab('options')).toBe('options');
     expect(openableTab('nonsense')).toBe('chart');
     expect(openableTab(undefined)).toBe('chart');
   });

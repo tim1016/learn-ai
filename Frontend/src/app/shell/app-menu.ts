@@ -69,11 +69,12 @@ export const APP_MENU: readonly AppMenuGroup[] = [
     icon: 'pi pi-chart-line',
     items: [
       { title: 'Markets', route: '/markets' },
-      { title: 'Options Lab', route: '/options-lab' },
-      { title: 'Options Chain (Live)', route: '/broker/options-chain' },
       { title: 'Options Surface (3D)', route: '/broker/options-surface' },
       { title: 'Pricing Lab', route: '/pricing-lab' },
     ],
+    // The Options Lab shell still hosts the stub Strategy finder; its chain
+    // moved into the instrument's Options tab.
+    pages: [{ title: 'Options Lab', route: '/options-lab' }],
   },
   {
     id: 'research',
