@@ -9,6 +9,8 @@ import {
 import { computed, signal } from '@angular/core';
 import { vi } from 'vitest';
 import { provideRouter } from '@angular/router';
+import { screen, within } from '@testing-library/angular';
+import userEvent from '@testing-library/user-event';
 
 import { environment } from '../../../../environments/environment';
 import {
@@ -21,8 +23,21 @@ import {
 } from '../../../shared/symbol-catalog/testing/fake-symbol-catalog';
 
 import { JobsService, type JobState } from '../../../services/jobs.service';
-import { RECORD_ID, storedRecord } from '../../../research/stored-study/testing/stored-study-fixtures';
+import {
+  RECORD_ID,
+  SIGNAL_INPUTS,
+  SIGNAL_RESULT,
+  storedRecord,
+} from '../../../research/stored-study/testing/stored-study-fixtures';
+import { DataLakeService, type DataLakeRead, type InstrumentDataReport } from '../../../shared/data-lake';
+import type { BackfillJobRun } from '../../../shared/data-lake/backfill-job-runner';
+import { TradeBackfillRunner, type TradeBackfillEnd } from '../../../shared/data-lake/trade-backfill-runner';
+import type { TradeBackfillWindow } from '../../../shared/data-lake/trade-backfill-spec';
+import { heldReport } from '../../../shared/data-lake/testing/instrument-data-report';
 import { SignalRunnerComponent } from './signal-runner.component';
+
+/** The sessions in the page's default window, as the lake's count of them reports. */
+const SESSIONS = 124;
 
 /** A one-indicator `/api/dataset/available` catalog. */
 const CATALOG = {
@@ -42,10 +57,16 @@ describe('SignalRunnerComponent indicator catalog load', () => {
   const catalogUrl = `${environment.pythonServiceUrl}/api/dataset/available`;
   let fixture: ComponentFixture<SignalRunnerComponent>;
   let startJob: ReturnType<typeof vi.fn>;
+  // The lake's count of the sessions the window needs (the page reads it once per window), and the shared capture.
+  let instrumentData: ReturnType<typeof vi.fn<(query: unknown) => Promise<DataLakeRead<InstrumentDataReport>>>>;
+  let captureRun: ReturnType<typeof vi.fn<(select: (defaults: never) => TradeBackfillWindow, accepted: (job: BackfillJobRun) => boolean | Promise<boolean>) => Promise<TradeBackfillEnd>>>;
 
   beforeEach(async () => {
     const jobs = signal<JobState[]>([]);
     startJob = vi.fn().mockResolvedValue('job-id-1');
+    // Left alone, the lake holds every session the default window needs, so only the specs about the count see a warning.
+    instrumentData = vi.fn().mockResolvedValue({ kind: 'ok', value: heldReport({ sessions: SESSIONS }) });
+    captureRun = vi.fn().mockResolvedValue({ kind: 'completed', failure: null });
     await TestBed.configureTestingModule({
       imports: [SignalRunnerComponent, HttpClientTestingModule],
       providers: [
@@ -60,6 +81,8 @@ describe('SignalRunnerComponent indicator catalog load', () => {
             dismiss: vi.fn(),
           },
         },
+        { provide: DataLakeService, useValue: { instrumentData } },
+        { provide: TradeBackfillRunner, useValue: { run: captureRun } },
         provideRouter([]),
         // The ticker card reads the lake catalog on init; without this the
         // real service fires a doomed XHR on every run.
@@ -111,17 +134,24 @@ describe('SignalRunnerComponent indicator catalog load', () => {
   });
 
   describe('rerun from a saved run', () => {
-    it('fills the inputs, flip sign and regime gate from the saved run, starts nothing, then names it when Run study is pressed', async () => {
-      const component = fixture.componentInstance;
+    const recordUrl = `${environment.pythonServiceUrl}/api/research/study-records/signal-study/${RECORD_ID}`;
+
+    async function openSaved(answer: ReturnType<typeof storedRecord>): Promise<void> {
       fixture.componentRef.setInput('rerun', RECORD_ID);
       fixture.detectChanges();
-      TestBed.inject(HttpTestingController)
-        .expectOne(`${environment.pythonServiceUrl}/api/research/study-records/signal-study/${RECORD_ID}`)
-        .flush(storedRecord('signal-study'));
+      TestBed.inject(HttpTestingController).expectOne(recordUrl).flush(answer);
       await new Promise((resolve) => setTimeout(resolve)); // the read resolves in a later task than the flush
       await fixture.whenStable();
+      fixture.detectChanges();
+    }
 
-      expect(component.range()).toEqual({ symbol: 'SPY', from: '2024-01-02', to: '2024-03-28', resolution: 'minute', multiplier: 15 });
+    const notice = () => (fixture.nativeElement as HTMLElement).querySelector('[data-testid="study-prefill"]');
+
+    it('fills the inputs, flip sign and regime gate from the saved run, starts nothing, then names it when Run study is pressed', async () => {
+      const component = fixture.componentInstance;
+      await openSaved(storedRecord('signal-study'));
+
+      expect(component.range()).toEqual({ symbol: 'SPY', from: '2024-01-02', to: '2024-03-28', resolution: 'minute', multiplier: 15, session: 'extended' });
       expect(component.selectedIndicator()).toBe('macd');
       expect(component.selectedParams()).toEqual({ fast: 12, slow: 26, signal: 9 });
       expect(component.flipSign()).toBe(false);
@@ -134,28 +164,162 @@ describe('SignalRunnerComponent indicator catalog load', () => {
         feature_name: 'macd_signal',
         flip_sign: false,
         rerun_of: RECORD_ID,
-        session: 'extended', // the bars it reads, not the "rth" the wire would fill in
+        session: 'extended',
       });
+    });
+
+    it.each([
+      ['regular hours', { session: 'rth', multiplier: 5 }, 'rth', 5, 'RTH'],
+      ['extended hours', { session: 'extended', multiplier: 10 }, 'extended', 10, 'Ext'],
+    ])('fills the session and the bars the saved run computed on: %s', async (_name, over, session, multiplier, pressed) => {
+      await openSaved(storedRecord('signal-study', { inputs: { ...SIGNAL_INPUTS, ...over } as never }));
+
+      expect(fixture.componentInstance.range()).toMatchObject({ session, multiplier });
+      expect(screen.getByRole('button', { name: pressed }).getAttribute('aria-pressed')).toBe('true');
+      expect(fixture.nativeElement.querySelector('select[aria-label="Bar multiplier"]').value).toBe(String(multiplier));
+    });
+
+    it('fills extended hours for a saved run that names no session, which is what the study computed on before it did', async () => {
+      const unnamed = Object.fromEntries(Object.entries(SIGNAL_INPUTS).filter(([key]) => key !== 'session'));
+
+      await openSaved(storedRecord('signal-study', { inputs: unnamed as never }));
+
+      expect(fixture.componentInstance.range().session).toBe('extended');
+    });
+
+    it('fills nothing when the saved run’s session is not one this page offers', async () => {
+      const before = fixture.componentInstance.range();
+
+      await openSaved(storedRecord('signal-study', { inputs: { ...SIGNAL_INPUTS, session: 'overnight' } as never }));
+
+      expect(fixture.componentInstance.range()).toBe(before);
+      expect(notice()?.textContent).toContain('could not be read');
+    });
+
+    it('fills nothing, and names the session, when the saved run’s bars are not ones that session offers', async () => {
+      const before = fixture.componentInstance.range();
+
+      await openSaved(storedRecord('signal-study', { inputs: { ...SIGNAL_INPUTS, session: 'rth', multiplier: 15 } as never }));
+
+      expect(fixture.componentInstance.range()).toBe(before);
+      expect(notice()?.textContent).toContain('15-minute bars are not offered here for regular hours');
     });
   });
 
   describe('study layout', () => {
     const root = () => fixture.nativeElement as HTMLElement;
 
-    it('offers only the bars the 15-bar target can use, and no session control', () => {
+    const barLengths = () =>
+      Array.from(root().querySelectorAll('select[aria-label="Bar multiplier"] option')).map((el) => el.textContent?.trim());
+    const barSelect = () => root().querySelector<HTMLSelectElement>('select[aria-label="Bar multiplier"]');
+    const barNote = () => root().querySelector('[data-testid="bar-size-note"]')?.textContent?.replace(/\s+/g, ' ').trim();
+
+    /** Presses a button of the page and lets the page settle. */
+    async function press(name: string): Promise<void> {
+      await userEvent.setup().click(screen.getByRole('button', { name }));
+      await fixture.whenStable();
+      fixture.detectChanges();
+    }
+
+    it('offers only minute bars, and under the default extended hours the lengths the server accepts for them', () => {
       const resolutions = Array.from(root().querySelectorAll('.res-btn')).map((el) => el.textContent?.trim());
-      const multipliers = Array.from(
-        root().querySelectorAll('select[aria-label="Bar multiplier"] option'),
-      ).map((el) => el.textContent?.trim());
 
       expect.soft(resolutions, 'hour and daily bars always fail').toEqual(['1m']);
-      expect.soft(multipliers, 'bars of 30 minutes or longer always fail').toEqual(['1×', '5×', '15×']);
-      expect.soft(root().querySelector('.session'), 'the session is not a control').toBeNull();
-      expect.soft(root().querySelector('[data-testid="study-constraints"]')?.textContent).toContain(
-        'extended hours included, fixed',
+      expect.soft(barLengths(), 'the lengths that divide the hour and reach the 70% gate over an extended session').toEqual(
+        ['1×', '2×', '3×', '4×', '5×', '6×', '10×', '12×', '15×'],
       );
+      expect.soft(barSelect()?.value, 'the bars the study has always read').toBe('15');
+      expect.soft(root().querySelector('[data-testid="study-constraints"]')?.textContent).not.toContain('extended hours included');
+      expect.soft(root().querySelector('[data-testid="study-constraints"]')?.textContent).toContain('15 bars');
+      expect.soft(barNote(), 'extended hours need no explanation of their list').toBeUndefined();
       // The default window is long enough for the picker's hour-bars hint.
       expect.soft(root().textContent, 'no hint to switch to bars that always fail').not.toContain('Switch to hour');
+    });
+
+    it('offers regular and extended hours as buttons to press, extended chosen, and does not fix the session', () => {
+      const rth = screen.getByRole('button', { name: 'RTH' }) as HTMLButtonElement;
+      const ext = screen.getByRole('button', { name: 'Ext' }) as HTMLButtonElement;
+
+      expect.soft(rth.disabled).toBe(false);
+      expect.soft(ext.disabled).toBe(false);
+      expect.soft(ext.getAttribute('aria-pressed'), 'extended is what the study has always read').toBe('true');
+      expect.soft(rth.getAttribute('aria-pressed')).toBe('false');
+    });
+
+    it('sends the session that was pressed, and the bars that session offers, and extended with the entered bars when nothing was pressed', async () => {
+      await press('Run study');
+      await press('RTH');
+      await press('Run study');
+      await press('Ext');
+      await press('Run study');
+
+      expect(startJob.mock.calls.map(([, payload]) => [payload.session, payload.multiplier])).toEqual([
+        ['extended', 15],
+        ['rth', 6],
+        ['extended', 15],
+      ]);
+    });
+
+    it('offers under regular hours only the lengths the server accepts for them, says why, and shows the length the run uses', async () => {
+      await press('RTH');
+
+      expect.soft(barLengths()).toEqual(['1×', '2×', '3×', '4×', '5×', '6×']);
+      expect.soft(barSelect()?.value, '15 minutes is not offered here, so the nearest length is shown').toBe('6');
+      expect.soft(barNote()).toContain('15-minute bars are not offered for regular hours, so this run uses 6-minute bars.');
+      expect.soft(barNote()).toContain('Regular hours offer bars of 1, 2, 3, 4, 5, 6 minutes only');
+      expect.soft(barNote()).toContain('needs 70% of its bars to have a target');
+
+      await press('Ext');
+
+      expect.soft(barLengths()).toHaveLength(9);
+      expect.soft(barSelect()?.value, 'the length entered comes back when the session offers it').toBe('15');
+      expect.soft(barNote()).toBeUndefined();
+    });
+
+    it('keeps a length the chosen session offers, and says only why the list is short', async () => {
+      const component = fixture.componentInstance;
+      component.range.update((r) => ({ ...r, multiplier: 3 }));
+      fixture.detectChanges();
+
+      await press('RTH');
+
+      expect(component.shownRange().multiplier).toBe(3);
+      expect(barNote()).not.toContain('are not offered for regular hours, so this run uses');
+      expect(barNote()).toContain('Regular hours offer bars of 1, 2, 3, 4, 5, 6 minutes only');
+      await press('Run study');
+      expect(startJob.mock.calls[0][1]).toMatchObject({ session: 'rth', multiplier: 3 });
+    });
+
+    it.each([15, 12, 10])('never sends a length regular hours refuse, however the range was entered: %d-minute bars', async (multiplier) => {
+      const component = fixture.componentInstance;
+      component.range.update((r) => ({ ...r, session: 'rth', multiplier }));
+      fixture.detectChanges();
+
+      await component.runSignalEngine();
+
+      expect(startJob.mock.calls[0][1]).toMatchObject({ session: 'rth', multiplier: 6 });
+    });
+
+    it('names the session in the sentence that says what is about to run', async () => {
+      const summary = () => root().querySelector('.study-run__summary')?.textContent?.replace(/\s+/g, ' ').trim();
+      expect.soft(summary()).toContain('extended hours');
+
+      await press('RTH');
+
+      expect.soft(summary()).toContain('regular hours');
+      expect.soft(summary()).not.toContain('extended hours');
+    });
+
+    it('reads a range that names no session as extended hours, in the sentence and in the request', async () => {
+      const component = fixture.componentInstance;
+      component.range.set({ symbol: 'AAPL', from: '2024-01-02', to: '2024-03-28', resolution: 'minute', multiplier: 5 });
+      fixture.detectChanges();
+
+      expect.soft(root().querySelector('.study-run__summary')?.textContent).toContain('extended hours');
+      expect.soft(screen.getByRole('button', { name: 'Ext' }).getAttribute('aria-pressed'), 'the picker shows what the run sends').toBe('true');
+      await press('Run study');
+
+      expect(startJob.mock.calls[0][1]).toMatchObject({ session: 'extended', multiplier: 5 });
     });
 
     it('starts nothing when an input changes', () => {
@@ -179,12 +343,137 @@ describe('SignalRunnerComponent indicator catalog load', () => {
       expect(startJob).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe('sessions the lake does not hold yet', () => {
+    const lacking = (missing: number) => ({ kind: 'ok' as const, value: heldReport({ sessions: SESSIONS, missing }) });
+
+    /** Enters another window, which is what asks the lake for its count, and lets the page settle. */
+    async function enterWindow(read: DataLakeRead<InstrumentDataReport>, to = '2024-06-27'): Promise<void> {
+      instrumentData.mockResolvedValue(read);
+      fixture.componentInstance.range.update((r) => ({ ...r, to }));
+      fixture.detectChanges();
+      await vi.waitFor(() => expect(instrumentData).toHaveBeenCalledTimes(2));
+      await fixture.whenStable();
+      fixture.detectChanges();
+    }
+
+    const warning = () => screen.queryByText(/in the lake yet/);
+
+    it('reads the count for the window the page holds, in the split-adjusted tree, and says nothing when the lake holds it all', async () => {
+      await vi.waitFor(() => expect(instrumentData).toHaveBeenCalledTimes(1));
+
+      expect(instrumentData).toHaveBeenCalledWith({ symbol: 'AAPL', from: '2024-01-02', to: '2024-06-28', tree: 'polygon_split_adjusted' });
+      expect(warning()).toBeNull();
+    });
+
+    it('warns how many of the run’s sessions the lake lacks and why the first run is slow, with an action to capture them', async () => {
+      await enterWindow(lacking(12));
+
+      expect(warning()?.textContent).toBe(`12 of ${SESSIONS} sessions aren’t in the lake yet.`);
+      expect(screen.getByText('The first run fetches them one session at a time, so it will be slow.')).toBeTruthy();
+      expect(screen.getByText('Capture them first.')).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Capture 12 sessions' })).toBeTruthy();
+    });
+
+    it('starts no capture by itself, and does not hold up Run study', async () => {
+      await enterWindow(lacking(12));
+
+      expect(captureRun).not.toHaveBeenCalled();
+      expect((screen.getByRole('button', { name: 'Run study' }) as HTMLButtonElement).disabled).toBe(false);
+      await userEvent.setup().click(screen.getByRole('button', { name: 'Run study' }));
+      expect(startJob).toHaveBeenCalledOnce();
+    });
+
+    it('captures exactly the span the lake named through the shared runner, shows its progress, and counts again when it ends', async () => {
+      const counted = lacking(12);
+      await enterWindow(counted);
+      let ends!: (end: TradeBackfillEnd) => void;
+      let asked: TradeBackfillWindow | null = null;
+      const job = { jobId: 'job-9', state: signal({ kind: 'running', started: true, progress: { current: 6, total: 24, unit: 'days', message: null } }), detach: vi.fn(), cancel: vi.fn() };
+      captureRun.mockImplementation(async (select, accepted) => {
+        asked = select(undefined as never);
+        await accepted(job as unknown as BackfillJobRun);
+        return new Promise<TradeBackfillEnd>((resolve) => (ends = resolve));
+      });
+      instrumentData.mockResolvedValue({ kind: 'ok', value: heldReport({ sessions: SESSIONS }) });
+
+      await userEvent.setup().click(screen.getByRole('button', { name: 'Capture 12 sessions' }));
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect.soft(asked).toEqual({
+        symbol: 'AAPL', price_adjustment_mode: 'polygon_split_adjusted',
+        start_trading_date_ms: counted.value.fill_window?.start_trading_date_ms, end_trading_date_ms: counted.value.fill_window?.end_trading_date_ms,
+      });
+      expect.soft(screen.getByText('Capturing 12 sessions of AAPL into the lake.')).toBeTruthy();
+      expect.soft(screen.getByText('6 of 24 days of the span')).toBeTruthy();
+      expect.soft(screen.getByRole('button', { name: 'Cancel the capture' })).toBeTruthy();
+
+      ends({ kind: 'completed', failure: null });
+      await vi.waitFor(() => expect(instrumentData).toHaveBeenCalledTimes(3));
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect.soft(warning(), 'the lake holds it all now').toBeNull();
+      expect.soft(screen.queryByText(/Capturing/)).toBeNull();
+    });
+
+    it('says a capture that stopped stopped, with the reason, and that Run study still fetches the rest', async () => {
+      await enterWindow(lacking(12));
+      captureRun.mockResolvedValue({ kind: 'failed', code: 'backfill_failed', message: 'the provider refused the key' });
+
+      await userEvent.setup().click(screen.getByRole('button', { name: 'Capture 12 sessions' }));
+      await vi.waitFor(() => expect(screen.getByText('The capture stopped before it finished.')).toBeTruthy());
+
+      expect(screen.getByText(/the provider refused the key/)).toBeTruthy();
+      expect(screen.getByText(/Run study fetches whatever is still missing/)).toBeTruthy();
+    });
+
+    it('says a count it could not read could not be read, and not that nothing is missing', async () => {
+      await enterWindow({ kind: 'unavailable', message: 'The data plane did not respond.' });
+
+      expect(screen.getByText('Could not check which of this run’s sessions the lake holds.')).toBeTruthy();
+      expect(screen.getByText(/The data plane did not respond\./)).toBeTruthy();
+      expect(warning()).toBeNull();
+      expect(screen.queryByText(/0 of|none missing/i)).toBeNull();
+    });
+
+    it('reads the count again only for another instrument or window, not for another bar, session or indicator', async () => {
+      const component = fixture.componentInstance;
+      await vi.waitFor(() => expect(instrumentData).toHaveBeenCalledTimes(1));
+      const user = userEvent.setup();
+
+      component.range.update((r) => ({ ...r, multiplier: 5 }));
+      await user.click(screen.getByRole('button', { name: 'RTH' }));
+      component.selectedIndicator.set('mom');
+      fixture.detectChanges();
+      await fixture.whenStable();
+      expect(instrumentData, 'nothing the lake count is keyed on changed').toHaveBeenCalledTimes(1);
+
+      component.range.update((r) => ({ ...r, symbol: 'MSFT' }));
+      fixture.detectChanges();
+      await vi.waitFor(() => expect(instrumentData).toHaveBeenCalledTimes(2));
+      expect(instrumentData).toHaveBeenLastCalledWith(expect.objectContaining({ symbol: 'MSFT' }));
+    });
+
+    it('reads nothing while the instrument or a date is not entered', async () => {
+      await vi.waitFor(() => expect(instrumentData).toHaveBeenCalledTimes(1));
+
+      fixture.componentInstance.range.update((r) => ({ ...r, from: '' }));
+      fixture.detectChanges();
+      await fixture.whenStable();
+
+      expect(instrumentData).toHaveBeenCalledTimes(1);
+      expect(warning()).toBeNull();
+    });
+  });
 });
 
 describe('SignalRunnerComponent job wiring', () => {
   let component: SignalRunnerComponent;
   let fixture: ComponentFixture<SignalRunnerComponent>;
   let jobsById: ReturnType<typeof signal<Map<string, JobState>>>;
+  let instrumentData: ReturnType<typeof vi.fn<(query: unknown) => Promise<DataLakeRead<InstrumentDataReport>>>>;
   let jobsServiceMock: {
     jobs: ReturnType<typeof computed<JobState[]>>;
     job: (id: string) => JobState | undefined;
@@ -210,10 +499,15 @@ describe('SignalRunnerComponent job wiring', () => {
       dismiss: vi.fn(),
     };
 
+    // Left alone, the lake holds every session the default window needs, so no warning is drawn.
+    instrumentData = vi.fn().mockResolvedValue({ kind: 'ok', value: heldReport({ sessions: SESSIONS }) });
+
     await TestBed.configureTestingModule({
       imports: [SignalRunnerComponent, HttpClientTestingModule],
       providers: [
         { provide: JobsService, useValue: jobsServiceMock },
+        { provide: DataLakeService, useValue: { instrumentData } },
+        { provide: TradeBackfillRunner, useValue: { run: vi.fn() } },
         provideFakeTickerCatalog(
           fakeTickerCatalog([{ symbol: 'SPY', name: 'SPDR S&P 500 ETF Trust', exchange: 'ARCA' }]),
         ),
@@ -242,8 +536,8 @@ describe('SignalRunnerComponent job wiring', () => {
 
     const [type, payload] = jobsServiceMock.startJob.mock.calls[0];
     expect(type).toBe('signal_engine');
-    // tests/jobs/test_signal_study_job.py parses exactly this body. The session is named, not defaulted: the study
-    // computes on extended hours until the owner decides D02, and the request carries no second session field.
+    // tests/jobs/test_signal_study_job.py parses exactly this body. The session is named, not defaulted: the page starts
+    // on extended hours, which the study has always computed on, and the request carries no second session field.
     expect(payload).toEqual({
       symbol: 'AAPL',
       from_date: '2024-01-02',
@@ -289,6 +583,47 @@ describe('SignalRunnerComponent job wiring', () => {
     fixture.detectChanges();
     return fixture.nativeElement as HTMLElement;
   }
+
+  it('marks a shown result as from other inputs, naming the session it answers, once the session is switched', async () => {
+    jobsServiceMock.fetchResult.mockResolvedValueOnce(SIGNAL_RESULT);
+    await component.runSignalEngine();
+    await settleJob('completed');
+    expect.soft(screen.queryByText('Previous result'), 'it answers the inputs entered').toBeNull();
+    const press = async (name: string) => {
+      await userEvent.setup().click(screen.getByRole('button', { name }));
+      await fixture.whenStable();
+      fixture.detectChanges();
+    };
+
+    await press('RTH');
+
+    expect.soft(screen.getByText('Previous result')).toBeTruthy();
+    const answered = screen.getByText('Previous result').closest('.previous-result__banner') as HTMLElement;
+    expect.soft(within(answered).getByText('Session').nextElementSibling?.textContent).toBe('extended hours');
+    expect.soft(within(answered).getByText('Bars').nextElementSibling?.textContent, 'the bars it answers, not the ones now shown').toBe('15 minute');
+
+    await press('Ext');
+
+    expect.soft(screen.queryByText('Previous result'), 'switching back asks the question it answers again').toBeNull();
+  });
+
+  it('counts the sessions the lake lacks again once its own run ends, because the run filled the lake', async () => {
+    instrumentData.mockResolvedValue({ kind: 'ok', value: heldReport({ sessions: SESSIONS, missing: 12 }) });
+    component.range.update((r) => ({ ...r, to: '2024-06-27' }));
+    fixture.detectChanges();
+    await vi.waitFor(() => expect(screen.queryByText(/in the lake yet/)).not.toBeNull());
+    instrumentData.mockResolvedValue({ kind: 'ok', value: heldReport({ sessions: SESSIONS }) });
+    jobsServiceMock.fetchResult.mockResolvedValueOnce(SIGNAL_RESULT);
+    const reads = instrumentData.mock.calls.length;
+
+    await component.runSignalEngine();
+    await settleJob('completed');
+    await vi.waitFor(() => expect(instrumentData).toHaveBeenCalledTimes(reads + 1));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(screen.queryByText(/in the lake yet/)).toBeNull();
+  });
 
   it('names the lake before anything has run, not a provider fetch', () => {
     const el = fixture.nativeElement as HTMLElement;
@@ -356,6 +691,34 @@ describe('SignalRunnerComponent job wiring', () => {
     expect(el.querySelector('p-message')).toBeNull();
     expect(lines(el), 'the refused source is the layout\'s one line').toHaveLength(1);
     expect(lines(el)[0].textContent).toContain('Data lake, Polygon');
+  });
+
+  it('names the session the lake judged in the refusal: the one its source records', async () => {
+    const reason = 'The lake cannot admit this window: 1 of 82 sessions was captured before the session closed: 2024-03-06.';
+    jobsServiceMock.fetchResult.mockResolvedValueOnce({
+      success: false, status: 'refused', ticker: 'AAPL', error: reason,
+      refusal: { code: 'captured_before_final', reason, sessions: [], sessions_total: 0, coverage: null },
+      data_source: dataSource(null, { session_policy: 'regular', snapshot_digest: null, effective_window: null }),
+    });
+
+    const el = await settleJob('failed', { errorCode: 'captured_before_final', errorMessage: reason });
+
+    expect(el.textContent).toContain('No result: the lake could not supply this study its data for regular hours.');
+  });
+
+  it('names the session the run asked for when the refusal came before anything was read', async () => {
+    const reason = '7-minute bars do not divide the hour.';
+    component.range.update((r) => ({ ...r, session: 'rth' }));
+    await component.runSignalEngine();
+    jobsServiceMock.fetchResult.mockResolvedValueOnce({
+      success: false, status: 'refused', ticker: 'AAPL', error: reason,
+      refusal: { code: 'resolution_unsupported', reason, sessions: [], sessions_total: 0, coverage: null },
+      data_source: null,
+    });
+
+    const el = await settleJob('failed', { errorCode: 'resolution_unsupported', errorMessage: reason });
+
+    expect(el.textContent).toContain('its data for regular hours.');
   });
 
   it('shows the reason of a refusal that came before anything was read, with no counts', async () => {

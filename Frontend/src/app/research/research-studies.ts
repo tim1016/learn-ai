@@ -139,14 +139,12 @@ export const RESEARCH_STUDIES: readonly StudyDefinition[] = [
     subject: 'instrument',
     resultKind: 'assessed',
     help: { route: '/docs/signal-engine-methodology' },
-    constraints: [
-      { label: 'Session', value: 'extended hours included, fixed' },
-      { label: 'Looks ahead', value: '15 bars, fixed' },
-    ],
-    // Reads the data lake (#3522); a result's own block replaces this line with the window and counts it recorded.
-    source: providerSource({ sources: ['Data lake', 'polygon'], adjustment: 'polygon_split_adjusted', sessionPolicy: 'extended' }),
+    constraints: [{ label: 'Looks ahead', value: '15 bars, fixed' }],
+    // Reads the data lake (#3522); a result's own block replaces this line with the window, session and counts it recorded.
+    // The session is a choice made on the page, so this line, which describes the study before any run, names none.
+    source: providerSource({ sources: ['Data lake', 'polygon'], adjustment: LAKE_STUDY_TREE }),
     limitations: [
-      'Bars include pre-market and after-hours trades, and the study needs at least 500 bars in the window.',
+      'With extended hours chosen, bars include pre-market and after-hours trades. Either way the study needs at least 500 bars in the window.',
       'The train and test split is by bar position, so a short window gives a short test.',
     ],
     nextStep: 'A signal that survives can be written as entry and exit rules and replayed in the Rule sandbox.',

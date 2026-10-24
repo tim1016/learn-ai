@@ -37,6 +37,7 @@ import { IndicatorConfigModalComponent } from '../../data-lab/indicator-config-m
 import { TickerRangePickerComponent } from '../../../shared/ticker-range-picker/ticker-range-picker.component';
 import type {
   Resolution,
+  Session,
   TickerRange,
 } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
 import { tickerRangeToWire } from '../../../utils/ticker-wire';
@@ -47,15 +48,52 @@ import { StoredInputsError, type StoredInputs } from '../../../research/stored-s
 import { createResultInputTracker } from '../../../shared/workspace/previous-result';
 import type { DataSourceProvenance } from '../../../shared/workspace/data-source-provenance';
 import { LakeStudySourceComponent } from '../../../shared/lake-study/lake-study-source.component';
+import { LakeHoldingNoticeComponent } from '../../../shared/lake-study/lake-holding-notice.component';
+import { createLakeHolding } from '../../../shared/lake-study/create-lake-holding';
+import type { InstrumentDataRequest } from '../../../shared/data-lake';
 import {
+  LAKE_STUDY_TREE,
   readLakeStudyRefusal,
+  SESSION_POLICY_FOR_REQUEST,
+  sessionPolicyWords,
   toDataSourceProvenance,
+  type LakeSessionPolicy,
   type LakeStudyRefused,
 } from '../../../shared/lake-study/lake-study';
+import signalBarMinutes from '@repo-contracts/signal-study-bar-minutes.json';
+
+/**
+ * The bar lengths, in minutes, the server accepts for each session: the target looks 15 bars ahead inside the same day
+ * and needs 70% of the bars to have one, so a regular session reaches that with shorter bars than an extended one does,
+ * and hour, daily and longer minute bars with neither. A data-plane test pins this file to the study's own refusals
+ * (`contracts/signal-study-bar-minutes.json`); the page works out nothing of its own.
+ */
+const BAR_MINUTES: Readonly<Record<Session, readonly number[]>> = signalBarMinutes;
+
+/** The offered length nearest to `wanted`, the shorter of two equally near. */
+function nearestBar(offered: readonly number[], wanted: number): number {
+  return offered.reduce((best, length) => {
+    const nearer = Math.abs(length - wanted) - Math.abs(best - wanted);
+    return nearer < 0 || (nearer === 0 && length < best) ? length : best;
+  });
+}
+
+/** The session a saved run computed on: the one it names, or extended, which is what the study computed on before it named one. */
+function storedSession(stored: StoredInputs): Session {
+  if (!stored.has('session')) return 'extended';
+  const session = stored.text('session');
+  if (session !== 'rth' && session !== 'extended') {
+    throw new StoredInputsError(`"${session}" is not a session this page offers`);
+  }
+  return session;
+}
 
 /** What a Signal study's request is made from: the inputs a shown result answers. */
 interface SignalStudyInputs {
-  readonly range: TickerRange;
+  /** Always names its session and a bar length that session offers, so the wire never falls back to the adapter's `rth` default. */
+  readonly range: TickerRange & { readonly session: Session };
+  /** What the range's session asks the lake for. */
+  readonly policy: LakeSessionPolicy;
   readonly indicator: string;
   readonly params: Record<string, number>;
   readonly flipSign: boolean;
@@ -78,6 +116,7 @@ interface SignalStudyInputs {
     TickerRangePickerComponent,
     StudyPageComponent,
     LakeStudySourceComponent,
+    LakeHoldingNoticeComponent,
   ],
   templateUrl: './signal-runner.component.html',
   styleUrls: ['./signal-runner.component.scss'],
@@ -114,20 +153,17 @@ export class SignalRunnerComponent {
   // override, the inherited ``TickerRequest`` base default of 1 would
   // silently switch every run from 15-minute to 1-minute bars. The
   // backend also pins multiplier=15 explicitly on its side (PR ii); the
-  // frontend mirror keeps the UI consistent with that default.
+  // frontend mirror keeps the UI consistent with that default. The session
+  // is extended hours, which the study has always computed on, so a run
+  // started without touching it moves no number (#3522).
   range = signal<TickerRange>({
     symbol: 'AAPL',
     from: '2024-01-02',
     to: '2024-06-28',
     resolution: 'minute',
     multiplier: 15,
+    session: 'extended',
   });
-  /**
-   * The target looks 15 bars ahead and needs 70% of the bars to have one, so a
-   * bar of 30 minutes or longer can never reach it: hour, daily, ×60 and ×240
-   * bars always fail (#3527), and are not offered.
-   */
-  readonly availableMultipliers: readonly number[] = [1, 5, 15];
   readonly availableResolutions: readonly Resolution[] = ['minute'];
 
   /** Catalog-driven selection: indicator key + params (matches data-lab's
@@ -174,15 +210,18 @@ export class SignalRunnerComponent {
   readonly jobId = signal<string | null>(null);
   readonly result = signal<SignalEngineResult | null>(null);
   readonly error = signal<string | null>(null);
-  /** Why the lake could not supply the window, when the run failed on that; read from the payload the failed job parked. */
-  readonly refusal = signal<LakeStudyRefused | null>(null);
+  /**
+   * Why the lake could not supply the window, when the run failed on that; read from the payload the failed job parked,
+   * with the session it judged: the one its source records, or the one the run asked for when nothing was read.
+   */
+  readonly refusal = signal<{ readonly refused: LakeStudyRefused; readonly session: LakeSessionPolicy | null } | null>(null);
 
   /**
    * The data-source line for what is on screen: the shown result's lake source, or the source a refused run was
    * refused against. `undefined` before either exists, which leaves the study's own pre-run line.
    */
   readonly dataSource = computed<DataSourceProvenance | undefined>(() => {
-    const source = this.result()?.dataSource ?? this.refusal()?.dataSource ?? null;
+    const source = this.result()?.dataSource ?? this.refusal()?.refused.dataSource ?? null;
     return source === null ? undefined : toDataSourceProvenance(source);
   });
 
@@ -207,23 +246,55 @@ export class SignalRunnerComponent {
   private readonly gate = createRunGate();
   readonly starting = this.gate.starting;
 
+  /**
+   * The range the picker shows and the run sends. One that names no session is extended hours, which is what the study
+   * computed on before it named one; one whose bar length the session does not offer reads as the nearest length it
+   * does, so a refused length is never sent whichever way the range was entered. The choice entered stays in `range`,
+   * and switching back to a session that offers it shows it again.
+   */
+  readonly shownRange = computed<TickerRange & { readonly session: Session }>(() => {
+    const range = this.range();
+    const session = range.session ?? 'extended';
+    return { ...range, session, multiplier: nearestBar(BAR_MINUTES[session], range.multiplier ?? 1) };
+  });
+
+  /** The bar lengths the chosen session offers, from the server's contract. */
+  readonly availableMultipliers = computed<readonly number[]>(() => BAR_MINUTES[this.shownRange().session]);
+
+  /** Why the bar lengths are what they are under regular hours, and which length the run uses when the one entered is not offered. */
+  readonly barNote = computed<string | null>(() => {
+    const { session, multiplier } = this.shownRange();
+    if (session !== 'rth') return null;
+    const entered = this.range().multiplier ?? 1;
+    const changed = entered === multiplier ? '' : `${entered}-minute bars are not offered for regular hours, so this run uses ${multiplier}-minute bars. `;
+    return (
+      `${changed}Regular hours offer bars of ${this.availableMultipliers().join(', ')} minutes only: the study looks 15 bars ahead ` +
+      'inside the same day and needs 70% of its bars to have a target, which a regular session holds too few longer bars to reach.'
+    );
+  });
+
   /** The inputs the shown result answers; a result is "previous" once these change. */
-  private readonly enteredInputs = computed<SignalStudyInputs>(() => ({
-    range: this.range(),
-    indicator: this.selectedIndicator(),
-    params: this.selectedParams(),
-    flipSign: this.flipSign(),
-    regimeGate: this.regimeGateEnabled(),
-  }));
+  private readonly enteredInputs = computed<SignalStudyInputs>(() => {
+    const range = this.shownRange();
+    return {
+      range,
+      policy: SESSION_POLICY_FOR_REQUEST[range.session],
+      indicator: this.selectedIndicator(),
+      params: this.selectedParams(),
+      flipSign: this.flipSign(),
+      regimeGate: this.regimeGateEnabled(),
+    };
+  });
   readonly inputs = createResultInputTracker(
     this.enteredInputs,
-    ({ range, indicator, params, flipSign, regimeGate }) => ({
+    ({ range, policy, indicator, params, flipSign, regimeGate }) => ({
       key: JSON.stringify([
         range.symbol.toUpperCase(),
         range.from,
         range.to,
         range.resolution,
         range.multiplier ?? 1,
+        policy,
         indicator,
         params,
         flipSign,
@@ -233,6 +304,7 @@ export class SignalRunnerComponent {
         { label: 'Instrument', value: range.symbol.toUpperCase() },
         { label: 'Window', value: `${range.from} to ${range.to}` },
         { label: 'Bars', value: `${range.multiplier ?? 1} minute` },
+        { label: 'Session', value: sessionPolicyWords(policy) },
         { label: 'Indicator', value: `${indicator} ${JSON.stringify(params)}` },
         { label: 'Flip sign', value: flipSign ? 'on' : 'off' },
         { label: 'Regime gate', value: regimeGate ? 'on' : 'off' },
@@ -241,17 +313,28 @@ export class SignalRunnerComponent {
   );
   private submitted: SignalStudyInputs | null = null;
 
-  canRun = computed(() => {
+  /** The instrument and both dates are entered. */
+  private readonly windowEntered = computed(() => {
     const r = this.range();
-    return (
-      r.symbol.trim().length > 0 &&
-      this.featureMapping() !== null &&
-      r.from.trim().length > 0 &&
-      r.to.trim().length > 0 &&
-      !this.loading() &&
-      !this.starting()
-    );
+    return r.symbol.trim().length > 0 && r.from.trim().length > 0 && r.to.trim().length > 0;
   });
+
+  canRun = computed(
+    () => this.windowEntered() && this.featureMapping() !== null && !this.loading() && !this.starting(),
+  );
+
+  /**
+   * How many of the run's sessions the lake does not hold yet, and the capture of them. The span is the one the run
+   * admits: the entered window, in the split-adjusted tree (`SignalStudyParams.price_adjustment_mode`), with no warmup.
+   * Read once per instrument or window; it warns and never holds up Run study.
+   */
+  readonly holding = createLakeHolding(
+    computed<InstrumentDataRequest | null>(() => {
+      if (!this.windowEntered()) return null;
+      const r = this.range();
+      return { symbol: r.symbol.trim().toUpperCase(), from: r.from, to: r.to, tree: LAKE_STUDY_TREE };
+    }),
+  );
 
   get selectedFeatureLabel(): string {
     return this.featureMapping()?.label ?? this.selectedIndicator().toUpperCase();
@@ -259,8 +342,8 @@ export class SignalRunnerComponent {
 
   /** What step 3 says is about to run. */
   readonly readySummary = computed(() => {
-    const r = this.range();
-    return `${this.selectedFeatureLabel} on ${r.symbol.toUpperCase()}, ${r.from} to ${r.to}`;
+    const { range, policy } = this.enteredInputs();
+    return `${this.selectedFeatureLabel} on ${range.symbol.toUpperCase()}, ${range.from} to ${range.to}, ${sessionPolicyWords(policy)}`;
   });
 
   /** Why Run study cannot start, in words that point at the step to fix. */
@@ -281,8 +364,14 @@ export class SignalRunnerComponent {
     const mapping = findMappingForFeature(name);
     if (mapping === null) throw new StoredInputsError(`"${name}" is not an indicator this page offers`);
     const multiplier = stored.number('multiplier');
-    if (stored.text('timespan') !== 'minute' || !this.availableMultipliers.includes(multiplier)) {
+    const session = storedSession(stored);
+    if (stored.text('timespan') !== 'minute') {
       throw new StoredInputsError(`${multiplier} ${stored.text('timespan')} bars are not offered here`);
+    }
+    if (!BAR_MINUTES[session].includes(multiplier)) {
+      throw new StoredInputsError(
+        `${multiplier}-minute bars are not offered here for ${sessionPolicyWords(SESSION_POLICY_FOR_REQUEST[session])}`,
+      );
     }
     const flipSign = stored.boolean('flip_sign');
     const regimeGate = stored.boolean('regime_gate_enabled');
@@ -292,11 +381,20 @@ export class SignalRunnerComponent {
       to: stored.text('to_date'),
       resolution: 'minute',
       multiplier,
+      session,
     });
     this.selectedIndicator.set(mapping.indicator);
     this.selectedParams.set({ ...mapping.params });
     this.flipSign.set(flipSign);
     this.regimeGateEnabled.set(regimeGate);
+  }
+
+  /**
+   * What the picker handed over. It hands back the range it was shown, so a change that leaves the bar length alone (the
+   * session, a date) must not commit the nearest length the shown range reads as in place of the one that was entered.
+   */
+  onRangeChange(next: TickerRange): void {
+    this.range.set(next.multiplier === this.shownRange().multiplier ? { ...next, multiplier: this.range().multiplier } : next);
   }
 
   /** Picker (add) in this host = single-select replace. */
@@ -359,9 +457,11 @@ export class SignalRunnerComponent {
         resultFetchedFor = id;
         this.error.set(j.errorMessage ?? 'Signal engine run failed');
         void this.loadRefusal(id);
+        this.holding.reread();
       } else if (j.status === 'cancelled' && resultFetchedFor !== id) {
         resultFetchedFor = id;
         this.error.set(j.message ?? 'Run cancelled');
+        this.holding.reread();
       }
     });
   }
@@ -389,14 +489,8 @@ export class SignalRunnerComponent {
       // the picker is also initialized to multiplier=15 above so the UI
       // and the wire agree.
       const submitted = this.enteredInputs();
-      // The study has always computed on extended hours (04:00-20:00 ET), and which session it should use is an open
-      // owner decision (D02 of PRD #3490). It is named, not defaulted: the run admits exactly this session from the
-      // lake, and the saved run says "extended" rather than the "rth" the wire would fill in.
-      const wire = tickerRangeToWire({
-        ...submitted.range,
-        symbol: submitted.range.symbol.toUpperCase(),
-        session: 'extended',
-      });
+      // The run admits exactly the session the person chose from the lake, and the saved run records it.
+      const wire = tickerRangeToWire({ ...submitted.range, symbol: submitted.range.symbol.toUpperCase() });
       const parent = this.prefill.parent();
       const id = await this.jobsService.startJob('signal_engine', {
         ...wire,
@@ -448,7 +542,9 @@ export class SignalRunnerComponent {
   private async loadRefusal(id: string): Promise<void> {
     try {
       const refused = readLakeStudyRefusal(await this.jobsService.fetchResult<unknown>(id));
-      if (refused !== null && this.jobId() === id) this.refusal.set(refused);
+      if (refused !== null && this.jobId() === id) {
+        this.refusal.set({ refused, session: refused.dataSource?.sessionPolicy ?? this.submitted?.policy ?? null });
+      }
     } catch (err: unknown) {
       if (err instanceof HttpErrorResponse && err.status === 404) return;
       if (this.jobId() !== id) return;
@@ -474,6 +570,8 @@ export class SignalRunnerComponent {
       } else if (mapped.error) {
         this.error.set(mapped.error);
       }
+      // The run filled the lake with whatever it lacked, so the count of what it lacks is read again.
+      this.holding.reread();
     } catch (err: unknown) {
       const msg =
         err && typeof err === 'object' && 'message' in err

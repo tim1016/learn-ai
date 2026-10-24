@@ -85,7 +85,7 @@ describe('StudyPageComponent', () => {
 
   it.each([
     ['feature', '15 minutes, fixed'],
-    ['signal', 'extended hours included, fixed'],
+    ['signal', '15 bars, fixed'],
     ['indicator-reliability', 'regular trading hours, fixed'],
     ['cross-sectional', 'daily, fixed'],
   ] as const)('says what %s fixes in place of a control: %s', async (study, fixed) => {
