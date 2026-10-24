@@ -616,8 +616,12 @@ PRD #3490 and the re-capture path below).
 
   To decide: an operator-run re-capture that fetches first, swaps only on success and restores the prior row on any
   failure, together with what happens to receipts that pinned the early bytes; or leaving held early days refused for
-  good. An extended-hours study refuses a day captured before 20:15 ET (17:15 on an early close); a regular-hours
-  study one captured before 16:15 ET (13:15).
+  good. An extended-hours study refuses a day whose capture completed before 20:20 ET (17:20 on an early close); a
+  regular-hours study one that completed before 16:20 ET (13:20). Those are the final instants (20:15, 16:15) plus the
+  five-minute claim lease. Any writer, such as a chart or a backfill, whose capture completes in the five minutes after
+  the final instant leaves a day that is refused for good although it may be whole; that is the price of the conservative bound. A
+  study also does not start on a session until the final instant plus that lease has passed (`window_not_complete`
+  before), so a day it captures itself is never one of those.
 - **P2: a split announced after a day was captured stays invisible to that held day until a later capture of the
   symbol refreshes its adjusted history.** The provider path adjusted to the moment of the request. Price-level
   outputs (MACD signal, quantile-bin bounds) move by the split factor, not only the prices.

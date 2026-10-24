@@ -33,7 +33,10 @@ A day captured before the study's session policy finished forming
 and nothing in the lake refreshes a committed day. Admission refuses it as
 ``captured_before_final`` and asks the vendor for nothing — it neither computes
 on that tape nor rewrites the day, which every other reader of the lake shares.
-Re-capturing such a day is an owner decision (``docs/known-gaps.md``).
+Re-capturing such a day is an owner decision (``docs/known-gaps.md``). A study
+starts only a claim lease after a session's final instant, so a capture it makes
+itself is one that rule calls final, and a writer that claimed before the final
+instant has published or expired.
 
 Lead-in. A study that warms up on sessions before its window may let the
 lead-in start late (``lead_in="trim_unsupplied_prefix"``): the oldest lead-in
@@ -615,13 +618,18 @@ def admit_minute_inputs(
         )
     lead = lead_in_sessions(window[0], identity.warmup_sessions)
     required = [*lead, *window]
-    live = [day for day in required if now < capture_final_ms(day, identity.session_policy)]
+    # A capture counts as final only from its completion less the claim lease (``captured_early``). A study that
+    # starts a lease after the final instant sees every live claim taken after it (none is renewed, and an expired
+    # one cannot publish), and every capture it makes itself is final under that rule.
+    live = [day for day in required if now < capture_final_ms(day, identity.session_policy) + CLAIM_LEASE_MS]
     if live:
         raise StudyInputRefusal(
             "window_not_complete",
             f"{len(live)} session(s) have not finished forming (from {live[0].isoformat()}); the lake holds a session "
             f"only once its {identity.session_policy} data is final (the close, plus the after-hours tape for "
-            "extended, plus the vendor's 15-minute delay). End the window on an earlier session.",
+            "extended, plus the vendor's 15-minute delay, plus the "
+            f"{CLAIM_LEASE_MS // 60_000} minutes a capture begun before then may still be publishing). End the window "
+            "on an earlier session.",
         )
 
     roots = resolve_data_roots(source="polygon", adjusted=identity.adjusted)
@@ -649,10 +657,10 @@ def admit_minute_inputs(
     for day, completed_ms in early.items():
         first_read[day] = _SessionRead(
             "early",
-            f"captured at {display_time(completed_ms)} ET (up to {CLAIM_LEASE_MS // 60_000} minutes earlier), before its "
-            f"{identity.session_policy} session had closed and been delivered "
-            f"({display_time(capture_final_ms(day, identity.session_policy))} ET); it must be captured again before "
-            f"a study of the {identity.session_policy} session can use it",
+            f"completed at {display_time(completed_ms)} ET; the vendor may have been asked as early as "
+            f"{display_time(completed_ms - CLAIM_LEASE_MS)} ET, before its {identity.session_policy} session had "
+            f"closed and been delivered ({display_time(capture_final_ms(day, identity.session_policy))} ET); it must "
+            f"be captured again before a study of the {identity.session_policy} session can use it",
         )
     check_cancelled()
 
