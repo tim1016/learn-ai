@@ -316,7 +316,7 @@ def test_a_no_iv_member_with_no_failed_request_is_excluded_as_a_deterministic_ou
 
 
 # ---------------------------------------------------------------------------
-# A study in which no member is evaluated completes nothing (#3524 review m2)
+# A study in which no member is evaluated completes nothing (#3524)
 # ---------------------------------------------------------------------------
 
 
@@ -360,7 +360,7 @@ def test_members_left_out_at_admission_and_at_the_iv_build_together_still_leave_
 
 
 # ---------------------------------------------------------------------------
-# A FRED outage is a degraded input, not a complete result (#3524 review m1)
+# A FRED outage is a degraded input, not a complete result (#3524)
 # ---------------------------------------------------------------------------
 
 
@@ -394,7 +394,7 @@ def test_a_default_rate_with_no_fred_key_is_a_stable_answer_and_the_cache_key_sa
 
 
 # ---------------------------------------------------------------------------
-# The retry flag comes from a typed failure, never from the error text (#3524 review m5)
+# The retry flag comes from a typed failure, never from the error text (#3524)
 # ---------------------------------------------------------------------------
 
 
@@ -456,7 +456,7 @@ def test_a_computation_failure_whose_text_happens_to_contain_iv_is_not_an_iv_pro
 
 
 # ---------------------------------------------------------------------------
-# One start, phases in order, and a unit on every count (#3524 review m7)
+# One start, phases in order, and a unit on every count (#3524)
 # ---------------------------------------------------------------------------
 
 
@@ -680,7 +680,7 @@ async def test_the_route_hands_the_worker_the_study_it_was_asked_for(monkeypatch
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("session", "policy"), [("rth", "regular"), ("extended", "extended")])
 async def test_the_one_session_field_chooses_the_session_the_daily_bars_fold(monkeypatch: pytest.MonkeyPatch, session, policy):
-    """#3524 review m10: ``extended`` used to be accepted and silently computed on the regular session."""
+    """#3524: ``extended`` used to be accepted by the route and silently computed on the regular session."""
     captured: dict[str, Any] = {}
     monkeypatch.setattr("app.routers.jobs.run_in_thread", lambda job_id, work, **kwargs: captured.update(work=work))
     monkeypatch.setattr("app.routers.jobs.run_cross_sectional_job", lambda study_params, **kwargs: captured.update(params=study_params))

@@ -245,7 +245,7 @@ def test_the_risk_free_rate_source_is_counted_per_day(monkeypatch):
 
 
 def test_a_default_rate_with_no_fred_key_is_not_an_outage_but_one_with_a_key_is(monkeypatch):
-    """#3524 review m1. No key is the same answer on every attempt; a configured key that gets nothing could answer next time."""
+    """#3524: no key is the same answer on every attempt; a configured key that gets nothing could answer next time."""
     rows = stock_rows(WINDOW)
     monkeypatch.setattr(fred_service, "_fetch_series", lambda *args, **kwargs: [])
     fred_service.clear_cache()
