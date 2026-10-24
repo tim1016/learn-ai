@@ -20,13 +20,24 @@ type Spy = Pick<typeof Vi, 'fn'>;
  */
 export async function renderHistoryTab(
   spy: Spy,
-  options: { service?: FakeService; jobs?: FakeJobs; detail?: FakeRunDetail; active?: boolean; polling?: boolean; providers?: readonly Provider[] } = {},
+  options: {
+    service?: FakeService;
+    jobs?: FakeJobs;
+    detail?: FakeRunDetail;
+    active?: boolean;
+    polling?: boolean;
+    providers?: readonly Provider[];
+    /** What a page that keeps the open run in its address tells the tab, and the listeners it has for what the tab says. */
+    inputs?: Record<string, unknown>;
+    on?: Record<string, (value: never) => void>;
+  } = {},
 ) {
   const service = options.service ?? fakeService(spy);
   const jobs = options.jobs ?? fakeJobs();
   const detail = options.detail ?? inertRunDetail();
   const view = await render(HistoryTabComponent, {
-    inputs: { active: options.active ?? true },
+    inputs: { active: options.active ?? true, ...options.inputs },
+    on: options.on,
     providers: [
       ...fakePickerWorld().providers,
       { provide: OptionsBacktestService, useValue: service },

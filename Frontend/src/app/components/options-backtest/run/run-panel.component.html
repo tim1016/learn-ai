@@ -19,12 +19,16 @@
     }
     @case ('complete') {
       @if (detail(); as done) {
-        @if (done.setup) { <a [routerLink]="['/options-setups/evidence/run', done.id]">Open strategy evidence workspace</a> }
-        <app-options-backtest-run-result [run]="done" />
         @if (done.setup) {
-          <button type="button" class="again" (click)="goldenReviewRun.set(done.id)">Review golden setup</button>
-          @if (goldenReviewRun() === done.id) { <app-golden-option-setup-approval [runId]="done.id" /> }
+          <p class="links">
+            @if (exploreRoute(); as route) { <a [routerLink]="route" [queryParams]="performanceQuery(done.id)">Performance and research lineage</a> }
+            @if (goldenOffer(); as offer) {
+              @if (offer.kind === 'link') { <a [routerLink]="offer.route" [queryParams]="goldenQuery(done.id)">Take to Golden</a> }
+              @else { <span class="words">{{ offer.why }}</span> }
+            }
+          </p>
         }
+        <app-options-backtest-run-result [run]="done" />
       } @else if (readProblem() === null) { <p class="words" role="status">Reading the result…</p> }
     }
     @case ('failed') {

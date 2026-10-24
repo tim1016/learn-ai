@@ -292,3 +292,62 @@ describe('deleting a run, and the keyboard', () => {
     await waitFor(() => expect(deleted).toEqual([30]));
   });
 });
+
+describe('a page that keeps the open run in its address', () => {
+  const service = () => fakeService(vi, { runs: vi.fn(async () => RUNS), run: vi.fn(async (id: number) => runDetail({ ...COMPLETE, id })) });
+
+  it('is told which run was opened, and that it was closed', async () => {
+    const shown = vi.fn();
+    await renderHistoryTab(vi, { service: service(), on: { runShown: shown } });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open run 30' }));
+    await screen.findByRole('region', { name: 'Backtest run' });
+    press('Back to the runs');
+
+    await waitFor(() => expect(shown.mock.calls).toEqual([[30], [null]]));
+  });
+
+  it('opens the run the address names as if it had been chosen, from the list, and closes it when the address stops naming it', async () => {
+    const { view, service: server } = await renderHistoryTab(vi, { service: service(), inputs: { openRun: 30 } });
+
+    await screen.findByRole('region', { name: 'Backtest run' });
+    expect(server.run).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: 'Open run 30' })).toBeNull();
+    await view.rerender({ inputs: { active: true, openRun: null } });
+
+    expect(await screen.findByRole('button', { name: 'Open run 30' })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Backtest run' })).toBeNull();
+  });
+
+  it('reads a run the list does not hold by its id, and opens it', async () => {
+    const server = service();
+    await renderHistoryTab(vi, { service: server, inputs: { openRun: 99 } });
+
+    await screen.findByRole('region', { name: 'Backtest run' });
+
+    expect(server.run).toHaveBeenCalledWith(99);
+  });
+
+  it('says why a run that cannot be read is not open, and closes the address on request', async () => {
+    const shown = vi.fn();
+    await renderHistoryTab(vi, { service: fakeService(vi, { runs: vi.fn(async () => RUNS) }), inputs: { openRun: 99 }, on: { runShown: shown } });
+
+    expect((await screen.findByRole('alert')).textContent).toBe('No run 99.');
+    press('Back to the runs');
+
+    await waitFor(() => expect(shown).toHaveBeenCalledWith(null));
+  });
+
+  it('shows the two runs the address names side by side, and says when they were put side by side or taken apart', async () => {
+    const shown = vi.fn();
+    const { view } = await renderHistoryTab(vi, { service: service(), inputs: { compareRuns: { a: 30, b: 29 } }, on: { comparisonShown: shown } });
+
+    await screen.findByRole('button', { name: 'Back to the runs' });
+    press('Back to the runs');
+    await screen.findByRole('button', { name: 'Open run 30' });
+    expect(shown).toHaveBeenLastCalledWith(null);
+    await view.rerender({ inputs: { active: true, compareRuns: { a: 30, b: 28 } } });
+
+    expect(await screen.findByRole('button', { name: 'Back to the runs' })).toBeTruthy();
+  });
+});

@@ -33,6 +33,11 @@ export const OPTIONS_SETUPS_ROUTES: Routes = [
         data: { stickyContent: true },
         loadComponent: () => import('./workspace/define/options-setup-define.component').then((m) => m.OptionsSetupDefineComponent),
       },
+      {
+        // The view and the run it is about are query keys (`?view=history&run=68`), so an opened run has an address.
+        path: 'explore',
+        loadComponent: () => import('./workspace/explore/options-setup-explore.component').then((m) => m.OptionsSetupExploreComponent),
+      },
     ],
   },
 ];

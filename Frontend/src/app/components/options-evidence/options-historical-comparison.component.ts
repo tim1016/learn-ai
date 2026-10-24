@@ -9,13 +9,14 @@ import { CompareViewComponent } from '../options-backtest/run-detail/compare/com
   imports: [RouterLink, CompareViewComponent, FormField],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './options-historical-comparison.component.html',
-  styleUrl: './options-evidence-page.component.scss',
+  styleUrl: './options-evidence-view.component.scss',
 })
 export class OptionsHistoricalComparisonComponent {
   readonly sourceRunId = input.required<number>();
   readonly comparator = input<string>();
   readonly route = input.required<readonly string[]>();
-  readonly context = input.required<{ inspected_study_id?: string; bot_return: string | null }>();
+  /** What the page's address says besides the view, kept on the link that records a comparison. */
+  readonly context = input.required<Readonly<Record<string, string | null | undefined>>>();
   protected readonly selection = signal({ runId: '' });
   protected readonly fields = form(this.selection);
   protected readonly comparatorId = computed(() => this.parse(this.comparator()));

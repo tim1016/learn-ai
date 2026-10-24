@@ -20,6 +20,7 @@ import { AlpacaActivityPageComponent } from './components/brokers/alpaca-desk/ac
 import { BotPanelShellComponent } from './components/broker/v2-panel/panel-shell/bot-panel-shell.component';
 import { EntryComponent } from './components/entry/entry.component';
 import { OptionsSetupsIndexComponent } from './options-setups/index/options-setups-index.component';
+import { OptionsSetupExploreComponent } from './options-setups/workspace/explore/options-setup-explore.component';
 import { routeTreeHasData } from './shell/current-url.service';
 import { NotFoundComponent } from './shell/not-found.component';
 import { accountWorkspaceFixRoute, type AccountWorkspaceFixDestination } from './fleet/account-workspace';
@@ -145,7 +146,7 @@ describe('routes', () => {
     '/no-such-page?x=1#frag',
     // A setup's address always carries its tab: a bare name, and a tab no page serves yet, name nothing.
     '/options-setups/Mine',
-    '/options-setups/Mine/explore',
+    '/options-setups/Mine/golden',
   ])('leaves %s where it is on the not-found page, never on a default page', async (path) => {
     TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
     const router = TestBed.inject(Router);
@@ -174,6 +175,19 @@ describe('routes', () => {
 
     await router.navigateByUrl('/options-setups/SPY%200DTE/define');
     expect(routeTreeHasData(router.routerState.snapshot.root, 'stickyContent')).toBe(true);
+  });
+
+  it('opens a setup\'s Explore at its own address, whatever view and run its query names', async () => {
+    TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
+    const router = TestBed.inject(Router);
+
+    await router.navigateByUrl('/options-setups/SPY%200DTE/explore?view=history&run=30');
+
+    expect(router.url).toBe('/options-setups/SPY%200DTE/explore?view=history&run=30');
+    let leaf = router.routerState.snapshot.root;
+    while (leaf.firstChild !== null) leaf = leaf.firstChild;
+    expect(await leaf.routeConfig?.loadComponent?.()).toBe(OptionsSetupExploreComponent);
+    expect(leaf.queryParams).toEqual({ view: 'history', run: '30' });
   });
 
   it('lazily loads the Data Lake Observatory and keeps it distinct from Data Lab', async () => {

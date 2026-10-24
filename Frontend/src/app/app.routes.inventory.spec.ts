@@ -124,6 +124,7 @@ const ROWS: Readonly<Record<string, Row>> = {
   'options-setups/:name': { group: null, notFound: true },
   'options-setups/:name/overview': { group: OPTIONS },
   'options-setups/:name/define': { group: OPTIONS },
+  'options-setups/:name/explore': { group: OPTIONS },
   'options-backtest': { group: OPTIONS, lands: '/options-setups' },
   'options-evidence/:kind/:subjectId': { group: OPTIONS, lands: '/options-setups/evidence/run/7' },
   'options-golden-search': { group: OPTIONS },

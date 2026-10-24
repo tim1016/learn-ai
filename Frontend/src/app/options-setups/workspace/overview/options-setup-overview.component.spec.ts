@@ -176,13 +176,13 @@ describe('Overview: when it cannot show what it is for', () => {
     expect(screen.getByRole('link', { name: 'Go to Define' }).getAttribute('href')).toBe('/options-setups/_new/define');
   });
 
-  it('says Explore and Golden are not available here yet, and why', async () => {
+  it('says Golden is not available here yet, and why, and says nothing of Explore, which is', async () => {
     await overview('Alpha', { index: indexOf({ setups: [savedName('Alpha', '1')] }), bots: { kind: 'known', bots: [] } });
 
     const later = await screen.findByRole('region', { name: 'Not available here yet' });
 
-    expect(text(later)).toContain('Explore. Backtests, run history and performance are being moved into this place');
     expect(text(later)).toContain('Golden. Approving a tested run and starting a golden search are being moved into this place');
+    expect(text(later)).not.toContain('Explore');
   });
 });
 

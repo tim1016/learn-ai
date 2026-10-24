@@ -15,6 +15,7 @@ import { describeDetail, FIELD, NO_PROBLEMS, type FieldProblems } from '../../co
 import { SetupSummaryChecker } from '../../components/options-backtest/setup-summary-checker';
 import type { SaveStatus } from '../../components/options-backtest/cards/bottom-bar.component';
 import { FileDownloadService } from '../../shared/file/file-download.service';
+import type { OptionsSetupTab } from '../options-setups.address';
 
 /** How long the setup rests, in milliseconds, before the server reads it back. A spec that is not about the wait sets 0. */
 export const SETUP_DESCRIBE_DEBOUNCE_MS = new InjectionToken<number>('SETUP_DESCRIBE_DEBOUNCE_MS', {
@@ -62,10 +63,10 @@ export type DraftStanding =
  * its address (a saved name, or none) says which setup it works on.
  *
  * It holds what the Options Backtest page held for the setup itself: the form,
- * its read-back by the server, the saved-name library and the name a run is
- * recorded under, and none of what a run needs. Opening a setup, saving it,
- * importing a file and exporting one live here, so that a tab switch loses
- * nothing and a later tab can ask for the setup exactly as the server read it.
+ * its read-back by the server and the saved-name library, and none of what a run
+ * needs (Explore keeps that, and tests the setup as saved, never this draft).
+ * Opening a setup, saving it, importing a file and exporting one live here, so
+ * that a tab switch loses nothing.
  */
 @Injectable()
 export class OptionsSetupWorkspaceStore {
@@ -77,9 +78,10 @@ export class OptionsSetupWorkspaceStore {
   readonly address = signal<string | null>(null);
   /**
    * Where the draft says it lives now, after a save under a name or a replacement
-   * that has none. The workspace follows it with the URL; the draft never waits on it.
+   * that has none, and the tab to show it on when the replacement asked for one.
+   * The workspace follows it with the URL; the draft never waits on it.
    */
-  readonly home = signal<{ readonly name: string | null } | null>(null);
+  readonly home = signal<{ readonly name: string | null; readonly tab?: OptionsSetupTab } | null>(null);
   /**
    * The address the draft has been made to match: opened from the library, or already the draft itself. An address
    * is acted on once, when it changes, so no later read of the library, and no save or import that leaves the
@@ -171,11 +173,9 @@ export class OptionsSetupWorkspaceStore {
     const error: unknown = this.library.error();
     return error === undefined ? null : extractServerMessage(error, 'The saved setups could not be read.');
   });
-  /** The name of the setup that was opened or last saved, and the rule for the name a run is recorded under. */
+  /** The name of the setup that was opened or last saved, and whether the draft is still that setup. */
   private readonly names = new RunNameTracker();
   readonly loadedName = this.names.name;
-  /** The name a run is recorded under: the loaded or saved setup's name, but only while the setup on screen is still that one. */
-  readonly runName = computed(() => this.names.nameFor(JSON.stringify(this.body())));
 
   /** What the address names, so the workspace can fail in place for a name that is not in the library. */
   readonly entry = computed<SetupEntry>(() => {
@@ -313,8 +313,9 @@ export class OptionsSetupWorkspaceStore {
   /**
    * A setup that has no saved name replaces the form: an imported file, or the setup of a past run.
    * The saved setup the address named is not touched, and the draft no longer claims to be it.
+   * `tab` is where the workspace then shows it, for a replacement that does not come from the form's own tab.
    */
-  replaceWithUnnamed(setup: ServedSetup, notice: ImportNotice): void {
+  replaceWithUnnamed(setup: ServedSetup, notice: ImportNotice, tab?: OptionsSetupTab): void {
     const clock = this.clock();
     if (clock === null) return;
     this.setupReplacements += 1;
@@ -323,7 +324,7 @@ export class OptionsSetupWorkspaceStore {
     this.automaticName.set(true);
     this.names.clear();
     this.importNotice.set(notice);
-    this.home.set({ name: null });
+    this.home.set(tab === undefined ? { name: null } : { name: null, tab });
   }
 
   addLeg(): void {

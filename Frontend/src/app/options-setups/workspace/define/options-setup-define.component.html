@@ -45,7 +45,7 @@
     </div>
     <div class="rail" data-span="12">
       <app-options-backtest-bottom-bar
-        [showRun]="false" [nameField]="store.saveForm.name" [canSave]="store.canSave()" [saving]="store.saving()" [nameProblem]="store.nameProblem()"
+        [nameField]="store.saveForm.name" [canSave]="store.canSave()" [saving]="store.saving()" [nameProblem]="store.nameProblem()"
         [automaticName]="store.automaticName()" (nameEdited)="store.automaticName.set(false)" (generateName)="store.automaticName.set(true)"
         [hint]="store.saveHint()" [status]="store.saveStatus()" (save)="store.save()" (height)="barHeight.set($event)" />
       @if (store.clock() !== null) {

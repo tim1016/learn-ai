@@ -80,25 +80,24 @@ describe('a setup\'s place', () => {
     expect(screen.getByText('Shipped example')).toBeTruthy();
   });
 
-  it('declares four tabs once; Overview and Define are links and the open one is marked', async () => {
+  it('declares four tabs once; Overview, Define and Explore are links and the open one is marked', async () => {
     await renderTab(withLibrary(servedSaved('Mine', exampleBody())), 'Mine', 'define', quiet);
 
     const tabs = screen.getByRole('navigation', { name: 'Options setup tabs' });
 
     expect(within(tabs).getByRole('link', { name: 'Overview' }).getAttribute('href')).toBe('/options-setups/Mine/overview');
+    expect(within(tabs).getByRole('link', { name: 'Explore' }).getAttribute('href')).toBe('/options-setups/Mine/explore');
     expect(within(tabs).getByRole('link', { name: 'Define' }).getAttribute('aria-current')).toBe('page');
     expect(within(tabs).getByRole('link', { name: 'Overview' }).getAttribute('aria-current')).toBeNull();
   });
 
-  it('keeps Explore and Golden in the strip, greyed and with no address, and says why', async () => {
+  it('keeps Golden in the strip, greyed and with no address, and says why', async () => {
     await renderTab(withLibrary(servedSaved('Mine', exampleBody())), 'Mine', 'overview', quiet);
 
     const tabs = screen.getByRole('navigation', { name: 'Options setup tabs' });
 
-    expect(within(tabs).queryByRole('link', { name: /Explore/ })).toBeNull();
     expect(within(tabs).queryByRole('link', { name: /Golden/ })).toBeNull();
-    expect(tabs.textContent).toContain('Explore');
-    expect(tabs.textContent).toContain('a backtest cannot be started from here yet');
+    expect(tabs.textContent).toContain('Golden');
     expect(tabs.textContent).toContain('Approving a tested run and starting a golden search are being moved into this place');
   });
 

@@ -18,6 +18,7 @@ import {
   UNSAVED_DRAFT_SEGMENT,
 } from '../options-setups.address';
 import { describeStanding } from './draft-standing';
+import { OptionsSetupExploreStore } from './explore/options-setup-explore-store';
 import { OptionsSetupWorkspaceStore } from './options-setup-store';
 
 /**
@@ -26,12 +27,13 @@ import { OptionsSetupWorkspaceStore } from './options-setup-store';
  *
  * It fails in place, with a way back, for a name the library does not hold: it
  * never opens another setup instead. The tabs it cannot offer yet stay in the
- * strip, greyed, with the reason.
+ * strip, greyed, with the reason. Define's working copy and Explore's dates and
+ * backtest are kept here, so a tab switch loses neither.
  */
 @Component({
   selector: 'app-options-setup-workspace',
   imports: [RouterOutlet, WorkspaceHeaderComponent, WorkspaceTabListComponent, WorkspaceStateBlockComponent, HowThisWorksLinkComponent, AssetIdentityComponent],
-  providers: [OptionsSetupWorkspaceStore],
+  providers: [OptionsSetupWorkspaceStore, OptionsSetupExploreStore],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './options-setup-workspace.component.html',
   styleUrl: './options-setup-workspace.component.scss',
@@ -111,8 +113,12 @@ export class OptionsSetupWorkspaceComponent {
       if (home === null) return;
       untracked(() => {
         const at = optionsSetupLocation(this.router.url);
-        if (at === null || at.name === home.name) return;
-        void this.router.navigate(optionsSetupRoute(home.name, at.tab), { replaceUrl: true, queryParamsHandling: 'preserve', preserveFragment: true });
+        if (at === null) return;
+        // A draft that asked for a tab (the setup of a run, taken from Explore) goes there as a step of its own, which Back undoes; a rename stays where it is.
+        const tab = home.tab ?? at.tab;
+        if (at.name === home.name && tab === at.tab) return;
+        const stays = home.tab === undefined;
+        void this.router.navigate(optionsSetupRoute(home.name, tab), stays ? { replaceUrl: true, queryParamsHandling: 'preserve', preserveFragment: true } : {});
       });
     });
     inject(DestroyRef).onDestroy(() => this.store.stop());

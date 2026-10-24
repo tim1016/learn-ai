@@ -30,9 +30,42 @@ export const OPTIONS_SETUP_TABS = defineWorkspaceTabs<OptionsSetupTab>(
  * workspace shows what it will have, and are not routes until they exist.
  */
 export const OPTIONS_SETUP_TAB_UNAVAILABLE: Readonly<Partial<Record<OptionsSetupTab, string>>> = {
-  explore: 'Backtests, run history and performance are being moved into this place, so a backtest cannot be started from here yet. Past runs open from the Options setups list.',
   golden: 'Approving a tested run and starting a golden search are being moved into this place. Approved versions open from the Options setups list.',
 };
+
+/**
+ * What Explore shows, by the `view` of its address (`/options-setups/:name/explore?view=`). Backtest is the one
+ * that opens when the address names none. Performance, Research lineage and Historical comparison are about one run,
+ * the `run` of the address.
+ */
+export type OptionsExploreView = 'backtest' | 'history' | 'chain' | 'performance' | 'lineage' | 'comparison';
+
+export const OPTIONS_EXPLORE_VIEWS = defineWorkspaceTabs<OptionsExploreView>(
+  { backtest: 'Backtest', history: 'History', chain: 'Past chain', performance: 'Performance', lineage: 'Research lineage', comparison: 'Historical comparison' },
+  ['backtest', 'history', 'chain', 'performance', 'lineage', 'comparison'],
+);
+
+export const OPTIONS_EXPLORE_DEFAULT_VIEW: OptionsExploreView = 'backtest';
+
+const EXPLORE_VIEWS: ReadonlySet<string> = new Set(OPTIONS_EXPLORE_VIEWS.tabs.map((tab) => tab.id));
+
+export function isOptionsExploreView(value: string): value is OptionsExploreView {
+  return EXPLORE_VIEWS.has(value);
+}
+
+/** The views that are about one run, and so need the address to name it. */
+export function isRunView(view: OptionsExploreView): boolean {
+  return view === 'performance' || view === 'lineage' || view === 'comparison';
+}
+
+/** The query of an Explore address. A view the address would open anyway, and a run it does not name, leave no key. */
+export function optionsExploreQuery(view: OptionsExploreView, run: number | null = null, comparator: number | null = null): Record<string, string | null> {
+  return {
+    view: view === OPTIONS_EXPLORE_DEFAULT_VIEW ? null : view,
+    run: run === null ? null : String(run),
+    comparator_run_id: comparator === null ? null : String(comparator),
+  };
+}
 
 const TABS: ReadonlyMap<string, OptionsSetupTab> = new Map(
   OPTIONS_SETUP_TABS.tabs.map((tab): [string, OptionsSetupTab] => [tab.id, tab.id]),

@@ -10,13 +10,12 @@ export interface SaveStatus {
 }
 
 /**
- * The setup's name and Save setup, and (unless `showRun` is off) Check data and
- * Start backtest with its shortcut. Beside the form it is the top card of the page's rail. Where
- * the rail is stacked under the form it is a bar kept in view at the bottom of
- * the page instead, fixed to the window rather than sticky, because the
- * shell's `main` scrolls horizontally there and so would hold a sticky bar in
- * place; the bar says its measured height so that the page can keep its end
- * clear of it.
+ * The setup's name and Save setup. Beside the form it is the top card of the
+ * page's rail. Where the rail is stacked under the form it is a bar kept in view
+ * at the bottom of the page instead, fixed to the window rather than sticky,
+ * because the shell's `main` scrolls horizontally there and so would hold a
+ * sticky bar in place; the bar says its measured height so that the page can
+ * keep its end clear of it.
  */
 @Component({
   selector: 'app-options-backtest-bottom-bar',
@@ -28,27 +27,16 @@ export interface SaveStatus {
 export class BottomBarComponent {
   readonly nameField = input.required<FieldTree<string>>();
   readonly canSave = input(false);
-  readonly fixedOnNarrow = input(true);
   readonly saving = input(false);
   /** Why the name cannot be used. */
   readonly nameProblem = input<string | null>(null);
   /** Why Save is not available yet, when it is not. */
   readonly hint = input<string | null>(null);
   readonly status = input<SaveStatus | null>(null);
-  /** Whether the bar offers Check data and Start. Define saves a setup and runs nothing, so it turns them off. */
-  readonly showRun = input(true);
-  /** Whether Check data can be asked: the setup is read back and both dates are picked. */
-  readonly canCheck = input(false);
-  /** Whether a backtest can be started: the same, and none is going. */
-  readonly canStart = input(false);
-  /** What Check data and Start wait for, or that a backtest is going. */
-  readonly runHint = input<string | null>(null);
   readonly save = output();
   readonly nameEdited = output();
   readonly generateName = output();
   readonly automaticName = input(true);
-  readonly check = output();
-  readonly start = output();
   /** The bar's height, to keep the end of the page clear of it while it is fixed to the window. */
   readonly height = output<number>();
   private readonly panel = viewChild.required<ElementRef<HTMLElement>>('panel');

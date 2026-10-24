@@ -2,8 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import {
   isOptionsEvidenceKind,
+  isOptionsExploreView,
+  isRunView,
+  OPTIONS_EXPLORE_VIEWS,
   OPTIONS_SETUP_TABS,
   optionsEvidenceRoute,
+  optionsExploreQuery,
   optionsSetupLocation,
   optionsSetupRoute,
   optionsSetupWindowTitle,
@@ -61,5 +65,26 @@ describe('the Options setups address', () => {
     expect(optionsEvidenceRoute('golden', 'ogs_abc')).toEqual(['/options-setups', 'evidence', 'golden', 'ogs_abc']);
     expect(['run', 'study', 'golden'].every(isOptionsEvidenceKind)).toBe(true);
     expect(isOptionsEvidenceKind('setup')).toBe(false);
+  });
+
+  it('declares the views of Explore once, in the order the owner works through them', () => {
+    expect(OPTIONS_EXPLORE_VIEWS.tabs.map((view) => view.label)).toEqual(['Backtest', 'History', 'Past chain', 'Performance', 'Research lineage', 'Historical comparison']);
+    expect(OPTIONS_EXPLORE_VIEWS.tabs.every((view) => isOptionsExploreView(view.id))).toBe(true);
+    expect(isOptionsExploreView('chart')).toBe(false);
+  });
+
+  it('knows which views are about one run', () => {
+    expect(OPTIONS_EXPLORE_VIEWS.tabs.filter((view) => isRunView(view.id)).map((view) => view.id)).toEqual(['performance', 'lineage', 'comparison']);
+  });
+
+  it('writes a view and the runs it is about as query keys, and leaves out what the address would say anyway', () => {
+    expect(optionsExploreQuery('backtest')).toEqual({ view: null, run: null, comparator_run_id: null });
+    expect(optionsExploreQuery('history', 30)).toEqual({ view: 'history', run: '30', comparator_run_id: null });
+    expect(optionsExploreQuery('comparison', 76, 69)).toEqual({ view: 'comparison', run: '76', comparator_run_id: '69' });
+  });
+
+  it('keeps Explore a tab of the setup: its view and run are not part of the setup tab’s path', () => {
+    expect(optionsSetupLocation('/options-setups/Mine/explore?view=history&run=30')).toEqual({ name: 'Mine', tab: 'explore' });
+    expect(optionsSetupWindowTitle('/options-setups/Mine/explore?view=history')).toBe('Mine · Explore · Options setups');
   });
 });
