@@ -41,7 +41,6 @@ import {
 } from '../../../utils/run-log-buffer';
 import { SignalReportComponent } from '../signal-report/signal-report.component';
 import { RunProgressPanelComponent, PhaseRailStop } from '../shared/run-progress-panel/run-progress-panel.component';
-import { ButtonModule } from 'primeng/button';
 import { MessageModule } from 'primeng/message';
 import { ToggleSwitch } from 'primeng/toggleswitch';
 import { TagModule } from 'primeng/tag';
@@ -60,8 +59,10 @@ import type {
   Resolution,
   TickerRange,
 } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
-import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
 import { tickerRangeToWire } from '../../../utils/ticker-wire';
+import { StudyPageComponent } from '../../../research/study-page/study-page.component';
+import { createRunGate } from '../../../research/run-gate';
+import { createResultInputTracker } from '../../../shared/workspace/previous-result';
 
 /** Snake-case shape returned by /api/jobs-internal/signal-engine worker. */
 interface SignalEngineJobResultRaw {
@@ -92,6 +93,15 @@ interface SignalEngineJobResultRaw {
   error: string | null;
 }
 
+/** What a Signal study's request is made from: the inputs a shown result answers. */
+interface SignalStudyInputs {
+  readonly range: TickerRange;
+  readonly indicator: string;
+  readonly params: Record<string, number>;
+  readonly flipSign: boolean;
+  readonly regimeGate: boolean;
+}
+
 @Component({
   selector: 'app-signal-runner',
   imports: [
@@ -99,7 +109,6 @@ interface SignalEngineJobResultRaw {
     FormsModule,
     SignalReportComponent,
     RunProgressPanelComponent,
-    ButtonModule,
     MessageModule,
     ToggleSwitch,
     TagModule,
@@ -107,7 +116,7 @@ interface SignalEngineJobResultRaw {
     ActiveIndicatorCardComponent,
     IndicatorConfigModalComponent,
     TickerRangePickerComponent,
-    AssetIdentityComponent,
+    StudyPageComponent,
   ],
   templateUrl: './signal-runner.component.html',
   styleUrls: ['./signal-runner.component.scss'],
@@ -143,8 +152,13 @@ export class SignalRunnerComponent {
     resolution: 'minute',
     multiplier: 15,
   });
-  readonly availableMultipliers: readonly number[] = [1, 5, 15, 60, 240];
-  readonly availableResolutions: readonly Resolution[] = ['minute', 'hour', 'daily'];
+  /**
+   * The target looks 15 bars ahead and needs 70% of the bars to have one, so a
+   * bar of 30 minutes or longer can never reach it: hour, daily, ×60 and ×240
+   * bars always fail (#3527), and are not offered.
+   */
+  readonly availableMultipliers: readonly number[] = [1, 5, 15];
+  readonly availableResolutions: readonly Resolution[] = ['minute'];
 
   /** Catalog-driven selection: indicator key + params (matches data-lab's
    *  ``IndicatorEntry`` shape). The ``feature_name`` sent to the backend is
@@ -190,7 +204,6 @@ export class SignalRunnerComponent {
   readonly jobId = signal<string | null>(null);
   readonly result = signal<SignalEngineResult | null>(null);
   readonly error = signal<string | null>(null);
-  readonly formCollapsed = signal(false);
 
   /** Rolling FIFO log buffer (cap 500). */
   readonly logBuffer = new RunLogBuffer();
@@ -209,6 +222,44 @@ export class SignalRunnerComponent {
 
   readonly cached = computed<boolean>(() => this.job()?.cached === true);
 
+  /** One press starts one run: a second click before the job is accepted is dropped. */
+  private readonly gate = createRunGate();
+  readonly starting = this.gate.starting;
+
+  /** The inputs the shown result answers; a result is "previous" once these change. */
+  private readonly enteredInputs = computed<SignalStudyInputs>(() => ({
+    range: this.range(),
+    indicator: this.selectedIndicator(),
+    params: this.selectedParams(),
+    flipSign: this.flipSign(),
+    regimeGate: this.regimeGateEnabled(),
+  }));
+  readonly inputs = createResultInputTracker(
+    this.enteredInputs,
+    ({ range, indicator, params, flipSign, regimeGate }) => ({
+      key: JSON.stringify([
+        range.symbol.toUpperCase(),
+        range.from,
+        range.to,
+        range.resolution,
+        range.multiplier ?? 1,
+        indicator,
+        params,
+        flipSign,
+        regimeGate,
+      ]),
+      facts: [
+        { label: 'Instrument', value: range.symbol.toUpperCase() },
+        { label: 'Window', value: `${range.from} to ${range.to}` },
+        { label: 'Bars', value: `${range.multiplier ?? 1} minute` },
+        { label: 'Indicator', value: `${indicator} ${JSON.stringify(params)}` },
+        { label: 'Flip sign', value: flipSign ? 'on' : 'off' },
+        { label: 'Regime gate', value: regimeGate ? 'on' : 'off' },
+      ],
+    }),
+  );
+  private submitted: SignalStudyInputs | null = null;
+
   canRun = computed(() => {
     const r = this.range();
     return (
@@ -216,7 +267,8 @@ export class SignalRunnerComponent {
       this.featureMapping() !== null &&
       r.from.trim().length > 0 &&
       r.to.trim().length > 0 &&
-      !this.loading()
+      !this.loading() &&
+      !this.starting()
     );
   });
 
@@ -224,10 +276,23 @@ export class SignalRunnerComponent {
     return this.featureMapping()?.label ?? this.selectedIndicator().toUpperCase();
   }
 
-  get runSummary(): string {
+  /** What step 3 says is about to run. */
+  readonly readySummary = computed(() => {
     const r = this.range();
-    return `${this.selectedFeatureLabel} on ${r.symbol.toUpperCase()} (${r.from} to ${r.to})`;
-  }
+    return `${this.selectedFeatureLabel} on ${r.symbol.toUpperCase()}, ${r.from} to ${r.to}`;
+  });
+
+  /** Why Run study cannot start, in words that point at the step to fix. */
+  readonly blockedReason = computed<string | null>(() => {
+    if (this.canRun() || this.loading() || this.starting()) return null;
+    if (this.featureMapping() === null) return 'Pick an indicator the study supports.';
+    return 'Choose an instrument and both dates.';
+  });
+
+  /** Anything past the idle state is on screen: a job, an error or a result. */
+  readonly hasOutput = computed(
+    () => this.job() !== null || this.error() !== null || this.result() !== null,
+  );
 
   /** Picker (add) in this host = single-select replace. */
   onPickerSelect(event: IndicatorPickerAdd): void {
@@ -295,9 +360,15 @@ export class SignalRunnerComponent {
     });
   }
 
-  async runSignalEngine(): Promise<void> {
+  /** Run study. A press while an earlier press is still starting its job is dropped. */
+  runSignalEngine(): Promise<void> {
+    return this.gate.press(() => this.startSignalEngine());
+  }
+
+  private async startSignalEngine(): Promise<void> {
     this.error.set(null);
     this.result.set(null);
+    this.inputs.clear();
     this.logBuffer.clear();
 
     try {
@@ -310,17 +381,19 @@ export class SignalRunnerComponent {
       // SignalEngineJobRequest preserves multiplier=15 default (PR ii);
       // the picker is also initialized to multiplier=15 above so the UI
       // and the wire agree.
+      const submitted = this.enteredInputs();
       const wire = tickerRangeToWire({
-        ...this.range(),
-        symbol: this.range().symbol.toUpperCase(),
+        ...submitted.range,
+        symbol: submitted.range.symbol.toUpperCase(),
       });
       const id = await this.jobsService.startJob('signal_engine', {
         ...wire,
         feature_name: featureId,
-        flip_sign: this.flipSign(),
-        regime_gate_enabled: this.regimeGateEnabled(),
+        flip_sign: submitted.flipSign,
+        regime_gate_enabled: submitted.regimeGate,
         force: this.forceRefresh(),
       });
+      this.submitted = submitted;
       this.jobId.set(id);
     } catch (err: unknown) {
       const msg =
@@ -353,29 +426,13 @@ export class SignalRunnerComponent {
     }
   }
 
-  toggleForm(): void {
-    this.formCollapsed.update(v => !v);
-  }
-
-  newRun(): void {
-    const id = this.jobId();
-    if (id) {
-      this.jobsService.dismiss(id);
-    }
-    this.jobId.set(null);
-    this.result.set(null);
-    this.error.set(null);
-    this.formCollapsed.set(false);
-    this.logBuffer.clear();
-  }
-
   private async handleCompleted(id: string): Promise<void> {
     try {
       const raw = await this.jobsService.fetchResult<SignalEngineJobResultRaw>(id);
       const mapped = this.toSignalEngineResult(raw);
       this.result.set(mapped);
       if (mapped.success) {
-        this.formCollapsed.set(true);
+        if (this.submitted !== null) this.inputs.capture(this.submitted);
       } else if (mapped.error) {
         this.error.set(mapped.error);
       }

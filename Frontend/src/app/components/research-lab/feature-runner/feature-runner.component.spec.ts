@@ -161,6 +161,59 @@ describe('FeatureRunnerComponent', () => {
     expect(component.jobId()).toBe('job-id-1');
   });
 
+  describe('study layout', () => {
+    const root = () => fixture.nativeElement as HTMLElement;
+    const runButton = () => root().querySelector<HTMLButtonElement>('button.study-run');
+
+    it('offers only the bars the 15-minute look-ahead can use, and no session control', () => {
+      const resolutions = Array.from(root().querySelectorAll('.res-btn')).map((el) => el.textContent?.trim());
+      const multipliers = Array.from(
+        root().querySelectorAll('select[aria-label="Bar multiplier"] option'),
+      ).map((el) => el.textContent?.trim());
+
+      expect.soft(resolutions, 'hour and daily bars always fail').toEqual(['1m']);
+      expect.soft(multipliers, '×60 and ×240 bars always fail').toEqual(['1×', '5×', '15×']);
+      expect.soft(root().querySelector('.session'), 'the session is not a control').toBeNull();
+      expect.soft(root().querySelector('[data-testid="study-constraints"]')?.textContent).toContain(
+        'extended hours included, fixed',
+      );
+    });
+
+    it('starts nothing when an input changes', () => {
+      component.range.update((r) => ({ ...r, symbol: 'MSFT', from: '2024-02-01' }));
+      component.selectedIndicator.set('mom');
+      component.selectedParams.set({ length: 5 });
+      fixture.detectChanges();
+
+      expect(jobsServiceMock.startJob).not.toHaveBeenCalled();
+    });
+
+    it('starts one job when Run study is pressed twice before the page re-renders', async () => {
+      const run = runButton();
+      if (run === null) throw new Error('no Run study button');
+
+      run.click();
+      run.click();
+      await fixture.whenStable();
+
+      expect(jobsServiceMock.startJob).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves a running job running when the study is left', () => {
+      component.jobId.set('job-id-1');
+      jobsByIdSignal.set(
+        new Map<string, JobState>([
+          ['job-id-1', { id: 'job-id-1', type: 'feature_research', status: 'running', recentLogs: [], logSeq: 0 }],
+        ]),
+      );
+      fixture.detectChanges();
+
+      fixture.destroy();
+
+      expect(jobsServiceMock.cancelJob).not.toHaveBeenCalled();
+    });
+  });
+
   it('runResearch surfaces a startJob failure into the error signal', async () => {
     jobsServiceMock.startJob.mockRejectedValueOnce(new Error('Network error'));
 

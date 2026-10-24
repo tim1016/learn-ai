@@ -3,16 +3,13 @@
 .indicator-reliability {
   color: var(--text-primary);
 
-  // ── RunStrip (run metadata bar) ───────────────────────────────────────
-  .rl-action-bar {
+  .study-config {
     display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-bottom: var(--space-4);
-
-    .rl-action-bar-spacer { flex: 1; }
+    flex-direction: column;
+    gap: var(--space-3);
   }
 
+  // ── RunStrip (run metadata bar) ───────────────────────────────────────
   .rl-runstrip {
     display: flex;
     align-items: center;
@@ -76,13 +73,6 @@
     flex-shrink: 0;
   }
 
-  .rl-runstrip-actions {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-left: 8px;
-  }
-
   .mono {
     font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
     font-variant-numeric: tabular-nums;
@@ -92,31 +82,6 @@
     @include eyebrow-heading;
   }
 
-  // "Methodology" button in the header — a muted outline so it doesn't
-  // compete with primary actions but is always one click away.
-  .methodology-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 12px;
-    background: transparent;
-    color: var(--text-secondary);
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    font-family: inherit;
-    font-size: 0.78rem;
-    cursor: pointer;
-    transition: background 0.12s, color 0.12s, border-color 0.12s;
-
-    i { font-size: 0.78rem; color: var(--accent); }
-
-    &:hover {
-      background: var(--bg-hover);
-      color: var(--text-primary);
-      border-color: var(--border-light);
-    }
-  }
-
   // Info icon sits flush with adjacent text.
   app-info-icon {
     display: inline-flex;
@@ -124,28 +89,14 @@
     vertical-align: baseline;
   }
 
-  // ── Controls panel (light cosmetic tweaks for dark theme) ─────────
-  .controls-panel {
-    background: var(--bg-surface);
-    border-color: var(--border);
-
-    .field label {
-      color: var(--text-secondary);
-    }
+  // ── Configuration (light cosmetic tweaks for dark theme) ──────────
+  .study-config .field label {
+    color: var(--text-secondary);
   }
 
   .params-box {
     background: var(--bg-elevated);
     border-color: var(--border);
-  }
-
-  .collapsed-summary {
-    background: rgba(59, 130, 246, 0.08);
-    border-color: rgba(59, 130, 246, 0.3);
-
-    &:hover {
-      background: rgba(59, 130, 246, 0.14);
-    }
   }
 
   // ── Hero verdict band ─────────────────────────────────────────────

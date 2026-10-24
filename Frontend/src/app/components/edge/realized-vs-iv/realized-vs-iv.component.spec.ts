@@ -2,7 +2,7 @@ import { provideHttpClient } from "@angular/common/http";
 import { HttpTestingController, provideHttpClientTesting } from "@angular/common/http/testing";
 import { TestBed } from "@angular/core/testing";
 import { provideRouter } from "@angular/router";
-import { render, screen } from "@testing-library/angular";
+import { render, screen, within } from "@testing-library/angular";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { fakePickerWorld } from "../../../shared/symbol-picker/testing/fake-picker-world";
@@ -59,7 +59,7 @@ describe("RealizedVsIvComponent — opens idle", () => {
   it("shows no study, no chart and no sample label before anything is computed", async () => {
     await renderPage();
 
-    expect(screen.getByTestId("rviv-idle")).toBeTruthy();
+    expect(screen.getByText("No result yet.")).toBeTruthy();
     expect(chartCount(), "no chart is drawn from placeholder values").toBe(0);
     expect(screen.queryByTestId("rviv-readout")).toBeNull();
     expect(screen.queryByTestId("rviv-source-tag")).toBeNull();
@@ -68,16 +68,82 @@ describe("RealizedVsIvComponent — opens idle", () => {
   });
 });
 
+describe("RealizedVsIvComponent — the page says what it will run", () => {
+  it("selects the bar size and tenor the run will use, not the first option of each list", async () => {
+    await renderPage();
+
+    expect((screen.getByLabelText("Bar size") as HTMLSelectElement).value).toBe("1D");
+    expect((screen.getByLabelText("Tenor") as HTMLSelectElement).value).toBe("30D");
+  });
+
+  it("says its window is fixed instead of offering dates", async () => {
+    await renderPage();
+
+    expect(screen.getByTestId("study-constraints").textContent).toContain("the last year of daily bars");
+  });
+});
+
+describe("RealizedVsIvComponent — one press, one run", () => {
+  it("starts nothing when an input changes, only when Run study is pressed", async () => {
+    const { http, user } = await renderPage();
+
+    await user.selectOptions(screen.getByLabelText("Bar size"), "15m");
+    await user.selectOptions(screen.getByLabelText("Tenor"), "60D");
+    await user.click(screen.getByRole("button", { name: "RTH" }));
+
+    http.expectNone(() => true);
+  });
+
+  it("sends the request once when the second click lands before the page has re-rendered", async () => {
+    const { http } = await renderPage();
+    const run = screen.getByRole("button", { name: "Run study" });
+
+    // Two clicks in one task: the button is not disabled yet when the second arrives.
+    run.click();
+    run.click();
+
+    expect(http.match("/api/aggregates/fetch")).toHaveLength(1);
+  });
+
+  it("marks the result as previous once an input changes, and keeps what it answered", async () => {
+    const { http, user, fixture } = await renderPage();
+    await user.click(screen.getByRole("button", { name: "Run study" }));
+    await answerCompute(http);
+    fixture.detectChanges();
+
+    await user.selectOptions(screen.getByLabelText("Tenor"), "60D");
+
+    const banner = screen.getByText("Previous result").closest("div");
+    if (banner === null) throw new Error("no previous-result banner");
+    expect(within(banner).getByText("30D"), "the tenor it was computed for").toBeTruthy();
+  });
+});
+
+describe("RealizedVsIvComponent — descriptive result", () => {
+  it("shows what was measured and no pass/fail verdict", async () => {
+    const { http, user, fixture } = await renderPage();
+
+    await user.click(screen.getByRole("button", { name: "Run study" }));
+    await answerCompute(http);
+    fixture.detectChanges();
+
+    expect(screen.getByTestId("study-descriptive-note")).toBeTruthy();
+    expect(screen.getByTestId("rviv-readout")).toBeTruthy();
+    const result = screen.getByRole("region", { name: "Result" });
+    expect(result.textContent ?? "").not.toMatch(/verdict|\bpass(ed)?\b|\bfail(ed)?\b|graduat|stage \d/i);
+  });
+});
+
 describe("RealizedVsIvComponent — real response", () => {
   it("draws the returned study and reads edge score as unavailable, not zero", async () => {
     const { http, user, fixture } = await renderPage();
 
-    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await user.click(screen.getByRole("button", { name: "Run study" }));
     await answerCompute(http);
     fixture.detectChanges();
 
     expect(screen.getByTestId("rviv-source-tag").textContent).toContain("SPY");
-    expect(screen.queryByTestId("rviv-idle")).toBeNull();
+    expect(screen.queryByText("No result yet.")).toBeNull();
     expect(chartCount(), "price chart and VRP histogram").toBe(2);
     const readout = screen.getByTestId("rviv-readout").textContent ?? "";
     expect.soft(readout, "values come from the response").toContain("21.0%");
@@ -91,7 +157,7 @@ describe("RealizedVsIvComponent — real response", () => {
   it("reports the 30-bar Yang-Zhang series as rv_yz_30_daily, not the first series the server sent", async () => {
     const { http, user, fixture } = await renderPage();
 
-    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await user.click(screen.getByRole("button", { name: "Run study" }));
     await answerCompute(http);
     fixture.detectChanges();
 
@@ -113,7 +179,7 @@ describe("RealizedVsIvComponent — real response", () => {
   it("says there is no IV30 when the response carries none, rather than drawing an IV line", async () => {
     const { http, user, fixture } = await renderPage();
 
-    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await user.click(screen.getByRole("button", { name: "Run study" }));
     await answerCompute(http, { ivPresent: false });
     fixture.detectChanges();
 
@@ -126,7 +192,7 @@ describe("RealizedVsIvComponent — failed request", () => {
   it("shows the error and no numbers", async () => {
     const { http, user, fixture } = await renderPage();
 
-    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await user.click(screen.getByRole("button", { name: "Run study" }));
     failBarsFetch(http, "Polygon is unavailable");
     await tick();
     fixture.detectChanges();
@@ -140,12 +206,12 @@ describe("RealizedVsIvComponent — failed request", () => {
 
   it("drops an earlier result when a later Compute fails, so it never reads as this request's answer", async () => {
     const { http, user, fixture } = await renderPage();
-    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await user.click(screen.getByRole("button", { name: "Run study" }));
     await answerCompute(http);
     fixture.detectChanges();
     expect(screen.getByTestId("rviv-readout")).toBeTruthy();
 
-    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await user.click(screen.getByRole("button", { name: "Run study" }));
     failBarsFetch(http, "Polygon is unavailable");
     await tick();
     fixture.detectChanges();

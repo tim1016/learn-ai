@@ -3,25 +3,8 @@
 
 :host {
   display: block;
-  background: $bg-canvas;
   color: $text-primary;
-  min-height: 100vh;
 }
-
-.route {
-  max-width: $container-lg;
-  margin: 0 auto;
-  padding: 16px;
-}
-
-/* ─── Route toolbar ─── */
-.route-toolbar {
-  display: flex; align-items: center; gap: 12px;
-  margin-bottom: 12px;
-  font-family: $font-mono; font-size: 11px;
-}
-.toolbar-spacer { flex: 1; }
-.tz { color: $text-muted; }
 
 /* ─── Coverage banner ─── */
 .coverage-banner {
@@ -104,10 +87,6 @@
 
 /* ─── Form ─── */
 .form-card {
-  background: $bg-surface; border: 1px solid $border;
-  border-radius: $radius-md;
-  padding: 14px;
-  margin-bottom: 12px;
   display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap;
 }
 .field { display: flex; flex-direction: column; gap: 4px; min-width: 110px; }
@@ -137,24 +116,12 @@
     color: var(--ind-cat-volatility);
   }
 }
-.form-spacer { flex: 1; }
-.compute-btn {
-  height: 30px; padding: 0 12px;
-  background: $bull; border: none;
-  border-radius: 4px; color: #0b0e14;
-  font-size: 12px; font-weight: 600; cursor: pointer;
-  display: inline-flex; align-items: center; gap: 6px;
-
-  &:hover:not([disabled]) { filter: brightness(1.05); }
-  &[disabled] { opacity: 0.6; cursor: progress; }
-}
-
 .source-tag {
   display: inline-flex; align-items: center;
   padding: 4px 8px; border-radius: 999px;
   font-family: $font-mono; font-size: 10px;
   text-transform: uppercase; letter-spacing: 0.06em;
-  margin-left: 6px;
+  margin-bottom: 8px;
 
   &.real { background: rgba(38, 166, 154, 0.15); color: $bull; border: 1px solid rgba(38, 166, 154, 0.4); }
 }
@@ -236,16 +203,6 @@
 .unavailable-note {
   margin: 0 0 8px;
   font-family: $font-mono; font-size: 10px; color: $text-muted;
-}
-
-/* ─── Idle (nothing computed yet) ─── */
-.idle-card {
-  background: $bg-surface; border: 1px dashed $border-light;
-  border-radius: $radius-md; padding: 32px 16px;
-  text-align: center;
-
-  .idle-title { color: $text-primary; font-weight: 600; margin-bottom: 4px; }
-  .idle-meta { color: $text-subtle; font-size: 12px; }
 }
 
 .readout-action {

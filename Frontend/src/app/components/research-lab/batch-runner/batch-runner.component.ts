@@ -9,7 +9,6 @@ import {
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 
-import { ButtonModule } from 'primeng/button';
 import { CardModule } from 'primeng/card';
 import { CheckboxModule } from 'primeng/checkbox';
 import { MessageModule } from 'primeng/message';
@@ -39,8 +38,10 @@ import { RunProgressPanelComponent } from '../shared/run-progress-panel/run-prog
 import { MultiTickerRangePickerComponent } from '../../../shared/multi-ticker-range-picker/multi-ticker-range-picker.component';
 import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
 import type { MultiTickerRange } from '../../../shared/multi-ticker-range-picker/multi-ticker-range-picker.types';
-import type { Resolution } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
 import { multiTickerRangeToWire } from '../../../utils/ticker-wire';
+import { StudyPageComponent } from '../../../research/study-page/study-page.component';
+import { createRunGate } from '../../../research/run-gate';
+import { createResultInputTracker } from '../../../shared/workspace/previous-result';
 
 const DEFAULT_TICKERS = ['SPY', 'QQQ', 'AAPL'];
 
@@ -137,12 +138,18 @@ interface CrossSectionalJobResultRaw {
   summary: string;
 }
 
+/** What a cross-sectional request is made from: the inputs a shown result answers. */
+interface BatchStudyInputs {
+  readonly range: MultiTickerRange;
+  readonly feature: string;
+  readonly target: string;
+}
+
 @Component({
   selector: 'app-batch-runner',
   imports: [
     CommonModule,
     FormsModule,
-    ButtonModule,
     SelectModule,
     TableModule,
     TagModule,
@@ -154,6 +161,7 @@ interface CrossSectionalJobResultRaw {
     RunProgressPanelComponent,
     MultiTickerRangePickerComponent,
     AssetIdentityComponent,
+    StudyPageComponent,
   ],
   templateUrl: './batch-runner.component.html',
   styleUrl: './batch-runner.component.scss',
@@ -167,11 +175,9 @@ export class BatchRunnerComponent {
   targetType = signal('directional');
 
   // Single MultiTickerRange replaces (selectedTickers, fromDate, toDate).
-  // Cross-sectional research is daily-resolution by default; the picker
-  // exposes minute/hour/daily but the jobs route accepts MultiTickerRequest's
-  // base defaults (multiplier=1, timespan="minute") if the picker emits
-  // them. We initialize to daily / multiplier=1 to match the historical
-  // shape (cross-sectional studies don't typically use sub-daily bars).
+  // Cross-sectional research reads daily bars whatever is sent: the worker
+  // ignores the resolution, so the page fixes it at daily / multiplier=1 and
+  // offers no sampling control (#3527).
   range = signal<MultiTickerRange>({
     symbols: [...DEFAULT_TICKERS],
     from: '2025-09-02',
@@ -179,8 +185,6 @@ export class BatchRunnerComponent {
     resolution: 'daily',
     multiplier: 1,
   });
-  readonly availableMultipliers: readonly number[] = [1];
-  readonly availableResolutions: readonly Resolution[] = ['minute', 'hour', 'daily'];
 
   // Run state — survives tab switches because JobsService is providedIn:'root'.
   // We track the active job id locally; the JobsService holds the canonical
@@ -208,6 +212,53 @@ export class BatchRunnerComponent {
 
   readonly features = OPTIONS_FEATURES;
   readonly targetTypes = TARGET_TYPES;
+
+  /** One press starts one run: a second click before the job is accepted is dropped. */
+  private readonly gate = createRunGate();
+  readonly starting = this.gate.starting;
+
+  /** The inputs the shown result answers; a result is "previous" once these change. */
+  private readonly enteredInputs = computed<BatchStudyInputs>(() => ({
+    range: this.range(),
+    feature: this.featureName(),
+    target: this.targetType(),
+  }));
+  readonly inputs = createResultInputTracker(this.enteredInputs, ({ range, feature, target }) => {
+    const universe = range.symbols.map((symbol) => symbol.toUpperCase()).sort();
+    return {
+      key: JSON.stringify([universe, range.from, range.to, feature, target]),
+      facts: [
+        { label: 'Universe', value: universe.join(', ') },
+        { label: 'Window', value: `${range.from} to ${range.to}` },
+        { label: 'Feature', value: OPTIONS_FEATURES.find((f) => f.value === feature)?.label ?? feature },
+        { label: 'Target', value: TARGET_TYPES.find((t) => t.value === target)?.label ?? target },
+      ],
+    };
+  });
+  private submitted: BatchStudyInputs | null = null;
+
+  readonly canRun = computed(() => {
+    const r = this.range();
+    return r.symbols.length > 0 && r.from !== '' && r.to !== '' && !this.loading() && !this.starting();
+  });
+
+  /** What step 3 says is about to run. */
+  readonly readySummary = computed(() => {
+    const r = this.range();
+    const feature = OPTIONS_FEATURES.find((f) => f.value === this.featureName())?.label ?? this.featureName();
+    return `${feature} across ${r.symbols.length} ${r.symbols.length === 1 ? 'instrument' : 'instruments'}, ${r.from} to ${r.to}`;
+  });
+
+  /** Why Run study cannot start, in words that point at the step to fix. */
+  readonly blockedReason = computed<string | null>(() => {
+    if (this.canRun() || this.loading() || this.starting()) return null;
+    return 'Choose at least one instrument and both dates.';
+  });
+
+  /** Anything past the idle state is on screen: a job, an error or a result. */
+  readonly hasOutput = computed(
+    () => this.job() !== null || this.error() !== null || this.result() !== null,
+  );
 
   constructor() {
     // Watch the JobsService for changes to the active job. We use an
@@ -372,7 +423,12 @@ export class BatchRunnerComponent {
   // empty-list guard below catches any edge case where consumers reach
   // runBatch with an empty universe.
 
-  async runBatch(): Promise<void> {
+  /** Run study. A press while an earlier press is still starting its job is dropped. */
+  runBatch(): Promise<void> {
+    return this.gate.press(() => this.startBatch());
+  }
+
+  private async startBatch(): Promise<void> {
     if (this.range().symbols.length === 0) {
       this.error.set('Select at least one ticker');
       return;
@@ -380,6 +436,7 @@ export class BatchRunnerComponent {
 
     this.error.set(null);
     this.result.set(null);
+    this.inputs.clear();
     this.logBuffer.clear();
 
     try {
@@ -387,15 +444,17 @@ export class BatchRunnerComponent {
       // CrossSectionalJobRequest inherits MultiTickerRequest in PR (ii);
       // legacy 'tickers' alias still accepted until PR (iii)'s alias
       // removal commit, but we send canonical 'symbols' now.
+      const submitted = this.enteredInputs();
       const wire = multiTickerRangeToWire({
-        ...this.range(),
-        symbols: this.range().symbols.map((s) => s.toUpperCase()),
+        ...submitted.range,
+        symbols: submitted.range.symbols.map((s) => s.toUpperCase()),
       });
       const id = await this.jobsService.startJob('cross_sectional', {
         ...wire,
-        feature_name: this.featureName(),
-        target_type: this.targetType(),
+        feature_name: submitted.feature,
+        target_type: submitted.target,
       });
+      this.submitted = submitted;
       this.jobId.set(id);
     } catch (err: unknown) {
       const msg =
@@ -428,17 +487,6 @@ export class BatchRunnerComponent {
     }
   }
 
-  newRun(): void {
-    const id = this.jobId();
-    if (id) {
-      this.jobsService.dismiss(id);
-    }
-    this.jobId.set(null);
-    this.result.set(null);
-    this.error.set(null);
-    this.logBuffer.clear();
-  }
-
   getIcClass(ic: number): string {
     const abs = Math.abs(ic);
     if (abs >= 0.05) return 'text-green-500 font-bold';
@@ -454,6 +502,7 @@ export class BatchRunnerComponent {
     try {
       const raw = await this.jobsService.fetchResult<CrossSectionalJobResultRaw>(id);
       this.result.set(this.toBatchResearchResult(raw));
+      if (this.submitted !== null) this.inputs.capture(this.submitted);
     } catch (err: unknown) {
       const msg =
         err && typeof err === 'object' && 'message' in err

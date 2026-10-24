@@ -38,9 +38,11 @@ const CATALOG = {
 describe('SignalRunnerComponent indicator catalog load', () => {
   const catalogUrl = `${environment.pythonServiceUrl}/api/dataset/available`;
   let fixture: ComponentFixture<SignalRunnerComponent>;
+  let startJob: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     const jobs = signal<JobState[]>([]);
+    startJob = vi.fn().mockResolvedValue('job-id-1');
     await TestBed.configureTestingModule({
       imports: [SignalRunnerComponent, HttpClientTestingModule],
       providers: [
@@ -49,7 +51,7 @@ describe('SignalRunnerComponent indicator catalog load', () => {
           useValue: {
             jobs,
             job: () => undefined,
-            startJob: vi.fn(),
+            startJob,
             cancelJob: vi.fn(),
             fetchResult: vi.fn(),
             dismiss: vi.fn(),
@@ -102,5 +104,46 @@ describe('SignalRunnerComponent indicator catalog load', () => {
     expect(picker?.querySelector('[role="alert"]')).toBeNull();
     expect(picker?.textContent).not.toContain('Indicators could not be loaded.');
     expect(picker?.textContent).toContain('1 of 1');
+  });
+
+  describe('study layout', () => {
+    const root = () => fixture.nativeElement as HTMLElement;
+
+    it('offers only the bars the 15-bar target can use, and no session control', () => {
+      const resolutions = Array.from(root().querySelectorAll('.res-btn')).map((el) => el.textContent?.trim());
+      const multipliers = Array.from(
+        root().querySelectorAll('select[aria-label="Bar multiplier"] option'),
+      ).map((el) => el.textContent?.trim());
+
+      expect.soft(resolutions, 'hour and daily bars always fail').toEqual(['1m']);
+      expect.soft(multipliers, 'bars of 30 minutes or longer always fail').toEqual(['1×', '5×', '15×']);
+      expect.soft(root().querySelector('.session'), 'the session is not a control').toBeNull();
+      expect.soft(root().querySelector('[data-testid="study-constraints"]')?.textContent).toContain(
+        'extended hours included, fixed',
+      );
+      // The default window is long enough for the picker's hour-bars hint.
+      expect.soft(root().textContent, 'no hint to switch to bars that always fail').not.toContain('Switch to hour');
+    });
+
+    it('starts nothing when an input changes', () => {
+      const component = fixture.componentInstance;
+      component.range.update((r) => ({ ...r, symbol: 'MSFT' }));
+      component.flipSign.set(false);
+      component.regimeGateEnabled.set(false);
+      fixture.detectChanges();
+
+      expect(startJob).not.toHaveBeenCalled();
+    });
+
+    it('starts one job when Run study is pressed twice before the page re-renders', async () => {
+      const run = root().querySelector<HTMLButtonElement>('button.study-run');
+      if (run === null) throw new Error('no Run study button');
+
+      run.click();
+      run.click();
+      await fixture.whenStable();
+
+      expect(startJob).toHaveBeenCalledTimes(1);
+    });
   });
 });

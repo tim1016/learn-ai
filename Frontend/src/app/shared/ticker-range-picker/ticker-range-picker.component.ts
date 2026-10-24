@@ -80,7 +80,17 @@ export class TickerRangePickerComponent {
     return bounds === 'provider' ? this.provider.bounds() : bounds;
   });
 
-  readonly advisories = computed<readonly Advisory[]>(() => computeAdvisories(this.value()));
+  /**
+   * The picker's hints for the value now entered. A hint that offers bars the
+   * host does not offer ("switch to hour") is left out, so no page is led to a
+   * resolution its own run cannot use.
+   */
+  readonly advisories = computed<readonly Advisory[]>(() =>
+    computeAdvisories(this.value()).filter((advisory) => {
+      const resolution = advisory.action?.patch.resolution;
+      return resolution === undefined || this.availableResolutions().includes(resolution);
+    }),
+  );
 
   /** Merges a change into the value held now: an advisory's one-click patch, or what the sampling card set. */
   protected patch(change: Partial<TickerRange>): void {

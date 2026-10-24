@@ -17,7 +17,6 @@ import { catchError, of, finalize } from 'rxjs';
 import { environment } from '../../../../environments/environment';
 import { Select } from 'primeng/select';
 import { InputNumber } from 'primeng/inputnumber';
-import { ButtonModule } from 'primeng/button';
 import { MessageModule } from 'primeng/message';
 import { ProgressSpinner } from 'primeng/progressspinner';
 import { TableModule } from 'primeng/table';
@@ -28,7 +27,6 @@ import { MultiSelect } from 'primeng/multiselect';
 import { Chart, registerables } from 'chart.js';
 import { InfoIconComponent } from '../../../shared/info-icon/info-icon.component';
 import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
-import { MethodologyDrawerService } from '../../../shared/methodology-drawer/methodology-drawer.service';
 import {
   IndicatorVerdictHeroComponent,
   type VerdictAnalysis,
@@ -36,6 +34,8 @@ import {
 import { TickerRangePickerComponent } from '../../../shared/ticker-range-picker/ticker-range-picker.component';
 import type { TickerRange } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
 import { tickerRangeToWire } from '../../../utils/ticker-wire';
+import { StudyPageComponent } from '../../../research/study-page/study-page.component';
+import { createResultInputTracker } from '../../../shared/workspace/previous-result';
 
 Chart.register(...registerables);
 
@@ -193,6 +193,15 @@ interface HorizonOption {
   value: number;
 }
 
+/** What a reliability request is made from: the inputs a shown result answers. */
+interface ReliabilityStudyInputs {
+  readonly range: TickerRange;
+  readonly indicator: string;
+  readonly params: Record<string, number>;
+  readonly horizons: readonly number[];
+  readonly includeSlope: boolean;
+}
+
 @Component({
   selector: 'app-indicator-reliability',
   templateUrl: './indicator-reliability.component.html',
@@ -203,7 +212,6 @@ interface HorizonOption {
     FormsModule,
     Select,
     InputNumber,
-    ButtonModule,
     MessageModule,
     ProgressSpinner,
     TableModule,
@@ -215,13 +223,13 @@ interface HorizonOption {
     AssetIdentityComponent,
     IndicatorVerdictHeroComponent,
     TickerRangePickerComponent,
+    StudyPageComponent,
   ],
 })
 export class IndicatorReliabilityComponent {
   private http = inject(HttpClient);
   private destroyRef = inject(DestroyRef);
   private pythonUrl = environment.pythonServiceUrl;
-  protected methodologyDrawer = inject(MethodologyDrawerService);
 
   // Expose Math for template use
   protected readonly Math = Math;
@@ -270,7 +278,6 @@ export class IndicatorReliabilityComponent {
   loadingIndicators = signal(false);
   result = signal<IndicatorReliabilityResponse | null>(null);
   error = signal<string | null>(null);
-  formCollapsed = signal(false);
   selectedHorizon = signal<number | null>(null);
 
   /**
@@ -337,6 +344,55 @@ export class IndicatorReliabilityComponent {
       !this.loading()
     );
   });
+
+  /** The inputs the shown result answers; a result is "previous" once these change. */
+  private readonly enteredInputs = computed<ReliabilityStudyInputs>(() => ({
+    range: this.range(),
+    indicator: this.indicatorName(),
+    params: this.paramValues(),
+    horizons: this.selectedHorizons(),
+    includeSlope: this.includeSlope(),
+  }));
+  readonly inputs = createResultInputTracker(
+    this.enteredInputs,
+    ({ range, indicator, params, horizons, includeSlope }) => ({
+      key: JSON.stringify([
+        range.symbol.toUpperCase(),
+        range.from,
+        range.to,
+        indicator,
+        params,
+        [...horizons].sort((a, b) => a - b),
+        includeSlope,
+      ]),
+      facts: [
+        { label: 'Instrument', value: range.symbol.toUpperCase() },
+        { label: 'Window', value: `${range.from} to ${range.to}` },
+        { label: 'Indicator', value: `${indicator} ${JSON.stringify(params)}` },
+        { label: 'Horizons', value: [...horizons].sort((a, b) => a - b).join(', ') + ' bars' },
+        { label: 'Slope IC', value: includeSlope ? 'included' : 'not included' },
+      ],
+    }),
+  );
+
+  /** What step 3 says is about to run. */
+  readonly readySummary = computed(() => {
+    const r = this.range();
+    return `${this.selectedIndicatorLabel} on ${r.symbol.toUpperCase()}, ${r.from} to ${r.to}`;
+  });
+
+  /** Why Run study cannot start, in words that point at the step to fix. */
+  readonly blockedReason = computed<string | null>(() => {
+    if (this.canRun() || this.loading()) return null;
+    if (this.indicatorName().trim().length === 0) return 'Pick an indicator.';
+    if (this.selectedHorizons().length === 0) return 'Pick at least one forward horizon.';
+    return 'Choose an instrument and both dates.';
+  });
+
+  /** Anything past the idle state is on screen: the request, an error or a result. */
+  readonly hasOutput = computed(
+    () => this.loading() || this.error() !== null || this.result() !== null,
+  );
 
   get selectedIndicatorLabel(): string {
     const found = this.indicatorOptions().find(i => i.value === this.indicatorName());
@@ -446,10 +502,17 @@ export class IndicatorReliabilityComponent {
     this.paramValues.update(current => ({ ...current, [name]: value }));
   }
 
+  /**
+   * Run study. `loading` closes synchronously, so a second press before the
+   * request settles is dropped and the request is sent once.
+   */
   runAnalysis(): void {
+    if (this.loading()) return;
     this.loading.set(true);
     this.error.set(null);
     this.result.set(null);
+    this.inputs.clear();
+    const submitted = this.enteredInputs();
 
     // Wire the canonical TickerRange shape into the request body via the
     // shared adapter. Python's IndicatorReliabilityRequest now inherits
@@ -457,15 +520,15 @@ export class IndicatorReliabilityComponent {
     // fields. The legacy aliases (ticker/start_date/end_date) still work
     // until PR (iii)'s alias-removal commit, but we send canonical now.
     const wire = tickerRangeToWire({
-      ...this.range(),
-      symbol: this.range().symbol.toUpperCase(),
+      ...submitted.range,
+      symbol: submitted.range.symbol.toUpperCase(),
     });
     const payload = {
       ...wire,
-      indicator_name: this.indicatorName(),
-      indicator_params: this.paramValues(),
-      horizons: this.selectedHorizons(),
-      include_slope: this.includeSlope(),
+      indicator_name: submitted.indicator,
+      indicator_params: submitted.params,
+      horizons: submitted.horizons,
+      include_slope: submitted.includeSlope,
     };
 
     this.http
@@ -488,21 +551,11 @@ export class IndicatorReliabilityComponent {
           if (!res.success && res.error) {
             this.error.set(res.error);
           } else if (res.success) {
-            this.formCollapsed.set(true);
+            this.inputs.capture(submitted);
             this.selectedHorizon.set(res.best_horizon);
           }
         }
       });
-  }
-
-  toggleForm(): void {
-    this.formCollapsed.update(v => !v);
-  }
-
-  newRun(): void {
-    this.formCollapsed.set(false);
-    this.result.set(null);
-    this.error.set(null);
   }
 
   // ─── Helpers for Display ─────────────────────────────────
