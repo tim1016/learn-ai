@@ -72,10 +72,14 @@ export interface SignalStrategyServices {
   readonly goldenValidation: Record<string, unknown>;
 }
 
-const ROUTES: Routes = [
-  { path: 'signal-strategies', children: SIGNAL_STRATEGIES_ROUTES },
-  { path: '**', data: { notFound: true }, component: NotFoundComponent },
-];
+/** The place's routes, then any a spec adds for the pages it walks to, then the not-found page. */
+function routesWith(extra: Routes): Routes {
+  return [
+    { path: 'signal-strategies', children: SIGNAL_STRATEGIES_ROUTES },
+    ...extra,
+    { path: '**', data: { notFound: true }, component: NotFoundComponent },
+  ];
+}
 
 /**
  * Providers that put the Signal strategies place in front of a world, behind
@@ -86,11 +90,12 @@ export function provideSignalStrategyWorld(
   world: SignalStrategyWorld,
   reads: Partial<SignalStrategyReads> = {},
   services: Partial<SignalStrategyServices> = {},
+  extraRoutes: Routes = [],
 ) {
   const fleet = provideFleetDirectory();
   return [
     provideZonelessChangeDetection(),
-    provideRouter(ROUTES, withComponentInputBinding(), withRouterConfig({ paramsInheritanceStrategy: 'always' })),
+    provideRouter(routesWith(extraRoutes), withComponentInputBinding(), withRouterConfig({ paramsInheritanceStrategy: 'always' })),
     { provide: fleet.provide, useValue: fleet.useValue },
     {
       provide: SignalStrategyRegistryService,
