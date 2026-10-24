@@ -115,6 +115,27 @@ describe('a setup\'s place', () => {
 });
 
 describe('a draft with no saved name', () => {
+  it('is never taken for the setup the owner came from: the address of no name holds a draft that says it is not saved', async () => {
+    await renderTab(withLibrary(servedSaved('Mine', exampleBody())), 'Mine', 'define', quiet);
+    await waitFor(() => expect(screen.getByText('Matches saved')).toBeTruthy());
+    expect((screen.getByLabelText('Setup name') as HTMLInputElement).value).toBe('Mine');
+
+    // To a new setup, and Back to Mine, and Forward to the new one again: each time the new one is not Mine.
+    const router = TestBed.inject(Router);
+    await router.navigateByUrl('/options-setups/_new/define');
+    await waitFor(() => expect(screen.getByText('Not saved')).toBeTruthy());
+    expect((screen.getByLabelText('Setup name') as HTMLInputElement).value).not.toBe('Mine');
+
+    await router.navigateByUrl('/options-setups/Mine/define');
+    await waitFor(() => expect(screen.getByText('Matches saved')).toBeTruthy());
+    expect((screen.getByLabelText('Setup name') as HTMLInputElement).value).toBe('Mine');
+
+    await router.navigateByUrl('/options-setups/_new/define');
+    await waitFor(() => expect(screen.getByText('Not saved')).toBeTruthy());
+    expect(screen.queryByText('Matches saved')).toBeNull();
+    expect((screen.getByLabelText('Setup name') as HTMLInputElement).value).not.toBe('Mine');
+  });
+
   it('lives at its own address, is titled as new, and says it is not saved', async () => {
     await renderTab(withLibrary(), null, 'define', { ...quiet, form: false });
 

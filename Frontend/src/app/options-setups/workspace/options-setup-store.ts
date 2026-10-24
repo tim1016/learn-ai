@@ -259,6 +259,9 @@ export class OptionsSetupWorkspaceStore {
         if (name === this.acknowledged) return;
         if (name === null) {
           this.acknowledged = null;
+          // `_new` is the address of a draft with no saved name. A draft still tied to one (the owner came from that
+          // setup, or went Back and Forward past it) lets go of the name and keeps its content as an unsaved draft.
+          this.detachFromSavedName();
           return;
         }
         if (clock === null || !ready) return;
@@ -277,6 +280,13 @@ export class OptionsSetupWorkspaceStore {
       const body = this.body();
       untracked(() => this.checker.show(body));
     });
+  }
+
+  private detachFromSavedName(): void {
+    if (this.names.name() === null) return;
+    this.names.clear();
+    this.saveModel.set({ name: '' });
+    this.automaticName.set(true);
   }
 
   /** The workspace was left: no read-back answer arrives after this. */
