@@ -3,6 +3,7 @@ import {
   Component,
   computed,
   inject,
+  input,
   linkedSignal,
   resource,
   signal,
@@ -134,12 +135,26 @@ export class LakeTabComponent {
   protected readonly barTypeOptions = BAR_TYPE_OPTIONS;
 
   /**
+   * The filters a link carries in the address (`?symbol=&price_adjustment_mode=&data_type=`, the
+   * data-lake API's own names), which the scoped-health notices and chips use
+   * to open the Lake on the finding. A value the page does not offer is ignored.
+   */
+  readonly symbol = input<string | undefined>(undefined);
+  readonly price_adjustment_mode = input<string | undefined>(undefined);
+  readonly data_type = input<string | undefined>(undefined);
+
+  /**
    * The view the whole page reads: readiness, the session grid and the tree a
    * backfill writes. Split-adjusted trade bars first: they are what every
-   * sweep and Golden Search reads.
+   * sweep and Golden Search reads. A link's filter sets it; the operator's own
+   * pick stands until the link changes.
    */
-  protected readonly mode = signal<PriceAdjustmentMode>('polygon_split_adjusted');
-  protected readonly bars = signal<DataLakeDataType>('trade');
+  protected readonly mode = linkedSignal<PriceAdjustmentMode>(
+    () => PRICE_ADJUSTMENT_OPTIONS.find((option) => option === this.price_adjustment_mode()) ?? 'polygon_split_adjusted',
+  );
+  protected readonly bars = linkedSignal<DataLakeDataType>(
+    () => BAR_TYPE_OPTIONS.find((option) => option === this.data_type()) ?? 'trade',
+  );
 
   /** The backfill form's starting window; a rebuild replaces it with the symbol's own. */
   protected readonly seedStart = tradingDateAt(Date.now() - DEFAULT_LOOKBACK_DAYS * DAY_MS);
@@ -167,12 +182,22 @@ export class LakeTabComponent {
   /** The symbols with sessions missing between their first and last that a backfill can fetch. */
   protected readonly gapRows = computed(() => fillRows(this.rows()));
 
-  /** Follows the rows: the pick survives a re-read, and the first row stands in when it is gone. */
-  protected readonly selectedSymbol = linkedSignal<readonly SymbolReadinessRow[], string | null>({
-    source: this.rows,
-    computation: (rows, previous) => {
-      const kept = previous?.value ?? null;
-      if (kept !== null && rows.some((row) => row.symbol === kept)) return kept;
+  /**
+   * Follows the rows: the pick survives a re-read, and the first row stands in
+   * when it is gone. A symbol a link asks for is picked when it first asks, or
+   * as soon as the rows hold it.
+   */
+  protected readonly selectedSymbol = linkedSignal<
+    { readonly rows: readonly SymbolReadinessRow[]; readonly asked: string | undefined },
+    string | null
+  >({
+    source: () => ({ rows: this.rows(), asked: this.symbol() }),
+    computation: ({ rows, asked }, previous) => {
+      const held = (symbol: string | null | undefined): symbol is string =>
+        symbol != null && rows.some((row) => row.symbol === symbol);
+      if (held(asked) && asked !== previous?.source.asked) return asked;
+      if (held(previous?.value)) return previous.value;
+      if (held(asked)) return asked;
       return rows[0]?.symbol ?? null;
     },
   });

@@ -1,0 +1,50 @@
+:host {
+  display: block;
+}
+
+.health-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.health-chips__chip {
+  --chip-tone: var(--bull);
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--chip-tone);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  text-decoration: none;
+
+  &[data-severity='info'] { --chip-tone: var(--accent); }
+  &[data-severity='warning'] { --chip-tone: var(--warn); }
+  &[data-severity='critical'] { --chip-tone: var(--bear); }
+  // Unknown is not a colour of healthy: a dashed outline and no tone at all.
+  &[data-severity='unknown'] {
+    --chip-tone: var(--border-strong);
+    border-style: dashed;
+  }
+}
+
+a.health-chips__chip:hover {
+  background: var(--bg-hover, var(--bg-surface));
+}
+
+.health-chips__label {
+  color: var(--text-primary);
+  font-weight: var(--fw-semi);
+}
+
+.health-chips__more {
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+}

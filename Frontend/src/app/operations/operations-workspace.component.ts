@@ -4,6 +4,7 @@ import { RouterOutlet } from '@angular/router';
 import { CurrentUrlService } from '../shell/current-url.service';
 import { HowThisWorksLinkComponent } from '../shared/help/how-this-works-link.component';
 import type { HelpDocumentRoute } from '../shared/help/help-documents';
+import { HealthChipsComponent } from '../shared/scoped-health/health-chips.component';
 import { WorkspaceHeaderComponent } from '../shared/workspace/workspace-header.component';
 import { WorkspaceTabListComponent } from '../shared/workspace/workspace-tab-list.component';
 import { OPERATIONS_TABS, operationsTabOf, operationsTabRoute, type OperationsTab } from './operations-tabs';
@@ -22,12 +23,13 @@ const PURPOSE =
  * that starts work (the Lake's backfill) does so only from its own explicit
  * controls.
  *
- * Presentation only: it reads no status and offers no action of its own.
+ * Presentation only: it offers no action of its own, and the health chips in its
+ * header read the scoped-health projection rather than any threshold here.
  */
 @Component({
   selector: 'app-operations-workspace',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [HowThisWorksLinkComponent, RouterOutlet, WorkspaceHeaderComponent, WorkspaceTabListComponent],
+  imports: [HealthChipsComponent, HowThisWorksLinkComponent, RouterOutlet, WorkspaceHeaderComponent, WorkspaceTabListComponent],
   templateUrl: './operations-workspace.component.html',
   styleUrl: './operations-workspace.component.scss',
 })

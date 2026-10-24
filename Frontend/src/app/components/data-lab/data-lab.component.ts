@@ -14,6 +14,8 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { AssetIdentityComponent } from '../../shared/asset-identity';
 import { DateRangePickerComponent, ProviderBoundsService, type QuickRangeKey, type QuickRangeOffer } from '../../shared/date-picker';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
+import { HealthNoticeComponent } from '../../shared/scoped-health/health-notice.component';
+import { HEALTH_NEEDS } from '../../shared/scoped-health/scoped-health';
 import { TimestampDisplayPipe } from '../../shared/timestamp';
 import { SymbolPickerComponent } from '../../shared/symbol-picker/symbol-picker.component';
 import { DEFAULT_ADJUSTMENT_MODE } from '../../shared/ticker-catalog';
@@ -155,6 +157,7 @@ export function parseYmdMsUtc(s: string): number | null {
     RouterLink,
     RouterLinkActive,
     RouterOutlet,
+    HealthNoticeComponent,
     PageHeaderComponent,
     AssetIdentityComponent,
     RunDockComponent,
@@ -177,6 +180,8 @@ export class DataLabComponent {
   private readonly sessionService = inject(DataLabSessionService);
   private readonly rangePresetsService = inject(DataLabRangePresetsService);
   readonly store = inject(DataLabWorkspaceStore);
+  /** The committed symbol's stock bars: a lake gap in another symbol is none of this page's business. */
+  protected readonly healthNeeds = HEALTH_NEEDS.stockHistory;
 
   /** The page is titled by the menu entry that leads to it (PRD #3490 R01):
    *  Stocks, or Return Distribution on its own study. */

@@ -7,7 +7,7 @@ import { formatTimestampDisplay } from '../../shared/timestamp/timestamp-display
 import { OptionArchiveTabComponent } from './option-archive-tab.component';
 
 function status(): OptionArchiveHealth {
-  return { enabled: true, generated_ms: 1792558800000, attention: false,
+  return { enabled: true, generated_ms: 1792558800000,
     underlyings: [{ underlying: 'SPY', severity: 'healthy', reason: 'Every requested session is preserved.',
       pending_sessions: 0, partial_sessions: 0, lost_sessions: 0, gaps: [], phase: 'complete',
       complete_through_session_ms: 1792503000000, last_archived_session_ms: 1792503000000,
@@ -31,7 +31,7 @@ describe('Operations → Option archive', () => {
     expect(screen.queryByRole('heading', { name: 'Weekly restore check' })).toBeNull();
   });
   it('keeps an older hole visible behind a recent success', async () => {
-    const health = status(); health.attention = true;
+    const health = status();
     health.underlyings[0] = { ...health.underlyings[0], severity: 'at_risk', partial_sessions: 2, lost_sessions: 1,
       reason: 'An older session remains partial.', gaps: [{ session_ms: 1729261800000, permanent: true,
         reason: 'The vendor no longer serves this session.', recorded_ms: 1792558800000 }], phase: 'rth_pause' };

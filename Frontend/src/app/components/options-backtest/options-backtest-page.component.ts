@@ -6,8 +6,9 @@ import { Tab, TabList, TabPanel, TabPanels, Tabs } from 'primeng/tabs';
 import type { DateRange } from '../../shared/date-picker';
 import { FileDownloadService } from '../../shared/file/file-download.service';
 import { HowThisWorksLinkComponent } from '../../shared/help/how-this-works-link.component';
-import { OptionArchiveBannerComponent } from '../../shared/option-archive/option-archive-banner.component';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
+import { HealthNoticeComponent } from '../../shared/scoped-health/health-notice.component';
+import { HEALTH_NEEDS } from '../../shared/scoped-health/scoped-health';
 import { extractServerMessage } from '../broker/operation-error';
 import { BottomBarComponent, type SaveStatus } from './cards/bottom-bar.component';
 import { CostsCardComponent } from './cards/costs-card.component';
@@ -60,7 +61,7 @@ interface ImportNotice {
 @Component({
   selector: 'app-options-backtest-page',
   imports: [
-    OptionArchiveBannerComponent,
+    HealthNoticeComponent,
     ButtonModule,
     Tabs,
     TabList,
@@ -96,6 +97,9 @@ export class OptionsBacktestPageComponent {
   private readonly service = inject(OptionsBacktestService);
   private readonly download = inject(FileDownloadService);
   private readonly injector = inject(Injector);
+
+  /** The archive and its backups matter to this page; the live feed and stock bars do not. */
+  protected readonly healthNeeds = HEALTH_NEEDS.archivedOptions;
 
   /** The tab on show: building and running a backtest, or the runs made so far. */
   protected readonly activeTab = signal<OptionsBacktestTab>('backtest');
