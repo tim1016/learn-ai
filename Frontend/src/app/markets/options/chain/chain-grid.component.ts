@@ -2,11 +2,12 @@ import { NgTemplateOutlet } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
-import { TimestampDisplayComponent } from '../../../shared/timestamp';
+import { TimestampDisplayComponent, formatTimestampDisplay } from '../../../shared/timestamp';
 import {
   ADD_LEG_UNAVAILABLE_REASON,
   CHAIN_COLUMN_LABELS,
   chainAbsentWords,
+  type ChainColumnId,
   type ChainField,
   type ChainTable,
 } from './chain-presentation';
@@ -46,5 +47,20 @@ export class ChainGridComponent {
 
   protected wordsOf(field: Extract<ChainField, { kind: 'absent' }>): string {
     return chainAbsentWords(field);
+  }
+
+  /** When a dated value was received, for the hover of a narrow cell that has no room for it. */
+  protected receivedTitle(field: ChainField): string | null {
+    return field.kind === 'value' && field.atMs !== null
+      ? `Received ${formatTimestampDisplay(field.atMs, { mode: 'local', granularity: 'time' })}`
+      : null;
+  }
+
+  protected labelOf(column: ChainColumnId): string {
+    return this.table().columns.headers?.[column]?.label ?? this.labels[column];
+  }
+
+  protected titleOf(column: ChainColumnId): string | null {
+    return this.table().columns.headers?.[column]?.title ?? null;
   }
 }

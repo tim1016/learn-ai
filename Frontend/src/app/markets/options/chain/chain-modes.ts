@@ -22,17 +22,13 @@ export interface ChainMode {
   readonly unavailable: string | null;
 }
 
-/** Live IBKR is the retained read-only market-data connection; the live chain is wired in its own slice. */
-export const LIVE_NOT_YET_REASON =
-  'Now · Live IBKR is not on this chain yet. The live feed is wired in the next slice, and nothing stands in for it meanwhile.';
-
 /** Live IBKR answers for the present only: a past instant is never read from today's feed. */
 export const PAST_LIVE_REASON =
   'Past · Live IBKR is not available. IBKR streams the present only and cannot answer for a past instant, so it never stands in for the archive and never shows today\'s chain under a past date.';
 
 export const CHAIN_MODES: readonly ChainMode[] = [
   { id: 'now-snapshot', when: 'Now', label: 'Snapshot', source: 'snapshot', unavailable: null },
-  { id: 'now-live', when: 'Now', label: 'Live IBKR', source: 'live', unavailable: LIVE_NOT_YET_REASON },
+  { id: 'now-live', when: 'Now', label: 'Live IBKR', source: 'live', unavailable: null },
   { id: 'past-archive', when: 'Past', label: 'Archive', source: 'archive', unavailable: null },
   { id: 'past-live', when: 'Past', label: 'Live IBKR', source: 'live', unavailable: PAST_LIVE_REASON },
 ];

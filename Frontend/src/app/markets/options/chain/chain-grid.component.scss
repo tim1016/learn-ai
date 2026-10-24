@@ -196,6 +196,10 @@
 
   // A dash is a value the provider did not send; a reason in words is a source that says why.
   .absent { color: var(--ol-fg-dim); }
+  // A compared figure sits in the band its gap falls in; a comparison that was not made is spoken, never shaded.
+  .data-row td[data-band='green'] { background: rgba(38, 166, 154, 0.18); color: var(--ol-pos); }
+  .data-row td[data-band='yellow'] { background: rgba(234, 179, 8, 0.2); color: #e0b23c; }
+  .data-row td[data-band='red'] { background: rgba(239, 83, 80, 0.2); color: var(--ol-neg); }
   .absent-words,
   .nonstandard {
     display: block;

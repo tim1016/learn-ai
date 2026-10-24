@@ -111,7 +111,7 @@ describe('Now · Snapshot, as the one chain presentation', () => {
   it('gives every contract every field, each filled or absent, and says nothing of whether a contract is standard', () => {
     const row = rowOf(present({ contracts: both(720) }), 720);
 
-    expect(Object.keys(cell(row.call).fields).sort()).toEqual(['ask', 'bid', 'delta', 'gamma', 'last', 'openInterest', 'spread', 'theta', 'vega', 'volume']);
+    expect(Object.keys(cell(row.call).fields).sort()).toEqual(['ask', 'bid', 'delta', 'deltaGap', 'engineDelta', 'gamma', 'iv', 'last', 'openInterest', 'spread', 'theta', 'vega', 'volume']);
     expect(cell(row.call).standard).toBeNull();
   });
 

@@ -27,7 +27,6 @@
     "src/app/components/broker/broker-deploy-page/option-structure/option-structure.bounds.parity.spec.ts": 0.01,
     "src/app/components/broker/broker-deploy-page/option-structure/option-structure.spec.ts": 0.022,
     "src/app/components/broker/broker-deploy-page/options-bot-deploy.component.spec.ts": 6.061,
-    "src/app/components/broker/broker-options-chain/broker-options-chain.component.spec.ts": 0.8,
     "src/app/components/broker/broker-options-surface/broker-options-surface.component.spec.ts": 0.181,
     "src/app/components/broker/clerk-transaction-evidence-drawer/clerk-transaction-evidence-drawer.component.spec.ts": 0.44,
     "src/app/components/broker/deployment-budget/deployment-budget.component.spec.ts": 1.106,

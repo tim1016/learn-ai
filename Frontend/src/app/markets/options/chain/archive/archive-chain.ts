@@ -100,6 +100,8 @@ function underlyingField(chain: ChainExpiry): ChainField {
 /** The archive holds trade bars and no recorded snapshot: every field but the last trade is absent, each for its own reason. */
 const NO_QUOTE = absent('no_quote_archived');
 const NO_SNAPSHOT = absent('no_recorded_snapshot');
+/** The archive holds no engine delta either: only Now · Live IBKR compares one against the feed's. */
+const NO_COMPARISON = absent('not_compared', 'only Now · Live IBKR compares an engine delta');
 
 function sideCell(contract: ChainContract | null, gap: Gap | null, atMs: number): ChainSideCell {
   if (contract === null) return { kind: 'gap', words: GAP_WORDS[gap ?? 'outside'] };
@@ -116,8 +118,11 @@ function sideCell(contract: ChainContract | null, gap: Gap | null, atMs: number)
       gamma: NO_SNAPSHOT,
       theta: NO_SNAPSHOT,
       vega: NO_SNAPSHOT,
+      iv: NO_SNAPSHOT,
       volume: NO_SNAPSHOT,
       openInterest: NO_SNAPSHOT,
+      engineDelta: NO_COMPARISON,
+      deltaGap: NO_COMPARISON,
     },
   };
   return cell;

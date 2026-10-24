@@ -21,7 +21,14 @@
       (expiryPicked)="requests.pickExpiry($event)"
     />
   }
-  @case ('live') { <app-workspace-state-block [state]="liveState" /> }
+  @case ('live') {
+    <app-live-chain
+      [symbol]="symbol()"
+      [expiryMs]="current.expiryMs"
+      (expiryPicked)="requests.pickExpiry($event)"
+      (expiryAdopted)="requests.adoptExpiry($event)"
+    />
+  }
   @case ('past-live') { <app-workspace-state-block [state]="pastLiveState" /> }
   @default {
     @if (invalidState(); as state) { <app-workspace-state-block [state]="state" /> }

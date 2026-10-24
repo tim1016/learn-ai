@@ -7,14 +7,8 @@ import { ArchiveChainComponent } from './archive/archive-chain.component';
 import { ChainModeSwitchComponent } from './chain-mode-switch.component';
 import { chainModeOf } from './chain-request';
 import { ChainRequestService } from './chain-request.service';
+import { LiveChainComponent } from './live/live-chain.component';
 import { SnapshotChainComponent } from './snapshot/snapshot-chain.component';
-
-/** Live IBKR is not on this chain yet; the strip above says why, and nothing else is shown in its place. */
-const LIVE_STATE: WorkspaceStateContent = {
-  kind: 'unavailable',
-  happened: 'Now · Live IBKR is not available on this chain yet.',
-  next: 'Choose Now · Snapshot or Past · Archive above. Nothing has been switched for you.',
-};
 
 /** A past instant is never read from the live feed, and the present's chain is never shown under a past date. */
 const PAST_LIVE_STATE: WorkspaceStateContent = {
@@ -37,7 +31,7 @@ const PAST_LIVE_STATE: WorkspaceStateContent = {
  */
 @Component({
   selector: 'app-options-chain',
-  imports: [ChainModeSwitchComponent, SnapshotChainComponent, ArchiveChainComponent, WorkspaceStateBlockComponent],
+  imports: [ChainModeSwitchComponent, SnapshotChainComponent, ArchiveChainComponent, LiveChainComponent, WorkspaceStateBlockComponent],
   providers: [ChainRequestService],
   templateUrl: './options-chain.component.html',
   styleUrl: './options-chain.component.scss',
@@ -50,7 +44,6 @@ export class OptionsChainComponent {
   protected readonly request = this.requests.request;
   protected readonly active = computed(() => chainModeOf(this.request()));
 
-  protected readonly liveState = LIVE_STATE;
   protected readonly pastLiveState = PAST_LIVE_STATE;
   protected readonly invalidState = computed<WorkspaceStateContent | null>(() => {
     const request = this.request();

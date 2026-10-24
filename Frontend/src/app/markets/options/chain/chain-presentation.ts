@@ -40,7 +40,13 @@ export type ChainAbsentReason =
   /** No snapshot was recorded for that date, so no Greek, open interest or volume exists for it. */
   | 'no_recorded_snapshot'
   /** The provider's snapshot carried nothing for this field. */
-  | 'not_in_snapshot';
+  | 'not_in_snapshot'
+  /** The live feed has sent nothing for this field of this contract yet. */
+  | 'not_sent_yet'
+  /** The source has no such field at all: its feed does not carry it. */
+  | 'not_on_feed'
+  /** A comparison that was not made; the detail names the input that was missing or stale. */
+  | 'not_compared';
 
 export type ChainField =
   | {
@@ -51,28 +57,41 @@ export type ChainField =
       readonly atMs: number | null;
       /** A share of the busiest cell, 0 to 100, for a column that draws a bar behind its figure. */
       readonly bar?: number;
+      /** The tolerance band a judged figure falls in, for a column that is judged against one. */
+      readonly band?: ChainBand;
     }
   | {
       readonly kind: 'absent';
       readonly reason: ChainAbsentReason;
       /** The source's own words about it (an unreadable file's reason, the code of an unknown state); else null. */
       readonly detail: string | null;
+      /** The word drawn in the cell in place of the dash, for a column whose absence the reader must not miss. */
+      readonly shown?: string;
     };
 
+/** How far a compared figure is from its reference: inside the tolerance, to be inspected, or outside it. */
+export type ChainBand = 'green' | 'yellow' | 'red';
+
 /** The columns a side can draw, in the words the grid heads them with. */
-export type ChainColumnId = 'delta' | 'gamma' | 'theta' | 'vega' | 'last' | 'bid' | 'ask' | 'spread' | 'volume' | 'openInterest';
+export type ChainColumnId =
+  | 'delta' | 'gamma' | 'theta' | 'vega' | 'iv'
+  | 'last' | 'bid' | 'ask' | 'spread' | 'volume' | 'openInterest'
+  | 'engineDelta' | 'deltaGap';
 
 export const CHAIN_COLUMN_LABELS: Readonly<Record<ChainColumnId, string>> = {
   delta: 'Δ',
   gamma: 'Γ',
   theta: 'Θ',
   vega: 'V',
+  iv: 'IV',
   last: 'Last',
   bid: 'Bid',
   ask: 'Ask',
   spread: 'Sprd',
   volume: 'Volume',
   openInterest: 'OI',
+  engineDelta: 'Δ Engine',
+  deltaGap: '|ΔΔ|',
 };
 
 /**
@@ -85,6 +104,16 @@ export interface ChainColumns {
   readonly calls: readonly ChainColumnId[];
   readonly puts: readonly ChainColumnId[];
   readonly detail: 'compact' | 'full';
+  /**
+   * A header that says more than its column's label: whose figure it is, and what a compared
+   * column compares. The label replaces the default one, and the title is its hover text.
+   */
+  readonly headers?: Readonly<Partial<Record<ChainColumnId, ChainHeader>>>;
+}
+
+export interface ChainHeader {
+  readonly label: string;
+  readonly title: string;
 }
 
 /** One contract on one side of a strike: who it is, and the fields its source holds for it. */
@@ -152,15 +181,30 @@ export interface ChainFact {
   readonly tone?: 'warn' | 'bad';
 }
 
+/**
+ * What a comparison column compares, said before the table so a reader never infers it: the
+ * quantity and its units, each side of the comparison, the inputs both sides were valued with,
+ * the instants they are as of, and the tolerance the gap is judged by.
+ */
+export interface ChainCrossCheck {
+  readonly title: string;
+  readonly statements: readonly { readonly label: string; readonly text: string }[];
+  /** How many contracts were compared and why the others were not; null while no contract is on screen. */
+  readonly outcome: string | null;
+}
+
 /** What one source says for one underlying and one expiry. */
 export interface ChainPresentation {
   readonly mode: ChainModeId;
   /** Contract identity: the underlying and expiry this chain is of. They survive filtering, and a mode change leaves them in the address. */
   readonly underlying: string;
-  readonly expiryMs: number;
+  /** The expiry this chain is of; null while a source has none to name yet (its listing is not read, or none is picked). */
+  readonly expiryMs: number | null;
   readonly facts: readonly ChainFact[];
   /** What this source cannot say, as sentences under the facts. */
   readonly notes: readonly string[];
+  /** Set by a source whose table carries a comparison column. */
+  readonly crossCheck?: ChainCrossCheck;
   readonly table: ChainTable;
 }
 
@@ -178,6 +222,9 @@ const ABSENT_WORDS: Readonly<Record<ChainAbsentReason, string>> = {
   no_quote_archived: 'The archive holds trade bars, not quotes',
   no_recorded_snapshot: 'No snapshot was recorded for this date',
   not_in_snapshot: 'The provider sent none',
+  not_sent_yet: 'IBKR has sent none for this contract yet',
+  not_on_feed: 'This feed does not carry it',
+  not_compared: 'Not compared',
 };
 
 /** The words for an absent field, with the source's own detail after them when it gave one. */

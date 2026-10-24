@@ -11,10 +11,10 @@ import type {
 } from '../../../../services/market-data.types';
 import { etIsoDate } from '../../../../shared/date/et-midnight';
 import { errorMessage } from '../../../../shared/errors/error-message';
-import { optionExpiryAnchorMs } from '../../../../shared/option-contract/option-expiry-date';
 import { formatTimestampDisplay } from '../../../../shared/timestamp';
 import { WorkspaceStateBlockComponent } from '../../../../shared/workspace/workspace-state-block.component';
 import type { WorkspaceStateContent } from '../../../../shared/workspace/workspace-state';
+import { nearestExpiry } from '../chain-expiry';
 import type { ChainPresentation } from '../chain-presentation';
 import { ChainViewComponent } from '../chain-view.component';
 import { snapshotPresentation, type ChainDensity } from './snapshot-chain';
@@ -91,11 +91,7 @@ export class SnapshotChainComponent {
   private pollInFlight = false;
 
   /** The nearest expiry the provider lists, from today's New York date. */
-  private readonly nearest = computed<number | null>(() => {
-    const listed = this.availableExpirations();
-    const today = optionExpiryAnchorMs(etIsoDate(Date.now()));
-    return listed.find((expiry) => expiry >= today) ?? listed[0] ?? null;
-  });
+  private readonly nearest = computed<number | null>(() => nearestExpiry(this.availableExpirations(), Date.now()));
   /** The expiry on screen: the address's, else the nearest. */
   protected readonly selected = computed(() => this.expiryMs() ?? this.nearest());
   /** The expiry whose chain is read: the one on screen, once the provider has said it lists it. */

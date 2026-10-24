@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, input, output } from '@angular/core
 
 import { WorkspaceStateBlockComponent } from '../../../shared/workspace/workspace-state-block.component';
 import type { WorkspaceStateContent } from '../../../shared/workspace/workspace-state';
+import { ChainCrossCheckComponent } from './chain-cross-check.component';
 import { ChainFactsComponent } from './chain-facts.component';
 import { ChainGridComponent } from './chain-grid.component';
 import type { ChainPresentation } from './chain-presentation';
@@ -13,7 +14,7 @@ import type { ChainPresentation } from './chain-presentation';
  */
 @Component({
   selector: 'app-chain-view',
-  imports: [ChainFactsComponent, ChainGridComponent, WorkspaceStateBlockComponent],
+  imports: [ChainFactsComponent, ChainCrossCheckComponent, ChainGridComponent, WorkspaceStateBlockComponent],
   templateUrl: './chain-view.component.html',
   styleUrl: './chain-view.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,

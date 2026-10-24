@@ -9,6 +9,9 @@ import userEvent from '@testing-library/user-event';
 import { from, of } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { BrokerHealthService } from '../../services/broker-health.service';
+import { MarketDataFeedService } from '../../services/market-data-feed.service';
+import { QuantLibService } from '../../services/quantlib.service';
 import { OptionsBacktestService } from '../../components/options-backtest/options-backtest.service';
 import { deferred } from '../../components/options-backtest/testing/deferred';
 import { SERVED_LIMITS } from '../../components/options-backtest/testing/fixtures';
@@ -21,8 +24,10 @@ import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-
 import { InstrumentContextService } from '../instrument-context.service';
 import { MARKETS_ROUTES } from '../markets.routes';
 import { InstrumentWorkspaceComponent } from '../workspace/instrument-workspace.component';
-import { LIVE_NOT_YET_REASON, PAST_LIVE_REASON } from './chain/chain-modes';
+import { PAST_LIVE_REASON } from './chain/chain-modes';
 import { PastChainService } from './chain/archive/past-chain.service';
+import { disconnectedHealth, ibkrFrame } from './chain/live/testing/fake-ibkr';
+import { liveWorld, startWith, type LiveWorld } from './chain/live/testing/render-live';
 import { chainDay, chainExpiry, contract, EXPIRY_MS, SESSION_CLOSE_MS, side, TRADING_DATE } from './chain/archive/testing/fixtures';
 
 const NEAR = optionExpiryAnchorMs('2099-01-15');
@@ -70,7 +75,7 @@ function snapshotReply(strike = 700): OptionsChainSnapshotResult {
 }
 
 /** The Options tab, with every read it can make replaced: the provider snapshot, the archive and the limits. */
-async function open(url: string, market = { chain: vi.fn(() => of(snapshotReply())) }, archive = { day: vi.fn(async () => chainDay()), expiry: vi.fn(async () => chainExpiry()), download: vi.fn() }) {
+async function open(url: string, market = { chain: vi.fn(() => of(snapshotReply())) }, archive = { day: vi.fn(async () => chainDay()), expiry: vi.fn(async () => chainExpiry()), download: vi.fn() }, live: LiveWorld = liveWorld(vi)) {
   const pickers = fakePickerWorld([{ symbol: 'SPY', name: 'SPDR S&P 500', firstHeld: '2024-01-02', lastHeld: '2026-09-18' }]);
   TestBed.configureTestingModule({
     providers: [
@@ -89,6 +94,11 @@ async function open(url: string, market = { chain: vi.fn(() => of(snapshotReply(
       },
       { provide: PastChainService, useValue: archive },
       { provide: OptionsBacktestService, useValue: { limits: async () => SERVED_LIMITS } },
+      // The retained IBKR feed is faked at every seam: no spec connects to a Gateway.
+      { provide: BrokerHealthService, useValue: { health: live.health, lastError: live.healthFailure, start: vi.fn() } },
+      { provide: MarketDataFeedService, useValue: { expirations: live.expirations, strikes: live.strikes } },
+      { provide: QuantLibService, useValue: { selectedEngine: live.engine, priceOption: live.price } },
+      live.feed.provide,
     ],
   });
   const harness = await RouterTestingHarness.create();
@@ -97,7 +107,7 @@ async function open(url: string, market = { chain: vi.fn(() => of(snapshotReply(
   harness.fixture.detectChanges();
   await harness.fixture.whenStable();
   const workspace = () => harness.fixture.debugElement.query(By.directive(InstrumentWorkspaceComponent));
-  return { harness, router, market, archive, context: () => workspace().injector.get(InstrumentContextService) };
+  return { harness, router, market, archive, live, context: () => workspace().injector.get(InstrumentContextService) };
 }
 
 const modeButton = (name: string) => screen.getByRole('button', { name });
@@ -155,15 +165,14 @@ describe('the Options tab of an instrument', () => {
 describe('the modes of the chain', () => {
   afterEach(() => vi.useRealTimers());
 
-  it('disables Past · Live IBKR and Now · Live IBKR, each with its reason in words', async () => {
+  it('disables Past · Live IBKR with its reason in words, and leaves Now · Live IBKR open to choose', async () => {
     const { router } = await open('/markets/SPY/options/chain');
     await screen.findByRole('table', { name: /Calls on the left/ });
 
-    for (const [name, reason] of [['Past · Live IBKR', PAST_LIVE_REASON], ['Now · Live IBKR', LIVE_NOT_YET_REASON]] as const) {
-      expect.soft((modeButton(name) as HTMLButtonElement).disabled, `${name} is disabled`).toBe(true);
-      expect.soft(screen.getByText(reason), `${name} says why`).toBeTruthy();
-      expect.soft(modeButton(name).getAttribute('title')).toBe(reason);
-    }
+    expect((modeButton('Past · Live IBKR') as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(PAST_LIVE_REASON)).toBeTruthy();
+    expect(modeButton('Past · Live IBKR').getAttribute('title')).toBe(PAST_LIVE_REASON);
+    expect((modeButton('Now · Live IBKR') as HTMLButtonElement).disabled).toBe(false);
     await userEvent.setup().click(modeButton('Past · Live IBKR'));
     expect(query(router)['source']).toBeUndefined();
   });
@@ -237,22 +246,69 @@ describe('the modes of the chain', () => {
     expect(document.body.textContent).not.toContain('111.00');
   });
 
-  it('says Now · Live IBKR is not available, and shows no snapshot in its place', async () => {
-    const { market } = await open('/markets/SPY/options/chain?source=live');
-
-    expect(await screen.findByText('Now · Live IBKR is not available on this chain yet.')).toBeTruthy();
-    expect(modeButton('Now · Live IBKR').getAttribute('aria-pressed')).toBe('true');
-    expect(market.chain).not.toHaveBeenCalled();
-    expect(screen.queryByRole('table', { name: /Calls on the left/ })).toBeNull();
-  });
-
   it('says Past · Live IBKR is not available when the address asks for a past date from the live source, and never shows today\'s chain for it', async () => {
-    const { market, archive } = await open(`/markets/SPY/options/chain?source=live&date=${TRADING_DATE}`);
+    const { market, archive, live } = await open(`/markets/SPY/options/chain?source=live&date=${TRADING_DATE}`);
 
     expect(await screen.findByText('Past · Live IBKR is not available.')).toBeTruthy();
     expect(modeButton('Past · Live IBKR').getAttribute('aria-pressed')).toBe('true');
     expect(market.chain).not.toHaveBeenCalled();
     expect(archive.day).not.toHaveBeenCalled();
+    expect(live.expirations).not.toHaveBeenCalled();
+    expect(live.feed.streams).toHaveLength(0);
+  });
+
+  it('opens Now · Live IBKR from the strip with the expiry kept, the snapshot gone, and nothing subscribed', async () => {
+    const { router, market, live } = await open(`/markets/SPY/options/chain?expiry=${NEAR}`);
+    await screen.findByRole('table', { name: /Calls on the left/ });
+
+    await userEvent.setup().click(modeButton('Now · Live IBKR'));
+
+    expect(await screen.findByText('Nothing is subscribed.')).toBeTruthy();
+    expect(query(router)).toMatchObject({ source: 'live', expiry: String(NEAR) });
+    expect(modeButton('Now · Live IBKR').getAttribute('aria-pressed')).toBe('true');
+    expect(facts()).toContain('Now · Live IBKR');
+    expect(facts()).toContain('Data-plane paper session connected.');
+    expect(screen.queryByRole('table', { name: /Calls on the left/ })).toBeNull();
+    expect(document.querySelector('app-snapshot-chain')).toBeNull();
+    expect(market.chain).toHaveBeenCalledTimes(1);
+    expect(live.feed.streams).toHaveLength(0);
+  });
+
+  it('says Now · Live IBKR is unavailable when the data plane holds no Gateway session, and falls back to nothing', async () => {
+    const live = liveWorld(vi);
+    live.health.set(disconnectedHealth());
+    const { market } = await open(`/markets/SPY/options/chain?source=live&expiry=${NEAR}`, undefined, undefined, live);
+
+    expect(await screen.findByText('Now · Live IBKR is unavailable.')).toBeTruthy();
+    expect(screen.getAllByText(/The FastAPI data-plane IBKR client is disconnected\./).length).toBeGreaterThan(0);
+    expect(market.chain).not.toHaveBeenCalled();
+    expect(screen.queryByRole('table', { name: /Calls on the left/ })).toBeNull();
+    expect(live.expirations).not.toHaveBeenCalled();
+    expect(live.feed.streams).toHaveLength(0);
+  });
+
+  it('releases the live subscription when the mode changes, and a frame the old stream delivers late never reaches the next chain', async () => {
+    const { live } = await open(`/markets/SPY/options/chain?source=live&expiry=${NEAR}`);
+    await startWith(500);
+    live.feed.streams[0].emit(ibkrFrame({ underlying_price: 111.11 }));
+    await screen.findByRole('table', { name: /Calls on the left/ });
+    expect(facts()).toContain('SPY 111.11');
+    const user = userEvent.setup();
+
+    await user.click(modeButton('Now · Snapshot'));
+
+    await screen.findByText(/Polygon option-chain snapshot/);
+    expect(live.feed.streams[0].closes).toBe(1);
+    live.feed.streams[0].emit(ibkrFrame({ underlying_price: 222.22 }));
+    expect(document.body.textContent).not.toContain('222.22');
+    expect(document.body.textContent).not.toContain('Now · Live IBKR is unavailable');
+    expect(document.querySelector('app-live-chain')).toBeNull();
+
+    await user.click(modeButton('Past · Archive'));
+    await screen.findByText('No session date is picked.');
+    live.feed.streams[0].emit(ibkrFrame({ underlying_price: 333.33 }));
+    expect(document.body.textContent).not.toContain('333.33');
+    expect(live.feed.streams).toHaveLength(1);
   });
 
   it('says in place what an unusable address asks for, loads nothing, and is left by choosing a source', async () => {

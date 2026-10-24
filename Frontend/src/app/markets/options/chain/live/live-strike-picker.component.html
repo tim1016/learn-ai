@@ -1,0 +1,16 @@
+<div class="head">
+  <span>Strikes IBKR can qualify: <strong>{{ strikes().length }}</strong></span>
+  <span>Selected: <strong>{{ selected().size }}</strong></span>
+  @if (loading()) { <span class="muted">Reading strikes…</span> }
+  <span class="spacer"></span>
+  <button type="button" class="action" [disabled]="bandUnavailable() !== null" [attr.title]="bandUnavailable()" (click)="bandPicked.emit()">ATM ± ${{ bandDollars() }}</button>
+  <button type="button" class="action" [disabled]="selected().size === 0" (click)="cleared.emit()">Clear strikes</button>
+</div>
+@if (bandUnavailable(); as reason) {
+  <p class="muted">{{ reason }}</p>
+}
+<div class="chips" role="group" aria-label="Strikes">
+  @for (chip of chips(); track chip.strike) {
+    <button type="button" class="chip" [class.selected]="selected().has(chip.strike)" [attr.aria-pressed]="selected().has(chip.strike)" (click)="toggled.emit(chip.strike)">{{ chip.label }}</button>
+  }
+</div>

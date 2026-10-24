@@ -90,6 +90,10 @@ function fmtGreek(value: number | null | undefined): string | null {
   return value != null ? value.toFixed(3) : null;
 }
 
+function fmtIv(value: number | null | undefined): string | null {
+  return value != null && value > 0 ? (value * 100).toFixed(2) + '%' : null;
+}
+
 function fmtVolume(value: number | null | undefined): string | null {
   if (value == null || value === 0) return null;
   if (value >= 1_000_000) return (value / 1_000_000).toFixed(1) + 'M';
@@ -106,6 +110,9 @@ function field(text: string | null, bar?: number): ChainField {
   return text === null ? absent('not_in_snapshot') : { kind: 'value', text, atMs: null, ...(bar === undefined ? {} : { bar }) };
 }
 
+/** The snapshot holds no engine delta: only Now · Live IBKR compares one against the feed's. */
+const NO_COMPARISON = absent('not_compared', 'only Now · Live IBKR compares an engine delta');
+
 function contractCell(contract: SnapshotContractResult | null, maxVolume: number): ChainSideCell {
   if (contract === null) return { kind: 'gap', words: 'No contract at this strike' };
   const cell: ChainContractCell = {
@@ -121,8 +128,11 @@ function contractCell(contract: SnapshotContractResult | null, maxVolume: number
       gamma: field(fmtGreek(contract.greeks?.gamma)),
       theta: field(fmtGreek(contract.greeks?.theta)),
       vega: field(fmtGreek(contract.greeks?.vega)),
+      iv: field(fmtIv(contract.impliedVolatility)),
       volume: field(fmtVolume(contract.day?.volume), barWidth(contract.day?.volume, maxVolume)),
       openInterest: field(fmtVolume(contract.openInterest)),
+      engineDelta: NO_COMPARISON,
+      deltaGap: NO_COMPARISON,
     },
   };
   return cell;
@@ -132,7 +142,7 @@ function centreIv(call: SnapshotContractResult | null, put: SnapshotContractResu
   const callIv = call?.impliedVolatility ?? 0;
   const putIv = put?.impliedVolatility ?? 0;
   const centre = callIv > 0 && putIv > 0 ? (callIv + putIv) / 2 : callIv || putIv;
-  return field(centre > 0 ? (centre * 100).toFixed(2) + '%' : null);
+  return field(fmtIv(centre));
 }
 
 /** The rows the snapshot shows: every listed strike, or those within `range` strikes of the money. */
