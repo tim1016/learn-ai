@@ -32728,6 +32728,327 @@
         "title": "IbkrStrikeList",
         "type": "object"
       },
+      "IndexedApproval": {
+        "properties": {
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "id": {
+            "pattern": "^ogs_[a-f0-9]{32}(?:[a-f0-9]{8})?$",
+            "title": "Id",
+            "type": "string"
+          },
+          "origin": {
+            "enum": [
+              "backtest",
+              "search",
+              "not_recorded"
+            ],
+            "title": "Origin",
+            "type": "string"
+          },
+          "recorded_name": {
+            "title": "Recorded Name",
+            "type": "string"
+          },
+          "setup_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Setup Sha256",
+            "type": "string"
+          },
+          "source_run_id": {
+            "maximum": 9007199254740991.0,
+            "minimum": 1.0,
+            "title": "Source Run Id",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "stale",
+              "revoked"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "study_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Study Id"
+          },
+          "underlying": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Underlying"
+          }
+        },
+        "required": [
+          "id",
+          "recorded_name",
+          "setup_sha256",
+          "source_run_id",
+          "origin",
+          "status",
+          "created_at_ms"
+        ],
+        "title": "IndexedApproval",
+        "type": "object"
+      },
+      "IndexedRun": {
+        "properties": {
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "first_session_open_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "First Session Open Ms",
+            "type": "integer"
+          },
+          "id": {
+            "maximum": 9007199254740991.0,
+            "minimum": 1.0,
+            "title": "Id",
+            "type": "integer"
+          },
+          "last_session_open_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Last Session Open Ms",
+            "type": "integer"
+          },
+          "net_profit_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Net Profit Usd"
+          },
+          "recorded_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recorded Name"
+          },
+          "sessions_requested": {
+            "title": "Sessions Requested",
+            "type": "integer"
+          },
+          "setup_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Setup Sha256"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "complete",
+              "failed",
+              "cancelled",
+              "interrupted"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "underlying": {
+            "title": "Underlying",
+            "type": "string"
+          },
+          "unreadable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unreadable Reason"
+          }
+        },
+        "required": [
+          "id",
+          "underlying",
+          "created_at_ms",
+          "status",
+          "first_session_open_ms",
+          "last_session_open_ms",
+          "sessions_requested"
+        ],
+        "title": "IndexedRun",
+        "type": "object"
+      },
+      "IndexedSetup": {
+        "description": "One library entry, by name: a shipped example, a saved setup, or one that can no longer be opened.",
+        "properties": {
+          "cannot_open_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cannot Open Reason"
+          },
+          "example": {
+            "title": "Example",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "saved_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Saved At Ms"
+          },
+          "setup_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Setup Sha256"
+          },
+          "underlying": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Underlying"
+          }
+        },
+        "required": [
+          "name",
+          "example"
+        ],
+        "title": "IndexedSetup",
+        "type": "object"
+      },
+      "IndexedStudy": {
+        "properties": {
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "id": {
+            "pattern": "^os_[a-f0-9]{40}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "recorded_name": {
+            "title": "Recorded Name",
+            "type": "string"
+          },
+          "setup_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Setup Sha256"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "underlying": {
+            "title": "Underlying",
+            "type": "string"
+          },
+          "unreadable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unreadable Reason"
+          },
+          "updated_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Updated At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "recorded_name",
+          "underlying",
+          "created_at_ms",
+          "updated_at_ms",
+          "phase",
+          "status"
+        ],
+        "title": "IndexedStudy",
+        "type": "object"
+      },
       "IndicatorBetween": {
         "additionalProperties": false,
         "properties": {
@@ -49271,6 +49592,72 @@
           "session_end_drawdown_usd"
         ],
         "title": "OptionsRobustnessMetrics",
+        "type": "object"
+      },
+      "OptionsSetupIndexResponse": {
+        "description": "Newest first within each list. A list shorter than its ``*_total`` was cut, and the page says so.",
+        "properties": {
+          "approvals": {
+            "items": {
+              "$ref": "#/components/schemas/IndexedApproval"
+            },
+            "title": "Approvals",
+            "type": "array"
+          },
+          "approvals_total": {
+            "minimum": 0.0,
+            "title": "Approvals Total",
+            "type": "integer"
+          },
+          "read_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Read At Ms",
+            "type": "integer"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/IndexedRun"
+            },
+            "title": "Runs",
+            "type": "array"
+          },
+          "runs_total": {
+            "minimum": 0.0,
+            "title": "Runs Total",
+            "type": "integer"
+          },
+          "setups": {
+            "items": {
+              "$ref": "#/components/schemas/IndexedSetup"
+            },
+            "title": "Setups",
+            "type": "array"
+          },
+          "studies": {
+            "items": {
+              "$ref": "#/components/schemas/IndexedStudy"
+            },
+            "title": "Studies",
+            "type": "array"
+          },
+          "studies_total": {
+            "minimum": 0.0,
+            "title": "Studies Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "read_at_ms",
+          "setups",
+          "runs",
+          "runs_total",
+          "studies",
+          "studies_total",
+          "approvals",
+          "approvals_total"
+        ],
+        "title": "OptionsSetupIndexResponse",
         "type": "object"
       },
       "OptionsWatchedPremiumView": {
@@ -94427,6 +94814,38 @@
           }
         },
         "summary": "Get Session Clock",
+        "tags": [
+          "research-options-backtest"
+        ]
+      }
+    },
+    "/api/research/options-backtest/setup-index": {
+      "get": {
+        "description": "The saved setups and all Options evidence in one read, each with its exact content hash; nothing is joined by name.",
+        "operationId": "get_setup_index_api_research_options_backtest_setup_index_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsSetupIndexResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestRefusalBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Get Setup Index",
         "tags": [
           "research-options-backtest"
         ]

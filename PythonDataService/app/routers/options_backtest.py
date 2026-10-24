@@ -3,17 +3,20 @@
 ``GET /session-clock`` is a full session's open and close, from the calendar.
 ``POST /setups/describe`` says a setup in plain sentences. ``GET /limits`` is what a setup and a range may be. ``GET /setups``
 lists the shipped examples and the saved setups, ``PUT /setups/{name}`` saves
-one and ``DELETE /setups/{name}`` removes one. Nothing here runs a backtest.
+one and ``DELETE /setups/{name}`` removes one. ``GET /setup-index`` lists those setups beside every run, study and
+approved version, each with the hash of the content it froze (#3512). Nothing here runs a backtest.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Annotated
 
 import asyncpg
 from fastapi import APIRouter, HTTPException, Path, Response, status
 
+from app.data_lake.catalog_client import CatalogUnavailableError
 from app.options_backtest import saved_setups
 from app.options_backtest.chain_download import MAX_CONTRACTS_PER_DOWNLOAD
 from app.options_backtest.describe import describe_setup
@@ -32,6 +35,7 @@ from app.options_backtest.setup import (
 from app.options_bots.golden import qualification_status
 from app.options_bots.golden_proof import GoldenProofError, current_rules_digest, setup_sha256
 from app.options_bots.golden_repository import events, records_for_setups
+from app.research.options_setup_index import read_index
 from app.research.persistence.db import with_connection
 from app.schemas.options_backtest import (
     OptionsBacktestLimitsResponse,
@@ -41,7 +45,10 @@ from app.schemas.options_backtest import (
     SessionClockResponse,
     SetupDescriptionResponse,
 )
+from app.schemas.options_setup_index import OptionsSetupIndexResponse
 from app.utils.timestamps import now_ms_utc
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -111,6 +118,26 @@ async def _listed_setups(conn: asyncpg.Connection) -> list[SavedSetupResponse]:
             view.golden_setup_id, view.golden_status, view.golden_status_explanation = summary
         result.append(view)
     return result
+
+
+@router.get(
+    "/setup-index",
+    response_model=OptionsSetupIndexResponse,
+    responses={status.HTTP_503_SERVICE_UNAVAILABLE: {"model": OptionsBacktestRefusalBody}},
+)
+async def get_setup_index() -> OptionsSetupIndexResponse:
+    """The saved setups and all Options evidence in one read, each with its exact content hash; nothing is joined by name."""
+    try:
+        return await read_index()
+    except (CatalogUnavailableError, asyncpg.PostgresConnectionError, asyncpg.InterfaceError, ConnectionError) as exc:
+        logger.warning("the Options setup index could not be read", extra={"action": "options_setup_index_unavailable"}, exc_info=exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "OPTIONS_SETUP_INDEX_UNAVAILABLE",
+                "message": "The saved setups and their evidence could not be read, because the research store could not be reached. Try again once it is back.",
+            },
+        ) from exc
 
 
 @router.put("/setups/{name}", response_model=SavedSetupResponse, responses=_IS_AN_EXAMPLE)

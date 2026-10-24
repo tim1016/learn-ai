@@ -6731,6 +6731,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/options-backtest/setup-index": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Setup Index
+         * @description The saved setups and all Options evidence in one read, each with its exact content hash; nothing is joined by name.
+         */
+        get: operations["get_setup_index_api_research_options_backtest_setup_index_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/options-backtest/setups": {
         parameters: {
             query?: never;
@@ -20651,6 +20671,100 @@ export interface components {
             /** Symbol */
             symbol: string;
         };
+        /** IndexedApproval */
+        IndexedApproval: {
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Id */
+            id: string;
+            /**
+             * Origin
+             * @enum {string}
+             */
+            origin: "backtest" | "search" | "not_recorded";
+            /** Recorded Name */
+            recorded_name: string;
+            /** Setup Sha256 */
+            setup_sha256: string;
+            /** Source Run Id */
+            source_run_id: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ready" | "stale" | "revoked";
+            /** Study Id */
+            study_id?: string | null;
+            /** Underlying */
+            underlying?: string | null;
+        };
+        /** IndexedRun */
+        IndexedRun: {
+            /** Created At Ms */
+            created_at_ms: number;
+            /** First Session Open Ms */
+            first_session_open_ms: number;
+            /** Id */
+            id: number;
+            /** Last Session Open Ms */
+            last_session_open_ms: number;
+            /** Net Profit Usd */
+            net_profit_usd?: string | null;
+            /** Recorded Name */
+            recorded_name?: string | null;
+            /** Sessions Requested */
+            sessions_requested: number;
+            /** Setup Sha256 */
+            setup_sha256?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "complete" | "failed" | "cancelled" | "interrupted";
+            /** Underlying */
+            underlying: string;
+            /** Unreadable Reason */
+            unreadable_reason?: string | null;
+        };
+        /**
+         * IndexedSetup
+         * @description One library entry, by name: a shipped example, a saved setup, or one that can no longer be opened.
+         */
+        IndexedSetup: {
+            /** Cannot Open Reason */
+            cannot_open_reason?: string | null;
+            /** Example */
+            example: boolean;
+            /** Name */
+            name: string;
+            /** Saved At Ms */
+            saved_at_ms?: number | null;
+            /** Setup Sha256 */
+            setup_sha256?: string | null;
+            /** Underlying */
+            underlying?: string | null;
+        };
+        /** IndexedStudy */
+        IndexedStudy: {
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Id */
+            id: string;
+            /** Phase */
+            phase: string;
+            /** Recorded Name */
+            recorded_name: string;
+            /** Setup Sha256 */
+            setup_sha256?: string | null;
+            /** Status */
+            status: string;
+            /** Underlying */
+            underlying: string;
+            /** Unreadable Reason */
+            unreadable_reason?: string | null;
+            /** Updated At Ms */
+            updated_at_ms: number;
+        };
         /** IndicatorBetween */
         IndicatorBetween: {
             /** Hi */
@@ -26889,6 +27003,28 @@ export interface components {
             top_five_profit_contribution: string | null;
             /** Winning Sessions */
             winning_sessions: number;
+        };
+        /**
+         * OptionsSetupIndexResponse
+         * @description Newest first within each list. A list shorter than its ``*_total`` was cut, and the page says so.
+         */
+        OptionsSetupIndexResponse: {
+            /** Approvals */
+            approvals: components["schemas"]["IndexedApproval"][];
+            /** Approvals Total */
+            approvals_total: number;
+            /** Read At Ms */
+            read_at_ms: number;
+            /** Runs */
+            runs: components["schemas"]["IndexedRun"][];
+            /** Runs Total */
+            runs_total: number;
+            /** Setups */
+            setups: components["schemas"]["IndexedSetup"][];
+            /** Studies */
+            studies: components["schemas"]["IndexedStudy"][];
+            /** Studies Total */
+            studies_total: number;
         };
         /** OptionsWatchedPremiumView */
         OptionsWatchedPremiumView: {
@@ -48063,6 +48199,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionClockResponse"];
+                };
+            };
+        };
+    };
+    get_setup_index_api_research_options_backtest_setup_index_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsSetupIndexResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
                 };
             };
         };
