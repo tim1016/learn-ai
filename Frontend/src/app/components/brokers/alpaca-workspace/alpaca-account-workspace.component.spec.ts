@@ -325,6 +325,17 @@ describe('AlpacaAccountWorkspaceComponent', () => {
       expect(screen.getByRole('link', { name: 'Settings' })).toBeTruthy();
     });
 
+    it('tells the inert Activity tab\'s reader why the lane cannot open it', async () => {
+      await renderWorkspace({ url: `${LANE_URL}/settings`, directory: unboundDirectory() });
+      await screen.findByRole('heading', { name: 'Unbound' });
+
+      // The reason is the account workspace's own words, handed to the shared
+      // tab strip; the strip only reads it out beside the greyed tab.
+      const inert = screen.getByText('Activity');
+      const reason = inert.querySelector('span')?.textContent?.replace('—', '').trim() ?? '';
+      expect(reason).not.toBe('');
+    });
+
     it('has no detectable accessibility violations with no account to offer', async () => {
       // The bound render above never emits the inert Activity tab, so this is
       // the only pass that grades it — and the unoffered tab is exactly the

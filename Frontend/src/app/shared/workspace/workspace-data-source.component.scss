@@ -1,0 +1,65 @@
+:host {
+  display: block;
+}
+
+.data-source-line {
+  margin: 0;
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+}
+
+.data-source-line__summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-2);
+  cursor: pointer;
+}
+
+.data-source-line__summary > span + span::before {
+  content: '·';
+  margin-right: var(--space-2);
+}
+
+p.data-source-line {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.data-source-line__label {
+  color: var(--text-secondary);
+  font-weight: var(--fw-semi);
+}
+
+/* Missing data and stated limitations: what the reader must not skim past. */
+.data-source-line__flag {
+  color: var(--warn);
+  font-weight: var(--fw-semi);
+}
+
+.data-source-line__details {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--space-1) var(--space-4);
+  margin: var(--space-2) 0 0;
+}
+
+.data-source-line__details div {
+  display: contents;
+}
+
+.data-source-line__details dt {
+  color: var(--text-subtle);
+}
+
+.data-source-line__details dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.data-source-line__details ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}

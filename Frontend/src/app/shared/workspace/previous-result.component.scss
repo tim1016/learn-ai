@@ -1,0 +1,62 @@
+:host {
+  display: block;
+}
+
+.previous-result__banner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px dashed var(--warn);
+  border-radius: var(--radius);
+  background: var(--warn-soft);
+}
+
+.previous-result__banner p {
+  margin: 0;
+}
+
+.previous-result__title {
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semi);
+}
+
+.previous-result__note {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.previous-result__inputs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  margin: var(--space-1) 0 0;
+}
+
+.previous-result__inputs div {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.previous-result__inputs dt {
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+}
+
+.previous-result__inputs dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+}
+
+/* A previous result stays readable but cannot pass for the current answer. */
+.previous-result__body.is-previous {
+  opacity: 0.55;
+}
+
+.previous-result__actions:empty {
+  display: none;
+}

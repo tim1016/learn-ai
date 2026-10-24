@@ -1,0 +1,17 @@
+@let item = action();
+@if (linkRoute(); as route) {
+  <a
+    class="workspace-action"
+    [class.workspace-action--primary]="variant() === 'primary'"
+    [routerLink]="route"
+    [queryParams]="item.queryParams"
+  >{{ item.label }}</a>
+} @else {
+  <button
+    type="button"
+    class="workspace-action"
+    [class.workspace-action--primary]="variant() === 'primary'"
+    [disabled]="item.disabled === true"
+    (click)="triggered.emit(item.id)"
+  >{{ item.label }}</button>
+}

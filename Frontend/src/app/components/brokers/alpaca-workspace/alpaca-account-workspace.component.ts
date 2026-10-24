@@ -28,6 +28,7 @@ import { CurrentUrlService } from '../../../shell/current-url.service';
 import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
+import { WorkspaceTabListComponent } from '../../../shared/workspace/workspace-tab-list.component';
 import { WorkspaceHeaderSlot } from './workspace-header-slot.service';
 
 /** How often the header re-reads the account's money, its account read and
@@ -86,6 +87,7 @@ type WorkspaceAccountStatus =
     RouterLink,
     RouterOutlet,
     TimestampDisplayComponent,
+    WorkspaceTabListComponent,
   ],
   templateUrl: './alpaca-account-workspace.component.html',
   styleUrl: './alpaca-account-workspace.component.scss',
@@ -152,13 +154,16 @@ export class AlpacaAccountWorkspaceComponent {
   protected readonly pageControls = this.headerSlot.content;
 
   /** The strip's tabs with the route each one links to, or `null` for a tab this
-   * workspace has no address for. Built once per location rather than per
-   * render, so a tab's `routerLink` is not handed a freshly allocated array on
-   * every change-detection pass. */
+   * workspace has no address for — Activity, the account's own history, on a
+   * lane with no confirmed account, and substituting another lane's is exactly
+   * what FR-096 forbids. Built once per location rather than per render, so a
+   * tab's `routerLink` is not handed a freshly allocated array on every
+   * change-detection pass. */
   protected readonly tabs = computed(() =>
     ACCOUNT_WORKSPACE_TABS.map((tab) => ({
       ...tab,
       route: accountWorkspaceTabRoute(this.location(), tab.id),
+      unavailableReason: TAB_WITHOUT_ACCOUNT,
     })),
   );
 
@@ -166,11 +171,6 @@ export class AlpacaAccountWorkspaceComponent {
    * confirmed account — Deploy is the account's own action, so an accountless
    * lane has nowhere to open it. */
   protected readonly deployRoute = computed(() => accountWorkspaceTabRoute(this.location(), 'deploy'));
-
-  /** Why a tab has no address here. Activity is the account's own history,
-   * so a lane with no confirmed account has none to offer — and substituting
-   * another lane's is exactly what FR-096 forbids. */
-  protected readonly TAB_WITHOUT_ACCOUNT = TAB_WITHOUT_ACCOUNT;
 
   /** This workspace's lane, or `null` while the directory has not resolved
    * one for the routed clerk — a bad deep link fails in place here (FR-096),
