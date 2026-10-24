@@ -154,6 +154,9 @@ async def _persist_completed_run(
         requested_engine=request.requested_engine,
         parameters=dict(request.strategy_parameters),
     )
+    if request.algorithm_source:
+        # Filing the run under a strategy (below) leaves its owner no longer saying it ran pasted code.
+        persist_payload = persist_payload | {"custom_source": True}
     if request.strategy_key is not None:
         persist_payload = persist_payload | {"strategy_name": request.strategy_key}
     return await persist_run_payload(persist_payload)

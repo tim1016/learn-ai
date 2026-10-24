@@ -299,6 +299,7 @@ export class ExploreBacktestComponent {
       this.applyRunInputs(inputsFromSavedRun(run, this.config.range()));
       this.runs.runError.set(null);
       if (submittedSource !== null) this.config.customLeanSource.set(submittedSource);
+      else if (run.customSource) this.config.blockRerunOfCustomSource();
     } catch (error) {
       const message = error instanceof Error
         ? error.message

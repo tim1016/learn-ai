@@ -586,6 +586,19 @@ export class StrategyLabConfigStore {
     );
   }
 
+  /**
+   * A reopened run of pasted LEAN source: the record keeps no source, and the
+   * strategy's bundled template is a different program, so the run is not
+   * rerun unchanged. A reason the restore already found stays the one shown.
+   */
+  blockRerunOfCustomSource(): void {
+    this.configurationWarning.update(
+      (warning) =>
+        warning ??
+        "This saved run executed LEAN source pasted into the workbench, and the record does not keep that source. Its persisted report remains available, but it cannot be rerun unchanged.",
+    );
+  }
+
   leanTemplateLabel(): string | null {
     const template = this.leanValidationTemplate();
     return template ? leanValidationTemplateLabel(template) : null;

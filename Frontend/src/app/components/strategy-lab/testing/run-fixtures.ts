@@ -83,6 +83,7 @@ export function makeRun(overrides: Partial<BacktestRunDetail> = {}): BacktestRun
     },
     insightSummaryJson: null,
     parityGroupId: null,
+    customSource: false,
     notes: null,
     trades: [makeTrade()],
     tradesTruncated: false,

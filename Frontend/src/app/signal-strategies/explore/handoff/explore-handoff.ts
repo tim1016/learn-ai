@@ -127,6 +127,12 @@ export function handoffFromBacktest(input: {
   const target = DESTINATION_WORDS[destination];
 
   carried.push({ field: 'Strategy', value: `${strategy.display_name} (${entry.strategy_key}, program ${entry.program_version ?? 'none'})` });
+  if (run.customSource) {
+    unsupported.push({
+      field: 'Algorithm source',
+      reason: `The run executed LEAN source pasted into the workbench, which the record does not keep. ${target} runs ${strategy.display_name}’s registered program, so what it finds is not that code’s result; the symbol, window and costs below are as the run recorded them.`,
+    });
+  }
   carried.push({ field: 'Symbol', value: inputs.range.symbol });
   if (destination === 'golden') {
     unsupported.push({

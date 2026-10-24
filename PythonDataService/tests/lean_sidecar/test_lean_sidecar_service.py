@@ -91,17 +91,34 @@ async def test_completed_run_persists_after_source_changes_mid_run(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("strategy_key", "recorded_name"),
+    ("algorithm_source", "strategy_key", "recorded"),
     [
-        pytest.param("rsi_mean_reversion", "rsi_mean_reversion", id="a custom source is owned by the strategy that submitted it"),
-        pytest.param(None, "user_provided", id="a request that names no owner keeps the name the run was built with"),
+        pytest.param(
+            "class MyAlgorithm: pass",
+            "rsi_mean_reversion",
+            {"strategy_name": "rsi_mean_reversion", "custom_source": True},
+            id="a custom source is owned by the strategy that submitted it and still marked as custom",
+        ),
+        pytest.param(
+            "class MyAlgorithm: pass",
+            None,
+            {"strategy_name": "user_provided", "custom_source": True},
+            id="a custom source that names no owner keeps the name the run was built with and is marked",
+        ),
+        pytest.param(
+            None,
+            None,
+            {"strategy_name": "user_provided"},
+            id="a bundled template run is not marked",
+        ),
     ],
 )
-async def test_completed_run_records_the_owner_the_request_names(
+async def test_completed_run_records_the_owner_the_request_names_and_whether_it_ran_pasted_source(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
+    algorithm_source: str | None,
     strategy_key: str | None,
-    recorded_name: str,
+    recorded: dict[str, object],
 ) -> None:
     from app.services import lean_sidecar_service as service
 
@@ -111,7 +128,7 @@ async def test_completed_run_records_the_owner_the_request_names(
         end_ms_utc=1_736_607_600_000,
         starting_cash=100_000.0,
         data_policy=_make_data_policy(),
-        algorithm_source="class MyAlgorithm: pass",
+        algorithm_source=algorithm_source,
         strategy_key=strategy_key,
     )
     persisted: list[dict] = []
@@ -131,7 +148,7 @@ async def test_completed_run_records_the_owner_the_request_names(
         response=SimpleNamespace(is_clean=True, lean_errors={}),
     )
 
-    assert persisted == [{"strategy_name": recorded_name}]
+    assert persisted == [recorded]
 
 
 @pytest.mark.parametrize(

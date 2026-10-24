@@ -55,7 +55,7 @@ from __future__ import annotations
 
 import asyncpg
 
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 26
 # Arbitrary but fixed: serializes concurrent first-use across FastAPI's loop
 # and the worker loop so CREATE IF NOT EXISTS never races itself.
 _ADVISORY_LOCK_KEY = 0x1926_0001
@@ -1130,6 +1130,13 @@ DDL_V25: tuple[str, ...] = (
        CHECK ((preparation_job_id IS NULL) = (preparation_identity IS NULL))""",
 )
 
+# Version 26 — a LEAN run of pasted source is filed under the strategy that
+# submitted it, so its owner no longer says it ran custom code; this column does.
+# Runs saved before it read false and are told apart by their old owner name.
+DDL_V26: tuple[str, ...] = (
+    "ALTER TABLE research_backtest_runs ADD COLUMN IF NOT EXISTS custom_source BOOLEAN NOT NULL DEFAULT FALSE",
+)
+
 VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (1, DDL_V1),
     (2, DDL_V2),
@@ -1156,6 +1163,7 @@ VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (23, DDL_V23),
     (24, DDL_V24),
     (25, DDL_V25),
+    (26, DDL_V26),
 )
 
 

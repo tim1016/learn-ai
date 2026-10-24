@@ -73,6 +73,7 @@ function baseRun(over: Partial<BacktestRunSummary> = {}): BacktestRunSummary {
     verdictGrade: null,
     verdictSignal: null,
     parityGroupId: null,
+    customSource: false,
     notes: null,
     dataPolicy: {
       source: "polygon",

@@ -3205,6 +3205,10 @@
             ],
             "title": "Commissionperorder"
           },
+          "customSource": {
+            "title": "Customsource",
+            "type": "boolean"
+          },
           "dataPolicy": {
             "anyOf": [
               {
@@ -3533,6 +3537,7 @@
           "verdictGrade",
           "verdictSignal",
           "parityGroupId",
+          "customSource",
           "requestedEngine",
           "fillMode",
           "durationMs",
@@ -3761,6 +3766,10 @@
             ],
             "title": "Commissionperorder"
           },
+          "customSource": {
+            "title": "Customsource",
+            "type": "boolean"
+          },
           "dataPolicy": {
             "anyOf": [
               {
@@ -3904,6 +3913,7 @@
           "verdictGrade",
           "verdictSignal",
           "parityGroupId",
+          "customSource",
           "hasSyntheticExit"
         ],
         "title": "BacktestRunSummaryResponse",

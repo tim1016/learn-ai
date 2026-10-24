@@ -68,6 +68,7 @@ export function savedRun(overrides: Partial<BacktestRunDetail> = {}): BacktestRu
     dataPolicy: SAVED_RUN_POLICY,
     insightSummaryJson: null,
     parityGroupId: null,
+    customSource: false,
     trades: [],
     tradesTruncated: false,
     closingBarSkips: [],

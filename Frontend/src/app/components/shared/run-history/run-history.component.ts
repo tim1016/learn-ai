@@ -57,10 +57,7 @@ export class RunHistoryComponent {
   }
 
   strategyLabel(row: RunHistoryRow): string {
-    if (row.source === "lean-sidecar" && row.strategyName === "user_provided") {
-      return "User-modified algorithm";
-    }
-    return row.strategyName;
+    return row.customSource ? "User-modified algorithm" : row.strategyName;
   }
 
   /**

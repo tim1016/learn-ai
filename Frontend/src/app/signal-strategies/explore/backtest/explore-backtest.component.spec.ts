@@ -14,7 +14,7 @@ import { within } from "@testing-library/angular";
 import { BehaviorSubject, Subject, of, throwError, type Observable } from "rxjs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { BacktestRunDetail } from "../../../services/backtest-runs.types";
+import type { BacktestRunDetail, BacktestRunSummary } from "../../../services/backtest-runs.types";
 import { BacktestRunsService } from "../../../services/backtest-runs.service";
 import { JobsService, type JobState } from "../../../services/jobs.service";
 import { LeanSidecarService } from "../../../services/lean-sidecar.service";
@@ -88,6 +88,7 @@ function run(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail {
     },
     insightSummaryJson: null,
     parityGroupId: null,
+    customSource: false,
     trades: [],
     tradesTruncated: false,
     closingBarSkips: [],
@@ -131,6 +132,33 @@ function exploreSession(registered: readonly string[] = [STRATEGY_KEY, "rsi_mean
     adoptedBacktestRunId: signal<number | null>(null),
     describedJobId: signal<string | null>(null),
     exploratory: signal(null),
+  };
+}
+
+/** The History row a saved run appears as. */
+function historyRow(saved: BacktestRunDetail): BacktestRunSummary {
+  return {
+    id: saved.id,
+    source: saved.source,
+    engine: saved.engine,
+    strategyName: saved.strategyName,
+    symbol: saved.symbol,
+    leanRunId: saved.leanRunId,
+    parameters: saved.parameters,
+    startDate: saved.startDate,
+    endDate: saved.endDate,
+    executedAt: saved.executedAt,
+    totalTrades: saved.totalTrades,
+    totalPnL: saved.totalPnL,
+    commissionPerOrder: saved.commissionPerOrder,
+    brokeragePolicy: null,
+    notes: null,
+    dataPolicy: saved.dataPolicy,
+    verdictGrade: null,
+    verdictSignal: null,
+    parityGroupId: null,
+    customSource: saved.customSource,
+    hasSyntheticExit: false,
   };
 }
 
@@ -198,6 +226,8 @@ async function createLab(
     backtestRunQueryError?: Error;
     /** The strategy keys the registry lists. */
     registered?: readonly string[];
+    /** The rows the strategy's History reads. */
+    history?: BacktestRunSummary[];
   } = {},
 ) {
   const jobs = signal<never[]>([]);
@@ -218,7 +248,7 @@ async function createLab(
         ? throwError(() => options.backtestRunQueryError)
         : options.runDetail ?? of(options.backtestRun ?? null),
     ),
-    list: vi.fn(() => of([])),
+    list: vi.fn(() => of(options.history ?? [])),
     updateNotes: vi.fn(),
   };
   const runDetailWatchCount = (): number => backtestRuns.get.mock.calls.length;
@@ -701,6 +731,33 @@ describe("Strategy Lab Workbench", () => {
     expect(root.querySelector("a[href*='/user_provided/']")).toBeNull();
     expect(root.querySelector("app-strategy-lab-run-stats")).toBeNull();
     expect(navigate).not.toHaveBeenCalled();
+    http.verify();
+  });
+
+  it("reopens a run of pasted LEAN source as a user-modified algorithm that cannot be rerun unchanged", async () => {
+    // Filed under the strategy whose Explore submitted the source, so only the record's mark says the code was pasted.
+    const pasted = run({ id: 93, source: "lean-sidecar", engine: "LEAN", requestedEngine: "lean", leanRunId: "lean-93", customSource: true });
+    const bundled = run({ id: 94, source: "lean-sidecar", engine: "LEAN", requestedEngine: "lean", leanRunId: "lean-94" });
+    const { fixture, http } = await createLab({ activeRun: pasted.id, backtestRun: pasted, history: [historyRow(pasted), historyRow(bundled)] });
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    const lab = fixture.componentInstance;
+    await vi.waitFor(() => {
+      expect(lab.config.configurationWarning()).toMatch(/cannot be rerun unchanged/);
+    });
+
+    expect(lab.config.configurationWarning()).toMatch(/pasted into the workbench/);
+    expect(lab.config.rerunBlocked()).toBe(true);
+    expect(lab.config.customLeanSource()).toBeNull();
+
+    lab.config.activeTab.set("history");
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const rows = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll("app-run-history tbody tr")).map((tr) => tr.textContent ?? "");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toContain("User-modified algorithm");
+    expect(rows[0]).not.toContain("ema_crossover_signal");
+    expect(rows[1]).toContain("ema_crossover_signal");
     http.verify();
   });
 

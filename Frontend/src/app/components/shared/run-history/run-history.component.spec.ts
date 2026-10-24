@@ -25,6 +25,7 @@ function row(over: Partial<RunHistoryRow> = {}): RunHistoryRow {
     verdictGrade: null,
     verdictSignal: null,
     parityGroupId: null,
+    customSource: false,
     ...over,
   };
 }
@@ -92,18 +93,19 @@ describe("RunHistoryComponent", () => {
     expect(t).toMatch(/\$42\.50/);
   });
 
-  it("labels custom LEAN runs as user-modified algorithms", async () => {
+  it("labels a run of pasted LEAN source as a user-modified algorithm, whichever strategy it is filed under", async () => {
     const fixture = await renderWith([
-      row({
-        source: "lean-sidecar",
-        engine: "LEAN",
-        strategyName: "user_provided",
-      }),
+      row({ id: "1", source: "lean-sidecar", engine: "LEAN", strategyName: "rsi_mean_reversion", customSource: true }),
+      row({ id: "2", source: "lean-sidecar", engine: "LEAN", strategyName: "user_provided", customSource: true }),
+      row({ id: "3", source: "lean-sidecar", engine: "LEAN", strategyName: "ema_crossover", customSource: false }),
     ]);
 
-    const t = text(fixture);
-    expect(t).toContain("User-modified algorithm");
-    expect(t).not.toContain("user_provided");
+    const names = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll("tbody tr")).map((tr) => tr.textContent ?? "");
+    expect(names[0]).toContain("User-modified algorithm");
+    expect(names[0]).not.toContain("rsi_mean_reversion");
+    expect(names[1]).toContain("User-modified algorithm");
+    expect(names[2]).toContain("ema_crossover");
+    expect(names[2]).not.toContain("User-modified algorithm");
   });
 
   it("dashes out symbol when null", async () => {

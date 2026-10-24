@@ -57,6 +57,12 @@ describe('a handoff from a backtest', () => {
     expect(carried(handoff, 'Adjustment')).toContain('split-adjusted');
   });
 
+  it('flags a run of pasted LEAN source, whose code the destination will not run, and says nothing of one that ran the program', () => {
+    expect(gap(fromRun({ requestedEngine: 'lean', customSource: true }), 'Algorithm source')).toContain('pasted into the workbench');
+    expect(gap(fromRun({ requestedEngine: 'lean', customSource: true }, 'walk-forward'), 'Algorithm source')).toContain('Walk-forward runs');
+    expect(gap(fromRun({ requestedEngine: 'lean' }), 'Algorithm source')).toBeUndefined();
+  });
+
   it('says a saved run carries no slippage rather than inventing one', () => {
     expect(gap(fromRun(), 'Slippage')).toContain('does not carry its slippage');
   });

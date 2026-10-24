@@ -50,7 +50,7 @@ async def test_history_lists_newest_first_filters_by_engine_and_keeps_the_graphq
         assert set(engine_row) == {
             "id", "source", "engine", "strategyName", "symbol", "leanRunId", "parameters", "startDate", "endDate",
             "executedAt", "totalTrades", "totalPnL", "commissionPerOrder", "brokeragePolicy", "notes", "dataPolicy",
-            "verdictGrade", "verdictSignal", "parityGroupId", "hasSyntheticExit",
+            "verdictGrade", "verdictSignal", "parityGroupId", "customSource", "hasSyntheticExit",
         }
         assert engine_row["engine"] == "PYTHON" and engine_row["source"] == "engine" and engine_row["totalPnL"] == 20.0
         assert engine_row["startDate"] == 1736139600000 and engine_row["endDate"] == 1736485200000  # ET midnight, ms UTC

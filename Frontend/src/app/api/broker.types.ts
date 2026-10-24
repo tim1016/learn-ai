@@ -9142,6 +9142,8 @@ export interface components {
             closingBarSkips: components["schemas"]["BacktestRunClosingBarSkipResponse"][];
             /** Commissionperorder */
             commissionPerOrder: number | null;
+            /** Customsource */
+            customSource: boolean;
             /** Datapolicy */
             dataPolicy: Record<string, never> | null;
             /** Durationms */
@@ -9304,6 +9306,8 @@ export interface components {
             brokeragePolicy: string | null;
             /** Commissionperorder */
             commissionPerOrder: number | null;
+            /** Customsource */
+            customSource: boolean;
             /** Datapolicy */
             dataPolicy: Record<string, never> | null;
             /** Enddate */
