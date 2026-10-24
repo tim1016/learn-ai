@@ -26,8 +26,10 @@ and what it reads now, field by field:
   *should* use is an owner decision (D02). A session
   counts as complete only once the vendor has delivered its whole tape (the
   close, plus four hours of after-hours for ``extended``, plus the vendor's
-  15-minute delay), and a held day captured before that is captured again
-  rather than read as complete (``app.data_lake.capture_finality``).
+  15-minute delay), and a held day captured before that is refused
+  (``captured_before_final``) rather than read as complete or captured again
+  (``app.data_lake.capture_finality``; how to capture it again is an owner
+  decision in ``docs/known-gaps.md``).
 * **Warmup.** None. Features use only bars inside the window (RSI-14, MACD
   12/26/9, rolling 30, ``pct_change(5)``), over one continuous series straight
   across overnight gaps; their first values in the window are NaN.

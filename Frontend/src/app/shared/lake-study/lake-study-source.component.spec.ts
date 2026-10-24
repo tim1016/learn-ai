@@ -13,9 +13,12 @@ function coverage(over: Partial<LakeCoverage['window']> = {}): LakeCoverage {
   return {
     window: {
       expectedSessions: 5, reused: 2, added: 3, missing: 0, failed: 0,
-      building: 0, corrupt: 0, unavailableFromProvider: 0, ...over,
+      building: 0, corrupt: 0, capturedBeforeFinal: 0, unavailableFromProvider: 0, ...over,
     },
-    warmup: { expectedSessions: 0, reused: 0, added: 0, missing: 0, failed: 0, building: 0, corrupt: 0, unavailableFromProvider: 0 },
+    warmup: {
+      expectedSessions: 0, reused: 0, added: 0, missing: 0, failed: 0,
+      building: 0, corrupt: 0, capturedBeforeFinal: 0, unavailableFromProvider: 0,
+    },
     artifacts: { fetched: 3, reused: 2, refreshed: 0 },
   };
 }
@@ -70,6 +73,26 @@ describe('LakeStudySourceComponent', () => {
     // The line below it still names where the study looked, and what was added.
     expect(screen.getByText('Data source')).toBeTruthy();
     expect(screen.getByText('4 added · 0 reused · 0 missing')).toBeTruthy();
+  });
+
+  it('says a held day captured before its session closed must be captured again, not that it is missing or damaged', async () => {
+    const reason = 'captured by 2024-03-06 16:31 ET, before its extended session had closed and been delivered (2024-03-06 20:15 ET); it must be captured again before a study of the extended session can use it';
+    await render(LakeStudySourceComponent, {
+      inputs: {
+        source: null,
+        refusal: {
+          code: 'captured_before_final',
+          reason: `The lake cannot admit this window: 1 of 5 sessions were captured before their data stopped forming: 2024-03-06 (${reason}).`,
+          sessions: [{ group: 'window', tradingDateMs: WEDNESDAY_OPEN, outcome: 'captured_before_final', reason, failureReason: null }],
+          sessionsTotal: 1,
+          coverage: coverage({ reused: 4, added: 0, failed: 1, capturedBeforeFinal: 1 }),
+        },
+      },
+    });
+
+    expect(screen.getByText(/5 sessions · 4 reused · 0 added · 0 missing · 1 failed \(1 captured before the session closed\)/)).toBeTruthy();
+    const session = screen.getByText(reason).closest('li');
+    expect(within(session as HTMLElement).getByText('captured before the session closed; must be captured again')).toBeTruthy();
   });
 
   it('counts the sessions it does not list', async () => {
