@@ -74,11 +74,11 @@ describe('the Operations place', () => {
     expect(links.filter((link) => link.getAttribute('aria-current') === 'page').map((link) => link.textContent?.trim())).toEqual(['TradingView comparison']);
   });
 
-  it('starts the TradingView comparison from the scope an old link carried', async () => {
+  it('starts the TradingView comparison from the symbol an old link carried', async () => {
     await open('/data-quality?ticker=aapl&from=2026-04-15&to=2026-05-15');
 
     expect(TestBed.inject(Router).url).toBe('/operations/data-checks/tradingview?ticker=aapl&from=2026-04-15&to=2026-05-15');
-    expect(screen.getByText('AAPL · 2026-04-15 → 2026-05-15')).toBeTruthy();
+    expect(screen.getByText('Build dataset').getAttribute('href')).toBe('/markets/AAPL/data/build');
   });
 
   it('shows a chip per health source in its header, each from the data plane\'s own word for it', async () => {

@@ -1,0 +1,48 @@
+<details class="quality">
+  <summary>Quality evidence: raw against clean bars</summary>
+  <p class="quality__muted">
+    {{ symbol() }} · {{ from() }} → {{ to() }}. This fetches the window's bars from the provider and runs the
+    cleanup pipeline, so it runs only when you ask.
+  </p>
+  <div class="quality__actions">
+    <button type="button" [disabled]="loading()" (click)="run()">
+      {{ loading() ? 'Analyzing…' : 'Run quality analysis' }}
+    </button>
+    @if (result()) {
+      <button type="button" (click)="download()">Download quality report</button>
+    }
+  </div>
+  @if (error()) {
+    <p class="quality__error" role="alert">{{ error() }}</p>
+  }
+  @if (result(); as q) {
+    <div class="quality__result" role="region" aria-label="Quality summary">
+      <h4>{{ q.ticker }} · {{ q.from_date }} → {{ q.to_date }}</h4>
+      <div class="quality__scroll">
+        <table class="quality__table">
+          <thead>
+            <tr><th scope="col">Metric</th><th scope="col">Raw</th><th scope="col">Clean</th></tr>
+          </thead>
+          <tbody>
+            @for (row of metricRows(); track row.label) {
+              <tr>
+                <th scope="row">{{ row.label }}</th>
+                <td>{{ row.raw }}</td>
+                <td>{{ row.clean }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+      <h5>Pipeline steps</h5>
+      <ol class="quality__steps">
+        @for (step of q.steps; track step.order) {
+          <li>
+            <strong>{{ step.name }}</strong> ({{ step.library }}) —
+            {{ step.bars_before }} → {{ step.bars_after }} bars ({{ step.bars_removed }} removed)
+          </li>
+        }
+      </ol>
+    </div>
+  }
+</details>

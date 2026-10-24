@@ -59,17 +59,25 @@ const ROWS: Readonly<Record<string, Row>> = {
   '': { group: null },
 
   // ── Markets ──────────────────────────────────────────────────────────────
-  'data-lab': { group: MARKETS, lands: '/data-lab/explore' },
-  'data-lab/explore': { group: MARKETS },
-  'data-lab/export': { group: MARKETS },
-  'data-lab/returns': { group: MARKETS },
+  markets: { group: MARKETS },
+  'markets/:symbol': { group: MARKETS, lands: '/markets/SPY/chart' },
+  'markets/:symbol/chart': { group: MARKETS },
+  'markets/:symbol/chart/news': { group: MARKETS },
+  'markets/:symbol/returns': { group: MARKETS },
+  'markets/:symbol/data': { group: MARKETS },
+  'markets/:symbol/data/build': { group: MARKETS },
+  // The chart, the Returns study and the dataset builder moved under the instrument; with no instrument named, an old address leads to the list.
+  'data-lab': { group: MARKETS, lands: '/markets' },
+  'data-lab/explore': { group: MARKETS, lands: '/markets' },
+  'data-lab/export': { group: MARKETS, lands: '/markets' },
+  'data-lab/returns': { group: MARKETS, lands: '/markets' },
   'options-lab': { group: MARKETS, lands: '/options-lab/chain' },
   'options-lab/chain': { group: MARKETS },
   'options-lab/strategy-finder': { group: MARKETS },
   'broker/options-chain': { group: MARKETS },
   'broker/options-surface': { group: MARKETS },
   'pricing-lab': { group: MARKETS },
-  'research-lab/market/news': { group: MARKETS },
+  'research-lab/market/news': { group: MARKETS, lands: '/markets' },
 
   // ── Research ─────────────────────────────────────────────────────────────
   'research-lab': { group: RESEARCH, lands: '/research-lab/features/validate' },
@@ -221,6 +229,7 @@ const SAMPLE_PARAMS: Readonly<Record<string, string>> = {
   accountId: 'PA9',
   sid: 'sid-1',
   kind: 'run',
+  symbol: 'SPY',
 };
 
 /** The query and fragment every direct load carries, to prove neither is lost. */
@@ -400,7 +409,7 @@ describe('the route inventory (T01)', () => {
       const nextEnd = () => firstValueFrom(router.events.pipe(filter((event) => event instanceof NavigationEnd)));
 
       await router.navigateByUrl('/options-evidence/run/7?view=lineage');
-      await router.navigateByUrl('/data-lab/explore?ticker=SPY');
+      await router.navigateByUrl('/markets/SPY/chart?from=2026-01-02&to=2026-02-27');
 
       const back = nextEnd();
       location.back();
@@ -411,27 +420,38 @@ describe('the route inventory (T01)', () => {
       const forward = nextEnd();
       location.forward();
       await forward;
-      expect(router.url).toBe('/data-lab/explore?ticker=SPY');
+      expect(router.url).toBe('/markets/SPY/chart?from=2026-01-02&to=2026-02-27');
       expect(activeMenuNodeFor(router.url)?.group.title).toBe('Markets');
     });
 
-    it('keeps the Returns study on a legacy-scope link instead of moving to Explore', async () => {
-      const { router } = await load('/data-lab/returns?ticker=SPY&from=2026-01-02');
-
-      expect(router.url).toBe('/data-lab/returns?ticker=SPY&from=2026-01-02');
-    });
-
     it.each([
-      ['/data-lab?mode=build&ticker=SPY#scope', '/data-lab/export?ticker=SPY#scope'],
-      // The archive card left Data Lab, so its anchors lead to the tab that holds each part of it.
+      // The archive card left Data Lab, so its anchors lead to the Operations tab that holds each part of it, whichever page named them.
       ['/data-lab#option-archive-SPY', '/operations/option-archive#option-archive-SPY'],
       ['/data-lab?ticker=SPY#option-archive', '/operations/option-archive?ticker=SPY#option-archive'],
       ['/data-lab#option-archive-backup', '/operations/backups#option-archive-backup'],
       ['/data-lab#option-archive-restore', '/operations/backups#option-archive-restore'],
-      // Validate left Data Lab, so a mode that names it goes to Operations with its scope.
+      ['/data-lab/export#option-archive-SPY', '/operations/option-archive#option-archive-SPY'],
+      ['/data-lab?mode=build&ticker=SPY#option-archive-SPY', '/operations/option-archive?ticker=SPY#option-archive-SPY'],
+      // Validate left Data Lab, so a mode or a path that names it goes to Operations with its scope.
       ['/data-lab?mode=validate', '/operations/data-checks/tradingview'],
       ['/data-lab?mode=validate&ticker=SPY&from=2026-01-02&to=2026-03-31', '/operations/data-checks/tradingview?ticker=SPY&from=2026-01-02&to=2026-03-31'],
-      ['/data-lab?mode=bogus&ticker=SPY', '/data-lab/explore?mode=bogus&ticker=SPY'],
+      ['/data-lab/explore?ticker=QQQ&mode=validate', '/operations/data-checks/tradingview?ticker=QQQ'],
+      ['/data-lab?mode=bogus&ticker=SPY', '/markets/SPY/chart?mode=bogus'],
+      ['/data-lab?mode=explore&ticker=spy&from=2026-01-02&to=2026-02-27&trading-session=extended#top', '/markets/SPY/chart?from=2026-01-02&to=2026-02-27&session=extended#top'],
+      ['/data-lab/explore?ticker=QQQ&from=2026-01-02&to=2026-02-27', '/markets/QQQ/chart?from=2026-01-02&to=2026-02-27'],
+      // The old news page named no instrument in its address; a ticker in the query is the instrument, and with none it leads to the list.
+      ['/research-lab/market/news?ticker=SPY&from=2026-01-02&to=2026-02-27#top', '/markets/SPY/chart/news?from=2026-01-02&to=2026-02-27#top'],
+      ['/research-lab/market/news', '/markets'],
+      // A symbol this app cannot hold is carried to the instrument's address, where it fails in place; it is never swapped for another.
+      ['/data-lab/explore?ticker=%24%24%24', '/markets/$$$/chart'],
+      // The Returns study moved under the instrument too: its window and session go with it, and the ticker becomes the path.
+      ['/data-lab/returns?ticker=spy&from=2026-01-02&to=2026-02-27&trading-session=extended#top', '/markets/SPY/returns?from=2026-01-02&to=2026-02-27&session=extended#top'],
+      ['/data-lab/returns', '/markets'],
+      // Build dataset moved under the instrument, with the full scope its address carried: the ticker becomes the path, the
+      // window and the retired `trading-session` ride as the place's context keys, and a saved setup it named still names it.
+      ['/data-lab/export?ticker=spy&from=2026-01-02&to=2026-02-27&trading-session=extended&sessionId=6f9619ff-8b86-d011-b42d-00c04fc964ff#top', '/markets/SPY/data/build?from=2026-01-02&to=2026-02-27&sessionId=6f9619ff-8b86-d011-b42d-00c04fc964ff&session=extended#top'],
+      ['/data-lab?mode=build&ticker=SPY&from=2026-01-02&to=2026-02-27', '/markets/SPY/data/build?from=2026-01-02&to=2026-02-27'],
+      ['/data-lab/export', '/markets'],
     ])('lands the legacy Data Lab address %s on %s in one navigation', async (url, landsOn) => {
       const { router, ended, cancelled } = await load(url);
 

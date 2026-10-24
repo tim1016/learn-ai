@@ -45,7 +45,7 @@ describe('ResearchLabComponent help', () => {
   });
 
   it('offers no link on a study that has no document', async () => {
-    await openStudy('market/news');
+    await openStudy('features/experiments');
 
     expect(screen.queryByRole('link', { name: 'How this works' })).toBeNull();
   });

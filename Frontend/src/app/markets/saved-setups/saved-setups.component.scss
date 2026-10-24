@@ -1,0 +1,111 @@
+// The saved setups drawer of an instrument place.
+@use '../../styles/tokens' as *;
+
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.saved-setups {
+  min-width: 0;
+  margin-bottom: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid $border-light;
+  border-radius: 8px;
+  background: $bg-surface;
+}
+
+.saved-setups__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
+
+  h2 {
+    margin: 0;
+    font-size: 1rem;
+  }
+
+  button {
+    min-height: 44px;
+    padding: 0 0.75rem;
+  }
+}
+
+.saved-setups__save {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  margin: 0.5rem 0;
+
+  input {
+    min-width: 0;
+    flex: 1 1 12rem;
+    min-height: 44px;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid $border-light;
+    border-radius: 6px;
+    background: $bg-sunken;
+    color: $text-primary;
+  }
+
+  button {
+    min-height: 44px;
+    padding: 0 0.75rem;
+  }
+}
+
+.saved-setups__error {
+  margin: 0;
+  color: var(--text-danger, #ef5350);
+}
+
+.saved-setups__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.saved-setups__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+
+  > button {
+    min-height: 44px;
+  }
+}
+
+.saved-setups__open {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  flex: 1 1 16rem;
+  text-align: start;
+}
+
+.saved-setups__name {
+  font-weight: 600;
+}
+
+.saved-setups__meta {
+  min-width: 0;
+  color: $text-secondary;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.saved-setups__empty {
+  color: $text-secondary;
+}
