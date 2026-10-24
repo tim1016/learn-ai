@@ -84,7 +84,7 @@ async def test_claim_minute_bar_inserts_row_and_returns_id(clean_artifacts, pool
 async def test_select_minute_capture_times_reports_when_each_complete_day_finished_and_is_root_scoped(
     clean_artifacts, pool
 ):
-    """The time a reader judges "captured before the day stopped forming" by (#3521 review M3)."""
+    """The time a reader judges "captured before the day stopped forming" by (#3521)."""
     done, pending = date(2024, 5, 20), date(2024, 5, 21)
     for day in (done, pending):
         await catalog_client.claim_minute_bar(

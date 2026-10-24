@@ -1,4 +1,4 @@
-"""When a minute capture of a session stops being early (#3521 review M3).
+"""When a minute capture of a session stops being early (#3521).
 
 A lake day is the vendor's whole day, published once and then immutable. A
 capture taken while the day was still forming holds only the minutes the

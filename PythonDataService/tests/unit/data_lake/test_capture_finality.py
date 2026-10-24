@@ -1,4 +1,4 @@
-"""When a minute capture of a session is final (#3521 review M3).
+"""When a minute capture of a session is final (#3521).
 
 The closing time comes from the canonical calendar; the vendor's after-hours tail and delivery delay are the two
 constants under test. Nothing here names a clock time except to pin what the calendar says about the days chosen.

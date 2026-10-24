@@ -377,7 +377,7 @@ def test_a_minute_study_neither_waits_on_nor_builds_the_daily_rollup(catalog, la
 
 
 # ---------------------------------------------------------------------------
-# A day captured before its data stopped forming is not a complete day (#3521 review M3)
+# A day captured before its data stopped forming is not a complete day (#3521)
 # ---------------------------------------------------------------------------
 
 
