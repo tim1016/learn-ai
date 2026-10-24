@@ -37,6 +37,13 @@
   --lane: var(--lane-shadow);
 }
 
+/* Once the mode is read, the open tab is underlined in the lane colour; before
+   that the tab list keeps its accent underline, not a grey one that would read
+   as disabled. */
+.account-workspace[data-lane] {
+  --workspace-tab-accent: var(--lane);
+}
+
 .account-workspace__header {
   display: flex;
   flex: 0 0 auto;
@@ -176,52 +183,6 @@
   &:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 }
 
-.account-workspace__tabs {
-  display: flex;
-  flex: 0 0 auto;
-  gap: var(--space-1);
-  padding: 0 var(--space-4);
-  border-bottom: 1px solid var(--border);
-}
-
-.account-workspace__tab {
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 2px solid transparent;
-  color: var(--text-subtle);
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-semi);
-  text-decoration: none;
-}
-
-.account-workspace__tab:hover {
-  color: var(--text-primary);
-}
-
-.account-workspace__tab:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-
-.account-workspace__tab.is-active {
-  border-bottom-color: var(--lane);
-  color: var(--text-primary);
-}
-
-/* Before the mode is read the frame is neutral; the open tab keeps the
-   accent underline rather than a grey one that would read as disabled. */
-.account-workspace:not([data-lane]) .account-workspace__tab.is-active {
-  border-bottom-color: var(--accent);
-}
-
-/* A tab this lane has no address for — Deploy before an account is
-   confirmed. It stays in the strip, greyed and inert, so the workspace still
-   shows what an account has rather than quietly shrinking to what this one
-   can reach. */
-.account-workspace__tab--unavailable {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
 .account-workspace__sr-only {
   position: absolute;
   width: 1px;
@@ -247,10 +208,5 @@
 @media (max-width: 760px) {
   .account-workspace__header {
     padding: var(--space-2);
-  }
-
-  .account-workspace__tabs {
-    overflow-x: auto;
-    padding: 0 var(--space-2);
   }
 }

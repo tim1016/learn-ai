@@ -1,0 +1,19 @@
+<nav class="workspace-tabs" [attr.aria-label]="label()">
+  @for (tab of tabs(); track tab.id) {
+    @if (tab.route; as route) {
+      <a
+        class="workspace-tab"
+        [class.is-active]="tab.id === activeId()"
+        [attr.aria-current]="tab.id === activeId() ? 'page' : null"
+        [routerLink]="route"
+      >{{ tab.label }}</a>
+    } @else {
+      <span class="workspace-tab workspace-tab--unavailable" aria-disabled="true">
+        {{ tab.label }}
+        @if (tab.unavailableReason; as reason) {
+          <span class="workspace-tab__reason"> — {{ reason }}</span>
+        }
+      </span>
+    }
+  }
+</nav>

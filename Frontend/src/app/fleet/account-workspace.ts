@@ -19,6 +19,7 @@
  */
 
 import type { components } from '../api/broker.types';
+import { defineWorkspaceTabs, type WorkspaceTabDescriptor } from '../shared/workspace/workspace-tabs';
 
 /** The workspace's tabs, in the order they are presented. Home is the
  * account's money and its bots: Overview, Bots and Gallery merged (D1, D3).
@@ -26,30 +27,29 @@ import type { components } from '../api/broker.types';
 export type AccountWorkspaceTab = 'home' | 'activity' | 'history' | 'settings' | 'deploy';
 
 /** One tab's identity and its operator-facing name. */
-export interface AccountWorkspaceTabDescriptor {
-  readonly id: AccountWorkspaceTab;
-  readonly label: string;
-}
+export type AccountWorkspaceTabDescriptor = WorkspaceTabDescriptor<AccountWorkspaceTab>;
 
-/** The one place a tab is named: the tab strip renders these and the window
- * title composes from them, so a tab can never pick up a second name. */
-const ACCOUNT_WORKSPACE_TAB_LABELS: Readonly<Record<AccountWorkspaceTab, string>> = {
-  home: 'Home',
-  activity: 'Activity',
-  history: 'History',
-  settings: 'Settings',
-  deploy: 'Deploy a bot',
-};
+/** The one place a tab is named, and the presented tab order (ADR 0064
+ * Decision 1): Home · Activity · History · Settings. The tab strip renders
+ * `tabs` and the window title composes from `label`, so a tab can never pick
+ * up a second name. Activity — the account's records (PRD #2560) — and
+ * History — every bot across every account (#2574) — sit before Settings.
+ * Deploy is not in the strip (PRD #2560 D3): it is the header's "Deploy a
+ * bot" button, and keeps its routed `deploy` URL, its title and its
+ * explain-in-place behaviour. */
+const ACCOUNT_TABS = defineWorkspaceTabs<AccountWorkspaceTab>(
+  {
+    home: 'Home',
+    activity: 'Activity',
+    history: 'History',
+    settings: 'Settings',
+    deploy: 'Deploy a bot',
+  },
+  ['home', 'activity', 'history', 'settings'],
+);
 
-/** The presented tab order (ADR 0064 Decision 1): Home · Activity · History
- * · Settings. Activity — the account's records (PRD #2560) — and History —
- * every bot across every account (#2574) — sit before Settings. Deploy is not
- * in the strip (PRD #2560 D3): it is the header's "Deploy a bot" button, and
- * keeps its routed `deploy` URL, its title and its explain-in-place
- * behaviour. */
-export const ACCOUNT_WORKSPACE_TABS: readonly AccountWorkspaceTabDescriptor[] = (
-  ['home', 'activity', 'history', 'settings'] as const
-).map((id) => ({ id, label: ACCOUNT_WORKSPACE_TAB_LABELS[id] }));
+/** The tab strip's tabs, in the order they are presented. */
+export const ACCOUNT_WORKSPACE_TABS: readonly AccountWorkspaceTabDescriptor[] = ACCOUNT_TABS.tabs;
 
 /** Home's query parameter for how its bots are shown: `wall` as chart tiles,
  * anything else (or nothing) as the List. */
@@ -97,7 +97,7 @@ export interface BotHistoryUrl {
 
 /** One tab's operator-facing name. */
 export function accountWorkspaceTabLabel(tab: AccountWorkspaceTab): string {
-  return ACCOUNT_WORKSPACE_TAB_LABELS[tab];
+  return ACCOUNT_TABS.label(tab);
 }
 
 /** Which account a URL is inside, which of its tabs is open, and whether a

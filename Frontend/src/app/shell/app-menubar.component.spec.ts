@@ -37,6 +37,6 @@ describe('AppMenubarComponent', () => {
 
     const active = container.querySelectorAll(`.${ACTIVE_GROUP_CLASS}`);
     expect(active.length).toBe(1);
-    expect(active[0].textContent).toContain('Options');
+    expect(active[0].textContent).toContain('Markets');
   });
 });

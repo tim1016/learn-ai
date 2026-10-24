@@ -1,12 +1,12 @@
 import { TestBed } from "@angular/core/testing";
 import { provideHttpClient } from "@angular/common/http";
 import { HttpTestingController, provideHttpClientTesting } from "@angular/common/http/testing";
+import { answerCompute, tick, YZ_RV_BY_WINDOW } from "../testing/edge-compute-world";
 import { EdgeApiService } from "./edge-api.service";
 
 /** Targeted tests for `getLiveIv30` — the live-IV30 fetch with
- *  vix-style → parametric fallback. The end-to-end realized-vs-iv flow is
- *  covered indirectly by the component spec; here we pin the fallback
- *  policy and the response→marker mapping. */
+ *  vix-style → parametric fallback. Here we pin the fallback policy and the
+ *  response→marker mapping; the compute flow has its own describe below. */
 describe("EdgeApiService.getLiveIv30", () => {
   let service: EdgeApiService;
   let httpMock: HttpTestingController;
@@ -96,5 +96,85 @@ describe("EdgeApiService.getLiveIv30", () => {
     expect(req.request.body).toEqual({ symbol: "QQQ", target_calendar_days: 60 });
     req.flush(mockIv30Response("vix_style", 0.22));
     await promise;
+  });
+});
+
+describe("EdgeApiService.computeRealizedVsIv", () => {
+  let service: EdgeApiService;
+  let httpMock: HttpTestingController;
+
+  const request = { symbol: "SPY", barSize: "1D", tenor: "30D", estimators: ["yz"] } as const;
+
+  beforeEach(() => {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [EdgeApiService, provideHttpClient(), provideHttpClientTesting()],
+    });
+    service = TestBed.inject(EdgeApiService);
+    httpMock = TestBed.inject(HttpTestingController);
+  });
+
+  afterEach(() => httpMock.verify());
+
+  it("returns a dataset that says it is real, with missing samples as NaN and the live marker absent when its endpoints are dark", async () => {
+    const promise = service.computeRealizedVsIv(request);
+    await answerCompute(httpMock);
+
+    const result = await promise;
+    expect.soft(result.provenance).toBe("real");
+    expect.soft(result.symbol).toBe("SPY");
+    expect.soft(result.N).toBe(40);
+    expect.soft(result.iv30[0], "no IV before the first sample").toBeNaN();
+    expect.soft(result.iv30[5]).toBeCloseTo(0.21, 12);
+    expect.soft(result.coverage.forwardBlindTail).toBe(3);
+    expect.soft(result.coverage.ivFirstTsMs).toBe(result.dates[5].getTime());
+    expect.soft(result.liveIv30).toBeNull();
+  });
+
+  it("picks each Yang-Zhang window by key, whatever other estimators the response lists first", async () => {
+    const promise = service.computeRealizedVsIv({ ...request, estimators: ["ctc", "yz"] });
+    await answerCompute(httpMock, { estimators: ["ctc", "yz"] });
+
+    const result = await promise;
+    expect.soft(result.rvYZ[10], "the readout series is yz_30").toBeCloseTo(YZ_RV_BY_WINDOW[30], 12);
+    expect.soft(result.rvYzByWindow.map((s) => s.window)).toEqual([5, 10, 30]);
+    expect.soft(result.rvYzByWindow.map((s) => s.values[10])).toEqual(
+      [5, 10, 30].map((w) => YZ_RV_BY_WINDOW[w]),
+    );
+  });
+
+  it("rejects, rather than reading another estimator's series, when the response has no yz_30", async () => {
+    const rejection = expect(
+      service.computeRealizedVsIv({ ...request, estimators: ["ctc"] }),
+    ).rejects.toThrow("yz_30");
+    await answerCompute(httpMock, { estimators: ["ctc"] });
+    await rejection;
+  });
+
+  it("rejects with Python's reason when the bars fetch fails, leaving nothing to fall back to", async () => {
+    const promise = service.computeRealizedVsIv(request);
+    httpMock.expectOne("/api/aggregates/fetch").flush({
+      success: false, ticker: "SPY", summary: {}, data: [], error: "Polygon is unavailable",
+    });
+
+    await expect(promise).rejects.toThrow("Polygon is unavailable");
+  });
+
+  it("rejects when the series request fails", async () => {
+    const rejection = expect(service.computeRealizedVsIv(request)).rejects.toThrow();
+    httpMock.expectOne("/api/aggregates/fetch").flush({
+      success: true, ticker: "SPY", summary: {},
+      data: [{ timestamp: 1_767_623_400_000, open: 1, high: 2, low: 1, close: 2, volume: 10 }],
+    });
+    await tick();
+    httpMock.expectOne("/api/edge/realized-vs-iv/series")
+      .flush({ detail: "boom" }, { status: 500, statusText: "Server Error" });
+    httpMock.expectOne("/api/edge/iv30/vix-style")
+      .flush({ detail: "dark" }, { status: 503, statusText: "Unavailable" });
+    await tick();
+    httpMock.expectOne("/api/edge/iv30/parametric")
+      .flush({ detail: "dark" }, { status: 503, statusText: "Unavailable" });
+
+    await rejection;
   });
 });

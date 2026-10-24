@@ -11,6 +11,8 @@
  *   3. No changes needed to the host component or the service.
  */
 
+import type { HelpDocumentRoute } from '../help/help-documents';
+
 export type MarkdownDocId = 'methodology' | 'golden-search-guide';
 
 export interface MarkdownDocDescriptor {
@@ -21,7 +23,7 @@ export interface MarkdownDocDescriptor {
   /** Full title shown in the drawer header. */
   readonly title: string;
   /** Route to the full-page view of this document (opened in a new tab). */
-  readonly fullPageRoute: string;
+  readonly fullPageRoute: HelpDocumentRoute;
   /** Width of the drawer panel. Defaults to `'min(960px, 92vw)'`. */
   readonly width?: string;
   /** Whether the drawer masks the page. Defaults to `true`; a guide read beside a live chart sets `false`. */

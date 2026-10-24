@@ -9,11 +9,6 @@
  * component — cleanly decoupled.
  */
 export interface VerdictAnalysis {
-  /** Indicator display name (e.g. "RSI(14)"). */
-  indicatorDisplay: string;
-  /** Underlying ticker (e.g. "AAPL"). */
-  ticker: string;
-
   /** Best horizon label (e.g. "30-bar"). */
   bestHorizonLabel: string;
   /** Out-of-sample IC at the best horizon. */

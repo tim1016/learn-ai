@@ -27,9 +27,10 @@ import {
   type SceneOffset,
 } from './entry-scene';
 import { createSceneRenderer, type SceneRenderer } from './entry-scene-renderer';
+import { HOME_ROUTE } from '../../shell/app-menu';
 
-/** Where "I'm In" leads. There is no sign-in: the click only opens the app. */
-const DESTINATION = '/data-lab';
+/** Where "I'm In" leads: the app's landing. There is no sign-in: the click only opens the app. */
+const DESTINATION = HOME_ROUTE;
 const ASSETS = '/assets/entry';
 
 const PUSH_IN_ZOOM = 1.8;

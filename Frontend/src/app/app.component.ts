@@ -1,9 +1,10 @@
 import { ChangeDetectionStrategy, Component, computed, effect, inject } from '@angular/core';
 import { Title } from '@angular/platform-browser';
-import { ActivatedRouteSnapshot, RouterOutlet } from '@angular/router';
+import { RouterOutlet } from '@angular/router';
 import { Toast } from 'primeng/toast';
 import { AlpacaLiveBannerComponent } from './shell/alpaca-live-banner.component';
 import { LaneAttentionBellComponent } from './shell/lane-attention-bell.component';
+import { HelpIndexComponent } from './shell/help-index.component';
 import { IbkrFeedPillComponent } from './shell/ibkr-feed-pill.component';
 import { MarkdownDrawerHostComponent } from './shared/markdown-drawer/markdown-drawer-host.component';
 import { AlpacaLiveVerdictService, verdictModeChip } from './services/alpaca-live-verdict.service';
@@ -13,8 +14,8 @@ import { FleetDirectoryService } from './fleet/fleet-directory.service';
 import { AppMenubarComponent } from './shell/app-menubar.component';
 import { TopBarComponent, type ShellAccountMode } from './shell/top-bar.component';
 import { PageBodyComponent } from './shell/page-body.component';
-import { pageTitleFor } from './shell/app-menu';
-import { CurrentUrlService } from './shell/current-url.service';
+import { NOT_FOUND_TITLE, windowTitleFor } from './shell/app-menu';
+import { CurrentUrlService, routeTreeHasData } from './shell/current-url.service';
 import { WorkspaceTitleContextService } from './shell/workspace-title-context.service';
 import {
   accountWorkspaceLocation,
@@ -34,6 +35,7 @@ import { laneDisplayNameText } from './fleet/fleet-directory.types';
     AppMenubarComponent,
     AlpacaLiveBannerComponent,
     LaneAttentionBellComponent,
+    HelpIndexComponent,
     IbkrFeedPillComponent,
     TopBarComponent,
     PageBodyComponent,
@@ -132,6 +134,7 @@ import { laneDisplayNameText } from './fleet/fleet-directory.types';
               <app-alpaca-live-banner [lane]="null" />
             }
           </nav>
+          <app-help-index shell-help />
         </app-top-bar>
       }
       <main class="main" [class.main--sticky-content]="hasStickyContent()">
@@ -153,6 +156,7 @@ export class AppComponent {
   private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly title = inject(Title);
   private readonly currentUrl = inject(CurrentUrlService).url;
+  private readonly pageUrl = inject(CurrentUrlService).pageUrl;
   private readonly activeRoute = inject(CurrentUrlService).activeRoute;
   private readonly titleContext = inject(WorkspaceTitleContextService);
 
@@ -180,9 +184,13 @@ export class AppComponent {
     );
   });
 
-  protected readonly pageTitle = computed(
-    () => this.workspaceTitle() ?? pageTitleFor(this.currentUrl()),
-  );
+  /** Outside a workspace the window reads `Page · Group` from the same menu
+   * node the menubar highlights (PRD #3490 R01); an address no page answers
+   * says so rather than borrowing the title of the page it starts with. */
+  protected readonly pageTitle = computed(() => {
+    const url = this.pageUrl();
+    return url === null ? NOT_FOUND_TITLE : (this.workspaceTitle() ?? windowTitleFor(url));
+  });
   protected readonly alpacaLanes = computed(() => this.fleetDirectory.lanesOf('alpaca'));
   /** The header's solid worst-case tint (owner decision 2026-10-03,
    * superseding #2168's neutral header): an all-Paper fleet paints Paper;
@@ -202,16 +210,16 @@ export class AppComponent {
       : 'live';
   });
   protected readonly isFullBleedRoute = computed(() =>
-    activeRouteHasData(this.activeRoute(), 'fullBleed'),
+    routeTreeHasData(this.activeRoute(), 'fullBleed'),
   );
   protected readonly hasStickyContent = computed(() =>
-    activeRouteHasData(this.activeRoute(), 'stickyContent'),
+    routeTreeHasData(this.activeRoute(), 'stickyContent'),
   );
   /** The entry page stands alone: no top bar, so no account-mode badges. It
    * is the one page allowed to drop them (ADR 0059 Decision 8, amended
    * 2026-10-03), because nothing on it reads or acts on an account. */
   protected readonly isChromelessRoute = computed(() =>
-    activeRouteHasData(this.activeRoute(), 'chromeless'),
+    routeTreeHasData(this.activeRoute(), 'chromeless'),
   );
 
   constructor() {
@@ -228,8 +236,4 @@ export class AppComponent {
     // when IB Gateway has logged out and is refusing every deploy.
     this.ibkrFeed.start();
   }
-}
-
-function activeRouteHasData(route: ActivatedRouteSnapshot, key: string): boolean {
-  return Boolean(route.data[key]) || route.children.some((child) => activeRouteHasData(child, key));
 }

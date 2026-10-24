@@ -11,6 +11,7 @@ import { TopBarComponent } from './top-bar.component';
     <app-top-bar>
       <span shell-nav>Primary navigation</span>
       <span shell-connection>Connection control</span>
+      <span shell-help>Help control</span>
     </app-top-bar>
   `,
 })
@@ -50,6 +51,7 @@ describe('TopBarComponent', () => {
 
     expect(container.querySelector('[data-shell-slot="nav"]')?.textContent).toContain('Primary navigation');
     expect(container.querySelector('[data-shell-slot="connection"]')?.textContent).toContain('Connection control');
+    expect(container.querySelector('[data-shell-slot="help"]')?.textContent).toContain('Help control');
   });
 
 });

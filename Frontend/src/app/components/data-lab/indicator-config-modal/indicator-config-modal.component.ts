@@ -33,6 +33,10 @@ export class IndicatorConfigModalComponent implements OnDestroy {
   paramConfigs = input<ActiveIndicatorParam[]>([]);
   /** Names of indicators currently in the active list (with any params). */
   activeIndicatorKeys = input<readonly string[]>([]);
+  /** Whether the related-indicator chips show. A host that holds one indicator and
+   *  binds neither `addRelated` nor `removeRelated` turns them off: a chip it cannot
+   *  act on would still read "Added". */
+  showRelated = input(true);
 
   paramChange = output<{ name: string; value: number }>();
   resetDefaults = output();
