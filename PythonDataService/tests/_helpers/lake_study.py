@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
@@ -68,3 +69,22 @@ def corrected_day(day: date, vendor_day: list[VendorBar], *, bump: str = "0.05")
         )
         for b in vendor_day
     ]
+
+
+def leave_publication_in_flight(catalog: FakeCatalog, lake: Path, day: date, *, lease_ms_from_now: int, mode: str = "raw") -> bytes:
+    """Leave ``day`` as a writer caught between the rename and the commit leaves it.
+
+    The new bytes are renamed into place, the catalog row is still ``fetching`` and no receipt names those bytes.
+    ``lease_ms_from_now`` positive: the writer is alive and holds its lease. Negative: it died, and its lease has
+    expired. Returns the stray bytes.
+    """
+    row = next(
+        r
+        for r in catalog.rows.values()
+        if r["trading_date"] == day and r["resolution"] == "minute" and r["price_adjustment_mode"] == mode
+    )
+    row["status"] = "fetching"
+    row["lease_expires_at_ms"] = int(time.time() * 1000) + lease_ms_from_now
+    stray = build_minute_trade_zip_bytes("SPY", day.strftime("%Y%m%d"), [minute_bar(day, 10, 0)])
+    lake_file(lake, mode, day).write_bytes(stray)
+    return stray

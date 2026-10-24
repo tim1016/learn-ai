@@ -15,6 +15,7 @@ import zipfile
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
+from typing import get_args
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -22,14 +23,15 @@ import pandas as pd
 import pytest
 import respx
 
-from app.data_lake import run_materialization
+from app.data_lake import catalog_client, run_materialization
 from app.data_lake.adjustment_versions import companion_path
 from app.data_lake.catalog_client import CatalogUnavailableError
 from app.data_lake.lean_writer import build_minute_trade_zip_bytes
-from app.data_lake.types import ArtifactFailure
+from app.data_lake.types import ArtifactFailure, ArtifactFailureReason
 from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.trading_calendar import expected_sessions, session_close_ms_utc, session_open_ms_utc
 from app.research.study_inputs import (
+    _OUTCOME_FOR_FAILURE,
     MinuteWindowIdentity,
     StudyInputRefusal,
     admit_minute_inputs,
@@ -38,7 +40,7 @@ from app.research.study_inputs import (
     lead_in_sessions,
 )
 from tests._helpers.fake_lake_catalog import FakeCatalog, install_fake_catalog, mock_launcher, point_lake_writer_at_tmp
-from tests._helpers.lake_study import commit_bars, commit_payload, lake_file, minute_bar
+from tests._helpers.lake_study import commit_bars, commit_payload, lake_file, leave_publication_in_flight, minute_bar
 from tests._helpers.pinned_vendor import VendorCalls, mock_vendor, scaled, vendor_history
 
 ET = ZoneInfo("America/New_York")
@@ -235,6 +237,98 @@ def test_a_session_another_run_is_still_capturing_is_building_not_missing(catalo
     assert refusal.code == "data_building"
     assert [(i.trading_date, i.outcome) for i in refusal.coverage.issues] == [(MARCH[1], "building")]
     assert counts(refusal.coverage.window) == (2, 0, 0, 1)
+
+
+def _contention_on(day: date, monkeypatch, *, reason: str = "lease_timeout") -> list:
+    """Make the materializer's sync bridge answer ``reason`` for ``day``; the list collects the specs it was asked."""
+    asked: list = []
+    failure = ArtifactFailure(artifact_kind="time_series_bars", symbol="SPY", trading_date=day, data_type="trade", reason=reason)
+
+    def bridge(spec, **_):
+        asked.append(spec)
+        return _result_with_failure(spec, failure)
+
+    monkeypatch.setattr(run_materialization, "_materialize_run_data_sync", bridge)
+    return asked
+
+
+@respx.mock
+def test_a_file_a_live_writer_has_renamed_in_but_not_committed_is_building_never_corrupt(catalog, lake, monkeypatch):
+    """The rename precedes the commit, so a file with no receipt is a capture in flight until the catalog says it is not (R13)."""
+    mock_launcher()
+    mock_vendor("SPY", vendor_history(MARCH))
+    admit(identity(MARCH[:3]))
+    leave_publication_in_flight(catalog, lake, MARCH[1], lease_ms_from_now=60_000)
+    asked = _contention_on(MARCH[1], monkeypatch)
+
+    refusal = refusal_of(identity(MARCH[:3]))
+
+    assert len(asked) == 1, "the materializer, which waits out a live writer, was asked; admission did not judge the file"
+    assert refusal.code == "data_building"
+    assert [(i.trading_date, i.outcome) for i in refusal.coverage.issues] == [(MARCH[1], "building")]
+    assert counts(refusal.coverage.window) == (2, 0, 0, 1)
+    assert refusal.coverage.window.corrupt == 0
+    assert "cannot be read" not in refusal.reason
+
+
+@respx.mock
+def test_a_writer_that_died_between_the_rename_and_the_commit_is_recaptured_not_refused(catalog, lake):
+    """Its lease has expired, so the materializer steals the row and fetches again; the study then admits the day."""
+    mock_launcher()
+    calls = VendorCalls()
+    mock_vendor("SPY", vendor_history(MARCH), calls=calls)
+    admit(identity(MARCH[:3]))
+    stray = leave_publication_in_flight(catalog, lake, MARCH[1], lease_ms_from_now=-60_000)
+    calls.requests.clear()
+
+    admitted = admit(identity(MARCH[:3]))
+
+    assert counts(admitted.coverage.window) == (2, 1, 0, 0), "the repaired day is added; the others were already held"
+    assert calls.days() == [MARCH[1]], "only the stranded day is fetched again"
+    assert lake_file(lake, "raw", MARCH[1]).read_bytes() != stray, "the committed bytes replaced the stray ones"
+
+
+@respx.mock
+@pytest.mark.parametrize("reason", ["io_error", "internal_error", "run_aborted"])
+def test_a_capture_that_failed_for_the_lakes_own_reason_is_not_captured_never_corrupt(catalog, lake, monkeypatch, reason):
+    mock_launcher()
+    mock_vendor("SPY", vendor_history(MARCH))
+    admit(identity(MARCH[:1]))
+    admit(identity(MARCH[2:3]))
+    _contention_on(MARCH[1], monkeypatch, reason=reason)
+
+    refusal = refusal_of(identity(MARCH[:3]))
+
+    assert refusal.code == "data_missing"
+    assert [(i.trading_date, i.outcome) for i in refusal.coverage.issues] == [(MARCH[1], "missing")]
+    assert reason in refusal.coverage.issues[0].reason
+    assert refusal.coverage.window.corrupt == 0 and "cannot be read" not in refusal.reason
+
+
+def test_every_failure_the_lake_can_report_has_an_outcome_for_the_session_it_names():
+    """A new ``ArtifactFailureReason`` must be classified here before it can reach a session."""
+    assert set(_OUTCOME_FOR_FAILURE) == set(get_args(ArtifactFailureReason))
+    assert "corrupt" not in set(_OUTCOME_FOR_FAILURE.values()), "a failed capture says nothing about bytes already held"
+
+
+@respx.mock
+def test_each_session_is_admitted_against_the_catalog_once(catalog, lake, monkeypatch):
+    mock_launcher()
+    mock_vendor("SPY", vendor_history(MARCH))
+    admit(identity(MARCH))
+    receipts_checked: list[str] = []
+    real = catalog_client.has_committed_file_receipt
+
+    async def counting(root_id, mode, path, digest, size):
+        receipts_checked.append(path)
+        return await real(root_id, mode, path, digest, size)
+
+    monkeypatch.setattr(catalog_client, "has_committed_file_receipt", counting)
+
+    admit(identity(MARCH))
+
+    assert sorted(receipts_checked) == sorted(set(receipts_checked)), "no file is read and admitted twice"
+    assert len(receipts_checked) == len(MARCH)
 
 
 @pytest.mark.parametrize("error", [CatalogUnavailableError("down"), TimeoutError("late")])
