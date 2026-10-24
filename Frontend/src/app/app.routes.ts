@@ -111,8 +111,8 @@ export const routes: Routes = [
         path: "strategy-finder",
         loadComponent: () =>
           import(
-            "./components/options-lab/strategy-finder-stub/strategy-finder-stub.component"
-          ).then((m) => m.StrategyFinderStubComponent),
+            "./components/options-lab/strategy-finder-unavailable/strategy-finder-unavailable.component"
+          ).then((m) => m.StrategyFinderUnavailableComponent),
       },
     ],
   },
