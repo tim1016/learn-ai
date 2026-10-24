@@ -5381,9 +5381,16 @@ export interface paths {
          * Start Signal Engine Job
          * @description Kick off a signal-engine run in a worker thread.
          *
-         *     Eight phases (load bars → graduation). Long phases (backtest grid,
-         *     walk-forward) emit fine-grained ``on_progress`` so the bar moves
-         *     while the worker is mid-sweep.
+         *     The worker admits the study's bars from the data lake (materializing what
+         *     is missing), then runs the signal pipeline: nine phases (admit and load
+         *     bars through graduation). Long phases (backtest grid, walk-forward) emit
+         *     fine-grained ``on_progress`` so the bar moves while the worker is
+         *     mid-sweep. A window the lake cannot admit, or a bar size the study can
+         *     never run on, fails the job with a typed refusal; no result is computed.
+         *
+         *     A successful prior run over the same admitted data is served from cache
+         *     (the lookup follows admission — see ``signal_study_service``). Pass
+         *     ``force=true`` to bypass.
          */
         post: operations["start_signal_engine_job_api_jobs_internal_signal_engine_post"];
         delete?: never;
@@ -6501,7 +6508,10 @@ export interface paths {
          * @description Analyze indicator reliability using IC with OOS validation.
          *
          *     This endpoint:
-         *     1. Fetches OHLCV bars for the ticker and date range
+         *     1. Admits OHLCV bars of the requested session (regular hours by default, or extended) for the ticker and
+         *        date range (warmup lead-in included) from the data lake, materializing what it lacks; a window the lake
+         *        cannot admit is refused with a typed code and the coverage counts (409, or 503 when the lake cannot be
+         *        asked), never computed on a shorter series
          *     2. Calculates the specified indicator using pandas-ta
          *     3. Splits data into 70% train / 30% test
          *     4. Computes IC on both splits for each horizon
@@ -6512,6 +6522,30 @@ export interface paths {
          *     IMPORTANT: This is time-series IC for a single asset, NOT cross-sectional factor IC.
          */
         post: operations["calculate_indicator_reliability_api_research_indicator_reliability_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/indicator-reliability/span": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read Indicator Reliability Span
+         * @description The scheduled sessions a run of this request asks the lake for: the warmup lead-in and the window.
+         *
+         *     A read: it answers from the calendar and the warmup sizing and touches neither a bar nor the lake. The page counts
+         *     the sessions of this span that the lake does not hold yet, so its slow-first-run warning covers the lead-in the
+         *     run admits with the window, which the browser has no calendar to derive.
+         */
+        post: operations["read_indicator_reliability_span_api_research_indicator_reliability_span_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -21229,6 +21263,13 @@ export interface components {
             timespan?: "minute" | "hour" | "day";
             /** To Date */
             to_date: string;
+            /**
+             * Warmup Policy
+             * @description What to do when the lake cannot supply the whole warmup lead-in the sizing asks for (history floor, symbol listing, sparse bars). 'allow_shortened' computes on the lead-in that exists and reports the shortfall in data_source.warmup; 'require_full' refuses with code 'warmup_shortened'. A lead-in session the vendor failed to supply (rather than answered with no bars) refuses under either policy.
+             * @default allow_shortened
+             * @enum {string}
+             */
+            warmup_policy?: "allow_shortened" | "require_full";
         };
         /**
          * IndicatorReliabilityResponse
@@ -21266,6 +21307,8 @@ export interface components {
             daily_ic_dates?: string[];
             /** Daily Ic Values */
             daily_ic_values?: number[];
+            /** @description The lake input behind this result: identity, admitted snapshot, coverage and warmup */
+            data_source: components["schemas"]["ReliabilityDataSource-Output"];
             /**
              * Decay Curve
              * @description IC at every integer horizon 1..N on the in-sample period
@@ -21692,6 +21735,26 @@ export interface components {
              * @enum {string}
              */
             value_type: "integer" | "decimal" | "boolean" | "category";
+        };
+        /** LakeCacheState */
+        LakeCacheState: {
+            /**
+             * Cached At Ms
+             * @description When the cache stored the result; null when not recorded
+             */
+            cached_at_ms: number | null;
+            /** Hit */
+            hit: boolean;
+        };
+        /**
+         * LakeEffectiveWindow
+         * @description The first and last session admitted (ET midnight, int64 ms UTC), unlike the requested bounds in the identity.
+         */
+        LakeEffectiveWindow: {
+            /** End Ms */
+            end_ms: number;
+            /** Start Ms */
+            start_ms: number;
         };
         /**
          * LaneAccountQuietRead
@@ -29737,6 +29800,304 @@ export interface components {
             kind: "regular_session";
         };
         /**
+         * ReliabilityDataSource
+         * @description The lake data source of a reliability run, plus its warmup report and the identity a stored result would key on.
+         */
+        "ReliabilityDataSource-Input": {
+            /** Aggregation */
+            aggregation: string;
+            /** Bar Minutes */
+            bar_minutes: number;
+            /**
+             * Bars Used
+             * @description Bars the statistics ran on, after the folding and the warmup trim
+             */
+            bars_used: number | null;
+            cache: components["schemas"]["LakeCacheState"];
+            /** Calculation Version */
+            calculation_version: string;
+            /** Corporate Action Versions */
+            corporate_action_versions: {
+                [key: string]: string;
+            };
+            coverage: components["schemas"]["StudyCoverage"] | null;
+            /** Data Root Id */
+            data_root_id: string | null;
+            /** @description Null until admission succeeds */
+            effective_window: components["schemas"]["LakeEffectiveWindow"] | null;
+            /**
+             * Identity Digest
+             * @description Hash of every input that decides the numbers
+             */
+            identity_digest: string;
+            /**
+             * Kind
+             * @constant
+             */
+            kind: "lake";
+            /**
+             * Minute Bars Read
+             * @description One-minute bars read, warmup lead-in included
+             */
+            minute_bars_read: number | null;
+            /**
+             * Price Adjustment Mode
+             * @enum {string}
+             */
+            price_adjustment_mode: "raw" | "polygon_split_adjusted";
+            /** Provider */
+            provider: string;
+            /**
+             * Result Identity Digest
+             * @description identity + admitted snapshot + calculation version; null when nothing was admitted
+             */
+            result_identity_digest: string | null;
+            /**
+             * Session Policy
+             * @enum {string}
+             */
+            session_policy: "regular" | "extended";
+            /**
+             * Snapshot Digest
+             * @description sha256 of every byte admitted; null when nothing was admitted
+             */
+            snapshot_digest: string | null;
+            /** Symbol */
+            symbol: string;
+            /** @description Requested against admitted lead-in; null when a refusal came before any bar was read */
+            warmup: components["schemas"]["ReliabilityWarmup"] | null;
+            /**
+             * Warmup Sessions
+             * @description Lead-in sessions the run read (after any unsupplied prefix was dropped)
+             */
+            warmup_sessions: number;
+            /**
+             * Window End Ms
+             * @description Requested last date, ET midnight, int64 ms UTC
+             */
+            window_end_ms: number;
+            /**
+             * Window Start Ms
+             * @description Requested first date, ET midnight, int64 ms UTC
+             */
+            window_start_ms: number;
+        };
+        /**
+         * ReliabilityDataSource
+         * @description The lake data source of a reliability run, plus its warmup report and the identity a stored result would key on.
+         */
+        "ReliabilityDataSource-Output": {
+            /** Aggregation */
+            aggregation: string;
+            /** Bar Minutes */
+            bar_minutes: number;
+            /**
+             * Bars Used
+             * @description Bars the statistics ran on, after the folding and the warmup trim
+             */
+            bars_used: number | null;
+            cache: components["schemas"]["LakeCacheState"];
+            /** Calculation Version */
+            calculation_version: string;
+            /** Corporate Action Versions */
+            corporate_action_versions: {
+                [key: string]: string;
+            };
+            coverage: components["schemas"]["StudyCoverage"] | null;
+            /** Data Root Id */
+            data_root_id: string | null;
+            /** @description Null until admission succeeds */
+            effective_window: components["schemas"]["LakeEffectiveWindow"] | null;
+            /**
+             * Identity Digest
+             * @description Hash of every input that decides the numbers
+             */
+            identity_digest: string;
+            /**
+             * Kind
+             * @constant
+             */
+            kind: "lake";
+            /**
+             * Minute Bars Read
+             * @description One-minute bars read, warmup lead-in included
+             */
+            minute_bars_read: number | null;
+            /**
+             * Price Adjustment Mode
+             * @enum {string}
+             */
+            price_adjustment_mode: "raw" | "polygon_split_adjusted";
+            /** Provider */
+            provider: string;
+            /**
+             * Result Identity Digest
+             * @description identity + admitted snapshot + calculation version; null when nothing was admitted
+             */
+            result_identity_digest: string | null;
+            /**
+             * Session Policy
+             * @enum {string}
+             */
+            session_policy: "regular" | "extended";
+            /**
+             * Snapshot Digest
+             * @description sha256 of every byte admitted; null when nothing was admitted
+             */
+            snapshot_digest: string | null;
+            /** Symbol */
+            symbol: string;
+            /** @description Requested against admitted lead-in; null when a refusal came before any bar was read */
+            warmup: components["schemas"]["ReliabilityWarmup"] | null;
+            /**
+             * Warmup Sessions
+             * @description Lead-in sessions the run read (after any unsupplied prefix was dropped)
+             */
+            warmup_sessions: number;
+            /**
+             * Window End Ms
+             * @description Requested last date, ET midnight, int64 ms UTC
+             */
+            window_end_ms: number;
+            /**
+             * Window Start Ms
+             * @description Requested first date, ET midnight, int64 ms UTC
+             */
+            window_start_ms: number;
+        };
+        /**
+         * ReliabilityRefusedResult
+         * @description The body of a refused run (409, or 503 when the lake cannot be asked): the shared refusal for this study.
+         */
+        ReliabilityRefusedResult: {
+            /** @description Null when the refusal came before anything was read */
+            data_source: components["schemas"]["ReliabilityDataSource-Input"] | null;
+            /** Error */
+            error: string;
+            refusal: components["schemas"]["StudyRefusal"];
+            /**
+             * Status
+             * @constant
+             */
+            status: "refused";
+            /**
+             * Success
+             * @constant
+             */
+            success: false;
+            /** Ticker */
+            ticker: string;
+        };
+        /**
+         * ReliabilitySpan
+         * @description The scheduled sessions a run of this request asks the lake for: the warmup lead-in and the window.
+         *
+         *     Answered from the calendar and the warmup sizing alone; no bar and no lake row is read. ``start_ms`` and ``end_ms``
+         *     are ET midnights (``int64 ms UTC``), like the ``data_source`` block's requested bounds. The lead-in is sized before
+         *     the lake is asked, so a symbol that lists inside it shortens it later: this is the span the run *asks* for.
+         */
+        ReliabilitySpan: {
+            /**
+             * End Ms
+             * @description ET midnight of the window's last date
+             */
+            end_ms: number;
+            /**
+             * Start Ms
+             * @description ET midnight of the first session the run admits: the lead-in's first, or the window's start when there is none
+             */
+            start_ms: number;
+            /**
+             * Warmup Sessions
+             * @description Lead-in sessions the sizing asks for, never before the provider's history floor
+             */
+            warmup_sessions: number;
+        };
+        /**
+         * ReliabilitySpanRequest
+         * @description The part of a reliability request that decides which sessions a run asks the lake for.
+         *
+         *     It carries no ``session``: the sessions a run asks the lake for are the same for ``rth`` and ``extended``, and a
+         *     field that cannot change the answer would be accepted and ignored. A body that sends one is refused (422).
+         */
+        ReliabilitySpanRequest: {
+            /** From Date */
+            from_date: string;
+            /**
+             * Indicator Name
+             * @description pandas-ta indicator name (e.g., 'rsi', 'ema')
+             */
+            indicator_name: string;
+            /**
+             * Indicator Params
+             * @description Indicator parameters (e.g., {'length': 14}); the lookback they imply sizes the warmup lead-in
+             */
+            indicator_params?: {
+                [key: string]: number;
+            };
+            /**
+             * Multiplier
+             * @default 1
+             */
+            multiplier?: number;
+            /** Symbol */
+            symbol: string;
+            /**
+             * Timespan
+             * @default minute
+             * @enum {string}
+             */
+            timespan?: "minute" | "hour" | "day";
+            /** To Date */
+            to_date: string;
+        };
+        /**
+         * ReliabilityWarmup
+         * @description The warmup lead-in the sizing asked for against the one the lake supplied.
+         *
+         *     Before the lake, a lead-in cut short by the provider's history floor, the symbol's listing date or sparse
+         *     sessions was computed on without a word. ``shortened`` and ``cause`` say it, ``notice`` says it in a sentence,
+         *     and ``policy`` is the request's ``warmup_policy``: what the run was allowed to do about it.
+         */
+        ReliabilityWarmup: {
+            /**
+             * Admitted Bars
+             * @description Bars at the study's resolution before the window's first session
+             */
+            admitted_bars: number;
+            /** Admitted Sessions */
+            admitted_sessions: number;
+            /**
+             * Cause
+             * @enum {string}
+             */
+            cause: "none" | "provider_history_floor" | "symbol_history_starts" | "sparse_session_bars";
+            /**
+             * Notice
+             * @description The shortfall in a sentence; null when there is none
+             */
+            notice: string | null;
+            /**
+             * Policy
+             * @enum {string}
+             */
+            policy: "allow_shortened" | "require_full";
+            /**
+             * Requested Bars
+             * @description Warmup bars the sizing asks for: indicator lookback x the warmup multiplier
+             */
+            requested_bars: number;
+            /**
+             * Requested Sessions
+             * @description Lead-in sessions the sizing asks for, never before the provider floor
+             */
+            requested_sessions: number;
+            /** Shortened */
+            shortened: boolean;
+            /** Shortfall Bars */
+            shortfall_bars: number;
+        };
+        /**
          * RemoveAction
          * @description Move: soft-delete this bot from the operator catalog.
          */
@@ -31404,6 +31765,19 @@ export interface components {
          *     pre-migration default. Signal-engine processing operates on
          *     15-minute bars by default; the inherited base default of 1 would
          *     silently switch every caller to 1-minute bars.
+         *
+         *     The worker reads the study's bars from the data lake itself, materializing
+         *     what the lake lacks (``app.services.signal_study_service``). Only minute
+         *     bars that divide the hour and are short enough to reach the study's
+         *     validity gate for the session are accepted; other sizes are refused with a
+         *     reason before the lake is touched.
+         *
+         *     **Default override**: ``session="extended"``. ``session`` is the one
+         *     control for which bars the study computes on: ``extended`` is every bar the
+         *     provider served, 04:00-20:00 ET, which is what the study has always read;
+         *     ``rth`` is the scheduled session, and the page offers both. The base default
+         *     (``rth``) would have silently moved every caller that omits it onto a
+         *     different sample (#3522).
          */
         SignalEngineJobRequest: {
             /** Featurename */
@@ -31436,7 +31810,7 @@ export interface components {
             rerunOf?: string | null;
             /**
              * Session
-             * @default rth
+             * @default extended
              * @enum {string}
              */
             session?: "rth" | "extended";
@@ -33861,6 +34235,63 @@ export interface components {
             /** Variable */
             variable: string;
         };
+        /**
+         * StudyArtifactCounts
+         * @description Artifact counts, kept apart from session counts (a session is one minute artifact plus metadata).
+         */
+        StudyArtifactCounts: {
+            /** Fetched */
+            fetched: number;
+            /** Refreshed */
+            refreshed: number;
+            /** Reused */
+            reused: number;
+        };
+        /** StudyCoverage */
+        StudyCoverage: {
+            artifacts: components["schemas"]["StudyArtifactCounts"];
+            warmup: components["schemas"]["StudyCoverageGroup"];
+            window: components["schemas"]["StudyCoverageGroup"];
+        };
+        /**
+         * StudyCoverageGroup
+         * @description Distinct-session counts from lake admission for the window or its warmup lead-in.
+         */
+        StudyCoverageGroup: {
+            /**
+             * Added
+             * @description Sessions this run made ready
+             */
+            added: number;
+            /** Building */
+            building: number;
+            /**
+             * Captured Before Final
+             * @description Held, but captured before the session's data stopped forming
+             */
+            captured_before_final: number;
+            /** Corrupt */
+            corrupt: number;
+            /** Expected Sessions */
+            expected_sessions: number;
+            /**
+             * Failed
+             * @description building + corrupt + captured_before_final + unavailable_from_provider
+             */
+            failed: number;
+            /**
+             * Missing
+             * @description Sessions not held and not fetched
+             */
+            missing: number;
+            /**
+             * Reused
+             * @description Sessions ready before this run began
+             */
+            reused: number;
+            /** Unavailable From Provider */
+            unavailable_from_provider: number;
+        };
         /** StudyDetail */
         StudyDetail: {
             /** Allowed Commands */
@@ -33921,6 +34352,53 @@ export interface components {
          */
         StudyRecordRefusalBody: {
             detail: components["schemas"]["StudyRecordRefusal"];
+        };
+        /** StudyRefusal */
+        StudyRefusal: {
+            /**
+             * Code
+             * @enum {string}
+             */
+            code: "resolution_unsupported" | "symbol_not_addressable" | "no_sessions_in_window" | "window_not_complete" | "data_unavailable_from_provider" | "data_corrupt" | "captured_before_final" | "data_building" | "data_missing" | "lake_unavailable" | "warmup_shortened";
+            /** @description Null when admission never started */
+            coverage: components["schemas"]["StudyCoverage"] | null;
+            /** Reason */
+            reason: string;
+            /**
+             * Sessions
+             * @description The sessions that could not be made ready; the first of sessions_total
+             */
+            sessions: components["schemas"]["StudySessionIssue"][];
+            /** Sessions Total */
+            sessions_total: number;
+        };
+        /**
+         * StudySessionIssue
+         * @description One required session admission could not make ready, and why.
+         */
+        StudySessionIssue: {
+            /**
+             * Failure Reason
+             * @description The materializer's own reason code for the session, when it gave one
+             */
+            failure_reason: string | null;
+            /**
+             * Group
+             * @enum {string}
+             */
+            group: "window" | "warmup";
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "missing" | "building" | "corrupt" | "captured_before_final" | "unavailable_from_provider";
+            /** Reason */
+            reason: string;
+            /**
+             * Trading Date Ms
+             * @description The session's canonical open, int64 ms UTC
+             */
+            trading_date_ms: number;
         };
         /** Subtract */
         "Subtract-Input": {
@@ -48341,6 +48819,66 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IndicatorReliabilityResponse"];
+                };
+            };
+            /** @description The study did not run: the request names an input it cannot read (a bar size the lake cannot form, a symbol it cannot hold, a window with no session or one still forming), the lake cannot admit the window, or the warmup policy refuses a shortened lead-in. The refusal carries a typed code, the reason, the sessions that could not be made ready and the counts admission reached. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReliabilityRefusedResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description The data lake's catalog is unavailable; same body as 409. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReliabilityRefusedResult"];
+                };
+            };
+        };
+    };
+    read_indicator_reliability_span_api_research_indicator_reliability_span_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReliabilitySpanRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReliabilitySpan"];
+                };
+            };
+            /** @description The request names a bar size the lake cannot form, so no span is asked of it; same body as a refused run. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReliabilityRefusedResult"];
                 };
             };
             /** @description Validation Error */

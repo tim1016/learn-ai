@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 from app.research.signal.standardize import apply_threshold_filter, compute_train_zscore
+from app.research.validation.ic import new_york_dates
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +118,7 @@ def run_backtest(
 
     if include_series and timestamps is not None:
         ts = timestamps[mask]
-        result.dates = [str(pd.to_datetime(t, unit="ms", utc=True).date()) for t in ts.values]
+        result.dates = [str(day) for day in new_york_dates(ts)]
         cum = np.cumsum(net_returns)
         result.cumulative_returns = cum.tolist()
         result.positions = positions.tolist()

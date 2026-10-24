@@ -1,0 +1,32 @@
+{
+ "requests": [
+  {
+   "file": "spy_15min_2025-01-13_2025-01-17.json",
+   "method": "GET",
+   "path": "/v2/aggs/ticker/SPY/range/15/minute/2025-01-13/2025-01-17",
+   "query": {
+    "adjusted": "false",
+    "sort": "asc",
+    "limit": "50000"
+   },
+   "http_status": 200,
+   "fetched_on": "2026-10-24",
+   "sha256": "f53f6f23d94096d62b2d51115aa3ff3855467d76e8546c31871ab951897d5a51",
+   "bytes": 31673
+  }
+ ],
+ "compared_with": {
+  "capture": "tests/fixtures/polygon_capture/spy_minute_2025-01-13_2025-01-17",
+  "bars_sha256": "36d3c9358f4bcbfa89b29ec12493f566fdbd71a61ee2ef9d6c7f3bdd6e90d961"
+ },
+ "facts": {
+  "bars": 320,
+  "sessions": 5,
+  "bars_per_session": 64,
+  "regular_hours_bars": 130,
+  "buckets_holding_fewer_than_15_minutes": 135,
+  "minutes_missing_from_those_buckets": 738,
+  "first_bar_start_new_york": "2025-01-13 04:00",
+  "last_bar_start_new_york": "2025-01-17 19:45"
+ }
+}

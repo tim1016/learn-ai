@@ -29,6 +29,7 @@ from app.research.indicator_reliability import (
     generate_next_steps,
     split_by_volatility_regime,
 )
+from app.research.validation.ic import compute_information_coefficient
 
 
 def _create_test_df(n_bars: int = 500, seed: int = 42) -> pd.DataFrame:
@@ -126,6 +127,28 @@ class TestComputeForwardReturn:
         valid_count = fwd.notna().sum()
         assert valid_count < len(df) - 15
 
+    def test_the_overnight_mask_follows_the_new_york_date_so_late_after_hours_bars_get_no_next_day_return(self):
+        """In standard time 19:00 ET is 00:00 UTC, so the evening and the next pre-market share one UTC date (#3523)."""
+        et = pd.Timestamp("2024-01-08", tz="America/New_York")
+        evening = [et + pd.Timedelta(hours=19, minutes=58), et + pd.Timedelta(hours=19, minutes=59)]
+        morning = [et + pd.Timedelta(days=1, hours=4), et + pd.Timedelta(days=1, hours=4, minutes=1)]
+        stamps = [int(t.timestamp() * 1000) for t in (*evening, *morning)]
+        assert pd.to_datetime(stamps, unit="ms", utc=True).date.tolist() == [pd.Timestamp("2024-01-09").date()] * 4
+        df = pd.DataFrame({"timestamp": stamps, "close": [100.0, 101.0, 102.0, 103.0]})
+
+        fwd = compute_forward_return(df, horizon=2, mask_overnight=True)
+
+        assert fwd.isna().all(), "both evening bars look across the overnight gap, and the New York dates differ"
+        assert np.isclose(compute_forward_return(df, horizon=2, mask_overnight=False).iloc[0], np.log(102 / 100), atol=1e-12, rtol=0)
+
+    def test_a_regular_hours_series_is_masked_exactly_as_it_was_when_the_mask_read_the_utc_date(self):
+        df = _create_test_df(500)
+        by_utc_date = df.assign(date=pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.date)
+
+        pd.testing.assert_series_equal(
+            compute_forward_return(df, horizon=15), compute_forward_return(by_utc_date, horizon=15), atol=0, rtol=0
+        )
+
 
 class TestComputeIndicatorReliabilityWithOos:
     """Tests for compute_indicator_reliability_with_oos (IS/OOS pipeline)."""
@@ -204,6 +227,26 @@ class TestComputeIndicatorReliabilityWithOos:
                 indicator_column="nonexistent",
                 horizons=[10],
             )
+
+    def test_the_train_and_test_dates_are_the_new_york_dates_of_the_edge_bars_so_an_evening_is_not_the_next_day(self):
+        """In standard time a bar at 19:xx ET is 00:xx UTC of the next date; the window ends on its own session (#3523)."""
+        rng = np.random.default_rng(3)
+        sessions = ["2024-02-20", "2024-02-21", "2024-02-22", "2024-02-23", "2024-02-26", "2024-02-27", "2024-02-28", "2024-02-29"]
+        stamps = []
+        for day in sessions:
+            for hour, count in ((15, 40), (19, 20)):
+                opening = pd.Timestamp(f"{day} {hour:02d}:00", tz="America/New_York")
+                stamps.extend(int((opening + pd.Timedelta(minutes=minute)).timestamp() * 1000) for minute in range(count))
+        close = 100 * np.exp(np.cumsum(rng.normal(0, 0.001, len(stamps))))
+        df = pd.DataFrame({"timestamp": stamps, "close": close, "rsi_14": rng.normal(50, 10, len(stamps))})
+
+        # 360 of 480 bars train: the last train bar is session 2024-02-27's 19:19 ET, the first test bar 2024-02-28's 15:00 ET.
+        _, _, metadata = compute_indicator_reliability_with_oos(
+            df=df, indicator_column="rsi_14", horizons=[1], train_ratio=0.75, random_simulations=5
+        )
+
+        assert (metadata["train_start"], metadata["train_end"]) == ("2024-02-20", "2024-02-27"), "train ends on its own session"
+        assert (metadata["test_start"], metadata["test_end"]) == ("2024-02-28", "2024-02-29"), "test ends on the last session"
 
 
 class TestFindBestHorizon:
@@ -392,6 +435,19 @@ class TestBarsPerYear:
     def test_bars_per_year(self, timespan, multiplier, expected):
         assert bars_per_year(timespan, multiplier) == pytest.approx(expected), "bars per year for the timespan and multiplier"
 
+    @pytest.mark.parametrize(
+        ("timespan", "multiplier", "session", "expected"),
+        [
+            pytest.param("minute", 1, "rth", 252 * 390, id="minute_regular"),
+            pytest.param("minute", 1, "extended", 252 * 960, id="minute_extended_is_the_16_hour_span"),
+            pytest.param("minute", 5, "extended", 252 * 960 / 5, id="multiplier_scales_inversely_in_extended"),
+            pytest.param("hour", 1, "extended", 252 * 16, id="hour_extended"),
+            pytest.param("day", 1, "extended", 252, id="a_daily_bar_does_not_depend_on_the_session"),
+        ],
+    )
+    def test_the_bars_a_year_holds_depend_on_the_session_the_bars_are_drawn_from(self, timespan, multiplier, session, expected):
+        assert bars_per_year(timespan, multiplier, session) == pytest.approx(expected, abs=1e-9, rel=0)
+
 
 class TestIRProxy:
     def test_ir_proxy_sign_and_breadth(self):
@@ -527,6 +583,27 @@ class TestRandomBaselineReturnsDistribution:
         assert mean_a == pytest.approx(mean_b, abs=1e-12), "same rng seed gives the same mean"
         assert std_a == pytest.approx(std_b, abs=1e-12), "same rng seed gives the same std"
         assert dist_a == pytest.approx(dist_b, abs=1e-12), "same rng seed gives the same distribution"
+
+    def test_each_shuffle_scores_exactly_what_the_public_daily_ic_scores(self):
+        """The loop labels the bars with their New York dates once; every shuffle must equal the public per-call result (#3523)."""
+        from app.research.indicator_reliability import _day_block_circular_shift
+
+        df = _create_test_df(500)
+        horizon = 10
+        _, _, distribution = compute_random_baseline_ic(
+            df, horizon=horizon, feature_column="rsi_14", n_simulations=10, rng=np.random.default_rng(seed=3)
+        )
+
+        rng = np.random.default_rng(seed=3)
+        forward = compute_forward_return(df, horizon)
+        days = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_convert("America/New_York").dt.date.to_numpy()
+        expected = []
+        for _ in range(10):
+            shuffled = pd.Series(_day_block_circular_shift(df["rsi_14"].to_numpy(), days, rng), index=df.index)
+            expected.append(compute_information_coefficient(shuffled, forward, df["timestamp"], correlation_method="spearman").mean_ic)
+
+        assert len(distribution) == 10
+        np.testing.assert_allclose(distribution, expected, atol=0, rtol=0)
 
     @pytest.mark.parametrize(
         "seed",

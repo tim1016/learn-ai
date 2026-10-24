@@ -130,6 +130,7 @@ $$ s_t = \operatorname{sign}(z_t) \cdot \mathbb{1}[|z_t| \ge \theta] $$
 **Step 4 — optional regime gate.** If `regimeGateEnabled=true`, multiply
 `s_t` by a 0/1 daily regime mask computed in
 [`signal/regime.py`](https://github.com/tim1016/learn-ai/blob/master/PythonDataService/app/research/signal/regime.py).
+Each regime day groups bars by their New York date, so extended-hours evening bars stay with their session.
 The mask is built from realised vol and trend regimes derived from prior
 bars only — no lookahead.
 
@@ -228,7 +229,7 @@ Implemented in
 For each fold `i ∈ {0, 1, …, K_folds − 1}`:
 
 1. Split bars into a train window (default 3 months) and a contiguous test
-   window (default 1 month).
+   window (default 1 month). Month boundaries use the bars' New York dates, including each session's evening bars.
 2. Fit `μ_i`, `σ_i` on the train fold's feature values only.
 3. **Select `θ_i`** that maximises **train-fold** net Sharpe across the
    threshold grid. This is per-fold selection, not global. The selected

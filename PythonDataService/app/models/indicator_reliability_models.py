@@ -6,13 +6,16 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.models.lake_study_models import LakeDataSource, LakeRefusedResult, TimestampMs
 from app.research.study_records.models import RecordId
-from app.schemas.ticker_request import TickerRequest
+from app.schemas.ticker_request import SessionFreeTickerRequest, TickerRequest
 
 StrengthLabel = Literal["Noise", "Weak", "Moderate", "Strong"]
 StabilityLabel = Literal["Low", "Moderate", "High"]
 DirectionLabel = Literal["Mean-Reversion", "Momentum", "None"]
 TradeabilityLabel = Literal["Likely tradeable", "Marginal", "Unlikely", "Unknown"]
+WarmupPolicy = Literal["allow_shortened", "require_full"]
+WarmupShortfallCause = Literal["none", "provider_history_floor", "symbol_history_starts", "sparse_session_bars"]
 
 
 class VerdictModel(BaseModel):
@@ -54,6 +57,16 @@ class IndicatorReliabilityRequest(TickerRequest):
         default=False,
         description="Also compute IC on indicator slope (1-bar change)",
     )
+    warmup_policy: WarmupPolicy = Field(
+        default="allow_shortened",
+        description=(
+            "What to do when the lake cannot supply the whole warmup lead-in the sizing asks for (history floor, "
+            "symbol listing, sparse bars). 'allow_shortened' computes on the lead-in that exists and reports the "
+            "shortfall in data_source.warmup; 'require_full' refuses with code 'warmup_shortened'. A lead-in session "
+            "the vendor failed to supply (rather than answered with no bars) refuses under either policy."
+        ),
+    )
+    # ``session`` is inherited: ``rth`` (the default, the session the study has always computed on) or ``extended``.
     rerun_of: RecordId | None = Field(
         default=None,
         description="The saved run this one was prefilled from (the History's Rerun); lineage only, never an input.",
@@ -181,6 +194,36 @@ class RegimeResults(BaseModel):
     )
 
 
+class ReliabilityWarmup(BaseModel):
+    """The warmup lead-in the sizing asked for against the one the lake supplied.
+
+    Before the lake, a lead-in cut short by the provider's history floor, the symbol's listing date or sparse
+    sessions was computed on without a word. ``shortened`` and ``cause`` say it, ``notice`` says it in a sentence,
+    and ``policy`` is the request's ``warmup_policy``: what the run was allowed to do about it.
+    """
+
+    policy: WarmupPolicy
+    requested_bars: int = Field(..., description="Warmup bars the sizing asks for: indicator lookback x the warmup multiplier")
+    requested_sessions: int = Field(..., description="Lead-in sessions the sizing asks for, never before the provider floor")
+    admitted_sessions: int
+    admitted_bars: int = Field(..., description="Bars at the study's resolution before the window's first session")
+    shortened: bool
+    shortfall_bars: int
+    cause: WarmupShortfallCause
+    notice: str | None = Field(..., description="The shortfall in a sentence; null when there is none")
+
+
+class ReliabilityDataSource(LakeDataSource):
+    """The lake data source of a reliability run, plus its warmup report and the identity a stored result would key on."""
+
+    warmup: ReliabilityWarmup | None = Field(
+        ..., description="Requested against admitted lead-in; null when a refusal came before any bar was read"
+    )
+    result_identity_digest: str | None = Field(
+        ..., description="identity + admitted snapshot + calculation version; null when nothing was admitted"
+    )
+
+
 class IndicatorReliabilityResponse(BaseModel):
     """Response from indicator reliability analysis."""
 
@@ -263,7 +306,49 @@ class IndicatorReliabilityResponse(BaseModel):
     # Warnings
     warnings: list[str] = Field(default_factory=list)
 
+    data_source: ReliabilityDataSource = Field(
+        ..., description="The lake input behind this result: identity, admitted snapshot, coverage and warmup"
+    )
+
     error: str | None = None
+
+
+class ReliabilityRefusedResult(LakeRefusedResult):
+    """The body of a refused run (409, or 503 when the lake cannot be asked): the shared refusal for this study."""
+
+    ticker: str
+    data_source: ReliabilityDataSource | None = Field(
+        ..., description="Null when the refusal came before anything was read"
+    )
+
+
+class ReliabilitySpanRequest(SessionFreeTickerRequest):
+    """The part of a reliability request that decides which sessions a run asks the lake for.
+
+    It carries no ``session``: the sessions a run asks the lake for are the same for ``rth`` and ``extended``, and a
+    field that cannot change the answer would be accepted and ignored. A body that sends one is refused (422).
+    """
+
+    indicator_name: str = Field(..., description="pandas-ta indicator name (e.g., 'rsi', 'ema')")
+    indicator_params: dict[str, int | float] = Field(
+        default_factory=dict,
+        description="Indicator parameters (e.g., {'length': 14}); the lookback they imply sizes the warmup lead-in",
+    )
+
+
+class ReliabilitySpan(BaseModel):
+    """The scheduled sessions a run of this request asks the lake for: the warmup lead-in and the window.
+
+    Answered from the calendar and the warmup sizing alone; no bar and no lake row is read. ``start_ms`` and ``end_ms``
+    are ET midnights (``int64 ms UTC``), like the ``data_source`` block's requested bounds. The lead-in is sized before
+    the lake is asked, so a symbol that lists inside it shortens it later: this is the span the run *asks* for.
+    """
+
+    start_ms: TimestampMs = Field(
+        ..., description="ET midnight of the first session the run admits: the lead-in's first, or the window's start when there is none"
+    )
+    end_ms: TimestampMs = Field(..., description="ET midnight of the window's last date")
+    warmup_sessions: int = Field(..., description="Lead-in sessions the sizing asks for, never before the provider's history floor")
 
 
 class IndicatorInfo(BaseModel):

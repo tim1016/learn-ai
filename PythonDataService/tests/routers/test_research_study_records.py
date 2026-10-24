@@ -102,10 +102,10 @@ async def test_opening_a_record_again_and_again_recomputes_nothing_and_writes_no
     for module, name in (
         (jobs, "run_feature_study"),
         (feature_study_service, "run_feature_research"),
-        (jobs, "run_signal_engine"),
+        (jobs, "run_signal_study"),
         (jobs, "run_cross_sectional_study"),
         (jobs, "run_in_thread"),
-        (reliability_router, "fetch_bars_chunked"),
+        (reliability_router, "admit_reliability_inputs"),
         (reliability_router, "compute_indicator_reliability_with_oos"),
         (jobs, "run_realized_vs_iv_study"),
     ):

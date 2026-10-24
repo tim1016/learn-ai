@@ -33,6 +33,7 @@ from uuid import uuid4
 
 import numpy as np
 from fastapi import HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.jobs.progress import CancellationCheck, JobCancelled, ProgressEmitter
@@ -282,6 +283,26 @@ def _detail_text(detail: Any) -> str:
     return detail if isinstance(detail, str) else json.dumps(detail, default=str)
 
 
+def _record_answer(run: RunRecorder, response: Any) -> None:
+    """Record what a handler answered with: a model or a dict is the result; a ``JSONResponse`` is read for its body.
+
+    A lake study answers a refusal as a ``JSONResponse`` with an error status and the refusal payload as its body
+    (``app.research.lake_study.refused_result``). That body is the run's parked result: the record keeps it with the
+    ``data_source`` it carries, and says the run failed with the refusal's own reason.
+    """
+    if isinstance(response, JSONResponse):
+        body = json.loads(response.body)
+        if response.status_code >= 400:
+            reason = body.get("error") if isinstance(body, dict) else None
+            run.fail(
+                reason if isinstance(reason, str) and reason else f"HTTP {response.status_code}",
+                result=body if isinstance(body, dict) else None,
+            )
+            return
+        response = body
+    run.deliver(response.model_dump(mode="json") if isinstance(response, BaseModel) else response)
+
+
 def keeps_route_record(
     study: StudyType, capture: Capture, *, body: str, root: Path | None = None
 ) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
@@ -307,7 +328,7 @@ def keeps_route_record(
             except Exception as exc:
                 await asyncio.to_thread(run.fail, f"{type(exc).__name__}: {exc}")
                 raise
-            await asyncio.to_thread(run.deliver, response.model_dump(mode="json") if isinstance(response, BaseModel) else response)
+            await asyncio.to_thread(_record_answer, run, response)
             return response
 
         kept.__signature__ = signature  # type: ignore[attr-defined]

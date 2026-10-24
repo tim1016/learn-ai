@@ -30,7 +30,6 @@ import respx
 from app.lean_sidecar.trading_calendar import expected_sessions
 from app.research.config import ResearchConfig
 from app.research.features.ta_features import TechnicalFeatures
-from app.research.lake_study import cache_key
 from app.research.runner import run_feature_research
 from app.research.study_inputs import StudyInputRefusal, admit_minute_inputs, bars_as_rows, fold_minute_bars
 from app.research.target import compute_forward_log_return
@@ -42,11 +41,8 @@ from app.services.feature_study_service import (
     serialize_feature_report,
 )
 from tests._helpers.fake_lake_catalog import install_fake_catalog, mock_launcher, point_lake_writer_at_tmp
+from tests._helpers.lake_study import ATOL, RTOL, assert_same, cache_key_of, vendor_rows
 from tests._helpers.pinned_vendor import mock_vendor, vendor_history
-
-#: The repo's strict-float default for indicators and closed-form calculations.
-ATOL = 1e-9
-RTOL = 0.0
 
 BAR_MINUTES_CONTRACT = Path(__file__).resolve().parents[3] / "contracts" / "feature-study-bar-minutes.json"
 
@@ -76,51 +72,6 @@ def lake_rows(params: FeatureStudyParams) -> tuple[list[dict], Any]:
     identity = feature_study_identity(params)
     admitted = admit_minute_inputs(identity.inputs, requester="test", now_ms=NOW_MS)
     return bars_as_rows(fold_minute_bars(admitted.window_bars, identity.bar_minutes)), admitted
-
-
-def cache_key_of(params: FeatureStudyParams, identity: Any, admitted: Any) -> dict[str, Any]:
-    """The key the study's result is cached under, as the shared run builds it."""
-    run = feature_study(params)
-    return cache_key(identity, admitted, calculation_version=run.calculation_version, extra=run.cache_extra)
-
-
-def vendor_rows(tape: dict, *, bar_minutes: int = 1) -> list[dict]:
-    """What the provider path would hand the runner for the same tape: the vendor's own floats."""
-    minutes = [
-        {"timestamp": b["t"], "open": b["o"], "high": b["h"], "low": b["l"], "close": b["c"], "volume": float(b["v"])}
-        for day in sorted(tape)
-        for b in tape[day]
-    ]
-    if bar_minutes == 1:
-        return minutes
-    bucket_ms = bar_minutes * 60_000
-    folded: dict[int, dict] = {}
-    for m in minutes:
-        key = m["timestamp"] // bucket_ms * bucket_ms
-        if key not in folded:
-            folded[key] = {**m, "timestamp": key}
-        else:
-            bar = folded[key]
-            bar["high"], bar["low"] = max(bar["high"], m["high"]), min(bar["low"], m["low"])
-            bar["close"] = m["close"]
-            bar["volume"] += m["volume"]
-    return [folded[k] for k in sorted(folded)]
-
-
-def assert_same(a: Any, b: Any, where: str = "report") -> None:
-    """Deep equality, floats at the strict-float tolerance (NaN equals NaN: a warmup region is part of the answer)."""
-    if isinstance(a, dict):
-        assert isinstance(b, dict) and a.keys() == b.keys(), where
-        for key in a:
-            assert_same(a[key], b[key], f"{where}.{key}")
-    elif isinstance(a, list | tuple):
-        assert isinstance(b, list | tuple) and len(a) == len(b), f"{where}: length {len(a)} != {len(b)}"
-        for i, (x, y) in enumerate(zip(a, b, strict=True)):
-            assert_same(x, y, f"{where}[{i}]")
-    elif isinstance(a, float) or isinstance(b, float):
-        assert np.isclose(a, b, atol=ATOL, rtol=RTOL, equal_nan=True), f"{where}: {a!r} != {b!r}"
-    else:
-        assert a == b, f"{where}: {a!r} != {b!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -224,8 +175,8 @@ def test_regular_hours_is_a_different_sample_and_a_different_cache_identity(lake
 
     assert len(regular_rows) < len(extended_rows), "extended hours add pre-market and after-hours bars"
     assert extended_identity.digest() != regular_identity.digest()
-    assert cache_key_of(study(session="extended"), extended_identity, extended) != cache_key_of(
-        study(session="regular"), regular_identity, regular
+    assert cache_key_of(feature_study(study(session="extended")), extended_identity, extended) != cache_key_of(
+        feature_study(study(session="regular")), regular_identity, regular
     )
     assert extended_identity.inputs.session_policy == "extended", "the default is the session the study has always computed on"
 

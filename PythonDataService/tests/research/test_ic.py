@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
+from scipy import stats
 
 from app.research.validation.ic import (
     _andrews_lag,
@@ -86,6 +88,69 @@ class TestInformationCoefficient:
         elif result.mean_ic < 0:
             assert result.ic_t_stat < 0, "t-stat is negative when mean IC is negative"
             assert result.nw_t_stat < 0, "Newey-West t-stat is negative when mean IC is negative"
+
+
+def _session_bars(session_dates: list[str], seed: int) -> tuple[pd.Series, pd.Series, pd.Series, list[str]]:
+    """Ten bars at 15:00 ET and ten at 19:00 ET on each session; the last list names each bar's session date."""
+    rng = np.random.default_rng(seed)
+    stamps: list[int] = []
+    sessions: list[str] = []
+    for day in session_dates:
+        for hour in (15, 19):
+            opening = pd.Timestamp(f"{day} {hour:02d}:00", tz="America/New_York")
+            stamps.extend(int((opening + pd.Timedelta(minutes=minute)).timestamp() * 1000) for minute in range(10))
+            sessions.extend([day] * 10)
+    feature = rng.normal(0, 1, len(stamps))
+    target = 0.4 * feature + rng.normal(0, 1, len(stamps))
+    return pd.Series(feature), pd.Series(target), pd.Series(stamps), sessions
+
+
+class TestDailyGroupingFollowsTheNewYorkDate:
+    """A day is the New York date of the bar's instant: 19:00 ET is 00:00 UTC of the next day in standard time (#3523)."""
+
+    @pytest.mark.parametrize(
+        "session_dates",
+        [
+            ["2024-01-08", "2024-01-09", "2024-01-10", "2024-01-11", "2024-01-12"],  # standard time, a Friday last
+            ["2024-07-08", "2024-07-09", "2024-07-10", "2024-07-11", "2024-07-12"],  # daylight time: 19:00 ET is 23:00 UTC
+            ["2024-03-07", "2024-03-08", "2024-03-11", "2024-03-12"],  # the week daylight time starts (Mar 10)
+        ],
+        ids=["standard_time", "daylight_time", "dst_start_week"],
+    )
+    def test_evening_bars_count_in_their_own_session_and_no_day_falls_after_the_last_session(self, session_dates):
+        feature, target, stamps, sessions = _session_bars(session_dates, seed=11)
+
+        result = compute_information_coefficient(feature, target, stamps)
+
+        assert result.daily_ic_dates == session_dates, "one daily IC per session, none on a weekend or after the last session"
+        expected = [
+            stats.spearmanr(
+                feature[[i for i, s in enumerate(sessions) if s == day]], target[[i for i, s in enumerate(sessions) if s == day]]
+            )[0]
+            for day in session_dates
+        ]
+        np.testing.assert_allclose(result.daily_ic_values, expected, atol=1e-12, rtol=0)
+
+    def test_a_regular_hours_series_groups_exactly_as_it_did_by_utc_date(self) -> None:
+        """9:30 to 16:00 ET is 13:30 to 21:00 UTC all year, so the two dates agree and no regular-hours number moves."""
+        rng = np.random.default_rng(5)
+        days = ["2024-01-08", "2024-01-09", "2024-03-11", "2024-03-12", "2024-11-04", "2024-11-05"]
+        stamps = [
+            int((pd.Timestamp(f"{day} 09:30", tz="America/New_York") + pd.Timedelta(minutes=minute)).timestamp() * 1000)
+            for day in days
+            for minute in range(390)
+        ]
+        feature = pd.Series(rng.normal(0, 1, len(stamps)))
+        target = pd.Series(0.2 * feature + rng.normal(0, 1, len(stamps)))
+        utc_dates = pd.to_datetime(pd.Series(stamps), unit="ms", utc=True).dt.date
+
+        result = compute_information_coefficient(feature, target, pd.Series(stamps))
+
+        by_utc_date = [
+            stats.spearmanr(feature[utc_dates == day], target[utc_dates == day])[0] for day in sorted(set(utc_dates))
+        ]
+        assert result.daily_ic_dates == [str(day) for day in sorted(set(utc_dates))], "the same days"
+        np.testing.assert_allclose(result.daily_ic_values, by_utc_date, atol=0, rtol=0)
 
 
 class TestNeweyWest:

@@ -85,8 +85,8 @@ describe('StudyPageComponent', () => {
 
   it.each([
     ['feature', '15 minutes, fixed'],
-    ['signal', 'extended hours included, fixed'],
-    ['indicator-reliability', 'regular trading hours, fixed'],
+    ['signal', '15 bars, fixed'],
+    ['indicator-reliability', '1 minute, fixed'],
     ['cross-sectional', 'daily, fixed'],
   ] as const)('says what %s fixes in place of a control: %s', async (study, fixed) => {
     await renderPage({ study });
@@ -96,8 +96,8 @@ describe('StudyPageComponent', () => {
 
   it.each([
     ['feature', 'Data lake, Polygon'],
-    ['signal', 'Polygon'],
-    ['indicator-reliability', 'Polygon'],
+    ['signal', 'Data lake, Polygon'],
+    ['indicator-reliability', 'Data lake, Polygon'],
     ['cross-sectional', 'Polygon stock bars, Polygon option bars, FRED risk-free rate'],
     ['realized-vs-iv', 'Data lake, Polygon, IV recorder (recorded IV30), Polygon option snapshot (current IV marker)'],
   ] as const)(

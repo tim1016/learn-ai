@@ -261,8 +261,8 @@ def fetch_bars_chunks_raw(
     ADR 0022 (h),
     duplicates and non-monotonic timestamps must surface as errors at
     the ingestion boundary, not be silently repaired. Callers that want
-    the legacy sanitized behavior (frontend Data Lab, indicator
-    research) should use :func:`fetch_bars_chunked` instead.
+    the legacy sanitized behavior (frontend Data Lab)
+    should use :func:`fetch_bars_chunked` instead.
 
     Progress events and the cooperative-cancel semantics match
     :func:`fetch_bars_chunked` exactly — only the post-merge sanitation
@@ -697,6 +697,10 @@ class IndicatorWindow:
     #: Bars of the computation's own length the longest indicator warms up on
     #: before the first visible bar; 0 when there are no indicators.
     warmup_bars: int
+    #: Whether the provider's history floor, not the sizing, ended the lead-in: the sizing asks for more sessions
+    #: than the provider serves, or the whole lead-in lies before the floor. A lead-in the floor leaves exactly as
+    #: long as the sizing asks is not limited.
+    floor_limited: bool = False
 
 
 @lru_cache(maxsize=32)
@@ -704,7 +708,9 @@ def _sessions_between(first: Date, last: Date) -> tuple[SessionWindow, ...]:
     return tuple(session_windows_ms_utc(first, last))
 
 
-def resolve_indicator_window(from_date: str, *, max_lookback: int, bar_minutes: int) -> IndicatorWindow:
+def resolve_indicator_window(
+    from_date: str, *, max_lookback: int, bar_minutes: int, now_ms: int | None = None
+) -> IndicatorWindow:
     """The ONE decision of a picked window's warm-up start and its visible start (#2458).
 
     The Data Lab chart, the dataset export, the indicator-reliability
@@ -737,7 +743,10 @@ def resolve_indicator_window(from_date: str, *, max_lookback: int, bar_minutes: 
       provider does not serve cannot warm anything up, and asking for it
       fails the whole fetch. When the floor — or a listing date, or a gap —
       leaves fewer lead-in bars than ``warmup_bars``, the caller sees it in the
-      bars it gets and must say so; this resolver never pretends.
+      bars it gets and must say so; this resolver never pretends. It says which
+      of those it knows itself: ``floor_limited``. ``now_ms`` fixes the clock
+      the floor is read at (a caller that has one passes it, so the floor and
+      its other decisions share an instant); production passes none.
 
     Formula: fetch_from = the latest session s with
       Σ_{sessions in [s, from_date)} floor(span / bar) ≥ max_lookback × INDICATOR_WARMUP_MULTIPLIER
@@ -755,12 +764,13 @@ def resolve_indicator_window(from_date: str, *, max_lookback: int, bar_minutes: 
     if max_lookback <= 0:
         return IndicatorWindow(from_date, from_date, window_start_ms, 0)
     warmup_bars = max_lookback * INDICATOR_WARMUP_MULTIPLIER
-    floor = polygon_history_floor(et_date_at_ms(now_ms_utc()))
+    floor = polygon_history_floor(et_date_at_ms(now_ms_utc() if now_ms is None else now_ms))
     if floor >= first:
-        return IndicatorWindow(from_date, from_date, window_start_ms, warmup_bars)
+        return IndicatorWindow(from_date, from_date, window_start_ms, warmup_bars, floor_limited=True)
 
     sessions = _sessions_between(floor, first - timedelta(days=1))
     fetch_from = floor
+    sized = False
     if bar_minutes < REGULAR_SESSION_MINUTES:
         bar_span_ms = bar_minutes * 60_000
         remaining = warmup_bars
@@ -768,12 +778,14 @@ def resolve_indicator_window(from_date: str, *, max_lookback: int, bar_minutes: 
             remaining -= (session.close_ms_utc - session.open_ms_utc) // bar_span_ms
             if remaining <= 0:
                 fetch_from = session.session_date
+                sized = True
                 break
     else:
         needed_sessions = warmup_bars * -(-bar_minutes // REGULAR_SESSION_MINUTES)
         if needed_sessions <= len(sessions):
             fetch_from = sessions[-needed_sessions].session_date
-    return IndicatorWindow(from_date, fetch_from.isoformat(), window_start_ms, warmup_bars)
+            sized = True
+    return IndicatorWindow(from_date, fetch_from.isoformat(), window_start_ms, warmup_bars, floor_limited=not sized)
 
 
 def _tag_session_column(

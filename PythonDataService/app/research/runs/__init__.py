@@ -34,7 +34,6 @@ from app.research.runs.result import (
 )
 from app.research.runs.runner import RunRequest, run_date_to_ms, run_strategy_spec
 from app.research.runs.storage import (
-    list_runs,
     load_run,
     save_run,
 )
@@ -61,7 +60,6 @@ __all__ = [
     "WindowSummary",
     "canonical_json",
     "hash_payload",
-    "list_runs",
     "load_run",
     "make_data_snapshot_id",
     "run_date_to_ms",

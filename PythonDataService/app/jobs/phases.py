@@ -69,6 +69,7 @@ REALIZED_VS_IV_PHASES: tuple[Phase, ...] = (
 
 # ── Signal engine runner ─────────────────────────────────────────────────
 SIGNAL_ENGINE_PHASES: tuple[Phase, ...] = (
+    Phase("admitting_data", "Checking the data lake for this window", 2),
     Phase("loading_bars", "Loading price history", 1),
     Phase("compute_feature", "Computing the signal feature", 1),
     Phase("diagnostics", "Running diagnostic checks", 1),
