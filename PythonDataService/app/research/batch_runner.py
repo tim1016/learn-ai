@@ -44,12 +44,23 @@ Inferential machinery (added 2026-05-01 after methodology review):
 * **Graduation ladder (Stage 0–3)** mirroring the Signal Engine
   ladder, with concrete numerical thresholds derived from the
   external methodology review.
+
+Inputs (#3524). The runner fetches no stock bars. The caller admits each
+member's daily bars from the data lake first
+(``app/research/cross_sectional_inputs.py``) and hands them in; a member the
+lake could not admit arrives as a typed exclusion and is carried through as an
+``invalid_data`` row with its reason, so the requested universe is always fully
+accounted for. The same rows set the IV spot and the ATM strike inside
+``build_iv_history``, which has no fetch of its own. The option inputs (expiries,
+contracts, option bars, the risk-free rate) are the provider's: each ticker's
+requests, failures and answers are recorded in an ``OptionInputLedger`` that
+rides on the ticker's result row.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -57,7 +68,9 @@ import numpy as np
 import pandas as pd
 from scipy import stats as scipy_stats
 
+from app.research.cross_sectional_inputs import ExclusionStage, MemberExclusion
 from app.research.options.iv_builder import build_iv_history
+from app.research.options.option_input_ledger import OptionInputLedger
 from app.research.options_runner import run_options_feature_research
 from app.services.polygon_client import PolygonClientService
 
@@ -262,6 +275,9 @@ class CrossSectionalReport:
 
     summary: str = ""
 
+    option_ledgers: dict[str, OptionInputLedger] = field(default_factory=dict)
+    """Each ticker's provider requests, failures and answers for the option inputs, for the data-source block."""
+
 
 # ─── Main entry ───────────────────────────────────────────────────────────
 
@@ -272,14 +288,27 @@ def run_cross_sectional_study(
     start_date: str,
     end_date: str,
     polygon_client: PolygonClientService,
+    stock_bars: Mapping[str, list[dict[str, Any]]],
     target_type: str = "directional",
+    excluded: Mapping[str, MemberExclusion] | None = None,
     on_phase: PhaseCallback = _noop_phase,
     on_log: LogCallback = _noop_log,
     on_progress: ProgressCallback = _noop_progress,
     cancel_check: CancelCallback = _no_cancel,
 ) -> CrossSectionalReport:
-    """Run a feature across multiple tickers and aggregate results."""
+    """Run a feature across multiple tickers and aggregate results.
+
+    ``stock_bars`` holds each member's admitted daily rows; ``excluded`` the members that never reached the
+    compute and why. Every ticker must be in exactly one of them: the runner has no bar source of its own, so
+    a ticker in neither is a caller bug and raises rather than being fetched or skipped.
+    ``polygon_client`` serves the option inputs only.
+    """
     n = len(tickers)
+    excluded = excluded or {}
+    unplaced = [t for t in tickers if t not in stock_bars and t not in excluded]
+    if unplaced:
+        raise ValueError(f"no admitted bars and no exclusion for: {', '.join(unplaced)}")
+    ledgers: dict[str, OptionInputLedger] = {}
 
     ticker_results: list[dict[str, Any]] = []
     # Per-ticker daily-return series, keyed by ticker, used for the
@@ -309,12 +338,27 @@ def run_cross_sectional_study(
 
         result: dict[str, Any] = _empty_ticker_result(ticker)
 
+        if ticker in excluded:
+            exclusion = excluded[ticker]
+            result["error"] = exclusion.reason
+            result["validity"] = "invalid_data"
+            result["exclusion"] = exclusion.as_dict()
+            ticker_results.append(result)
+            on_log(f"[{i + 1}/{n}] {ticker}: INVALID — {exclusion.reason}")
+            on_progress(i + 1, n, f"{ticker}: invalid ({exclusion.code})")
+            continue
+
+        ledger = ledgers[ticker] = OptionInputLedger()
+        member_bars = stock_bars[ticker]
+
         try:
             iv_df = build_iv_history(
                 underlying=ticker,
                 start_date=start_date,
                 end_date=end_date,
                 polygon_client=polygon_client,
+                stock_bars=member_bars,
+                ledger=ledger,
             )
         except Exception as e:
             # Poll before recording the failure: on the final ticker an early
@@ -322,9 +366,15 @@ def run_cross_sectional_study(
             # that arrived during the IV build would otherwise be reported as a
             # completed study with one errored row.
             cancel_check()
-            _fail_ticker(result, e, ticker=ticker, index=i, total=n, on_log=on_log, on_progress=on_progress)
+            result["option_inputs"] = ledger.as_dict()
+            _fail_ticker(
+                result, e, ticker=ticker, index=i, total=n, on_log=on_log, on_progress=on_progress,
+                stage="iv_inputs", code="iv_build_failed",
+            )
             ticker_results.append(result)
             continue
+
+        result["option_inputs"] = ledger.as_dict()
 
         # The mid-ticker poll sits between the two per-ticker error handlers on
         # purpose, and ahead of the empty-IV early exit for the same reason as
@@ -334,36 +384,27 @@ def run_cross_sectional_study(
         cancel_check()
 
         if iv_df.empty:
-            result["error"] = "No IV data could be derived"
+            if ledger.failure_count:
+                reason = (
+                    f"No IV data could be derived: {ledger.failure_count} provider request(s) for the option "
+                    f"inputs did not answer (first: {ledger.failures[0].reason})"
+                )
+                exclusion = MemberExclusion(ticker, "iv_inputs", "iv_source_unavailable", reason, retryable=True)
+            else:
+                reason = "No IV data could be derived"
+                exclusion = MemberExclusion(ticker, "iv_inputs", "no_iv_derived", reason, retryable=False)
+            result["error"] = reason
             result["validity"] = "invalid_data"
+            result["exclusion"] = exclusion.as_dict()
             ticker_results.append(result)
-            on_log(f"[{i + 1}/{n}] {ticker}: INVALID — no IV data")
+            on_log(f"[{i + 1}/{n}] {ticker}: INVALID — {reason}")
             on_progress(i + 1, n, f"{ticker}: invalid (no IV data)")
             continue
 
         result["data_points"] = len(iv_df)
-        on_log(f"[{i + 1}/{n}] {ticker}: {len(iv_df)} IV days; fetching daily bars...")
+        on_log(f"[{i + 1}/{n}] {ticker}: {len(iv_df)} IV days; {len(member_bars)} daily bars; running IC validation...")
 
         try:
-            stock_bars = polygon_client.fetch_aggregates(
-                ticker=ticker,
-                multiplier=1,
-                timespan="day",
-                from_date=start_date,
-                to_date=end_date,
-                adjusted=True,
-            )
-
-            if not stock_bars:
-                result["error"] = "No stock data available"
-                result["validity"] = "invalid_data"
-                ticker_results.append(result)
-                on_log(f"[{i + 1}/{n}] {ticker}: INVALID — no stock bars")
-                on_progress(i + 1, n, f"{ticker}: invalid (no stock data)")
-                continue
-
-            on_log(f"[{i + 1}/{n}] {ticker}: {len(stock_bars)} daily bars; running IC validation...")
-
             iv_data = iv_df.to_dict(orient="records")
             for row in iv_data:
                 row["atm_iv"] = row.get("iv_30d_atm")
@@ -374,7 +415,7 @@ def run_cross_sectional_study(
                 ticker=ticker,
                 feature_name=feature_name,
                 iv_data=iv_data,
-                stock_daily_bars=stock_bars,
+                stock_daily_bars=member_bars,
                 start_date=start_date,
                 end_date=end_date,
                 target_type=target_type,
@@ -395,11 +436,19 @@ def run_cross_sectional_study(
                 # ran the IC computation, so the ticker is INVALID,
                 # not "FAIL".
                 result["error"] = research_report.error
-                result["validity"] = (
-                    "invalid_iv"
-                    if "diagnostic" in research_report.error.lower() or "iv" in research_report.error.lower()
-                    else "error"
+                is_iv_problem = (
+                    "diagnostic" in research_report.error.lower() or "iv" in research_report.error.lower()
                 )
+                result["validity"] = "invalid_iv" if is_iv_problem else "error"
+                result["exclusion"] = MemberExclusion(
+                    ticker,
+                    "iv_diagnostics" if is_iv_problem else "computation",
+                    "iv_failed_diagnostics" if is_iv_problem else "computation_error",
+                    research_report.error,
+                    # Sparse IV from unanswered requests could pass on a second attempt; a failed
+                    # computation of unknown cause is not evidence either way.
+                    retryable=ledger.failure_count > 0 or not is_iv_problem,
+                ).as_dict()
                 on_log(f"[{i + 1}/{n}] {ticker}: INVALID — {research_report.error}")
                 on_progress(i + 1, n, f"{ticker}: invalid")
             else:
@@ -414,7 +463,7 @@ def run_cross_sectional_study(
 
                 # Stash daily returns + per-ticker IC series for the
                 # N_eff_assets calculation below.
-                returns = _extract_daily_returns(stock_bars)
+                returns = _extract_daily_returns(member_bars)
                 if not returns.empty:
                     per_ticker_returns[ticker] = returns
                 if research_report.ic_values and research_report.ic_dates:
@@ -509,6 +558,7 @@ def run_cross_sectional_study(
         stage_info=stage_info,
         ticker_results=ticker_results,
         summary=summary,
+        option_ledgers=ledgers,
     )
 
 
@@ -524,10 +574,16 @@ def _fail_ticker(
     total: int,
     on_log: LogCallback,
     on_progress: ProgressCallback,
+    stage: ExclusionStage = "computation",
+    code: str = "computation_error",
 ) -> None:
-    """Record one ticker's failure on its result row and report it."""
+    """Record one ticker's failure on its result row and report it.
+
+    The cause of an exception is not known to be permanent, so the exclusion is always retryable.
+    """
     result["error"] = str(error)
     result["validity"] = "error"
+    result["exclusion"] = MemberExclusion(ticker, stage, code, str(error), retryable=True).as_dict()
     on_log(f"[{index + 1}/{total}] {ticker}: ERROR — {error}")
     on_progress(index + 1, total, f"{ticker}: error")
     logger.error("[Batch] Error processing %s: %s", ticker, str(error))
@@ -548,6 +604,8 @@ def _empty_ticker_result(ticker: str) -> dict[str, Any]:
         "error": None,
         "validity": "valid",  # overwritten if anything fails
         "low_confidence": False,
+        "exclusion": None,  # set when the ticker is left out of the statistics: where, why, whether to ask again
+        "option_inputs": None,  # the provider requests behind this ticker's IV history
     }
 
 

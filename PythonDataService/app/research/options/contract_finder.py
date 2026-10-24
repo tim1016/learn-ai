@@ -13,6 +13,7 @@ from typing import Any
 
 import pandas as pd
 
+from app.research.options.option_input_ledger import OptionInputLedger
 from app.services.bs_greeks import black_scholes_greeks
 from app.services.polygon_client import PolygonClientService
 from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
@@ -146,6 +147,11 @@ def _fetch_contracts_for_expiry(
     }
 
 
+def _picked_tickers(selection: dict[str, Any]) -> dict[str, str | None]:
+    """The contracts a lookup chose, by role: the part of the provider's answer the study reads."""
+    return {role: (contract.get("ticker") if contract else None) for role, contract in sorted(selection.items())}
+
+
 def _find_bracket_expiries(
     polygon_client: PolygonClientService,
     underlying: str,
@@ -217,6 +223,7 @@ def find_bracket_contracts(
     end_date: str,
     polygon_client: PolygonClientService,
     stock_bars: list[dict[str, Any]],
+    ledger: OptionInputLedger,
 ) -> pd.DataFrame:
     """Find bracket contracts (two expiries around 30 DTE) for each trading day.
 
@@ -226,6 +233,9 @@ def find_bracket_contracts(
         end_date: ISO date string
         polygon_client: Polygon REST client wrapper
         stock_bars: Daily OHLCV bars with 'timestamp' and 'close' fields
+        ledger: Records each provider request this search makes — what it answered and what it did not. A
+            request that fails leaves its date without that expiry or contract, as it always did, but the
+            failure is now named in the ledger instead of only in a log line.
 
     Returns:
         DataFrame with columns per date:
@@ -279,9 +289,11 @@ def find_bracket_contracts(
                     polygon_client, underlying, trade_date, stock_close=stock_close
                 )
                 _expiry_cache[cache_key] = (low_exp, high_exp)
+                ledger.answered("option_expiries", cache_key, [low_exp, high_exp])
             except Exception as e:
                 logger.warning(f"[CONTRACT FINDER] Error finding expiries for {date_str}: {e}")
                 _expiry_cache[cache_key] = (None, None)
+                ledger.failed("option_expiries", cache_key, e)
 
         low_exp, high_exp = _expiry_cache[cache_key]
 
@@ -310,6 +322,7 @@ def find_bracket_contracts(
                         _contract_cache[contract_key] = _fetch_contracts_for_expiry(
                             polygon_client, underlying, low_exp, stock_close, dte_days=low_dte
                         )
+                        ledger.answered("option_contracts", contract_key, _picked_tickers(_contract_cache[contract_key]))
                     low_contracts = _contract_cache[contract_key]
                     if low_contracts["atm_call"]:
                         row["low_dte_atm_contract"] = low_contracts["atm_call"].get("ticker")
@@ -321,6 +334,7 @@ def find_bracket_contracts(
                         row["low_dte_call_contract"] = low_contracts["otm_call"].get("ticker")
                 except Exception as e:
                     logger.warning(f"[CONTRACT FINDER] Error fetching low-DTE contracts for {date_str}: {e}")
+                    ledger.failed("option_contracts", f"{underlying}:{low_exp}", e)
 
         if high_exp:
             high_dte = (datetime.strptime(high_exp, "%Y-%m-%d") - trade_date).days
@@ -332,6 +346,7 @@ def find_bracket_contracts(
                         _contract_cache[contract_key] = _fetch_contracts_for_expiry(
                             polygon_client, underlying, high_exp, stock_close, dte_days=high_dte
                         )
+                        ledger.answered("option_contracts", contract_key, _picked_tickers(_contract_cache[contract_key]))
                     high_contracts = _contract_cache[contract_key]
                     if high_contracts["atm_call"]:
                         row["high_dte_atm_contract"] = high_contracts["atm_call"].get("ticker")
@@ -343,6 +358,7 @@ def find_bracket_contracts(
                         row["high_dte_call_contract"] = high_contracts["otm_call"].get("ticker")
                 except Exception as e:
                     logger.warning(f"[CONTRACT FINDER] Error fetching high-DTE contracts for {date_str}: {e}")
+                    ledger.failed("option_contracts", f"{underlying}:{high_exp}", e)
 
         rows.append(row)
 

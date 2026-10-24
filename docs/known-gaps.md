@@ -79,6 +79,21 @@ previously tracked items (issues #1655, #1671, #1672, #1674, #1677, #1664,
   graduation policies need explicit hand-calculated fixtures instead of
   thematic paper citations. Behavior tests alone do not establish
   independent numerical equivalence. *(was F-0026)*
+- **Cross-sectional IV history raises once a month's expiry bracket goes stale
+  (high, 2026-10-23, #3484).** `contract_finder.find_bracket_contracts` looks the
+  two expiries bracketing 30 days up once per month and reuses them, so `k` days
+  into the month both DTEs have fallen by `k`. Since #3484 replaced the local
+  interpolation in `iv_builder._interpolate_iv` with `variance_interpolated_iv`,
+  which raises when 30 days is outside `[dte_low, dte_high]`, `build_iv_history`
+  raises `ValueError` for any window with a session more than `dte_high - 30` days
+  after its month's first session while both DTEs are still 7 or more (a day or two
+  for a name with weekly expiries), and the whole ticker lands as `error`. Before
+  #3484 the same days were extrapolated with a negative weight. The IV diagnostics
+  need 30 valid days with at most 15% missing, so no window long enough to run the
+  study avoids it. The repair is a per-day bracket (one wide expiry lookup per
+  month, the bracket chosen per date), which changes the IVs and so is the owner's
+  call. `tests/research/options/test_iv_builder_provider_inputs.py` stays inside
+  the span that does not raise.
 - **Sharpe inference scope** — the measured-grid DSR does not account for
   prior feature/research searches or correct serial dependence in overlapping
   forward returns. HAC assumes zero covariance across separated OOS segments

@@ -3,7 +3,7 @@
 Formula: 30-day constant-maturity IV via variance-time interpolation between the two expiries bracketing 30 calendar days (T1 ≤ 30 < T2, chosen by ``contract_finder._find_bracket_expiries``): σ²_30·30 = w·σ²_T1·T1 + (1-w)·σ²_T2·T2, with w = (T2 - 30)/(T2 - T1) and T in calendar days. Equal-maturity inputs retain the internal arithmetic-mean fallback.
 Reference: Cboe VIX Methodology (2019), constant-maturity total-variance interpolation step only; this module uses selected-contract BSM IVs and does not replicate the model-free VIX calculation.
 Canonical implementation: app/research/options/iv_builder.py
-Validated against: NONE — pending fixture
+Validated against: NONE — pending fixture. A round trip, not a golden fixture: tests/research/options/test_iv_builder_provider_inputs.py recovers the volatility a priced option chain was generated with.
 """
 from __future__ import annotations
 
@@ -16,7 +16,8 @@ import pandas as pd
 
 from app.engine.edge.features_realtime.iv30_constructor import variance_interpolated_iv
 from app.research.options.contract_finder import find_bracket_contracts
-from app.services.fred_service import get_risk_free_rate
+from app.research.options.option_input_ledger import OptionInputLedger
+from app.services.fred_service import get_risk_free_rate_and_source
 from app.services.polygon_client import PolygonClientService
 from app.volatility.solver import implied_volatility
 
@@ -59,14 +60,18 @@ def _prefetch_all_bars(
     tickers: set[str],
     start_date: str,
     end_date: str,
+    ledger: OptionInputLedger,
 ) -> dict[str, dict[str, dict[str, Any]]]:
     """Fetch full date-range daily bars for each option ticker in parallel.
 
     Returns nested dict: bars_by_contract[ticker][date_str] = bar
+
+    A contract whose fetch fails has no bars here, exactly as a contract that never traded; the ledger is what
+    tells the two apart. The pool's threads only fetch: each outcome is recorded from the calling thread.
     """
     bars_by_contract: dict[str, dict[str, dict[str, Any]]] = {}
 
-    def _fetch_one(ticker: str) -> tuple[str, dict[str, dict[str, Any]]]:
+    def _fetch_one(ticker: str) -> tuple[str, dict[str, dict[str, Any]], Exception | None]:
         date_map: dict[str, dict[str, Any]] = {}
         try:
             bars = polygon_client.fetch_aggregates(
@@ -86,14 +91,22 @@ def _prefetch_all_bars(
                         dt = pd.Timestamp(ts).to_pydatetime()
                     date_map[dt.strftime("%Y-%m-%d")] = bar
         except Exception as e:
-            logger.debug(f"[IV BUILDER] Failed to prefetch bars for {ticker}: {e}")
-        return ticker, date_map
+            return ticker, {}, e
+        return ticker, date_map, None
 
     with ThreadPoolExecutor(max_workers=_PREFETCH_WORKERS) as executor:
         futures = {executor.submit(_fetch_one, t): t for t in tickers}
         for future in as_completed(futures):
-            ticker, date_map = future.result()
+            ticker, date_map, error = future.result()
             bars_by_contract[ticker] = date_map
+            if error is None:
+                ledger.answered("option_bars", ticker, date_map)
+            else:
+                logger.warning(
+                    "option bars were not fetched; the contract is treated as having none",
+                    extra={"action": "option_bars_fetch_failed", "contract": ticker, "error_type": type(error).__name__},
+                )
+                ledger.failed("option_bars", ticker, error)
 
     return bars_by_contract
 
@@ -228,7 +241,8 @@ def build_iv_history(
     start_date: str,
     end_date: str,
     polygon_client: PolygonClientService,
-    stock_bars: list[dict[str, Any]] | None = None,
+    stock_bars: list[dict[str, Any]],
+    ledger: OptionInputLedger,
 ) -> pd.DataFrame:
     """Build historical 30-day constant-maturity IV time series.
 
@@ -236,8 +250,11 @@ def build_iv_history(
         underlying: Stock ticker (e.g. "SPY")
         start_date: ISO date string
         end_date: ISO date string
-        polygon_client: Polygon REST client wrapper
-        stock_bars: Optional pre-fetched daily stock bars. If None, fetches from Polygon.
+        polygon_client: Polygon REST client for the option inputs (expiries, contracts, option bars)
+        stock_bars: The study's daily stock bars, already admitted. Required: this builder never fetches the
+            underlying itself, so the bars that set the IV spot and the ATM strike are the bars the study
+            computes on, from the source the study names.
+        ledger: Records every provider request made for the option inputs and the risk-free rate's source.
 
     Returns:
         DataFrame with columns:
@@ -245,23 +262,13 @@ def build_iv_history(
     """
     logger.info(f"[IV BUILDER] Building IV history for {underlying} [{start_date} → {end_date}]")
 
-    # Step 1: Fetch stock daily bars if not provided
-    if stock_bars is None:
-        stock_bars = polygon_client.fetch_aggregates(
-            ticker=underlying,
-            multiplier=1,
-            timespan="day",
-            from_date=start_date,
-            to_date=end_date,
-        )
-
     if not stock_bars:
         logger.error(f"[IV BUILDER] No stock bars found for {underlying}")
         return pd.DataFrame()
 
     # Step 2: Find bracket contracts for each trading day
     logger.info("[IV BUILDER] Finding bracket contracts...")
-    bracket_df = find_bracket_contracts(underlying, start_date, end_date, polygon_client, stock_bars)
+    bracket_df = find_bracket_contracts(underlying, start_date, end_date, polygon_client, stock_bars, ledger)
 
     if bracket_df.empty:
         logger.error(f"[IV BUILDER] No bracket contracts found for {underlying}")
@@ -272,7 +279,7 @@ def build_iv_history(
     # Step 3: Batch prefetch all option bars
     unique_tickers = _collect_unique_tickers(bracket_df)
     logger.info(f"[IV BUILDER] Prefetching bars for {len(unique_tickers)} unique contracts...")
-    bars_by_contract = _prefetch_all_bars(polygon_client, unique_tickers, start_date, end_date)
+    bars_by_contract = _prefetch_all_bars(polygon_client, unique_tickers, start_date, end_date, ledger)
     total_bars = sum(len(dates) for dates in bars_by_contract.values())
     logger.info(f"[IV BUILDER] Prefetched {total_bars} bars across {len(bars_by_contract)} contracts")
 
@@ -289,7 +296,8 @@ def build_iv_history(
             logger.info(f"[IV BUILDER] Deriving IV for date {idx + 1}/{len(bracket_df)}: {date_str}")
 
         # Dynamic risk-free rate for this trading day (cached per date)
-        rfr = get_risk_free_rate(dte_days=TARGET_DTE, observation_date=date_str)
+        rfr, rate_source = get_risk_free_rate_and_source(dte_days=TARGET_DTE, observation_date=date_str)
+        ledger.risk_free_rate(rate_source)
 
         result: dict[str, Any] = {
             "date": date_str,

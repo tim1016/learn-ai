@@ -476,6 +476,7 @@ class TestCancellationContract:
             start_date="2024-01-02",
             end_date="2024-02-01",
             polygon_client=object(),  # never reached: build_iv_history raises first
+            stock_bars={"SPY": []},
             cancel_check=cancel_check,
         )
 
@@ -532,7 +533,9 @@ class TestCancellationContract:
         )
 
         def _unreached(*args, **kwargs):
-            raise AssertionError("fetch_aggregates must not run after the cancellation")
+            raise AssertionError("the IC pipeline must not run after the cancellation")
+
+        monkeypatch.setattr("app.research.batch_runner.run_options_feature_research", _unreached)
 
         with pytest.raises(_Cancelled):
             run_cross_sectional_study(
@@ -540,7 +543,8 @@ class TestCancellationContract:
                 tickers=["SPY"],
                 start_date="2024-01-02",
                 end_date="2024-02-01",
-                polygon_client=type("_Polygon", (), {"fetch_aggregates": staticmethod(_unreached)})(),
+                polygon_client=object(),
+                stock_bars={"SPY": []},
                 cancel_check=cancel_check,
             )
         assert polls == 2
@@ -582,5 +586,6 @@ class TestCancellationContract:
                 start_date="2024-01-02",
                 end_date="2024-02-01",
                 polygon_client=object(),
+                stock_bars={"SPY": []},
                 cancel_check=cancel_check,
             )

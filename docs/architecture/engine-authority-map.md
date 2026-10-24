@@ -50,6 +50,24 @@ provider-era entry can reach. No calculation ownership changes: the feature,
 target, IC and robustness math is untouched. The session the study reads
 (extended hours today, as before) is an owner decision (D02 of PRD #3490).
 
+**Cross-sectional study data admission (#3524).** The Cross-sectional study
+(Research Lab → Features → Cross-sectional) computes its stock bars from
+admitted lake inputs; its Polygon daily fetch, and the IV builder's second
+fetch of the underlying, are gone. `app/research/cross_sectional_inputs.py`
+admits each member through the same `study_inputs.admit_minute_inputs` and folds
+the admitted minutes to daily rows with the lake's own reduction
+(`derived_daily.aggregate_minute_to_daily`); a member the lake cannot admit is
+excluded with a typed reason, and a universe with no admissible member refuses.
+`app/services/cross_sectional_study_service.py` runs the job and keys the result
+cache on each member's admitted snapshot digest in a new namespace.
+The option inputs (expiries, contracts, option bars, the risk-free rate) stay
+provider-sourced and are named, counted and fingerprinted per run by
+`app/research/options/option_input_ledger.py`; a request the provider did not
+answer is a typed failure, and a result holding one is not cached. No calculation
+ownership changes: IV, IC, N_eff, binomial and graduation math is untouched. The
+session the daily bar folds from (`regular` by default, `extended` opt-in) is an
+owner decision (D02 of PRD #3490).
+
 Committed lake-file admission (#2456) is owned by
 `PythonDataService/app/data_lake/admission.py`, backed by committed catalog
 receipts. Python reads and LEAN preflight refuse files whose exact bytes have
