@@ -28,7 +28,7 @@ from app.engine.strategy.spec.tests._parity_helpers import (
 )
 from app.research.baselines.runner import BaselineRequest, run_baselines
 from app.research.runs import RunRequest, run_date_to_ms, run_strategy_spec, save_run
-from app.research.runs.storage import list_runs
+from tests._helpers.run_ledgers import run_ids, run_ledgers
 
 
 def _build_parent_spec() -> StrategySpec:
@@ -128,9 +128,8 @@ def test_buy_and_hold_baseline_outcome(tmp_path: Path, parent_run):
     assert bl.test_metrics.sharpe_ratio is not None, "sharpe_ratio is finite on the equity curve"
     # Child run on disk.
     assert (tmp_path / bl.baseline_run_id / "ledger.json").is_file(), "child run ledger persisted on disk"
-    # Discoverable via list_runs filter.
-    listed = list_runs(root=tmp_path, parent_run_id=config.baseline_id)
-    assert [lg.run_id for lg in listed] == [bl.baseline_run_id], "child run discoverable via the list_runs parent filter"
+    # Discoverable through the runs store's parent filter.
+    assert run_ids(tmp_path, parent_run_id=config.baseline_id) == [bl.baseline_run_id], "child run discoverable via the parent filter"
     # Default coverage from _DEFAULT_TARGET_METRICS.
     metric_names = {dist.metric_name for dist in result.null_distributions}
     assert "sharpe_ratio" in metric_names, "null distributions cover sharpe_ratio"
@@ -356,7 +355,7 @@ def test_child_run_window_matches_parent_exactly(tmp_path: Path, parent_run):
     # Reload the child ledger to compare its persisted window to the
     # parent's. The child is referenced by config.baseline_id (its
     # parent_run_id field), per the runner's lineage convention.
-    listed = list_runs(root=tmp_path, parent_run_id=config.baseline_id)
+    listed = run_ledgers(tmp_path, parent_run_id=config.baseline_id)
     assert len(listed) == 1
     child_ledger = listed[0]
     assert child_ledger.start_ms == parent_ledger.start_ms

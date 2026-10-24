@@ -17,7 +17,7 @@ On-disk layout (unchanged from pre-seam):
 Each fold's individual run is *not* persisted here — folds are normal
 ``RunLedger`` records under ``<root>/<fold_run_id>/`` (Phase A
 storage). The ``parent_run_id`` field on each fold's ledger points
-back at this WF so ``list_runs(parent_run_id=wf_id)`` enumerates them.
+back at this WF so ``list_ids(parent_run_id=wf_id)`` on the runs store enumerates them.
 
 Public exception classes (``WalkForwardNotFoundError``,
 ``WalkForwardAlreadyExistsError``, ``WalkForwardCorruptError``) are
@@ -104,7 +104,7 @@ def list_walk_forwards(
     """Enumerate persisted walk-forwards, optionally filtered, newest first.
 
     Returns ``WalkForwardConfig`` records (not full results) — the
-    listing endpoint shape mirrors ``list_runs``: lightweight summary
+    listing endpoint answers a lightweight summary
     with full fetch on-demand via ``GET /walk-forward/{wf_id}``.
 
     Shared filters (``parent_run_id``, ``since_ms``) are applied

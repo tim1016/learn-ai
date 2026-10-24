@@ -51,10 +51,6 @@ export function filledSharePercent(filled: number, refused: number): string {
   return total === 0 ? '0.0' : oneDecimal(roundedPart(BigInt(filled) * 1000n, BigInt(total)));
 }
 
-export function equityCoordinates(values: readonly string[]): { x: number; y: number }[] {
-  return equityPlot(values)?.coordinates ?? [];
-}
-
 /** Common session positions for every plot, with room for the endpoint bars. */
 export function sessionX(slot: number, sessions: number): number {
   return 8 + (slot / Math.max(1, sessions)) * 984;

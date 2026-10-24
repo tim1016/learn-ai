@@ -172,7 +172,7 @@ export const LIVE_PHRASE = `DEPLOY ${LIVE_ACCOUNT} $${LIVE_BUDGET}`;
 
 // ── The fleet ──────────────────────────────────────────────────────────────
 
-function lane(clerkId: string, label: string, account: string, mode: 'paper' | 'live'): LaneDescriptor {
+export function lane(clerkId: string, label: string, account: string, mode: 'paper' | 'live'): LaneDescriptor {
   return {
     broker: 'alpaca',
     clerk_id: clerkId,
@@ -201,7 +201,7 @@ function lane(clerkId: string, label: string, account: string, mode: 'paper' | '
   };
 }
 
-const DIRECTORY = {
+export const DIRECTORY = {
   observed_at_ms: NOW_MS,
   clerks: [
     lane(PAPER_CLERK, 'Paper', PAPER_ACCOUNT, 'paper'),
@@ -209,7 +209,7 @@ const DIRECTORY = {
   ],
 } satisfies FleetDirectoryResponse;
 
-function brokerAccount(accountId: string, mode: 'paper' | 'live', equity: number): BrokerAccountSnapshot {
+export function brokerAccount(accountId: string, mode: 'paper' | 'live', equity: number): BrokerAccountSnapshot {
   return {
     broker: 'alpaca',
     account_id: accountId,
@@ -229,7 +229,7 @@ function brokerAccount(accountId: string, mode: 'paper' | 'live', equity: number
   };
 }
 
-function clerkStatus(accountId: string, world: 'real_paper' | 'real_live'): ClerkStatus {
+export function clerkStatus(accountId: string, world: 'real_paper' | 'real_live'): ClerkStatus {
   return {
     account_id: accountId,
     authority_kind: world,
@@ -240,7 +240,7 @@ function clerkStatus(accountId: string, world: 'real_paper' | 'real_live'): Cler
   };
 }
 
-function verdict(finalVerdict: AlpacaLiveVerdict['final_verdict'], accountId: string): AlpacaLiveVerdict {
+export function verdict(finalVerdict: AlpacaLiveVerdict['final_verdict'], accountId: string): AlpacaLiveVerdict {
   return fakeAlpacaLiveVerdict(finalVerdict, { observed_account_id: accountId, observed_at_ms: NOW_MS });
 }
 
@@ -331,7 +331,7 @@ export const PAPER_MONEY_HOLDING = fakeAccountMoney({
 /** Flat: the sale at $500.99 returned everything, and the bot finished $0.99 up. */
 export const PAPER_MONEY_FINISHED = idleMoney(PAPER_ACCOUNT, 'real_paper', '25000.99');
 
-const LIVE_MONEY = idleMoney(LIVE_ACCOUNT, 'real_live', '5000.00');
+export const LIVE_MONEY = idleMoney(LIVE_ACCOUNT, 'real_live', '5000.00');
 const LIVE_MONEY_WITH_NEW = fakeAccountMoney({
   ...LIVE_MONEY,
   free_to_deploy_usd: '4200.00',
@@ -394,7 +394,7 @@ const EXPLICIT_NULL_END_422 = {
 } satisfies Schemas['HTTPValidationError'] & { detail: ValidationErrorAsSent[] };
 
 /** The end check's answer in the backend's words: an omitted end is the default end. */
-function endPreview(request: BotEndPreviewRequest): BotEndView {
+export function endPreview(request: BotEndPreviewRequest): BotEndView {
   const end = request.end ?? { end_at_ms: WALK_DEFAULT_END.end_at_ms, end_action: 'SELL' };
   return scheduledEndView(end, {
     dryRun: request.execution_mode === 'dry_run',
@@ -402,7 +402,7 @@ function endPreview(request: BotEndPreviewRequest): BotEndView {
   });
 }
 
-const PAPER_DEPLOY_VIEW = {
+export const PAPER_DEPLOY_VIEW = {
   ...DEPLOY_VIEW,
   account_id: PAPER_ACCOUNT,
   account_label: `Alpaca paper · ${PAPER_ACCOUNT}`,
@@ -410,7 +410,7 @@ const PAPER_DEPLOY_VIEW = {
   exit_steps_summary: EXIT_STEPS_SUMMARY,
   default_end: WALK_DEFAULT_END,
 } satisfies DeployBotView;
-const LIVE_ACCOUNT_DEPLOY_VIEW = {
+export const LIVE_ACCOUNT_DEPLOY_VIEW = {
   ...LIVE_DEPLOY_VIEW,
   account_id: LIVE_ACCOUNT,
   account_label: `Alpaca live · ${LIVE_ACCOUNT}`,
@@ -419,7 +419,7 @@ const LIVE_ACCOUNT_DEPLOY_VIEW = {
   default_end: WALK_DEFAULT_END,
 } satisfies DeployBotView;
 
-interface DeployLane {
+export interface DeployLane {
   readonly view: DeployBotView;
   readonly before: AccountMoneyView;
   readonly withNew: AccountMoneyView;
@@ -427,7 +427,7 @@ interface DeployLane {
   readonly bot: string;
 }
 
-const DEPLOY_LANES: Readonly<Record<'paper' | 'live', DeployLane>> = {
+export const DEPLOY_LANES: Readonly<Record<'paper' | 'live', DeployLane>> = {
   paper: { view: PAPER_DEPLOY_VIEW, before: PAPER_MONEY_BEFORE, withNew: PAPER_MONEY_WITH_NEW, amount: PAPER_BUDGET, bot: WALKED_BOT },
   live: { view: LIVE_ACCOUNT_DEPLOY_VIEW, before: LIVE_MONEY, withNew: LIVE_MONEY_WITH_NEW, amount: LIVE_BUDGET, bot: LIVE_BOT },
 };
@@ -435,7 +435,7 @@ const DEPLOY_LANES: Readonly<Record<'paper' | 'live', DeployLane>> = {
 /** The budget preview the backend authors for `body` on this lane: the
  * account as it stands with no amount, and with a NEW slice for the one
  * amount this walk types. Any other amount is a walk bug, answered as such. */
-function budgetPreview(deploy: DeployLane, body: DeployBotBody): DeploymentBudgetPreview | null {
+export function budgetPreview(deploy: DeployLane, body: DeployBotBody): DeploymentBudgetPreview | null {
   const world = body.execution_mode === 'live' ? 'real_live' : 'real_paper';
   const amount = body.budget?.amount_usd ?? null;
   if (amount !== null && amount !== deploy.amount) return null;
@@ -464,7 +464,7 @@ function budgetPreview(deploy: DeployLane, body: DeployBotBody): DeploymentBudge
   };
 }
 
-function admission(deploy: DeployLane): RunAdmissionDecision {
+export function admission(deploy: DeployLane): RunAdmissionDecision {
   return {
     operation: 'START',
     allowed: true,
@@ -503,10 +503,10 @@ function receipt(deploy: DeployLane, world: BudgetDeployReceipt['world']): Budge
 
 // ── The symbol picker's world: SPY is listed and held ──────────────────────
 
-const VENDOR_CATALOG = [
+export const VENDOR_CATALOG = [
   { symbol: 'SPY', name: 'SPDR S&P 500 ETF Trust', exchange: 'ARCX', status: 'active', asset_class: 'us_equity' },
 ] satisfies SymbolCatalogEntry[];
-const LAKE_COVERAGE = {
+export const LAKE_COVERAGE = {
   market: 'usa',
   kinds: [],
   symbols: [{

@@ -10,8 +10,8 @@ baseline runs into per-metric null distributions.
 Each baseline run is persisted as a child ``RunLedger`` under
 ``artifacts/runs/<baseline_run_id>/`` with ``parent_run_id`` set to
 the **baselines run id** (not the original parent run) so
-``list_runs(parent_run_id=baseline_id)`` enumerates the baseline
-children. The aggregated result is persisted separately under
+``list_ids(parent_run_id=baseline_id)`` on the runs store enumerates the
+baseline children. The aggregated result is persisted separately under
 ``artifacts/baselines/<baseline_id>/``.
 
 Failures match the Phase A/C/D contract: missing parent run,

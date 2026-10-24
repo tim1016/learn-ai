@@ -82,8 +82,7 @@ function detailRows(provenance: DataSourceProvenance): readonly DetailRow[] {
  * A legacy record without provenance is `null`, and the line says so in one
  * sentence. Nothing is inferred from current holdings or defaults.
  *
- * Distinct from `app-data-source`, the free-text caption for live feeds: this
- * renders a typed, server-supplied record.
+ * It renders a typed, server-supplied record, never a free-text caption.
  */
 @Component({
   selector: 'app-workspace-data-source',
