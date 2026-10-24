@@ -1645,6 +1645,17 @@ these are the others.
   (the TradingView comparison, data divergence and strategy pre-flight). It holds
   inspections and explicit jobs; opening it starts none.
   _Avoid_: Admin, Tools, Settings (an account's Settings is its own tab).
+- **Scoped health** — what the lake catalog, the option archive, the backups and
+  the IBKR feed each say about themselves, kept as findings that name what they
+  are about (an instrument, a session, a mode, or *broad* when the source cannot
+  say which), when they were read, how bad they are and which work they get in the
+  way of. A backup that is behind gets in the way of recovery only, never of a
+  price or a chart; IBKR down, of the live chain and the bots' feed only, never of
+  archived history; a source that cannot be read is *unknown*, never healthy.
+  Python decides all of it. The Operations header shows one chip per source, and a
+  page a finding affects shows one line linking to the Operations tab that holds
+  the evidence. That line never stands in for the reason shown at a refused action.
+  _Avoid_: system status, health badge.
 
 ## Account money map (resolved 2026-09-28)
 

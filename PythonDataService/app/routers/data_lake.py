@@ -27,8 +27,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
-from datetime import date
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -45,16 +43,8 @@ from app.data_lake.backfill import (
 )
 from app.data_lake.catalog_client import MinuteBarLeaseStatus, select_minute_bar_lease_status
 from app.data_lake.ensure_data import ensure_data, provider_for_data_type
-from app.data_lake.polygon_fetcher import polygon_history_floor
-from app.data_lake.run_readiness import (
-    SpanGaps,
-    coverage_gaps,
-    current_versions,
-    fold_run_readiness,
-    gapped_symbols,
-    needs_adjustment_record,
-    span_gaps,
-)
+from app.data_lake.polygon_fetcher import current_polygon_history_floor
+from app.data_lake.run_readiness import coverage_gaps, read_run_readiness
 from app.data_lake.types import (
     MAX_SYMBOL_LENGTH,
     MAX_TRADING_RANGE_DAYS,
@@ -82,11 +72,6 @@ from app.lean_sidecar.trading_calendar import session_open_ms_utc, session_windo
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/data-lake", tags=["data-lake"])
-
-
-def _provider_history_floor() -> date:
-    """The oldest trading date the provider serves, as of today in ET."""
-    return polygon_history_floor(trading_date_at_ms(int(time.time() * 1000)))
 
 
 async def _ensure_catalog_pool() -> None:
@@ -349,33 +334,11 @@ async def get_run_readiness(
         price_adjustment_mode,
         data_type,
     )
-    data_root_id = root_identity.active_root_id()
-    floor = _provider_history_floor()
-    counts = await catalog_client.select_symbol_revision_counts(
-        market, price_adjustment_mode, data_type, floor, data_root_id=data_root_id
-    )
-    # The counts say which symbols have a hole in their span; only those are read session by session.
-    gaps: dict[str, SpanGaps] = {}
-    for symbol in gapped_symbols(counts):
-        held = await catalog_client.select_coverage_minute_bars(
-            market, symbol, data_type, None, None, price_adjustment_mode=price_adjustment_mode, data_root_id=data_root_id
-        )
-        gaps[symbol] = span_gaps({row.trading_date for row in held if row.trading_date is not None}, floor)
-    versions = (
-        await asyncio.to_thread(
-            current_versions,
-            path_policy.resolve_lake_root(price_adjustment_mode),
-            sorted({count.symbol for count in counts}),
-        )
-        if needs_adjustment_record(price_adjustment_mode)
-        else None
-    )
-    return RunReadinessResponse(
+    return await read_run_readiness(
         market=market,
-        price_adjustment_mode=price_adjustment_mode,
         data_type=data_type,
-        data_root_id=data_root_id,
-        symbols=fold_run_readiness(counts, versions, gaps),
+        price_adjustment_mode=price_adjustment_mode,
+        floor=current_polygon_history_floor(),
     )
 
 
@@ -422,7 +385,7 @@ async def get_backfill_defaults(market: Literal["usa"] = "usa") -> BackfillDefau
         lean_image_digest=PINNED_LEAN_IMAGE_DIGEST,
         max_trading_range_days=MAX_TRADING_RANGE_DAYS,
         max_symbol_length=MAX_SYMBOL_LENGTH,
-        provider_history_start_ms=trading_date_to_calendar_anchor_ms(_provider_history_floor()),
+        provider_history_start_ms=trading_date_to_calendar_anchor_ms(current_polygon_history_floor()),
     )
 
 
@@ -592,7 +555,7 @@ async def start_backfill_job(req: BackfillJobRequest) -> dict:
     # (#2241). Only this side holds the credential, so only this side can
     # refuse it — and refusing here covers the operator typing a date into
     # the Observatory panel exactly as it covers the picker's gate.
-    floor = _provider_history_floor()
+    floor = current_polygon_history_floor()
     if spec.start_trading_date < floor:
         raise HTTPException(
             status_code=422,

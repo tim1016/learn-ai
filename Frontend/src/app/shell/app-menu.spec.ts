@@ -8,6 +8,7 @@ import {
   menuItemsFor,
   windowTitleFor,
 } from './app-menu';
+import { OPERATIONS_TABS, operationsTabLabel } from '../operations/operations-tabs';
 import { HELP_DOCUMENTS } from '../shared/help/help-documents';
 
 describe('app menu projections', () => {
@@ -88,14 +89,20 @@ describe('app menu projections', () => {
     expect(menuItemsFor('/unlisted-page').every((group) => group.styleClass === undefined)).toBe(true);
   });
 
-  it('places the Data Lake Observatory in Operations', () => {
-    const lakeEntry = menuItemsFor('/data-lake')
-      .find((group) => group.label === 'Operations')
-      ?.items?.find((item) => item.label === 'Data Lake Observatory');
+  it('places the Operations tabs in Operations', () => {
+    const operations = menuItemsFor('/operations/backups').find((group) => group.label === 'Operations');
 
-    expect.soft(lakeEntry?.routerLink, 'links the Data Lake Observatory entry to /data-lake').toBe('/data-lake');
-    expect.soft(lakeEntry?.styleClass, 'marks the Data Lake Observatory entry active').toBe(ACTIVE_ITEM_CLASS);
-    expect.soft(windowTitleFor('/data-lake'), 'titles the window for the Data Lake Observatory').toBe('Data Lake Observatory · Operations');
+    expect.soft(
+      operations?.items?.map((item) => [item.label, item.routerLink]),
+      'lists every Operations tab',
+    ).toEqual(OPERATIONS_TABS.map((tab) => [tab.label, `/operations/${tab.id}`]));
+    expect.soft(
+      operations?.items?.find((item) => item.label === operationsTabLabel('backups'))?.styleClass,
+      'marks the open tab active',
+    ).toBe(ACTIVE_ITEM_CLASS);
+    expect.soft(windowTitleFor('/operations/lake'), 'titles the window for the Lake tab').toBe(`${operationsTabLabel('lake')} · Operations`);
+    expect.soft(windowTitleFor('/operations/math-checks'), 'titles the window for the Math checks tab').toBe(`${operationsTabLabel('math-checks')} · Operations`);
+    expect.soft(windowTitleFor('/operations/data-checks/pre-flight'), 'titles a check by the tab that holds it').toBe(`${operationsTabLabel('data-checks')} · Operations`);
   });
 
   it('titles the window Page · Group, and an account page by its group alone', () => {
@@ -128,10 +135,10 @@ describe('app menu projections', () => {
     // The analytical builder is an Options Lab tab, filed under Options setups (R32).
     ['/options-lab/strategy-builder', 'Options setups', 'Strategy Builder'],
     ['/options-evidence/run/run-7', 'Options setups', 'Options evidence'],
-    // Data checks: tabs other shells still host.
-    ['/data-lab/validate', 'Operations', 'Validate'],
-    ['/research-lab/inspect/data-divergence', 'Operations', 'Data Divergence'],
-    ['/research-lab/inspect/pre-flight', 'Operations', 'Strategy Pre-flight'],
+    // Data checks: each check is a page of the one Data checks tab.
+    ['/operations/data-checks/tradingview', 'Operations', 'Data checks'],
+    ['/operations/data-checks/divergence', 'Operations', 'Data checks'],
+    ['/operations/data-checks/pre-flight', 'Operations', 'Data checks'],
     // ADR 0064: every tab of one account is that account's place, so the
     // menubar names the account list rather than moving between Bots and
     // Gallery entries while the workspace's own tabs already say which page

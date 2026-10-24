@@ -8,6 +8,9 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import { provideFakeDateWorld } from '../../shared/date-picker/testing/fake-trading-calendar';
+import { fakeScopedHealth, healthItem, projection } from '../../shared/scoped-health/testing/scoped-health-fixtures';
+import { ScopedHealthService } from '../../shared/scoped-health/scoped-health.service';
+import { TestBed } from '@angular/core/testing';
 import { etMidnightMs } from '../../shared/date/et-midnight';
 import { servedSaved } from '../options-backtest/testing/fixtures';
 import { OptionsBacktestService } from '../options-backtest/options-backtest.service';
@@ -49,6 +52,20 @@ async function preparePlan(fake = service()) {
 }
 
 describe('Options Golden Search workbench', () => {
+  it('tells the operator what the data plane says of the archived history a study replays', async () => {
+    const health = fakeScopedHealth(
+      projection(healthItem({ kind: 'option_archive', instrument: 'QQQ', severity: 'critical', explanation: 'QQQ: capture is failing.', link: { tab: 'option-archive', query: {}, fragment: 'option-archive-QQQ' } })),
+    );
+    TestBed.overrideProvider(ScopedHealthService, { useValue: { read: health.read } });
+
+    await page();
+
+    expect(await screen.findByText(/QQQ: capture is failing/)).toBeTruthy();
+    expect(health.read).toHaveBeenCalledWith({ operations: ['options_history', 'recovery'], instrument: null });
+    expect(screen.getByRole('link', { name: 'Open Option archive' }).getAttribute('href')).toBe('/operations/option-archive#option-archive-QQQ');
+    expect(screen.getByRole('heading', { name: 'Improve a saved setup' })).toBeTruthy();
+  });
+
   it('reopens a frozen final batch on the final step before its first result', async () => {
     const fake = service();
     fake.get.mockResolvedValue(study({ phase: 'final', status: 'interrupted', final_results: [], allowed_commands: ['resume', 'keep_original'] }));

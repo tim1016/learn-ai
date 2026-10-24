@@ -1,0 +1,5 @@
+.archive-section { padding: 1rem; border: 1px solid var(--p-content-border-color); border-radius: var(--p-border-radius-md); }
+article { padding-block: .5rem; border-block-start: 1px solid var(--p-content-border-color); }
+dl { display: grid; grid-template-columns: minmax(10rem, 1fr) 2fr; gap: .25rem 1rem; }
+dd { margin: 0; }
+.needs-attention { border-inline-start: 3px solid var(--p-orange-500); padding-inline-start: .75rem; }

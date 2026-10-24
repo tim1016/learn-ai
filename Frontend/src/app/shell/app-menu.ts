@@ -3,6 +3,7 @@ import type { MenuItem } from 'primeng/api';
 import { accountWorkspaceLocation, routePathOf } from '../fleet/account-workspace';
 import type { BreadcrumbItem } from '../shared/breadcrumb/breadcrumb-item';
 import { HELP_DOCUMENTS } from '../shared/help/help-documents';
+import { OPERATIONS_TABS, operationsTabRoute } from '../operations/operations-tabs';
 
 export interface AppMenuItem {
   /** The single display name for every navigation projection. */
@@ -39,6 +40,13 @@ export const ACTIVE_GROUP_CLASS = 'app-menubar-group--active';
 
 /** Applied to the menu entry that is the current route. */
 export const ACTIVE_ITEM_CLASS = 'app-menubar-item--active';
+
+/** A list the menu's types promise is not empty, from a declaration that lives elsewhere: an empty one fails at load. */
+function nonEmpty<T>(items: readonly T[], message: string): readonly [T, ...T[]] {
+  const [first, ...rest] = items;
+  if (first === undefined) throw new Error(message);
+  return [first, ...rest];
+}
 
 /**
  * Canonical application information architecture (ADR 0084).
@@ -127,16 +135,11 @@ export const APP_MENU: readonly AppMenuGroup[] = [
     id: 'operations',
     title: 'Operations',
     icon: 'pi pi-server',
-    items: [
-      { title: 'Data Lake Observatory', route: '/data-lake' },
-      { title: 'Golden Fixtures', route: '/golden-fixtures' },
-    ],
-    // Data checks: tabs the Data Lab and Research Lab shells still host.
-    pages: [
-      { title: 'Validate', route: '/data-lab/validate' },
-      { title: 'Data Divergence', route: '/research-lab/inspect/data-divergence' },
-      { title: 'Strategy Pre-flight', route: '/research-lab/inspect/pre-flight' },
-    ],
+    // The place's own tab declaration, so a tab renamed or added there is renamed or added here.
+    items: nonEmpty(
+      OPERATIONS_TABS.map((tab) => ({ title: tab.label, route: operationsTabRoute(tab.id).join('/') })),
+      'Operations declares no tabs.',
+    ),
   },
 ];
 

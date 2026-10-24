@@ -3,6 +3,7 @@ import { provideRouter } from '@angular/router';
 import { render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 import { BrokerHealthService } from '../../../services/broker-health.service';
+import { fakeScopedHealth, healthItem, projection } from '../../../shared/scoped-health/testing/scoped-health-fixtures';
 import { MarketDataFeedService } from '../../../services/market-data-feed.service';
 import type { IbkrConnectionHealth } from '../../../api/broker-models';
 import { BrokerOptionsSurfaceComponent, intersectAll, pickMonthlyExpiries, pickStrikesAroundAtm } from './broker-options-surface.component';
@@ -28,6 +29,24 @@ describe('Options Surface page', () => {
     await waitFor(() => expect(screen.getByText('Setup')).toBeTruthy());
     await waitFor(() => expect(screen.getByText('Surface setup failed.')).toBeTruthy());
     expect(expirations).toHaveBeenCalledOnce();
+  });
+
+  it('says what the data plane makes of the IBKR feed, and keeps its own reason where the controls would be', async () => {
+    const feed = fakeScopedHealth(
+      projection(healthItem({ kind: 'ibkr_market_data', severity: 'critical', explanation: 'The IBKR session is down. Live option chain and bot feed readiness are affected; archived history is not.' })),
+    );
+    await render(BrokerOptionsSurfaceComponent, {
+      providers: [
+        provideRouter([]),
+        { provide: BrokerHealthService, useValue: { health: signal(null), bannerState: signal(null), start: vi.fn() } },
+        { provide: MarketDataFeedService, useValue: { expirations: vi.fn() } },
+        feed.provider,
+      ],
+    });
+
+    expect((await screen.findByText(/archived history is not/)).closest('.health-notice')?.textContent).toContain('Failing.');
+    expect(feed.read).toHaveBeenCalledWith({ operations: ['live_chain'], instrument: null });
+    expect(screen.getByText(/Broker is disconnected/)).toBeTruthy();
   });
 
   it('clears the prepared grid when the symbol changes', async () => {

@@ -438,8 +438,9 @@ current budget, risk-edit and mode behavior is recorded in ADRs 0059 and 0060.
 Tracked open items left by the Data Lab redesign PR
 (its PRD is in Git history). Implemented:
 child routes Explore/Export/Validate (Explore is now the instrument place's
-Chart tab and Export its Build dataset page, ADR 0084; only Validate is still
-under `/data-lab`), workspace store, legacy URL redirects,
+Chart tab and Export its Build dataset page, Validate is Operations → Data
+checks, ADR 0084; `/data-lab` is redirects only), workspace store, legacy URL
+redirects,
 searchable indicator picker, theme-token chart colors, `POST /api/dataset/plan`,
 additive `DataLabSession` ms-UTC columns (dual-read).
 
@@ -476,10 +477,12 @@ additive `DataLabSession` ms-UTC columns (dual-read).
   opened under the instrument its record names. The old Data Lab never wrote a
   `sessionId` into an address, so only a hand-made link is affected; the setup
   opens from its instrument's Saved setups.
-- **Build dataset and Validate templates still exceed the ~80-line path rule
-  (low).** The Build dataset four-section form (~230 lines) and Validate (~115
-  lines) remain single templates — same follow-up refactor class as the
-  shell split.
+- **`computeAllIndicators` has no UI toggle in the new Explore (low).** The
+  signal defaults to false; wire a control if the legacy behavior is missed.
+- **Build dataset and TradingView-check templates still exceed the ~80-line path
+  rule (low).** The Build dataset four-section form (~230 lines) and the
+  TradingView check (Validate, now Operations → Data checks; ~130 lines) remain
+  single templates — same follow-up refactor class as the shell split.
 - **Responsive overflow assertions need a browser pass (medium).** The §8
   structural rules are in place, but the 320–1920px `scrollWidth === clientWidth`
   checks and AXE scans have not been executed against a live browser.

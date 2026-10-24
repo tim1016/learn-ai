@@ -1,0 +1,19 @@
+@if (finding(); as found) {
+  <div class="health-notice" [attr.data-severity]="found.severity" role="status">
+    <p>
+      <strong>{{ found.word }}.</strong> {{ found.text }}
+      @if (note(); as extra) { {{ extra }} }
+      @if (found.others > 0) { <span class="health-notice__more">{{ found.others }} more in Operations.</span> }
+      @if (found.link; as link) {
+        <a [routerLink]="link.route" [queryParams]="link.query" [fragment]="link.fragment">Open {{ link.label }}</a>
+      }
+    </p>
+  </div>
+} @else if (unreadable()) {
+  <div class="health-notice" data-severity="unknown" role="status">
+    <p>
+      <strong>Unknown.</strong> Health status could not be read, so what this page depends on cannot be confirmed healthy.
+      <a [routerLink]="operationsRoute">Open Operations</a>
+    </p>
+  </div>
+}

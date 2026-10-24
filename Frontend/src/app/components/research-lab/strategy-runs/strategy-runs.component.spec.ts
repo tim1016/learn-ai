@@ -6,10 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { StrategyRunsComponent } from './strategy-runs.component';
 import { StrategyRunsService } from '../../../services/strategy-runs.service';
-import type {
-  RunLedger,
-  StrategyRunResponse,
-} from '../../../services/strategy-runs.types';
+import type { RunLedger } from '../../../services/strategy-runs.types';
 
 function makeLedger(overrides: Partial<RunLedger> = {}): RunLedger {
   return {
@@ -46,42 +43,8 @@ function makeLedger(overrides: Partial<RunLedger> = {}): RunLedger {
   };
 }
 
-function makeRunResponse(): StrategyRunResponse {
-  return {
-    ledger: makeLedger(),
-    result: {
-      run_id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-      initial_cash: 100000,
-      final_equity: 102500,
-      equity_curve: [],
-      drawdown_curve: [],
-      trades: [],
-      metrics: {
-        total_trades: 0,
-        winning_trades: 0,
-        losing_trades: 0,
-        win_rate: null,
-        total_return_pct: 0.025,
-        max_drawdown_pct: 0,
-        sharpe_ratio: null,
-        sortino_ratio: null,
-        profit_factor: null,
-        expectancy_pct: null,
-        payoff_ratio: null,
-        exposure_pct: null,
-        avg_trade_bars: null,
-      },
-      log_lines: [],
-      warnings: [],
-    },
-  };
-}
-
 interface ServiceMock {
   listRuns: ReturnType<typeof vi.fn>;
-  runSpyEmaFixture: ReturnType<typeof vi.fn>;
-  getRun: ReturnType<typeof vi.fn>;
-  createRun: ReturnType<typeof vi.fn>;
 }
 
 describe('StrategyRunsComponent', () => {
@@ -93,9 +56,6 @@ describe('StrategyRunsComponent', () => {
   beforeEach(async () => {
     service = {
       listRuns: vi.fn().mockResolvedValue({ runs: [makeLedger()] }),
-      runSpyEmaFixture: vi.fn().mockResolvedValue(makeRunResponse()),
-      getRun: vi.fn(),
-      createRun: vi.fn(),
     };
     routerNavigate = vi.fn().mockResolvedValue(true);
 
@@ -139,16 +99,6 @@ describe('StrategyRunsComponent', () => {
     await component.refresh();
     expect(service.listRuns).toHaveBeenCalledOnce();
     expect(component.runs()).toEqual([]);
-  });
-
-  it('runFixture() POSTs the fixture, then refreshes, and remembers the new run_id', async () => {
-    service.listRuns.mockClear();
-    await component.runFixture();
-    expect(service.runSpyEmaFixture).toHaveBeenCalledOnce();
-    expect(service.listRuns).toHaveBeenCalledOnce();
-    expect(component.lastFixtureRunId()).toBe(
-      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    );
   });
 
   it('open(run) navigates to the detail route', () => {
