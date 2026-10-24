@@ -33,8 +33,10 @@ and what it reads now, field by field:
   size on what it read: ``extended`` for 15m and ``regular`` for 1d (a day folded from
   extended minutes would open at the first pre-market print). ``session`` overrides it. The
   owner ruled (#3525) that this is the choice: a 15m run is extended or regular hours, extended
-  by default, and the page offers daily bars no choice. ``hf_session`` is the HF
-  estimator's own filter, unchanged; only 15m bars have an HF
+  by default, and daily bars are regular hours only. The server holds those rules
+  (:func:`resolve_session_choice`): ``hf_session``, the HF estimator's own filter, follows the session (regular hours
+  RTH, extended hours ETH) and is derived when a request omits it; a request that names a pair that disagrees, or
+  extended-hours daily bars, is refused with ``resolution_unsupported`` and the reason. Only 15m bars have an HF
   estimator, so a daily identity records none. A session counts as complete only once the vendor has delivered
   its whole tape (``app.data_lake.capture_finality``).
 * **Annualization.** Before: a 15m bar was counted 26 to a day whatever session it was folded from, so an
@@ -67,10 +69,11 @@ and what it reads now, field by field:
   bar with none has no IV and the counts say how many snapshots fell outside every bar.
   Before: equality of timestamps, which almost never held. The current-IV marker
   (``POST /api/edge/iv30/*``) stays a separate browser call and a separate field.
-  The recorder is scheduled (:mod:`app.services.iv_recorder_schedule`, #3525): one closing snapshot per trading day, so
-  a daily bar holds an IV a day and the history builds from the day the schedule first ran. A 15m bar holds an IV only
-  in the bar its snapshot falls in, so a once-a-day recorder never gives a 15m window the 252 consecutive bars of IV
-  a z-score needs.
+  The recorder is scheduled (:mod:`app.services.iv_recorder_schedule`, #3525): one snapshot per trading day at 15:55 ET
+  (12:55 on an early close), filed at the quote time of the chain it read (before the close), so the regular-hours
+  15:45 bar, the extended 15:45 bar and the day's bar each hold it, and the history builds from the day the schedule
+  first ran. A 15m bar holds an IV only in the bar its snapshot falls in, so a once-a-day recorder never gives a 15m
+  window the 252 consecutive bars of IV a z-score needs.
 * **Cache and result.** Before: none, and nothing was stored. Now: a namespace keyed on the
   input identity (data policy, the IV digest, the estimators), the admitted snapshot
   digest and the calculation version, looked up after admission. Nothing is relabelled.
@@ -84,7 +87,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -120,11 +123,17 @@ CACHE_NAMESPACE = "realized_vs_iv:lake:v1"
 
 _REQUESTER = "realized-vs-iv-study"
 
+#: The bar sizes the study is defined for.
+BarSizeLabel = Literal["15m", "1d"]
+
 #: Bar sizes the study is defined for, and the minutes each folds.
 BAR_MINUTES: Mapping[str, int] = {"15m": 15, "1d": DAY_BAR_MINUTES}
 
 #: The session each bar size reads unless a request names one; see the module docstring (#3525).
 DEFAULT_SESSION_POLICY: Mapping[str, SessionPolicy] = {"15m": "extended", "1d": "regular"}
+
+#: The HF estimator's session filter that goes with each session the bars are folded from: regular hours are RTH, extended ETH.
+HF_SESSION_FOR_POLICY: Mapping[SessionPolicy, Session] = {"regular": "RTH", "extended": "ETH"}
 
 #: The tail of the calendar searched for the last final session: longer than any run of closed days plus a session.
 _FINAL_SESSION_SEARCH_DAYS = 14
@@ -138,7 +147,7 @@ class IvInput:
     """The IV a run is given: recorded, caller-supplied or none, and a digest of exactly the points in it."""
 
     source: IvSource
-    #: ``{ts, iv30, health_score?, variance_contribution_synthetic?}``, stamped as the snapshot was taken.
+    #: ``{ts, iv30, health_score?, variance_contribution_synthetic?}``, stamped at the moment its quotes describe (a recorded row's quote time).
     points: tuple[Mapping[str, Any], ...]
     digest: str
 
@@ -150,9 +159,10 @@ class RealizedVsIvParams:
     symbol: str
     bar_size: str = "1d"
     tenor_days: int = 30
-    #: The HF estimator's own session filter (ETH 04:00-20:00 ET, or RTH). Unchanged by the lake. It applies to ``15m``
-    #: bars only: a daily run has no HF estimator, so the identity records none rather than a choice nothing read.
-    hf_session: Session = "ETH"
+    #: The HF estimator's own session filter (ETH 04:00-20:00 ET, or RTH). It follows the session the bars are folded from;
+    #: ``None`` is the one that goes with it, and a different one is refused (:func:`resolve_session_choice`). It applies to
+    #: ``15m`` bars only: a daily run has no HF estimator, so the identity records none rather than a choice nothing read.
+    hf_session: Session | None = None
     #: Which bars the study folds from; ``None`` is the session that bar size has always read.
     session_policy: SessionPolicy | None = None
     estimators: tuple[str, ...] = ("yz",)
@@ -248,7 +258,7 @@ def resolve_window(bar_size: str, session_policy: SessionPolicy, now_ms: int) ->
 class DefaultWindow:
     """The window a run reads when its request names none, and the session it reads it in."""
 
-    bar_size: str
+    bar_size: BarSizeLabel
     session_policy: SessionPolicy
     start: date
     end: date
@@ -256,12 +266,13 @@ class DefaultWindow:
     sessions: int
 
 
-def default_window(bar_size: str, session_policy: SessionPolicy | None, now_ms: int) -> DefaultWindow:
+def default_window(bar_size: BarSizeLabel, session_policy: SessionPolicy | None, now_ms: int) -> DefaultWindow:
     """What a run of ``bar_size`` would read now: ``session_policy`` (``None`` is the bar size's own) and its default window.
 
     A page asks for this before a run so it can show the window and count what the lake lacks over exactly that span.
+    A pair the study does not offer (extended-hours daily bars) is refused as a run would refuse it.
     """
-    policy = _session_policy_for(bar_size, session_policy)
+    policy, _ = resolve_session_choice(bar_size, session_policy, None)
     start, end = resolve_window(bar_size, policy, now_ms)
     return DefaultWindow(bar_size, policy, start, end, len(expected_sessions(start, end)))
 
@@ -327,20 +338,43 @@ def load_iv_input(
 # ---------------------------------------------------------------------------
 
 
-def _session_policy_for(bar_size: str, session_policy: SessionPolicy | None) -> SessionPolicy:
-    """The session a run reads: the one it names, else the bar size's own; a typed refusal for a bar size not defined."""
+def resolve_session_choice(
+    bar_size: str, session_policy: SessionPolicy | None, hf_session: Session | None
+) -> tuple[SessionPolicy, Session | None]:
+    """The session the bars are folded from and the HF filter that goes with it; a typed refusal for a choice not offered.
+
+    ``session_policy`` ``None`` is the session the bar size reads by default. Daily bars are regular hours only and have no
+    HF estimator (``None``, whatever ``hf_session`` was sent). A 15-minute run's HF filter follows its session; ``None``
+    is derived, and a different one is refused. Every refusal is ``resolution_unsupported``, raised before the lake is touched.
+    """
     if bar_size not in BAR_MINUTES:
         raise StudyInputRefusal(
             "resolution_unsupported",
             f"{bar_size} bars are not supported: the annualization and the HF estimator are defined for "
             f"{' and '.join(BAR_MINUTES)} bars only.",
         )
-    return session_policy if session_policy is not None else DEFAULT_SESSION_POLICY[bar_size]
+    policy = session_policy if session_policy is not None else DEFAULT_SESSION_POLICY[bar_size]
+    if bar_size == "1d":
+        if policy != "regular":
+            raise StudyInputRefusal(
+                "resolution_unsupported",
+                "Daily bars are folded from regular hours only: a day folded from extended minutes would open at the "
+                "first pre-market print. Ask for regular hours, or for 15-minute bars.",
+            )
+        return policy, None
+    expected = HF_SESSION_FOR_POLICY[policy]
+    if hf_session is not None and hf_session != expected:
+        raise StudyInputRefusal(
+            "resolution_unsupported",
+            f"Bars folded from {policy} hours are measured with the {expected} high-frequency session, not "
+            f"{hf_session}: the two follow each other.",
+        )
+    return policy, expected
 
 
 def realized_vs_iv_identity(params: RealizedVsIvParams, *, now_ms: int) -> RealizedVsIvIdentity:
-    """The study's input identity, or a typed refusal for a bar size it is not defined for."""
-    policy = _session_policy_for(params.bar_size, params.session_policy)
+    """The study's input identity, or a typed refusal for a bar size or session it is not defined for."""
+    policy, hf_session = resolve_session_choice(params.bar_size, params.session_policy, params.hf_session)
     window = params.window if params.window is not None else resolve_window(params.bar_size, policy, now_ms)
     return RealizedVsIvIdentity(
         inputs=MinuteWindowIdentity(
@@ -354,7 +388,7 @@ def realized_vs_iv_identity(params: RealizedVsIvParams, *, now_ms: int) -> Reali
         bar_minutes=BAR_MINUTES[params.bar_size],
         bar_size=params.bar_size,
         tenor_days=params.tenor_days,
-        hf_session=params.hf_session if params.bar_size == "15m" else None,
+        hf_session=hf_session,
         estimators=params.estimators,
         windows=params.windows,
         confidence_floor=params.confidence_floor,

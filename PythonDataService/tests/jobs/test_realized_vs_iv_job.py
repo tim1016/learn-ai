@@ -249,6 +249,45 @@ def test_a_bar_size_the_study_was_never_defined_for_is_refused_before_the_lake_i
     assert harness.computed == 0
 
 
+@pytest.mark.parametrize(
+    ("bar_size", "session_policy", "hf_session", "reason"),
+    [
+        pytest.param("1d", "extended", None, "regular hours only", id="daily bars are regular hours only"),
+        pytest.param("15m", None, "RTH", "folded from extended hours are measured with the ETH high-frequency session, not RTH", id="the default session is extended: RTH does not go with it"),
+        pytest.param("15m", "regular", "ETH", "folded from regular hours are measured with the RTH high-frequency session, not ETH", id="regular hours with the ETH filter"),
+        pytest.param("15m", "extended", "RTH", "folded from extended hours are measured with the ETH high-frequency session, not RTH", id="extended hours with the RTH filter"),
+    ],
+)
+def test_a_session_choice_the_study_does_not_offer_is_refused_before_the_lake_is_touched(harness, bar_size, session_policy, hf_session, reason):
+    """The owner's rules (#3525) are the server's: a client that skips the page's one session control still meets them."""
+    state = harness.run(params(bar_size=bar_size, session_policy=session_policy, hf_session=hf_session), job_id="bad-session")
+
+    refusal = harness.result("bad-session")
+    assert state["status"] == "failed" and state["error_code"] == "resolution_unsupported"
+    assert reason in state["error_message"]
+    assert refusal["refusal"]["coverage"] is None and refusal["data_source"] is None
+    assert harness.catalog.rows == {} and harness.computed == 0
+
+
+@pytest.mark.parametrize(
+    ("session_policy", "hf_session"), [("regular", None), ("regular", "RTH"), ("extended", None), ("extended", "ETH"), (None, None), (None, "ETH")]
+)
+def test_the_hf_filter_a_fifteen_minute_run_reads_follows_its_session_and_is_derived_when_omitted(harness, session_policy, hf_session):
+    state = harness.run(params(bar_size="15m", window=(WINDOW[0], WINDOW[2]), session_policy=session_policy, hf_session=hf_session), job_id="follows")
+
+    result = harness.result("follows")
+    assert state["status"] == "completed"
+    assert result["hf_session"] == ("RTH" if session_policy == "regular" else "ETH")
+
+
+def test_the_record_of_a_fifteen_minute_run_that_left_out_the_hf_filter_holds_the_one_the_run_read(harness, tmp_path):
+    request = RealizedVsIvJobRequest.model_validate({"job_id": "j", "symbol": "SPY", "bar_size": "15m", "session": "rth"})
+    assert request.hf_session == "RTH"
+
+    kept = capture_realized_vs_iv(request).inputs
+    assert (kept["session"], kept["hf_session"]) == ("rth", "RTH"), "a rerun reads the filter the run used"
+
+
 def test_a_bad_adjustment_record_is_rebuilt_and_counted_as_added(harness):
     harness.run(params(), job_id="first")
     record = companion_path(lake_file(harness.lake, "polygon_split_adjusted", WINDOW[5]))
@@ -399,18 +438,19 @@ def test_force_recomputes_even_when_the_identity_matches(harness):
 
 
 @pytest.mark.parametrize(
-    "change",
+    ("base", "change"),
     [
-        pytest.param({"session_policy": "extended"}, id="session_policy"),
-        pytest.param({"tenor_days": 60}, id="tenor"),
-        pytest.param({"windows": (5, 10)}, id="windows"),
-        pytest.param({"window": (WINDOW[0], WINDOW[-2])}, id="window_end"),
+        # Daily bars are regular hours only, so the session is changed on 15-minute bars.
+        pytest.param({"bar_size": "15m", "window": (WINDOW[0], WINDOW[2])}, {"session_policy": "regular"}, id="session_policy"),
+        pytest.param({}, {"tenor_days": 60}, id="tenor"),
+        pytest.param({}, {"windows": (5, 10)}, id="windows"),
+        pytest.param({}, {"window": (WINDOW[0], WINDOW[-2])}, id="window_end"),
     ],
 )
-def test_a_changed_policy_or_scientific_input_is_a_new_identity_not_a_cache_hit(harness, change):
-    harness.run(params(), job_id="first")
+def test_a_changed_policy_or_scientific_input_is_a_new_identity_not_a_cache_hit(harness, base, change):
+    harness.run(params(**base), job_id="first")
 
-    state = harness.run(params(**change), job_id="changed")
+    state = harness.run(params(**base, **change), job_id="changed")
 
     assert state.get("cached") != "1" and harness.computed == 2
 
@@ -503,8 +543,23 @@ def test_the_browser_body_is_accepted_in_snake_or_camel_case_and_defaults_are_th
 
     assert snake.symbol == camel.symbol == "SPY", "a ticker is upper-cased, as the store file name depends on it"
     assert (snake.bar_size, snake.tenor_days, snake.hf_session) == (camel.bar_size, camel.tenor_days, camel.hf_session)
-    assert (minimal.bar_size, minimal.tenor_days, minimal.hf_session, minimal.session) == ("1d", 30, "ETH", None)
+    assert (minimal.bar_size, minimal.tenor_days, minimal.hf_session, minimal.session) == ("1d", 30, None, None), "daily bars have no HF filter"
     assert minimal.estimators == ["yz"] and minimal.windows == [5, 10, 30] and minimal.iv_series is None
+
+
+@pytest.mark.parametrize(
+    ("body", "derived"),
+    [
+        pytest.param({"bar_size": "15m"}, "ETH", id="15m reads extended hours unless told otherwise"),
+        pytest.param({"bar_size": "15m", "session": "extended"}, "ETH", id="extended is ETH"),
+        pytest.param({"bar_size": "15m", "session": "rth"}, "RTH", id="regular hours are RTH"),
+        pytest.param({"bar_size": "15m", "session": "rth", "hf_session": "ETH"}, "ETH", id="a named filter is kept for the job to refuse if it disagrees"),
+        pytest.param({"bar_size": "1d", "session": "rth"}, None, id="daily bars have none"),
+        pytest.param({"bar_size": "5m"}, None, id="a bar size the study is not defined for is left to the job to refuse"),
+    ],
+)
+def test_a_request_that_leaves_out_the_hf_filter_gets_the_one_that_goes_with_its_session(body, derived):
+    assert RealizedVsIvJobRequest.model_validate({"job_id": "j", "symbol": "SPY", **body}).hf_session == derived
 
 
 def test_the_estimators_a_request_may_name_are_exactly_the_ones_the_composition_computes():
@@ -553,7 +608,7 @@ async def test_the_route_hands_the_worker_the_study_it_was_asked_for(monkeypatch
     monkeypatch.setattr("app.routers.jobs.run_in_thread", fake_run_in_thread)
     monkeypatch.setattr("app.routers.jobs.run_realized_vs_iv_study", fake_study)
     request = RealizedVsIvJobRequest.model_validate(
-        {**BROWSER, "job_id": "j1", "force": True, "session": "rth",
+        {**BROWSER, "job_id": "j1", "force": True, "session": "rth", "hf_session": "RTH",
          "window_start_ms": et_midnight_ms(date(2024, 3, 4)), "window_end_ms": et_midnight_ms(date(2024, 5, 3)),
          "iv_series": [{"ts": 1_700_000_000_000, "iv30": 0.2, "health_score": None}]}
     )
@@ -563,7 +618,7 @@ async def test_the_route_hands_the_worker_the_study_it_was_asked_for(monkeypatch
 
     assert response == {"job_id": "j1", "status": "queued"}
     assert captured["params"] == RealizedVsIvParams(
-        symbol="SPY", bar_size="15m", tenor_days=30, hf_session="ETH", session_policy="regular",
+        symbol="SPY", bar_size="15m", tenor_days=30, hf_session="RTH", session_policy="regular",
         estimators=("yz",), windows=(5, 10, 30), confidence_floor=0.1,
         iv_series=[{"ts": 1_700_000_000_000, "iv30": 0.2, "health_score": None}],
         window=(date(2024, 3, 4), date(2024, 5, 3)),

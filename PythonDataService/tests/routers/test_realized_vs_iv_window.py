@@ -10,7 +10,10 @@ from datetime import date
 import pytest
 
 from app.lean_sidecar.trading_calendar import expected_sessions
+from app.research.lake_study import SESSION_POLICY_FOR_REQUEST
+from app.research.study_inputs import StudyInputRefusal
 from app.routers.jobs import RealizedVsIvJobRequest
+from app.routers.realized_vs_iv import _request_session
 from app.services.realized_vs_iv_study_service import RealizedVsIvParams, realized_vs_iv_identity
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 
@@ -85,3 +88,26 @@ async def test_a_page_can_send_the_window_back_unchanged_in_the_job_request(clie
 @pytest.mark.parametrize("params", [{"bar_size": "5m"}, {"bar_size": "1h"}, {}, {"bar_size": "1d", "session": "all"}])
 async def test_a_bar_size_or_session_the_study_does_not_define_is_a_422(client, params):
     assert (await client.get(URL, params=params)).status_code == 422
+
+
+async def test_a_daily_window_for_the_regular_session_the_page_names_is_the_default_one(client):
+    named = (await client.get(URL, params={"bar_size": "1d", "session": "rth"})).json()
+    default = (await client.get(URL, params={"bar_size": "1d"})).json()
+
+    assert named == default and named["session"] == "rth"
+
+
+async def test_extended_hours_daily_bars_are_a_422_that_carries_the_refusal_a_run_would_give(client):
+    """Daily bars are regular hours only (the owner's ruling, #3525); the server holds it, not only the page."""
+    response = await client.get(URL, params={"bar_size": "1d", "session": "extended"})
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "resolution_unsupported" and "regular hours only" in detail["reason"]
+    with pytest.raises(StudyInputRefusal) as run_refusal:
+        realized_vs_iv_identity(RealizedVsIvParams("SPY", "1d", session_policy="extended"), now_ms=NOW_MS)
+    assert (run_refusal.value.code, run_refusal.value.reason) == (detail["code"], detail["reason"])
+
+
+def test_the_routes_spelling_of_a_session_is_the_inverse_of_the_one_requests_use():
+    assert {_request_session(policy): policy for policy in ("regular", "extended")} == SESSION_POLICY_FOR_REQUEST

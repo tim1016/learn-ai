@@ -47,6 +47,7 @@ import respx
 from polygon.rest.models import Agg
 
 from app.engine.edge.realized_vs_iv_series import compute_realized_vs_iv_series
+from app.engine.edge.session_bars import DAY_BAR_MINUTES
 from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms_utc
 from app.research.study_inputs import StudyInputRefusal, admit_minute_inputs, bars_as_rows, fold_minute_bars
 from app.services.polygon_client import PolygonClientService
@@ -179,6 +180,16 @@ def lake_rows(window: list[date], *, bar_size: str, session_policy: str | None =
     )
     admitted = admit_minute_inputs(identity.inputs, requester="comparison", now_ms=NOW_MS)
     return bars_as_rows(fold_minute_bars(admitted.window_bars, identity.bar_minutes))
+
+
+def extended_daily_rows(window: list[date]) -> list[dict]:
+    """Daily bars folded from every extended minute. The study refuses this run (daily bars are regular hours only), so
+    the same admitted minutes of a 15-minute extended identity are folded by day here, outside the study."""
+    identity = realized_vs_iv_identity(
+        RealizedVsIvParams("SPY", "15m", window=(window[0], window[-1]), session_policy="extended"), now_ms=NOW_MS
+    )
+    admitted = admit_minute_inputs(identity.inputs, requester="comparison", now_ms=NOW_MS)
+    return bars_as_rows(fold_minute_bars(admitted.window_bars, DAY_BAR_MINUTES))
 
 
 def iv_at(rows: list[dict]) -> list[dict]:
@@ -476,14 +487,15 @@ EXTENDED_DAILY_MEASURED = {
 def test_the_daily_session_is_regular_by_default_and_folding_it_from_extended_hours_is_a_different_sample(world):
     """Cause: ``data-quality`` (session scope). The census could not confirm Polygon's day bar is regular-session only;
     the default assumes it is, because a day folded from extended minutes opens at the first pre-market print and its
-    high and low reach into the after-hours tape. The owner ruled the default regular (#3525)."""
+    high and low reach into the after-hours tape. The owner ruled daily bars regular hours only (#3525): the study
+    refuses the extended run, so that side is the same minutes folded by day outside the study."""
     window = window_of("1d")
     tape = tape_for(window)
     mock_vendor("SPY", tape, adjusted=tape)
     provider = provider_rows(tape, window, bar_size="1d", sanitized=False)
 
     default = compare(provider, lake_rows(window, bar_size="1d"), "1d")
-    extended = compare(provider, lake_rows(window, bar_size="1d", session_policy="extended"), "1d")
+    extended = compare(provider, extended_daily_rows(window), "1d")
 
     assert default.causes == [] and max(default.output_max_diff.values()) <= 1e-9
     assert extended.causes == ["data-quality"] and extended.timestamps_changed == 0

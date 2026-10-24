@@ -61,7 +61,12 @@ from app.services.dataset_service import RunCancelledError
 from app.services.engine_backtest_service import execute_engine_backtest
 from app.services.feature_study_service import FeatureStudyParams, run_feature_study
 from app.services.polygon_client import PolygonClientService
-from app.services.realized_vs_iv_study_service import RealizedVsIvParams, run_realized_vs_iv_study
+from app.services.realized_vs_iv_study_service import (
+    DEFAULT_SESSION_POLICY,
+    HF_SESSION_FOR_POLICY,
+    RealizedVsIvParams,
+    run_realized_vs_iv_study,
+)
 from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms, et_midnight_ms
 
 router = APIRouter()
@@ -266,7 +271,9 @@ class RealizedVsIvJobRequest(_CamelCaseModel):
 
     ``session`` is which bars the study folds from: ``extended`` (04:00-20:00 ET) or ``rth``. Omitted, it is the session
     each bar size has always read (``extended`` for ``15m``, ``rth`` for ``1d``; #3525). ``hf_session`` is the HF
-    estimator's own ETH/RTH filter and is unchanged.
+    estimator's own ETH/RTH filter and follows the session (``rth`` is RTH, ``extended`` is ETH): omitted, it is derived
+    for ``15m`` bars and recorded as derived, and one that disagrees with the session, or ``extended`` with ``1d``,
+    fails the job with ``resolution_unsupported`` and the reason (``resolve_session_choice``).
     """
 
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
@@ -275,7 +282,7 @@ class RealizedVsIvJobRequest(_CamelCaseModel):
     symbol: str = Field(..., min_length=1, max_length=20)
     bar_size: str = Field("1d", max_length=16)
     tenor_days: int = Field(30, ge=1, le=365)
-    hf_session: HfSession = "ETH"
+    hf_session: HfSession | None = None
     session: Session | None = None
     estimators: list[Literal["ctc", "parkinson", "gk", "yz"]] = Field(default_factory=lambda: ["yz"], min_length=1)
     windows: list[Annotated[int, Field(ge=2, le=500)]] = Field(default_factory=lambda: [5, 10, 30], min_length=1)
@@ -291,6 +298,14 @@ class RealizedVsIvJobRequest(_CamelCaseModel):
     """Skip the result cache and always re-run."""
     rerun_of: RecordId | None = None
     """The saved run this one was prefilled from (the History's Rerun); lineage only, never an input."""
+
+    @model_validator(mode="after")
+    def _derive_the_hf_session_a_fifteen_minute_request_omits(self) -> RealizedVsIvJobRequest:
+        """Derive the HF filter a 15-minute request left out, so the run's record holds the filter the run read."""
+        if self.hf_session is None and self.bar_size == "15m":
+            policy = SESSION_POLICY_FOR_REQUEST[self.session] if self.session is not None else DEFAULT_SESSION_POLICY["15m"]
+            self.hf_session = HF_SESSION_FOR_POLICY[policy]
+        return self
 
     @model_validator(mode="after")
     def _window_is_two_et_midnights_or_neither(self) -> RealizedVsIvJobRequest:
