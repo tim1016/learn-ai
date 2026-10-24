@@ -31,6 +31,8 @@ The inventory (#2747) then found very little math left outside Python. Of the re
 
 Exception 1 covers the Strategy Builder only. Pricing Lab (now the Pricing view of an instrument's Options tab, `Frontend/src/app/markets/options/pricing/options-pricing.component.ts`) also calls `black-scholes.ts` and diffs against it by default. The exception does not cover that use; it is non-conformance (#2747 F6, H5).
 
+The live cross-check on an instrument's Options chain (Now · Live IBKR, `Frontend/src/app/markets/options/chain/live/live-cross-check.ts`) is non-conformance too. Angular computes `|Δ IBKR − Δ engine|` there (`absDiff`) and judges it green, yellow or red (`deltaAbsBand` and the `DELTA_GAP_*` edges, 0.005 and 0.02, in `Frontend/src/app/components/broker/format.ts`). That is a number a user compares and a verdict, with no Python canonical, no parity test, and no reason of latency or layer-locality: the data plane already prices every contract. The retired Chain (Live) page computed it the same way and #2747 did not inventory it; ADR 0084 carries it over unchanged. It is tracked by #TBD (move the gap, its band and the not-compared reasons into Python), and it does not widen the table.
+
 **.NET has no exception.** The .NET FIFO position engine (`Backend/Services/Implementation/PositionEngine.cs`) was once named as one, for layer-locality: EF/Postgres lots inside DbContext transactions. It serves only the Portfolio page, which the map rules dead (☆), and no test compares it to Python. So it goes with that page rather than being kept as an exception.
 
 ## Consequences
