@@ -7,11 +7,17 @@ import { BacktestRunsService } from '../../../services/backtest-runs.service';
 import { failureText, isNotFound, nonBlank, registered } from '../../entry-support';
 import type { StrategyRegistryEntry } from '../../signal-strategy-evidence';
 import { SignalStrategyRegistryService } from '../../signal-strategy-registry.service';
+import { savedRunRoute } from '../../signal-strategy-tabs';
 import { EXPLORE_RUN_PARAM, EXPLORE_SEARCH_PARAM, exploreTabRoute, parseRunId, type ExploreTabId } from '../explore-tabs';
 import type { ExploreEntry, ExploreEntryRefusal, ExploreEntryResolver } from './explore-entry';
 
 /** The query keys an old address carried only to name the strategy or the run; the new address says them in its path or restates them. */
 const RESTATED = new Set(['strategy', EXPLORE_RUN_PARAM, 'restoreRun', EXPLORE_SEARCH_PARAM]);
+
+/** The old address's query, less the keys the new address restates. */
+function keptQuery(route: ActivatedRouteSnapshot): Record<string, string> {
+  return Object.fromEntries(Object.entries(route.queryParams).filter(([name]) => !RESTATED.has(name)));
+}
 
 /**
  * One redirect, straight to the strategy's Explore: the old address's query and
@@ -25,10 +31,9 @@ function redirectTo(
   tool: ExploreTabId,
   native: Readonly<Record<string, string>> = {},
 ): RedirectCommand {
-  const kept = Object.fromEntries(Object.entries(route.queryParams).filter(([name]) => !RESTATED.has(name)));
   return new RedirectCommand(
     router.createUrlTree([...exploreTabRoute(strategyKey, tool)], {
-      queryParams: { ...kept, ...native },
+      queryParams: { ...keptQuery(route), ...native },
       fragment: route.fragment ?? undefined,
     }),
   );
@@ -40,53 +45,67 @@ function refused(target: ExploreTabId, refusal: ExploreEntryRefusal): ExploreEnt
 
 /**
  * The owner of a saved backtest run, from the strategy the run itself stored.
- * `/strategy-lab`, the run-detail aliases and the evidence address all end here:
- * a run whose stored strategy the registry lists lands on that strategy's
- * Backtest; one whose strategy it does not list, one that does not exist and one
- * the address claims for another strategy are each refused in place. An address
- * naming no run goes to the strategy it names, or to a chooser. No strategy is
- * ever guessed.
+ * `/strategy-lab`, the run-detail aliases and the evidence address all end here.
+ * A run whose stored strategy the registry lists lands on that strategy's
+ * Backtest. One whose strategy it does not list (retired, renamed, or a custom
+ * LEAN source) stays viewable: the evidence address shows it by itself,
+ * read-only, and an old address goes there in one redirect. A run that does not
+ * exist, and one the address claims for another strategy, are refused in place.
+ * An address naming no run goes to the strategy it names, or to a chooser. No
+ * strategy is ever guessed.
  */
-export const resolveBacktestEntry: ExploreEntryResolver = async (route) => {
-  const router = inject(Router);
-  const registry = inject(SignalStrategyRegistryService);
-  const runs = inject(BacktestRunsService);
-  const target: ExploreTabId = 'backtest';
+function resolveRunEntry(whereUnregistered: 'show' | 'redirect'): ExploreEntryResolver {
+  return async (route) => {
+    const router = inject(Router);
+    const registry = inject(SignalStrategyRegistryService);
+    const runs = inject(BacktestRunsService);
+    const target: ExploreTabId = 'backtest';
 
-  let entries: readonly StrategyRegistryEntry[];
-  try {
-    entries = await registry.entries();
-  } catch (error) {
-    return refused(target, { reason: 'read-failed', subject: 'the strategy registry', message: failureText(error) });
-  }
-
-  const claimed = nonBlank(route.queryParamMap.get('strategy'));
-  const rawRun = route.paramMap.get('id') ?? route.queryParamMap.get(EXPLORE_RUN_PARAM) ?? route.queryParamMap.get('restoreRun');
-  if (rawRun !== null) {
-    const runId = parseRunId(rawRun);
-    if (runId === null) return refused(target, { reason: 'invalid-run', raw: rawRun });
-    let run;
+    let entries: readonly StrategyRegistryEntry[];
     try {
-      run = await firstValueFrom(runs.get(runId));
+      entries = await registry.entries();
     } catch (error) {
-      return refused(target, { reason: 'read-failed', subject: `saved run #${runId}`, message: failureText(error) });
+      return refused(target, { reason: 'read-failed', subject: 'the strategy registry', message: failureText(error) });
     }
-    if (run === null) return refused(target, { reason: 'run-not-found', runId });
-    const owner = registered(entries, run.strategyName);
-    if (owner === undefined) return refused(target, { reason: 'run-unresolved', runId, storedStrategy: run.strategyName });
-    if (claimed !== null && claimed !== owner.strategy_key) {
-      return refused(target, { reason: 'run-mismatch', runId, owner: owner.strategy_key, claimed });
-    }
-    return redirectTo(route, router, owner.strategy_key, target, { [EXPLORE_RUN_PARAM]: String(runId) });
-  }
 
-  if (claimed !== null) {
-    const named = registered(entries, claimed);
-    if (named !== undefined) return redirectTo(route, router, named.strategy_key, target);
-    return { kind: 'choose', target, unknownStrategy: claimed, strategies: entries };
-  }
-  return { kind: 'choose', target, unknownStrategy: null, strategies: entries };
-};
+    const claimed = nonBlank(route.queryParamMap.get('strategy'));
+    const rawRun = route.paramMap.get('id') ?? route.queryParamMap.get(EXPLORE_RUN_PARAM) ?? route.queryParamMap.get('restoreRun');
+    if (rawRun !== null) {
+      const runId = parseRunId(rawRun);
+      if (runId === null) return refused(target, { reason: 'invalid-run', raw: rawRun });
+      let run;
+      try {
+        run = await firstValueFrom(runs.get(runId));
+      } catch (error) {
+        return refused(target, { reason: 'read-failed', subject: `saved run #${runId}`, message: failureText(error) });
+      }
+      if (run === null) return refused(target, { reason: 'run-not-found', runId });
+      const owner = registered(entries, run.strategyName);
+      if (owner === undefined) {
+        if (whereUnregistered === 'show') return { kind: 'run-report', target, runId, storedStrategy: run.strategyName };
+        return new RedirectCommand(
+          router.createUrlTree([...savedRunRoute(runId)], { queryParams: keptQuery(route), fragment: route.fragment ?? undefined }),
+        );
+      }
+      if (claimed !== null && claimed !== owner.strategy_key) {
+        return refused(target, { reason: 'run-mismatch', runId, owner: owner.strategy_key, claimed });
+      }
+      return redirectTo(route, router, owner.strategy_key, target, { [EXPLORE_RUN_PARAM]: String(runId) });
+    }
+
+    if (claimed !== null) {
+      const named = registered(entries, claimed);
+      if (named !== undefined) return redirectTo(route, router, named.strategy_key, target);
+      return { kind: 'choose', target, unknownStrategy: claimed, strategies: entries };
+    }
+    return { kind: 'choose', target, unknownStrategy: null, strategies: entries };
+  };
+}
+
+/** An old address: a run no registered strategy holds ends at the run itself, read-only. */
+export const resolveBacktestEntry: ExploreEntryResolver = resolveRunEntry('redirect');
+/** The evidence address: the same run, shown in place when no registered strategy holds it. */
+export const resolveEvidenceRunEntry: ExploreEntryResolver = resolveRunEntry('show');
 
 /**
  * The owner of a saved Grid Search, from the strategy the search stored, for

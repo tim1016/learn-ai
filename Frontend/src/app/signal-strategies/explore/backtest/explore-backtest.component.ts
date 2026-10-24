@@ -31,6 +31,7 @@ import { WorkspaceStateBlockComponent } from "../../../shared/workspace/workspac
 import { EXPLORE_RUN_PARAM, exploreTabRoute } from "../explore-tabs";
 import { ExploreSession } from "../explore-session";
 import { GOLDEN_RUN_PARAM, goldenTabRoute } from "../../golden/golden-tabs";
+import { savedRunRoute } from "../../signal-strategy-tabs";
 
 /**
  * Explore's Backtest: Strategy Lab's workbench and run history for one strategy.
@@ -101,10 +102,25 @@ export class ExploreBacktestComponent {
   protected readonly equityPoints = computed(() => (this.shownRun() === null ? [] : this.report.equityPoints()));
   protected readonly reportNotices = computed(() => (this.shownRun() === null ? [] : this.report.reportNotices()));
 
-  /** A run the address names that another strategy produced: never drawn under this strategy's header. */
+  /**
+   * A run the address names that another strategy produced: never drawn under this
+   * strategy's header. Its owner is linked only when the registry lists it; a run
+   * no registered strategy holds opens read-only on its own page.
+   */
   protected readonly mismatch = computed<WorkspaceStateContent | null>(() => {
     const run = this.loadedRun();
     if (run === null || run.strategyName === this.key()) return null;
+    const ownerListed = this.session.registeredKeys()?.has(run.strategyName) === true;
+    const back = { id: "own", label: `Back to ${this.key()}`, route: exploreTabRoute(this.key(), "backtest") };
+    if (!ownerListed) {
+      return {
+        kind: "unavailable",
+        happened: `Saved run #${run.id} belongs to ${run.strategyName}, which the registry does not list.`,
+        why: "No strategy's Explore holds it, so this page shows none of its report.",
+        next: "Open the run by itself, read-only, or go back to this strategy's backtests.",
+        actions: [{ id: "report", label: `Open run #${run.id} read-only`, route: savedRunRoute(run.id) }, back],
+      };
+    }
     return {
       kind: "unavailable",
       happened: `Saved run #${run.id} belongs to ${run.strategyName}, not ${this.key()}.`,
@@ -117,8 +133,21 @@ export class ExploreBacktestComponent {
           route: exploreTabRoute(run.strategyName, "backtest"),
           queryParams: { [EXPLORE_RUN_PARAM]: String(run.id) },
         },
-        { id: "own", label: `Back to ${this.key()}`, route: exploreTabRoute(this.key(), "backtest") },
+        back,
       ],
+    };
+  });
+
+  /** Another strategy's backtest holds the container: said here, linked to its own Explore, and never taken over by this one. */
+  protected readonly otherRunning = computed<WorkspaceStateContent | null>(() => {
+    const owner = this.runs.otherStrategyRunning();
+    if (owner === null) return null;
+    return {
+      kind: "running",
+      happened: `${owner}'s backtest is running.`,
+      why: "One Strategy Lab backtest runs at a time, so Run waits here until it ends. Its progress and result show under its own strategy, not this one.",
+      next: `Follow it in ${owner}'s Explore.`,
+      actions: [{ id: "other", label: `Open ${owner}'s backtest`, route: exploreTabRoute(owner, "backtest") }],
     };
   });
 

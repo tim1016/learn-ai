@@ -121,9 +121,10 @@ function backtestPayload(): Record<string, unknown> {
 const STRATEGY_KEY = "ema_crossover_signal";
 
 /** The parts of the strategy's Explore session the workbench reads and writes. */
-function exploreSession() {
+function exploreSession(registered: readonly string[] = [STRATEGY_KEY, "rsi_mean_reversion"]) {
   return {
     key: signal(STRATEGY_KEY).asReadonly(),
+    registeredKeys: signal<ReadonlySet<string> | null>(new Set(registered)).asReadonly(),
     sweepCapability: signal({ supported: true, reason: null }).asReadonly(),
     goldenCapability: signal({ supported: true, reason: null }).asReadonly(),
     backtestRunId: signal<number | null>(null),
@@ -195,6 +196,8 @@ async function createLab(
     /** Makes the run-detail read surface a transport error, which is a
      *  different failure from the fetched run being unrestorable. */
     backtestRunQueryError?: Error;
+    /** The strategy keys the registry lists. */
+    registered?: readonly string[];
   } = {},
 ) {
   const jobs = signal<never[]>([]);
@@ -242,8 +245,8 @@ async function createLab(
       EngineRunDockSource,
       { provide: RUN_DOCK_SOURCE, useExisting: EngineRunDockSource },
       { provide: RUN_DOCK_STORAGE_KEY, useValue: "run-dock-expanded:strategy-lab" },
-      { provide: STRATEGY_LAB_PINNED_STRATEGY, useValue: signal<string | null>(STRATEGY_KEY).asReadonly() },
-      { provide: ExploreSession, useValue: exploreSession() },
+      { provide: STRATEGY_LAB_PINNED_STRATEGY, useValue: signal(STRATEGY_KEY).asReadonly() },
+      { provide: ExploreSession, useValue: exploreSession(options.registered) },
       {
         provide: JobsService,
         useValue: {
@@ -323,7 +326,7 @@ describe("Strategy Lab Workbench", () => {
     expect(runButton()?.textContent).toContain("Run validation");
 
     // JobsService.resumeActive() finds the job the reload interrupted.
-    activeJobs.set([{ id: "resumed-1", type: "engine_backtest", status: "running", phase: "running_indicators", recentLogs: [], logSeq: 0 }]);
+    activeJobs.set([{ id: "resumed-1", type: "engine_backtest", status: "running", phase: "running_indicators", recentLogs: [], logSeq: 0, parameters: { backtest: { strategy_name: STRATEGY_KEY } } }]);
     fixture.detectChanges();
     await fixture.whenStable();
     fixture.detectChanges();
@@ -336,8 +339,8 @@ describe("Strategy Lab Workbench", () => {
     // Several active jobs from other tabs: nothing is adopted, but Run stays
     // disabled — the container is busy either way.
     activeJobs.set([
-      { id: "tab-a", type: "engine_backtest", status: "running", recentLogs: [], logSeq: 0 },
-      { id: "tab-b", type: "engine_backtest", status: "running", recentLogs: [], logSeq: 0 },
+      { id: "tab-a", type: "engine_backtest", status: "running", recentLogs: [], logSeq: 0, parameters: { backtest: { strategy_name: STRATEGY_KEY } } },
+      { id: "tab-b", type: "engine_backtest", status: "running", recentLogs: [], logSeq: 0, parameters: { backtest: { strategy_name: STRATEGY_KEY } } },
     ]);
     fixture.detectChanges();
     await fixture.whenStable();
@@ -680,6 +683,23 @@ describe("Strategy Lab Workbench", () => {
     expect(root.querySelector("app-strategy-lab-run-stats")).toBeNull();
     expect(root.querySelector(".next-steps")).toBeNull();
     expect(TestBed.inject(StrategyLabConfigStore).initialCash()).toBe(100_000);
+    expect(navigate).not.toHaveBeenCalled();
+    http.verify();
+  });
+
+  it("opens a run no registered strategy holds read-only on its own page, and never links the strategy it stored", async () => {
+    const orphan = run({ id: 78, strategyName: "user_provided", requestedEngine: "lean", source: "lean-sidecar", engine: "LEAN" });
+    const { fixture, http, navigate } = await createLab({ activeRun: 78, backtestRun: orphan });
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.textContent).toContain("Saved run #78 belongs to user_provided, which the registry does not list.");
+    expect(within(root).getByRole("link", { name: "Open run #78 read-only" }).getAttribute("href")).toBe("/signal-strategies/evidence/run/78");
+    expect(within(root).queryByRole("link", { name: /under user_provided/ })).toBeNull();
+    expect(root.querySelector("a[href*='/user_provided/']")).toBeNull();
+    expect(root.querySelector("app-strategy-lab-run-stats")).toBeNull();
     expect(navigate).not.toHaveBeenCalled();
     http.verify();
   });

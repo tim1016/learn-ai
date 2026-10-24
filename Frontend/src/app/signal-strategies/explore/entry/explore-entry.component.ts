@@ -9,6 +9,7 @@ import { SignalStrategyChipComponent } from '../../signal-strategy-chip.componen
 import { SIGNAL_STRATEGIES_ROUTE } from '../../signal-strategy-tabs';
 import { EXPLORE_RUN_PARAM, EXPLORE_SEARCH_PARAM, EXPLORE_TABS, exploreTabRoute, type ExploreTabId } from '../explore-tabs';
 import type { ExploreEntry, ExploreEntryRefusal } from './explore-entry';
+import { UnregisteredRunReportComponent } from './unregistered-run-report.component';
 
 const TOOL_WORDS: Readonly<Record<ExploreTabId, string>> = {
   backtest: 'backtest',
@@ -34,14 +35,6 @@ function refusalState(refusal: ExploreEntryRefusal, target: ExploreTabId): Works
         happened: `Saved run #${refusal.runId} was not found.`,
         why: 'The server holds no backtest run with that number, so no strategy can be named for it.',
         next: 'Check the number, or choose a strategy and open its backtests.',
-        actions: [TO_LIST],
-      };
-    case 'run-unresolved':
-      return {
-        kind: 'unavailable',
-        happened: `Saved run #${refusal.runId} stored the strategy "${refusal.storedStrategy}", which the registry does not list.`,
-        why: 'The strategy may be retired or renamed, or the run may have used custom source. No strategy is guessed for it, and the record is unchanged.',
-        next: 'Choose a registered strategy to explore.',
         actions: [TO_LIST],
       };
     case 'run-mismatch':
@@ -108,12 +101,20 @@ function refusalState(refusal: ExploreEntryRefusal, target: ExploreTabId): Works
  * address, lands when its owner cannot be named: a chooser of the registered
  * strategies when the address named none, or the reason in words when the
  * stored evidence did not resolve. It stays at the address it was opened at,
- * keeping the id, and never opens a strategy the evidence did not name.
+ * keeping the id, and never opens a strategy the evidence did not name. A saved
+ * run no registered strategy holds is the one record it still shows: by itself,
+ * read-only.
  */
 @Component({
   selector: 'app-explore-entry',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, SignalStrategyChipComponent, WorkspaceHeaderComponent, WorkspaceStateBlockComponent],
+  imports: [
+    RouterLink,
+    SignalStrategyChipComponent,
+    UnregisteredRunReportComponent,
+    WorkspaceHeaderComponent,
+    WorkspaceStateBlockComponent,
+  ],
   templateUrl: './explore-entry.component.html',
   styleUrl: './explore-entry.component.scss',
 })
@@ -122,14 +123,21 @@ export class ExploreEntryComponent {
   readonly entry = input.required<ExploreEntry>();
 
   protected readonly title = computed(() => {
-    const target = this.entry().target;
-    return this.entry().kind === 'choose' ? `Choose a strategy to ${TOOL_WORDS[target]}` : EXPLORE_TABS.label(target);
+    const entry = this.entry();
+    if (entry.kind === 'run-report') return `Saved run #${entry.runId}`;
+    return entry.kind === 'choose' ? `Choose a strategy to ${TOOL_WORDS[entry.target]}` : EXPLORE_TABS.label(entry.target);
   });
 
-  protected readonly breadcrumb: readonly WorkspaceBreadcrumbItem[] = [
+  protected readonly breadcrumb = computed<readonly WorkspaceBreadcrumbItem[]>(() => [
     { label: 'Signal strategies', route: [SIGNAL_STRATEGIES_ROUTE] },
-    { label: 'Explore' },
-  ];
+    { label: this.entry().kind === 'run-report' ? 'Saved run' : 'Explore' },
+  ]);
+
+  /** The run no registered strategy holds, when that is what the address named. */
+  protected readonly savedRun = computed(() => {
+    const entry = this.entry();
+    return entry.kind === 'run-report' ? entry : null;
+  });
 
   protected readonly refusal = computed<WorkspaceStateContent | null>(() => {
     const entry = this.entry();

@@ -1,6 +1,8 @@
-<app-workspace-header [title]="title()" [breadcrumb]="breadcrumb" />
+<app-workspace-header [title]="title()" [breadcrumb]="breadcrumb()" />
 
-@if (refusal(); as state) {
+@if (savedRun(); as run) {
+  <app-unregistered-run-report [runId]="run.runId" [storedStrategy]="run.storedStrategy" />
+} @else if (refusal(); as state) {
   <div class="entry">
     <app-workspace-state-block [state]="state" />
   </div>

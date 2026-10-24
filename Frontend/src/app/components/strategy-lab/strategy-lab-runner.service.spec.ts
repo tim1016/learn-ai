@@ -15,10 +15,17 @@ import type { JobState, JobStatus } from "../../services/jobs.service";
 import { LeanSidecarService } from "../../services/lean-sidecar.service";
 import { BacktestRunsService } from "../../services/backtest-runs.service";
 import { STRATEGY_LAB_PINNED_STRATEGY, StrategyLabConfigStore } from "./strategy-lab-config.store";
-import { StrategyLabRunner } from "./strategy-lab-runner.service";
+import { StrategyLabRunner, strategyOfJob } from "./strategy-lab-runner.service";
 import { inputsFromBacktestJob, type StrategyInfo } from "./strategy-lab.models";
 
 const TERMINAL_JOB_STATUSES: JobStatus[] = ["completed", "failed", "cancelled"];
+
+/** The payload a Python backtest of the strategy under test is submitted with: what says whose job it is. */
+const OWNED_BACKTEST = { backtest: { strategy_name: "ema_crossover_signal" } };
+/** A marker as this build writes it. */
+function marker(job: { id: string; type: string }, strategy = "ema_crossover_signal"): string {
+  return JSON.stringify({ ...job, strategy });
+}
 
 /** Mirrors `JobsService.job()`/`activeJobs()` well enough to test a runner
  *  reacting to a job JobsService discovered on its own (e.g. `resumeActive()`
@@ -436,7 +443,8 @@ describe("StrategyLab configuration and runner", () => {
     await runner.run();
 
     const request = startJob.mock.calls[0]?.[1]?.request;
-    expect(request).toEqual(expect.objectContaining({ algorithm_source: customSource }));
+    // The strategy whose Explore submitted the source owns the run it saves.
+    expect(request).toEqual(expect.objectContaining({ algorithm_source: customSource, strategy_key: STRATEGY.name }));
     expect(request).not.toHaveProperty("template");
     expect(request).not.toHaveProperty("strategy_parameters");
   });
@@ -611,8 +619,8 @@ describe("StrategyLab configuration and runner", () => {
 
   describe("resuming a job JobsService already had in flight (e.g. after a page reload)", () => {
     it.each([
-      ["engine_backtest", makeJobState({ id: "resumed-1", type: "engine_backtest", status: "running" })],
-      ["lean_engine_run", makeJobState({ id: "resumed-lean-1", type: "lean_engine_run", status: "running", parameters: { request: { run_id: "strategy_lab_spy_x1" } } })],
+      ["engine_backtest", makeJobState({ id: "resumed-1", type: "engine_backtest", status: "running", parameters: OWNED_BACKTEST })],
+      ["lean_engine_run", makeJobState({ id: "resumed-lean-1", type: "lean_engine_run", status: "running", parameters: { request: { run_id: "strategy_lab_spy_x1", template: "ema_crossover_signal" } } })],
     ])("adopts an active %s job discovered after construction and reports running", (_type, job) => {
       expect(runner.running()).toBe(false);
 
@@ -639,7 +647,7 @@ describe("StrategyLab configuration and runner", () => {
       expect(reloaded.adoptedJob()?.parameters).toEqual({ backtest: { strategy_name: "ema_crossover_signal" } });
 
       // Once the job ends the rail is no longer the adopted job's to describe.
-      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "completed" }));
+      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "completed", parameters: OWNED_BACKTEST }));
       expect(reloaded.adoptedJob()).toBeNull();
     });
 
@@ -678,13 +686,13 @@ describe("StrategyLab configuration and runner", () => {
 
       // A genuinely active second job must not displace the tracked job-1 …
       fetchResult.mockResolvedValue({ success: true, study_id: 999, total_trades: 1, net_profit: 1 });
-      putJob(makeJobState({ id: "resumed-2", type: "engine_backtest", status: "running" }));
+      putJob(makeJobState({ id: "resumed-2", type: "engine_backtest", status: "running", parameters: OWNED_BACKTEST }));
       TestBed.tick();
       expect(runner.running()).toBe(true);
 
       // … so when that second job completes, its study is not the one this
       // runner offers to open.
-      putJob(makeJobState({ id: "resumed-2", type: "engine_backtest", status: "completed" }));
+      putJob(makeJobState({ id: "resumed-2", type: "engine_backtest", status: "completed", parameters: OWNED_BACKTEST }));
       TestBed.tick();
       await Promise.resolve();
       expect(runner.pendingOpenRunId()).toBeNull();
@@ -715,7 +723,7 @@ describe("StrategyLab configuration and runner", () => {
           reads += 1;
           return of(reads < 2 ? [] : [landed]);
         });
-        putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "completed" }));
+        putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "completed", parameters: OWNED_BACKTEST }));
         TestBed.tick();
         await vi.waitFor(() => {
           expect(runner.runError()).toContain("Still saving");
@@ -740,7 +748,7 @@ describe("StrategyLab configuration and runner", () => {
     it("keeps the confirmed-failure message for a save that failed", async () => {
       config.engine.set("python");
       await runner.run();
-      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "completed" }));
+      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "completed", parameters: OWNED_BACKTEST }));
       fetchResult.mockResolvedValue({
         success: true,
         study_id: null,
@@ -767,7 +775,7 @@ describe("StrategyLab configuration and runner", () => {
           net_profit: 1,
         });
         listRuns.mockImplementation(() => of([]));
-        putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "completed" }));
+        putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "completed", parameters: OWNED_BACKTEST }));
         TestBed.tick();
         await vi.waitFor(() => {
           expect(runner.runError()).toContain("LEAN comparison starts once the save lands");
@@ -789,19 +797,19 @@ describe("StrategyLab configuration and runner", () => {
       // Simulate the reload: a fresh runner with no job of its own, while two
       // engine jobs are active and the other tab's job is listed first.
       const reloaded = TestBed.runInInjectionContext(() => new StrategyLabRunner());
-      putJob(makeJobState({ id: "other-tab", type: "engine_backtest", status: "running" }));
-      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "running" }));
+      putJob(makeJobState({ id: "other-tab", type: "engine_backtest", status: "running", parameters: OWNED_BACKTEST }));
+      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "running", parameters: OWNED_BACKTEST }));
       TestBed.tick();
       expect(reloaded.running()).toBe(true);
 
       fetchResult.mockResolvedValue({ success: true, study_id: 777, total_trades: 1, net_profit: 1 });
-      putJob(makeJobState({ id: "other-tab", type: "engine_backtest", status: "completed" }));
+      putJob(makeJobState({ id: "other-tab", type: "engine_backtest", status: "completed", parameters: OWNED_BACKTEST }));
       TestBed.tick();
       await Promise.resolve();
       expect(runner.pendingOpenRunId()).toBeNull();
 
       fetchResult.mockResolvedValue({ success: true, study_id: 224, total_trades: 2, net_profit: 150 });
-      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "completed" }));
+      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "completed", parameters: OWNED_BACKTEST }));
       TestBed.tick();
       await Promise.resolve();
       await Promise.resolve();
@@ -814,7 +822,7 @@ describe("StrategyLab configuration and runner", () => {
       // arrives; the saved study was reachable only through History. The
       // runner from beforeEach has not ticked yet, so it stands in for the
       // freshly loaded tab (a second instance would share this tab's marker).
-      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
+      sessionStorage.setItem("strategyLab.ownJob", marker({ id: "job-9", type: "engine_backtest" }));
       fetchResult.mockResolvedValue({ success: true, study_id: 321, total_trades: 4, net_profit: 12 });
       TestBed.tick();
 
@@ -833,7 +841,7 @@ describe("StrategyLab configuration and runner", () => {
     });
 
     it("retires the marker and reports nothing when the remembered job's result is gone (404)", async () => {
-      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
+      sessionStorage.setItem("strategyLab.ownJob", marker({ id: "job-9", type: "engine_backtest" }));
       fetchResult.mockRejectedValue(new HttpErrorResponse({ status: 404, statusText: "Not Found", error: { error: "result not found or expired" } }));
       resumed.set(true);
       TestBed.tick();
@@ -847,7 +855,7 @@ describe("StrategyLab configuration and runner", () => {
     });
 
     it("reports any other read failure and keeps the marker for a later reload", async () => {
-      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
+      sessionStorage.setItem("strategyLab.ownJob", marker({ id: "job-9", type: "engine_backtest" }));
       fetchResult.mockRejectedValue(new HttpErrorResponse({ status: 503, statusText: "Service Unavailable" }));
       resumed.set(true);
       TestBed.tick();
@@ -859,7 +867,7 @@ describe("StrategyLab configuration and runner", () => {
       expect(sessionStorage.getItem("strategyLab.ownJob")).not.toBeNull();
     });
 
-    it("honours the previous frontend's bare-id marker once, telling the engine apart by the result's shape", async () => {
+    it("moves the previous frontend's bare-id marker to the current key, keeping it, and reads no result for a job it cannot name", async () => {
       sessionStorage.setItem("strategyLab.ownJobId", "job-old");
       fetchResult.mockResolvedValue({ strategy_execution_id: 808, exit_code: 0 });
       resumed.set(true);
@@ -867,14 +875,26 @@ describe("StrategyLab configuration and runner", () => {
       await Promise.resolve();
       await Promise.resolve();
 
-      expect(fetchResult).toHaveBeenCalledWith("job-old");
-      expect(runner.pendingOpenRunId()).toBe(808);
+      // The marker names no strategy, so a job that has finished since is nobody's to open.
+      expect(fetchResult).not.toHaveBeenCalled();
+      expect(runner.pendingOpenRunId()).toBeNull();
       expect(sessionStorage.getItem("strategyLab.ownJobId")).toBeNull();
-      expect(sessionStorage.getItem("strategyLab.ownJob")).toBeNull();
+      expect(JSON.parse(sessionStorage.getItem("strategyLab.ownJob") ?? "{}")).toEqual({ id: "job-old", type: null, strategy: null });
+    });
+
+    it("takes a marker written before the strategy was recorded when its running job's payload names this strategy", () => {
+      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
+      putJob(makeJobState({ id: "job-9", type: "engine_backtest", status: "running", parameters: OWNED_BACKTEST }));
+      putJob(makeJobState({ id: "newer", type: "engine_backtest", status: "running", parameters: OWNED_BACKTEST }));
+      resumed.set(true);
+      TestBed.tick();
+
+      expect(runner.running()).toBe(true);
+      expect(runner.adoptedJob()?.id).toBe("job-9");
     });
 
     it("names LEAN when a remembered LEAN result cannot be read", async () => {
-      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "lean-9", type: "lean_engine_run" }));
+      sessionStorage.setItem("strategyLab.ownJob", marker({ id: "lean-9", type: "lean_engine_run" }));
       fetchResult.mockRejectedValue(new HttpErrorResponse({ status: 503, statusText: "Service Unavailable" }));
       resumed.set(true);
       TestBed.tick();
@@ -884,20 +904,8 @@ describe("StrategyLab configuration and runner", () => {
       expect(runner.runStatusBanner()).toBe("LEAN result unavailable");
     });
 
-    it("uses an engine-neutral headline when a migrated marker's result cannot be read", async () => {
-      sessionStorage.setItem("strategyLab.ownJobId", "job-old");
-      fetchResult.mockRejectedValue(new HttpErrorResponse({ status: 503, statusText: "Service Unavailable" }));
-      resumed.set(true);
-      TestBed.tick();
-      await Promise.resolve();
-      await Promise.resolve();
-
-      expect(runner.runStatusBanner()).toBe("Result of the run in flight unavailable");
-      expect(sessionStorage.getItem("strategyLab.ownJob")).not.toBeNull();
-    });
-
     it("discards the remembered result when a run started while it was still being read", async () => {
-      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
+      sessionStorage.setItem("strategyLab.ownJob", marker({ id: "job-9", type: "engine_backtest" }));
       let settle: (value: unknown) => void = () => undefined;
       fetchResult.mockReturnValueOnce(new Promise((resolve) => { settle = resolve; }));
       resumed.set(true);
@@ -923,7 +931,7 @@ describe("StrategyLab configuration and runner", () => {
     });
 
     it("does not report a superseded remembered result's read failure against the new run", async () => {
-      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
+      sessionStorage.setItem("strategyLab.ownJob", marker({ id: "job-9", type: "engine_backtest" }));
       let reject: (reason: unknown) => void = () => undefined;
       fetchResult.mockReturnValueOnce(new Promise((_, rej) => { reject = rej; }));
       resumed.set(true);
@@ -942,7 +950,7 @@ describe("StrategyLab configuration and runner", () => {
     });
 
     it("reads a stored failure the same way the live path does", async () => {
-      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
+      sessionStorage.setItem("strategyLab.ownJob", marker({ id: "job-9", type: "engine_backtest" }));
       fetchResult.mockResolvedValue({ success: false, error: "boom" });
       resumed.set(true);
       TestBed.tick();
@@ -958,9 +966,9 @@ describe("StrategyLab configuration and runner", () => {
       // The snapshot can list the job in a terminal state (state is patched
       // before the active-set removal); the registry knows the outcome, so
       // no result is probed until the effect handles completion itself.
-      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
+      sessionStorage.setItem("strategyLab.ownJob", marker({ id: "job-9", type: "engine_backtest" }));
       fetchResult.mockResolvedValue({ success: true, study_id: 555, total_trades: 1, net_profit: 1 });
-      putJob(makeJobState({ id: "job-9", type: "engine_backtest", status: "completed" }));
+      putJob(makeJobState({ id: "job-9", type: "engine_backtest", status: "completed", parameters: OWNED_BACKTEST }));
       resumed.set(true);
       TestBed.tick();
       await Promise.resolve();
@@ -970,8 +978,8 @@ describe("StrategyLab configuration and runner", () => {
     });
 
     it("reports a remembered job the registry holds as failed, without probing its result", () => {
-      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
-      putJob(makeJobState({ id: "job-9", type: "engine_backtest", status: "failed", errorMessage: "engine crashed" }));
+      sessionStorage.setItem("strategyLab.ownJob", marker({ id: "job-9", type: "engine_backtest" }));
+      putJob(makeJobState({ id: "job-9", type: "engine_backtest", status: "failed", errorMessage: "engine crashed", parameters: OWNED_BACKTEST }));
       resumed.set(true);
       TestBed.tick(); // adoption reattaches by id …
       TestBed.tick(); // … and the job effect reports the terminal state
@@ -981,13 +989,86 @@ describe("StrategyLab configuration and runner", () => {
     });
 
     it("still prefers the remembered job while it is active, even after the snapshot settles", () => {
-      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
+      sessionStorage.setItem("strategyLab.ownJob", marker({ id: "job-9", type: "engine_backtest" }));
       resumed.set(true);
-      putJob(makeJobState({ id: "job-9", type: "engine_backtest", status: "running" }));
+      putJob(makeJobState({ id: "job-9", type: "engine_backtest", status: "running", parameters: OWNED_BACKTEST }));
       TestBed.tick();
 
       expect(runner.running()).toBe(true);
       expect(fetchResult).not.toHaveBeenCalled();
+    });
+
+    describe("a backtest of another strategy", () => {
+      const OTHER_BACKTEST = { backtest: { strategy_name: "rsi_mean_reversion" } };
+
+      it("is never adopted: it keeps the container busy and is named as another strategy's", () => {
+        putJob(makeJobState({ id: "rsi-1", type: "engine_backtest", status: "running", parameters: OTHER_BACKTEST }));
+        resumed.set(true);
+        TestBed.tick();
+
+        expect(runner.running()).toBe(false);
+        expect(runner.adoptedJob()).toBeNull();
+        expect(runner.engineBusy()).toBe(true);
+        expect(runner.otherStrategyRunning()).toBe("rsi_mean_reversion");
+      });
+
+      it("is not this workbench's own job's alone: its own strategy's job is still adopted beside it", () => {
+        putJob(makeJobState({ id: "rsi-1", type: "engine_backtest", status: "running", parameters: OTHER_BACKTEST }));
+        putJob(makeJobState({ id: "ema-1", type: "engine_backtest", status: "running", parameters: OWNED_BACKTEST }));
+        TestBed.tick();
+
+        expect(runner.adoptedJob()?.id).toBe("ema-1");
+      });
+
+      it("is left alone through the marker its own workbench wrote, which stays for it", () => {
+        sessionStorage.setItem("strategyLab.ownJob", marker({ id: "rsi-1", type: "engine_backtest" }, "rsi_mean_reversion"));
+        putJob(makeJobState({ id: "rsi-1", type: "engine_backtest", status: "running", parameters: OTHER_BACKTEST }));
+        resumed.set(true);
+        TestBed.tick();
+
+        expect(runner.running()).toBe(false);
+        expect(JSON.parse(sessionStorage.getItem("strategyLab.ownJob") ?? "{}")).toEqual({ id: "rsi-1", type: "engine_backtest", strategy: "rsi_mean_reversion" });
+      });
+
+      it("does not have its finished result opened here through that marker", async () => {
+        sessionStorage.setItem("strategyLab.ownJob", marker({ id: "rsi-1", type: "engine_backtest" }, "rsi_mean_reversion"));
+        fetchResult.mockResolvedValue({ success: true, study_id: 321, total_trades: 4, net_profit: 12 });
+        resumed.set(true);
+        TestBed.tick();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(fetchResult).not.toHaveBeenCalled();
+        expect(runner.pendingOpenRunId()).toBeNull();
+      });
+
+      it("is not offered this workbench's study when it completes", async () => {
+        putJob(makeJobState({ id: "rsi-1", type: "engine_backtest", status: "running", parameters: OTHER_BACKTEST }));
+        TestBed.tick();
+        fetchResult.mockResolvedValue({ success: true, study_id: 321, total_trades: 4, net_profit: 12 });
+        putJob(makeJobState({ id: "rsi-1", type: "engine_backtest", status: "completed", parameters: OTHER_BACKTEST }));
+        TestBed.tick();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(fetchResult).not.toHaveBeenCalled();
+        expect(runner.pendingOpenRunId()).toBeNull();
+        expect(runner.otherStrategyRunning()).toBeNull();
+      });
+
+      it("a LEAN run of a bundled template is told apart by the LEAN twin the catalog registers", () => {
+        config.strategies.set([STRATEGY, RSI_STRATEGY]);
+        putJob(makeJobState({
+          id: "lean-rsi",
+          type: "lean_engine_run",
+          status: "running",
+          parameters: { request: { run_id: "strategy_lab_spy_x2", template: "rsi_mean_reversion" } },
+        }));
+        TestBed.tick();
+
+        expect(runner.running()).toBe(false);
+        expect(runner.otherStrategyRunning()).toBe("rsi_mean_reversion");
+      });
     });
 
     it("leaves a parity companion's LEAN job alone even though it shares the job type", () => {
@@ -1007,12 +1088,12 @@ describe("StrategyLab configuration and runner", () => {
 
     it("ends the run when its own job terminates instead of adopting another active job", async () => {
       await runner.run();
-      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "running" }));
-      putJob(makeJobState({ id: "other-tab", type: "engine_backtest", status: "running" }));
+      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "running", parameters: OWNED_BACKTEST }));
+      putJob(makeJobState({ id: "other-tab", type: "engine_backtest", status: "running", parameters: OWNED_BACKTEST }));
       TestBed.tick();
 
       fetchResult.mockResolvedValue({ success: false, error: "boom" });
-      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "failed", errorMessage: "boom" }));
+      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "failed", errorMessage: "boom", parameters: OWNED_BACKTEST }));
       TestBed.tick();
       await Promise.resolve();
       expect(runner.running()).toBe(false);
@@ -1020,7 +1101,7 @@ describe("StrategyLab configuration and runner", () => {
       // The other tab's job is still active, but this run is over: no
       // adoption, and its completion is not this tab's result.
       fetchResult.mockResolvedValue({ success: true, study_id: 777, total_trades: 1, net_profit: 1 });
-      putJob(makeJobState({ id: "other-tab", type: "engine_backtest", status: "completed" }));
+      putJob(makeJobState({ id: "other-tab", type: "engine_backtest", status: "completed", parameters: OWNED_BACKTEST }));
       TestBed.tick();
       await Promise.resolve();
       await Promise.resolve();
@@ -1033,7 +1114,7 @@ describe("StrategyLab configuration and runner", () => {
       // This tab's job-1 never shows up as active (it ended while the tab was
       // away); another tab's single job is running.
       const reloaded = TestBed.runInInjectionContext(() => new StrategyLabRunner());
-      putJob(makeJobState({ id: "other-tab", type: "engine_backtest", status: "running" }));
+      putJob(makeJobState({ id: "other-tab", type: "engine_backtest", status: "running", parameters: OWNED_BACKTEST }));
       TestBed.tick();
 
       expect(reloaded.running()).toBe(false);
@@ -1042,23 +1123,23 @@ describe("StrategyLab configuration and runner", () => {
 
     it("forgets its marker once its own job has ended", async () => {
       await runner.run();
-      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "running" }));
+      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "running", parameters: OWNED_BACKTEST }));
       TestBed.tick();
       fetchResult.mockResolvedValue({ success: false, error: "boom" });
-      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "failed", errorMessage: "boom" }));
+      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "failed", errorMessage: "boom", parameters: OWNED_BACKTEST }));
       TestBed.tick();
       await Promise.resolve();
 
       // A later reload with one other active job is unambiguous again.
       const reloaded = TestBed.runInInjectionContext(() => new StrategyLabRunner());
-      putJob(makeJobState({ id: "other-tab", type: "engine_backtest", status: "running" }));
+      putJob(makeJobState({ id: "other-tab", type: "engine_backtest", status: "running", parameters: OWNED_BACKTEST }));
       TestBed.tick();
       expect(reloaded.running()).toBe(true);
     });
 
     it("reports the container busy while several jobs are active even though none is adoptable", () => {
-      putJob(makeJobState({ id: "tab-a", type: "engine_backtest", status: "running" }));
-      putJob(makeJobState({ id: "tab-b", type: "engine_backtest", status: "running" }));
+      putJob(makeJobState({ id: "tab-a", type: "engine_backtest", status: "running", parameters: OWNED_BACKTEST }));
+      putJob(makeJobState({ id: "tab-b", type: "engine_backtest", status: "running", parameters: OWNED_BACKTEST }));
       TestBed.tick();
 
       expect(runner.running()).toBe(false);
@@ -1066,23 +1147,23 @@ describe("StrategyLab configuration and runner", () => {
     });
 
     it("remembers a job adopted by fallback so a later reload prefers it over newer experiments", () => {
-      putJob(makeJobState({ id: "solo", type: "engine_backtest", status: "running" }));
+      putJob(makeJobState({ id: "solo", type: "engine_backtest", status: "running", parameters: OWNED_BACKTEST }));
       TestBed.tick();
       expect(runner.running()).toBe(true);
 
       const reloaded = TestBed.runInInjectionContext(() => new StrategyLabRunner());
-      putJob(makeJobState({ id: "later", type: "engine_backtest", status: "running" }));
+      putJob(makeJobState({ id: "later", type: "engine_backtest", status: "running", parameters: OWNED_BACKTEST }));
       TestBed.tick();
       expect(reloaded.running()).toBe(true);
     });
 
     it("offers the produced study once an adopted engine_backtest job completes", async () => {
       fetchResult.mockResolvedValue({ success: true, study_id: 224, total_trades: 2, net_profit: 150 });
-      putJob(makeJobState({ id: "resumed-3", type: "engine_backtest", status: "running" }));
+      putJob(makeJobState({ id: "resumed-3", type: "engine_backtest", status: "running", parameters: OWNED_BACKTEST }));
       TestBed.tick();
       expect(runner.running()).toBe(true);
 
-      putJob(makeJobState({ id: "resumed-3", type: "engine_backtest", status: "completed" }));
+      putJob(makeJobState({ id: "resumed-3", type: "engine_backtest", status: "completed", parameters: OWNED_BACKTEST }));
       TestBed.tick();
       await Promise.resolve();
       await Promise.resolve();
@@ -1090,5 +1171,21 @@ describe("StrategyLab configuration and runner", () => {
       expect(runner.pendingOpenRunId()).toBe(224);
       expect(runner.running()).toBe(false);
     });
+  });
+});
+
+describe("strategyOfJob", () => {
+  const catalog = [STRATEGY, RSI_STRATEGY];
+
+  it.each([
+    ["a Python backtest", { type: "engine_backtest", parameters: { backtest: { strategy_name: "rsi_mean_reversion" } } }, "rsi_mean_reversion"],
+    ["a LEAN custom source that names its owner", { type: "lean_engine_run", parameters: { request: { algorithm_source: "class MyAlgorithm: ...", strategy_key: "rsi_mean_reversion" } } }, "rsi_mean_reversion"],
+    ["a LEAN bundled template, through the catalog's LEAN twin", { type: "lean_engine_run", parameters: { request: { template: "rsi_mean_reversion" } } }, "rsi_mean_reversion"],
+    ["a LEAN custom source with no owner", { type: "lean_engine_run", parameters: { request: { algorithm_source: "class MyAlgorithm: ..." } } }, null],
+    ["a LEAN template the catalog does not register", { type: "lean_engine_run", parameters: { request: { template: "retired_template" } } }, null],
+    ["a payload with no strategy", { type: "engine_backtest", parameters: { backtest: {} } }, null],
+    ["a job with no payload", { type: "engine_backtest", parameters: undefined }, null],
+  ] as const)("reads %s", (_name, job, owner) => {
+    expect(strategyOfJob(job, catalog)).toBe(owner);
   });
 });

@@ -1,4 +1,5 @@
 import { HttpErrorResponse } from '@angular/common/http';
+import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { Router } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
@@ -24,6 +25,8 @@ interface Records {
   runs?: Record<number, BacktestRunDetail>;
   searches?: Record<string, GridSearchDetail>;
   runFailure?: Error;
+  /** Serves the run report's chart reads from the test controller, so none goes to the network. */
+  reportReads?: boolean;
 }
 
 afterEach(() => {
@@ -37,6 +40,7 @@ function configure(records: Records): void {
   TestBed.configureTestingModule({
     providers: [
       ...appConfig.providers,
+      ...(records.reportReads === true ? [provideHttpClientTesting()] : []),
       { provide: fleet.provide, useValue: fleet.useValue },
       {
         provide: SignalStrategyRegistryService,
@@ -116,12 +120,10 @@ describe('an old Strategy Lab address (T01)', () => {
     expect(await screen.findByText(/"no_such_thing" is not a registered strategy/)).toBeTruthy();
   });
 
-  it('keeps the address and says so when the run stored a strategy the registry does not list', async () => {
-    const router = await show('/strategy-lab/runs/9', { runs: { 9: savedRun({ id: 9, strategyName: 'user_provided' }) } });
+  it('ends a link that claims an unlisted owner’s run for a registered strategy at the run itself, not at that strategy', async () => {
+    const router = await land(`/strategy-lab?run=9&strategy=${RSI}`, { runs: { 9: savedRun({ id: 9, strategyName: 'user_provided' }) } });
 
-    expect(router.url).toBe('/strategy-lab/runs/9');
-    expect(await screen.findByText(/Saved run #9 stored the strategy "user_provided", which the registry does not list/)).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Back to Signal strategies' }).getAttribute('href')).toBe('/signal-strategies');
+    expect(router.url).toBe('/signal-strategies/evidence/run/9');
   });
 
   it('refuses a run that does not exist, keeping its id', async () => {
@@ -160,6 +162,50 @@ describe('an old Strategy Lab address (T01)', () => {
 
     expect(router.url).toBe('/strategy-lab/runs/7');
     expect(await screen.findByText('The strategy registry could not be read.')).toBeTruthy();
+  });
+});
+
+describe('a saved run no registered strategy holds (I08)', () => {
+  const orphan = (strategyName: string) => ({ 9: savedRun({ id: 9, strategyName }) });
+
+  it.each([
+    ['/strategy-lab/runs/9', '/signal-strategies/evidence/run/9'],
+    ['/strategy-lab?run=9&tab=history#trades', '/signal-strategies/evidence/run/9?tab=history#trades'],
+    ['/engine/runs/9?symbol=QQQ', '/signal-strategies/evidence/run/9?symbol=QQQ'],
+    ['/lean-lab?restoreRun=9', '/signal-strategies/evidence/run/9'],
+  ])('sends %s to the run itself in one redirect, keeping the rest of the link', async (url, lands) => {
+    const router = await land(url, { runs: orphan('user_provided') });
+
+    expect(router.url).toBe(lands);
+  });
+
+  it.each(['user_provided', 'spy_ema_crossover', 'ema_crossover_2_bps'])(
+    'shows a run that stored %s by itself, read-only, naming the strategy it stored',
+    async (stored) => {
+      const router = await show('/signal-strategies/evidence/run/9', { runs: orphan(stored), reportReads: true });
+
+      expect(router.url).toBe('/signal-strategies/evidence/run/9');
+      expect(await screen.findByRole('heading', { name: 'Saved run #9' })).toBeTruthy();
+      expect(screen.getByText(new RegExp(`Run #9 stored the strategy "${stored}", which the registry does not list`))).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'Back to Signal strategies' }).getAttribute('href')).toBe('/signal-strategies');
+      // The report is the existing one, with nothing around it that runs, sweeps or approves.
+      expect(document.querySelector('app-strategy-lab-run-stats')).not.toBeNull();
+      expect(screen.queryByRole('button', { name: /Run validation/ })).toBeNull();
+      expect(screen.queryByRole('link', { name: /Sweep|Walk-forward|golden/i })).toBeNull();
+    },
+  );
+
+  it('opens a registered strategy’s run in that strategy’s Explore, not by itself', async () => {
+    const router = await land('/signal-strategies/evidence/run/9', { runs: orphan(EMA) });
+
+    expect(router.url).toBe(`/signal-strategies/${EMA}/explore/backtest?run=9`);
+  });
+
+  it('still refuses a run that does not exist, keeping its id, at the evidence address', async () => {
+    const router = await show('/signal-strategies/evidence/run/404');
+
+    expect(router.url).toBe('/signal-strategies/evidence/run/404');
+    expect(await screen.findByText('Saved run #404 was not found.')).toBeTruthy();
   });
 });
 

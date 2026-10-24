@@ -27,7 +27,9 @@ const strategyAddress: CanMatchFn = (_route, segments) =>
  * Evidence whose owner is not in its address (`evidence/run/:id`,
  * `evidence/search/:id`, `evidence/study/:id`) resolves its strategy from the
  * record itself, lands on that strategy's page in one redirect, and fails in
- * place, keeping the id, when the record names none the registry lists.
+ * place, keeping the id, when the record names none the registry lists. A saved
+ * run is the exception: one no registered strategy holds (retired, renamed, or a
+ * custom LEAN source) is shown by itself, read-only, at its evidence address.
  */
 export const SIGNAL_STRATEGIES_ROUTES: Routes = [
   {
@@ -43,7 +45,7 @@ export const SIGNAL_STRATEGIES_ROUTES: Routes = [
   },
   {
     path: 'evidence/run/:id',
-    resolve: { entry: lazyEntryResolver((resolvers) => resolvers.resolveBacktestEntry) },
+    resolve: { entry: lazyEntryResolver((resolvers) => resolvers.resolveEvidenceRunEntry) },
     loadComponent: () =>
       import('./explore/entry/explore-entry.component').then((m) => m.ExploreEntryComponent),
   },

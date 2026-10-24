@@ -10,6 +10,15 @@ import { defineWorkspaceTabs } from '../shared/workspace/workspace-tabs';
 export const SIGNAL_STRATEGIES_ROUTE = '/signal-strategies';
 export const SIGNAL_STRATEGIES_RECENCY_ROUTE = `${SIGNAL_STRATEGIES_ROUTE}/recency`;
 
+/**
+ * A saved backtest run's own address. It resolves the run's owner from the
+ * record: a registered strategy's Explore when there is one, and otherwise the
+ * run itself, read-only, with no strategy around it.
+ */
+export function savedRunRoute(runId: number): readonly string[] {
+  return [SIGNAL_STRATEGIES_ROUTE, 'evidence', 'run', String(runId)];
+}
+
 /** Second segments that name a page of the list, not a strategy. */
 const RESERVED_SEGMENTS: ReadonlySet<string> = new Set(['recency', 'evidence']);
 

@@ -8,7 +8,7 @@ import { defaults, emaCapability, preflight } from '../../components/golden-sear
 import type { JobState } from '../../services/jobs.service';
 import { harnessEntry, registryEntry } from '../testing/fixtures';
 import { emptyWorld } from '../testing/signal-strategy-world';
-import { EMA, savedRun, savedSearch, sweepableEma } from './testing/explore-fixtures';
+import { EMA, SAVED_RUN_POLICY, savedRun, savedSearch, sweepableEma } from './testing/explore-fixtures';
 import { provideExploreWorld, type ExploreCalls, type ExploreWorld } from './testing/explore-world';
 
 const RSI = 'rsi_mean_reversion';
@@ -46,8 +46,29 @@ async function startRun(calls: ExploreCalls): Promise<void> {
   await waitFor(() => expect(calls.jobs.started).toHaveLength(1));
 }
 
-function job(status: JobState['status']): JobState {
-  return { id: 'job-1', type: 'engine_backtest', status, phase: 'running_indicators', recentLogs: [], logSeq: 0 };
+/** The payload a Python backtest of `strategy` is submitted with, as the runner builds it. */
+function backtestPayload(strategy: string): JobState['parameters'] {
+  return {
+    backtest: {
+      strategy_name: strategy,
+      requested_engine: 'python',
+      initial_cash: 75_000,
+      fill_mode: 'next_bar_open',
+      commission_per_order: 0.35,
+      params: { fast_period: 8, slow_period: 21, symbol: 'QQQ' },
+      auto_fetch: true,
+      resolution: 'minute',
+      compatibility_profile: null,
+      data_policy: SAVED_RUN_POLICY,
+      start_date: '2026-03-02',
+      end_date: '2026-04-02',
+    },
+  };
+}
+
+/** A backtest of `strategy` as the job registry reports it. */
+function job(status: JobState['status'], strategy = EMA, id = 'job-1'): JobState {
+  return { id, type: 'engine_backtest', status, phase: 'running_indicators', recentLogs: [], logSeq: 0, parameters: backtestPayload(strategy) };
 }
 
 describe('a strategy’s Explore', () => {
@@ -204,16 +225,70 @@ describe('a strategy’s Explore', () => {
     expect(within(section).queryByRole('button')).toBeNull();
   });
 
-  it('starts another strategy’s Explore afresh: its backtest is not the one running for the last strategy', async () => {
-    const { harness, calls } = await open(`/signal-strategies/${EMA}/explore/backtest`);
-    await startRun(calls);
-    calls.jobs.active.set([job('running')]);
+  describe('while another strategy’s backtest is running', () => {
+    const rail = () => within(screen.getByRole('complementary', { name: 'Strategy configuration' }));
 
-    await harness.navigateByUrl(`/signal-strategies/${RSI}/explore/backtest`);
-    await waitFor(() => expect(calls.jobs.refreshCalls).toBe(2));
+    it('says so and links to that strategy, and neither adopts the job, describes its inputs, nor opens its result', async () => {
+      const { harness, calls, router } = await open(`/signal-strategies/${EMA}/explore/backtest`, { runs: { 91: savedRun() } });
+      await startRun(calls);
+      calls.jobs.active.set([job('running')]);
 
-    // The registry shows a job in flight to the new runner, which can only wait; it did not start it.
-    expect(calls.jobs.started).toHaveLength(1);
-    expect(screen.getAllByText('RSI Mean Reversion').length).toBeGreaterThan(0);
+      await harness.navigateByUrl(`/signal-strategies/${RSI}/explore/backtest`);
+
+      expect(await screen.findByText(`${EMA}'s backtest is running.`)).toBeTruthy();
+      expect(screen.getByRole('link', { name: `Open ${EMA}'s backtest` }).getAttribute('href')).toBe(`/signal-strategies/${EMA}/explore/backtest`);
+      // The rail is this strategy's, with Run held back by the busy container, not running.
+      const button = await runButton();
+      expect(button.textContent).toContain('Run validation');
+      expect(button.disabled).toBe(true);
+      expect(rail().getByText('RSI Mean Reversion')).toBeTruthy();
+      const strip = screen.getByRole('navigation', { name: 'Explore tools' });
+      expect(within(strip).getByRole('link', { name: /Backtest/ }).textContent).not.toContain('running');
+
+      // When the other strategy's run finishes, its result is not opened here, and nothing is refused.
+      calls.jobs.result = { success: true, total_trades: 3, net_profit: 120, study_id: 91, save_outcome: 'saved' };
+      calls.jobs.active.set([job('completed')]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(within(strip).getByRole('link', { name: /Backtest/ }).textContent).not.toContain('run ready');
+      expect(router.url).toBe(`/signal-strategies/${RSI}/explore/backtest`);
+      expect(screen.queryByText(/belongs to/)).toBeNull();
+      expect(calls.jobs.started).toHaveLength(1);
+    });
+
+    it('finds the first strategy’s backtest still running when the owner comes back to it', async () => {
+      const { harness, calls } = await open(`/signal-strategies/${EMA}/explore/backtest`);
+      await startRun(calls);
+      calls.jobs.active.set([job('running')]);
+      await harness.navigateByUrl(`/signal-strategies/${RSI}/explore/backtest`);
+      await screen.findByText(`${EMA}'s backtest is running.`);
+
+      await harness.navigateByUrl(`/signal-strategies/${EMA}/explore/backtest`);
+
+      const button = await runButton();
+      expect(button.textContent).toContain('Running…');
+      expect(screen.queryByText(/backtest is running\./)).toBeNull();
+    });
+
+    it('is not taken over by another browser tab’s Explore of a different strategy', async () => {
+      // A fresh tab holds no marker, so only what the job itself says can tell whose it is.
+      const { calls } = await open(`/signal-strategies/${RSI}/explore/backtest`);
+      await runButton();
+      calls.jobs.active.set([job('running')]);
+
+      expect(await screen.findByText(`${EMA}'s backtest is running.`)).toBeTruthy();
+      const button = await runButton();
+      expect(button.textContent).toContain('Run validation');
+      expect(rail().getByText('RSI Mean Reversion')).toBeTruthy();
+      expect(within(screen.getByRole('navigation', { name: 'Explore tools' })).getByRole('link', { name: /Backtest/ }).textContent).not.toContain('running');
+    });
+
+    it('is still taken up by a fresh tab’s Explore of its own strategy', async () => {
+      const { calls } = await open(`/signal-strategies/${EMA}/explore/backtest`);
+      await runButton();
+      calls.jobs.active.set([job('running')]);
+
+      expect(await screen.findByRole('button', { name: /Running…/ })).toBeTruthy();
+      expect(screen.queryByText(/backtest is running\./)).toBeNull();
+    });
   });
 });

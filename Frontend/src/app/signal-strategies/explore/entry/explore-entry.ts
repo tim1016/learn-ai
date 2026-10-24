@@ -11,8 +11,6 @@ import type { ExploreTabId } from '../explore-tabs';
 export type ExploreEntryRefusal =
   | { readonly reason: 'invalid-run'; readonly raw: string }
   | { readonly reason: 'run-not-found'; readonly runId: number }
-  /** The run exists, but the strategy it stored is not in the registry (retired, renamed, or a custom LEAN source). */
-  | { readonly reason: 'run-unresolved'; readonly runId: number; readonly storedStrategy: string }
   | { readonly reason: 'run-mismatch'; readonly runId: number; readonly owner: string; readonly claimed: string }
   | { readonly reason: 'search-not-found'; readonly searchId: string }
   | { readonly reason: 'search-unresolved'; readonly searchId: string; readonly storedStrategy: string }
@@ -21,8 +19,8 @@ export type ExploreEntryRefusal =
 
 /**
  * What an address that has no strategy of its own resolves to when it is not
- * redirected: a chooser of registered strategies, or a refusal. Both keep the
- * address the owner arrived at.
+ * redirected: a chooser of registered strategies, a refusal, or a run no strategy
+ * holds. Each keeps the address the owner arrived at.
  */
 export type ExploreEntry =
   | {
@@ -37,6 +35,17 @@ export type ExploreEntry =
       readonly kind: 'refused';
       readonly target: ExploreTabId;
       readonly refusal: ExploreEntryRefusal;
+    }
+  /**
+   * A saved run whose stored strategy the registry does not list (retired,
+   * renamed, or a custom LEAN source): no Explore holds it, so it is shown by
+   * itself, read-only, under the strategy name it stored.
+   */
+  | {
+      readonly kind: 'run-report';
+      readonly target: 'backtest';
+      readonly runId: number;
+      readonly storedStrategy: string;
     };
 
 /**

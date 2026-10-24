@@ -39,6 +39,9 @@ export class ExploreSession {
   /** The registry key in the address. */
   readonly key = this.workspace.key;
 
+  /** Every key the registry lists, so a link to a strategy is offered only for one it lists. */
+  readonly registeredKeys = this.workspace.registeredKeys;
+
   readonly entry = computed<StrategyRegistryEntry | null>(() => {
     const state = this.workspace.entry();
     return state.kind === 'found' ? state.entry : null;

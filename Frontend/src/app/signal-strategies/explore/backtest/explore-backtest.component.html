@@ -10,6 +10,9 @@
           @if (mismatch(); as refusal) {
             <app-workspace-state-block [state]="refusal" />
           }
+          @if (otherRunning(); as other) {
+            <app-workspace-state-block [state]="other" />
+          }
           @if (shownRun(); as shown) {
             <nav class="next-steps" aria-label="Next steps for this run">
               <span>Run #{{ shown.id }} is exploratory and in-sample.</span>
