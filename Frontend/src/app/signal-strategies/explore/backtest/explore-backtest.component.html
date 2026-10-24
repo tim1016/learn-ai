@@ -21,6 +21,13 @@
                   <span>Sweep and Walk-forward are not allowed for this strategy. {{ sweep.reason }}</span>
                 }
               }
+              @if (goldenCapability(); as golden) {
+                @if (golden.supported) {
+                  <a [routerLink]="goldenRoute()" [queryParams]="{ run: shown.id }">Plan a golden search from this run</a>
+                } @else {
+                  <span>A golden search is not allowed for this strategy. {{ golden.reason }}</span>
+                }
+              }
             </nav>
           }
           <div class="workbench">
@@ -116,14 +123,7 @@
             [strategyKey]="key()"
             (runSelected)="selectHistoryRun($event)"
             (goldenRunRequested)="selectGoldenCandidate($event)"
-            [goldenRefreshToken]="goldenRefreshToken()"
           />
-          @if (goldenCandidateRunId(); as runId) {
-            <app-golden-validation-workbench
-              [sourceRunId]="runId"
-              (changed)="refreshGoldenHistory()"
-            />
-          }
         </p-tabpanel>
       </p-tabpanels>
   </p-tabs>

@@ -33,6 +33,7 @@ import { StrategyLabRunReport } from "../../../components/strategy-lab/strategy-
 import { StrategyLabRunner } from "../../../components/strategy-lab/strategy-lab-runner.service";
 import { inputsFromBacktestJob, inputsFromSavedRun } from "../../../components/strategy-lab/strategy-lab.models";
 import { RUN_DOCK_SOURCE, RUN_DOCK_STORAGE_KEY } from "../../../shared/run-dock/run-dock-source";
+import { goldenTabRoute } from "../../golden/golden-tabs";
 import { ExploreSession } from "../explore-session";
 import { ExploreBacktestComponent } from "./explore-backtest.component";
 
@@ -124,6 +125,7 @@ function exploreSession() {
   return {
     key: signal(STRATEGY_KEY).asReadonly(),
     sweepCapability: signal({ supported: true, reason: null }).asReadonly(),
+    goldenCapability: signal({ supported: true, reason: null }).asReadonly(),
     backtestRunId: signal<number | null>(null),
     adoptedBacktestRunId: signal<number | null>(null),
     describedJobId: signal<string | null>(null),
@@ -696,6 +698,20 @@ describe("Strategy Lab Workbench", () => {
     expect(within(root).getByRole("link", { name: "Walk-forward from this run" }).getAttribute("href")).toBe(
       `/signal-strategies/${STRATEGY_KEY}/explore/walk-forward?run=91`,
     );
+    // Golden opens an unlocked plan for review from the run; Explore itself approves nothing.
+    expect(within(root).getByRole("link", { name: "Plan a golden search from this run" }).getAttribute("href")).toBe(
+      `/signal-strategies/${STRATEGY_KEY}/golden/studies?run=91`,
+    );
+  });
+
+  it("sends a run chosen as the baseline run to the strategy's Golden configuration review, and approves nothing itself", async () => {
+    const { fixture } = await createLab({});
+    const navigate = vi.spyOn(TestBed.inject(Router), "navigate").mockResolvedValue(true);
+
+    fixture.componentInstance.selectGoldenCandidate(41);
+
+    expect(navigate).toHaveBeenCalledWith([...goldenTabRoute(STRATEGY_KEY, "configuration")], { queryParams: { run: 41 } });
+    expect((fixture.nativeElement as HTMLElement).querySelector("app-golden-validation-workbench")).toBeNull();
   });
 
   it("takes a run's inputs over once: opening the same run again from another tool keeps what was edited since", async () => {

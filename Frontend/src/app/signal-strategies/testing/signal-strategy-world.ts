@@ -60,6 +60,18 @@ export interface SignalStrategyReads {
   readonly fleet: (query: BotHistoryQuery) => void;
 }
 
+/**
+ * Reads and verbs a page beyond Overview and Define makes, each replacing the service's
+ * method of that name for one spec: Golden Search's studies and plan, the proof's
+ * detail, recheck and flag, and the baseline-run reviews. A method a spec does not
+ * give is not there to call, so a page that reaches for one fails loudly.
+ */
+export interface SignalStrategyServices {
+  readonly golden: Record<string, unknown>;
+  readonly validation: Record<string, unknown>;
+  readonly goldenValidation: Record<string, unknown>;
+}
+
 const ROUTES: Routes = [
   { path: 'signal-strategies', children: SIGNAL_STRATEGIES_ROUTES },
   { path: '**', data: { notFound: true }, component: NotFoundComponent },
@@ -73,6 +85,7 @@ const ROUTES: Routes = [
 export function provideSignalStrategyWorld(
   world: SignalStrategyWorld,
   reads: Partial<SignalStrategyReads> = {},
+  services: Partial<SignalStrategyServices> = {},
 ) {
   const fleet = provideFleetDirectory();
   return [
@@ -91,7 +104,7 @@ export function provideSignalStrategyWorld(
     },
     {
       provide: StrategyValidationService,
-      useValue: { getCatalog: async () => ({ strategies: [...(await answer(world.proof))] }) },
+      useValue: { getCatalog: async () => ({ strategies: [...(await answer(world.proof))] }), ...services.validation },
     },
     {
       provide: GoldenSearchService,
@@ -101,11 +114,12 @@ export function provideSignalStrategyWorld(
           return answer(world.qualifications);
         },
         capabilities: () => answer(world.capabilities),
+        ...services.golden,
       },
     },
     {
       provide: GoldenValidationService,
-      useValue: { list: () => from(answer(world.reviews)) },
+      useValue: { list: () => from(answer(world.reviews)), ...services.goldenValidation },
     },
     {
       provide: BotHistoryService,

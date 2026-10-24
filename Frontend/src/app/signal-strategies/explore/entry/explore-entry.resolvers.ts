@@ -1,12 +1,10 @@
-import { HttpErrorResponse } from '@angular/common/http';
 import { inject } from '@angular/core';
 import { RedirectCommand, Router, type ActivatedRouteSnapshot } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 
 import { GridSearchService } from '../../../components/grid-search/grid-search.service';
 import { BacktestRunsService } from '../../../services/backtest-runs.service';
-import { pythonFailureMessage } from '../../../services/python-http-failure';
-import { errorMessage } from '../../../shared/errors/error-message';
+import { failureText, isNotFound, nonBlank, registered } from '../../entry-support';
 import type { StrategyRegistryEntry } from '../../signal-strategy-evidence';
 import { SignalStrategyRegistryService } from '../../signal-strategy-registry.service';
 import { EXPLORE_RUN_PARAM, EXPLORE_SEARCH_PARAM, exploreTabRoute, parseRunId, type ExploreTabId } from '../explore-tabs';
@@ -14,19 +12,6 @@ import type { ExploreEntry, ExploreEntryRefusal, ExploreEntryResolver } from './
 
 /** The query keys an old address carried only to name the strategy or the run; the new address says them in its path or restates them. */
 const RESTATED = new Set(['strategy', EXPLORE_RUN_PARAM, 'restoreRun', EXPLORE_SEARCH_PARAM]);
-
-function failureText(error: unknown): string {
-  return error instanceof HttpErrorResponse ? pythonFailureMessage(error) : errorMessage(error);
-}
-
-function isNotFound(error: unknown): boolean {
-  return error instanceof HttpErrorResponse && error.status === 404;
-}
-
-function nonBlank(value: string | null): string | null {
-  const trimmed = value?.trim() ?? '';
-  return trimmed === '' ? null : trimmed;
-}
 
 /**
  * One redirect, straight to the strategy's Explore: the old address's query and
@@ -51,10 +36,6 @@ function redirectTo(
 
 function refused(target: ExploreTabId, refusal: ExploreEntryRefusal): ExploreEntry {
   return { kind: 'refused', target, refusal };
-}
-
-function registered(entries: readonly StrategyRegistryEntry[], key: string): StrategyRegistryEntry | undefined {
-  return entries.find((entry) => entry.strategy_key === key);
 }
 
 /**

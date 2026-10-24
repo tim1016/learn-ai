@@ -87,12 +87,7 @@ export const APP_MENU: readonly AppMenuGroup[] = [
     id: 'signal-strategies',
     title: 'Signal strategies',
     icon: 'pi pi-briefcase',
-    items: [
-      { title: 'Signal strategies', route: '/signal-strategies' },
-      // These tools sit beside the strategy list until each moves into a strategy's tabs.
-      { title: 'Golden Search', route: '/golden-search' },
-      { title: 'Strategy Validation', route: '/strategy-validation' },
-    ],
+    items: [{ title: 'Signal strategies', route: '/signal-strategies' }],
     pages: [
       // The multi-strategy comparison is one link from the list, not a menu entry.
       { title: 'Recency Chart', route: '/signal-strategies/recency' },
@@ -103,6 +98,11 @@ export const APP_MENU: readonly AppMenuGroup[] = [
       { title: 'Strategy Lab', route: '/engine' },
       { title: 'Grid Search', route: '/grid-search' },
       { title: 'Walk-Forward', route: '/walk-forward' },
+      // Golden Search studies are a strategy's Golden tab and Strategy Validation is its Proof
+      // and Golden → Configuration review. These addresses redirect there; one that names no
+      // strategy stays open as a chooser, or a refusal, under this group.
+      { title: 'Golden Search', route: '/golden-search' },
+      { title: 'Strategy Validation', route: '/strategy-validation' },
     ],
   },
   {

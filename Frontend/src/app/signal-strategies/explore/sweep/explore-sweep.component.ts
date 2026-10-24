@@ -12,6 +12,7 @@ import { WorkspaceStateBlockComponent } from '../../../shared/workspace/workspac
 import { readStateOf } from '../../read-state';
 import { ExploreSession } from '../explore-session';
 import { EXPLORE_RUN_PARAM, EXPLORE_SEARCH_PARAM, exploreTabRoute } from '../explore-tabs';
+import { goldenTabRoute } from '../../golden/golden-tabs';
 import { injectBacktestHandoff } from '../handoff/backtest-handoff';
 import { ExploreHandoffNoticeComponent } from '../handoff/explore-handoff-notice.component';
 
@@ -58,6 +59,8 @@ export class ExploreSweepComponent {
 
   protected readonly key = this.session.key;
   protected readonly walkForwardRoute = computed(() => exploreTabRoute(this.key(), 'walk-forward'));
+  /** Golden plans a search from this one's ranges, where the registry allows a golden search at all. */
+  protected readonly goldenRoute = computed(() => (this.session.goldenCapability()?.supported === true ? goldenTabRoute(this.key(), 'studies') : null));
 
   readonly activeTab = signal<SweepTab>('new');
   readonly lookupMessage = signal<string | null>(null);

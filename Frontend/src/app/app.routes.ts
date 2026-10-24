@@ -7,6 +7,7 @@ import { redirectLegacyDataLab } from "./components/data-lab/data-lab-ingress";
 import { brokerClerkRedirectGuard } from "./fleet/broker-clerk-redirect.guard";
 import { redirectKeepingState } from "./shell/route-redirects";
 import { lazyEntryResolver } from "./signal-strategies/explore/entry/explore-entry.lazy";
+import { lazyGoldenEntryResolver } from "./signal-strategies/golden/entry/golden-entry.lazy";
 
 const loadBrokerLaneUnavailable = () =>
   import('./fleet/broker-lane-unavailable.component').then(
@@ -51,6 +52,20 @@ const loadExploreEntry = () =>
 const backtestEntry = {
   resolve: { entry: lazyEntryResolver((resolvers) => resolvers.resolveBacktestEntry) },
   loadComponent: loadExploreEntry,
+} satisfies Route;
+
+// The retired Golden Search and Strategy Validation pages end at the owning
+// strategy's Golden or Proof in one redirect, the strategy named by the stored
+// study or by the link. An address that names none opens a chooser, never a
+// guessed strategy. The study address carries the resolver itself, for the same
+// reason as the run addresses above.
+const loadGoldenEntry = () =>
+  import("./signal-strategies/golden/entry/golden-entry.component").then(
+    (module) => module.GoldenEntryComponent,
+  );
+const goldenStudiesEntry = {
+  resolve: { entry: lazyGoldenEntryResolver((resolvers) => resolvers.resolveGoldenStudiesEntry) },
+  loadComponent: loadGoldenEntry,
 } satisfies Route;
 
 // The retired broker-wide choosers (Bots, Gallery, Settings and
@@ -238,20 +253,8 @@ export const routes: Routes = [
     resolve: { entry: lazyEntryResolver((resolvers) => resolvers.resolveWalkForwardEntry) },
     loadComponent: loadExploreEntry,
   },
-  {
-    path: "golden-search",
-    loadComponent: () =>
-      import("./components/golden-search/golden-search-page.component").then(
-        (m) => m.GoldenSearchPageComponent
-      ),
-  },
-  {
-    path: "golden-search/:studyId",
-    loadComponent: () =>
-      import("./components/golden-search/golden-search-page.component").then(
-        (m) => m.GoldenSearchPageComponent
-      ),
-  },
+  { path: "golden-search", ...goldenStudiesEntry },
+  { path: "golden-search/:studyId", ...goldenStudiesEntry },
   {
     path: "options-evidence/:kind/:subjectId",
     loadComponent: () => import("./components/options-evidence/options-evidence-page.component").then((m) => m.OptionsEvidencePageComponent),
@@ -275,10 +278,8 @@ export const routes: Routes = [
   },
   {
     path: "strategy-validation",
-    loadComponent: () =>
-      import(
-        "./components/strategy-validation/strategy-validation.component"
-      ).then((m) => m.StrategyValidationComponent),
+    resolve: { entry: lazyGoldenEntryResolver((resolvers) => resolvers.resolveValidationEntry) },
+    loadComponent: loadGoldenEntry,
   },
   {
     path: "engine/docs",

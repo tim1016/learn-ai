@@ -4,7 +4,7 @@
   <header class="summary__header">
     <p>{{ p.method === 'zoom' ? 'Zoom Search' : 'Grid Search' }} · frozen when the plan was locked</p>
     @if (canRevise()) {
-      <a pButton size="small" severity="secondary" [outlined]="true" [routerLink]="['/golden-search']" [queryParams]="{ revise: s.id }"><i class="pi pi-copy" aria-hidden="true"></i><span>Revise (new study)</span></a>
+      <a pButton size="small" severity="secondary" [outlined]="true" [routerLink]="studiesRoute()" [queryParams]="{ revise: s.id }"><i class="pi pi-copy" aria-hidden="true"></i><span>Revise (new study)</span></a>
     } @else if (s.action_refusals.revise; as reason) {
       <span class="muted">Revise unavailable — {{ reason }}</span>
     }

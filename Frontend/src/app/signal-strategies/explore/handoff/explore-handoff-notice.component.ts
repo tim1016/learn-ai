@@ -2,13 +2,14 @@ import { ChangeDetectionStrategy, Component, computed, input } from '@angular/co
 import { RouterLink } from '@angular/router';
 
 import { EXPLORE_RUN_PARAM, EXPLORE_SEARCH_PARAM, exploreTabRoute } from '../explore-tabs';
-import type { ExploreHandoff } from './explore-handoff';
+import type { HandoffAccount } from './explore-handoff';
 
 /**
  * What a handoff brought from the tool before it: where from, what arrived, what
  * could not and why, and what is left to choose. It is the evidence the
  * destination's form was seeded honestly, and it says plainly that nothing has
- * started.
+ * started. Into Golden the destination is a plan that is not locked, and the
+ * notice says that nothing has been locked or run.
  */
 @Component({
   selector: 'app-explore-handoff-notice',
@@ -24,7 +25,7 @@ import type { ExploreHandoff } from './explore-handoff';
         <span class="handoff__window">{{ handoff().lineage.from }} to {{ handoff().lineage.to }}</span>
       </h3>
       <p class="handoff__lead">
-        This form is filled in from that evidence so you can review it. Nothing has started; {{ launchWords() }} when it looks right.
+        {{ leadWords() }}
       </p>
       <dl class="handoff__carried">
         @for (item of handoff().carried; track item.field) {
@@ -75,17 +76,30 @@ import type { ExploreHandoff } from './explore-handoff';
   `,
 })
 export class ExploreHandoffNoticeComponent {
-  readonly handoff = input.required<ExploreHandoff>();
+  readonly handoff = input.required<HandoffAccount>();
 
   /** The source evidence, by its own native id, in the tool that owns it. */
   protected readonly source = computed(() => {
     const { source, strategyKey } = this.handoff().lineage;
-    return source.kind === 'backtest'
-      ? { label: `backtest run #${source.runId}`, route: exploreTabRoute(strategyKey, 'backtest'), queryParams: { [EXPLORE_RUN_PARAM]: String(source.runId) } }
-      : { label: `sweep ${source.searchId.slice(0, 8)}`, route: exploreTabRoute(strategyKey, 'sweep'), queryParams: { [EXPLORE_SEARCH_PARAM]: source.searchId } };
+    switch (source.kind) {
+      case 'backtest':
+        return { label: `backtest run #${source.runId}`, route: exploreTabRoute(strategyKey, 'backtest'), queryParams: { [EXPLORE_RUN_PARAM]: String(source.runId) } };
+      case 'sweep':
+        return { label: `sweep ${source.searchId.slice(0, 8)}`, route: exploreTabRoute(strategyKey, 'sweep'), queryParams: { [EXPLORE_SEARCH_PARAM]: source.searchId } };
+      case 'walk-forward':
+        // A walk-forward study has no address of its own: it opens from its tool's history.
+        return { label: `walk-forward study ${source.studyId.slice(0, 8)}`, route: exploreTabRoute(strategyKey, 'walk-forward'), queryParams: {} };
+    }
   });
 
-  protected readonly launchWords = computed(() =>
-    this.handoff().destination === 'sweep' ? 'press Launch search' : 'press Launch study',
-  );
+  protected readonly leadWords = computed(() => {
+    switch (this.handoff().destination) {
+      case 'sweep':
+        return 'This form is filled in from that evidence so you can review it. Nothing has started; press Launch search when it looks right.';
+      case 'walk-forward':
+        return 'This form is filled in from that evidence so you can review it. Nothing has started; press Launch study when it looks right.';
+      case 'golden':
+        return 'This plan is filled in from that evidence so you can review it. Nothing is locked or running: the plan is checked as any plan is, and locking it is your decision.';
+    }
+  });
 }

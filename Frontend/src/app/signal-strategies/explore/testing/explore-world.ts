@@ -6,12 +6,13 @@ import { GridSearchService } from '../../../components/grid-search/grid-search.s
 import type { GridSearchDetail, GridSearchSpecRequest } from '../../../components/grid-search/grid-search.types';
 import type { StrategyInfo } from '../../../components/strategy-lab/strategy-lab.models';
 import { WalkForwardStudyService } from '../../../components/walk-forward-study/walk-forward-study.service';
+import type { WalkForwardStudyDetail } from '../../../components/walk-forward-study/walk-forward-study.types';
 import { BacktestRunsService } from '../../../services/backtest-runs.service';
 import type { BacktestRunDetail } from '../../../services/backtest-runs.types';
 import { JobsService, type JobState } from '../../../services/jobs.service';
 import { LeanSidecarService } from '../../../services/lean-sidecar.service';
 import { fakePickerWorld } from '../../../shared/symbol-picker/testing/fake-picker-world';
-import { provideSignalStrategyWorld, type SignalStrategyReads, type SignalStrategyWorld } from '../../testing/signal-strategy-world';
+import { provideSignalStrategyWorld, type SignalStrategyReads, type SignalStrategyServices, type SignalStrategyWorld } from '../../testing/signal-strategy-world';
 
 /**
  * The reads and writes Explore's three tools make, as a spec sees them. Every
@@ -23,6 +24,8 @@ export interface ExploreWorld {
   readonly runs: Readonly<Record<number, BacktestRunDetail>>;
   /** Saved Grid Searches by id. */
   readonly searches: Readonly<Record<string, GridSearchDetail>>;
+  /** Saved walk-forward studies by id. A study not listed is one the server does not have. */
+  readonly walkForwardStudies?: Readonly<Record<string, WalkForwardStudyDetail>>;
 }
 
 export interface FakeJobs {
@@ -88,6 +91,7 @@ export function provideExploreWorld(
   strategyWorld: SignalStrategyWorld,
   evidence: ExploreWorld = noExploreEvidence(),
   reads: Partial<SignalStrategyReads> = {},
+  services: Partial<SignalStrategyServices> = {},
 ): { readonly providers: (Provider | EnvironmentProviders)[]; readonly calls: ExploreCalls } {
   const jobs: FakeJobs = { active: signal<JobState[]>([]), started: [], refreshCalls: 0, result: { success: false } };
   const calls: ExploreCalls = { jobs, sweepPreflights: [], walkForwardPreflights: [], runReads: [] };
@@ -98,7 +102,7 @@ export function provideExploreWorld(
   return {
     calls,
     providers: [
-      ...provideSignalStrategyWorld(strategyWorld, reads),
+      ...provideSignalStrategyWorld(strategyWorld, reads, services),
       provideHttpClient(withInterceptors([auxiliaryReads(schemas)])),
       ...picker.providers,
       {
@@ -153,8 +157,10 @@ export function provideExploreWorld(
         provide: WalkForwardStudyService,
         useValue: {
           list: async () => [],
-          get: async () => {
-            throw new Error('no study in this world');
+          get: async (id: string) => {
+            const study = evidence.walkForwardStudies?.[id];
+            if (study === undefined) throw new HttpErrorResponse({ status: 404, url: `/api/research/walk-forward-studies/${id}` });
+            return study;
           },
           preflight: async (spec: unknown) => {
             calls.walkForwardPreflights.push(spec);

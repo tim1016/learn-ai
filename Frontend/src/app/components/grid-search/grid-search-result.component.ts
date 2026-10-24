@@ -70,6 +70,8 @@ export class GridSearchResultComponent {
   readonly backLabel = input('History');
   /** Where "test out of sample" leads, as router commands. Unset, the result offers no such link. */
   readonly walkForwardRoute = input<readonly string[] | null>(null);
+  /** Where "Plan a golden search over these ranges" leads: the strategy's Golden studies, with this search as its starting point. Unset, no link is offered. */
+  readonly goldenRoute = input<readonly string[] | null>(null);
   /** A study-owned sweep is evidence: no Cancel, Finish or Delete here — the study manages it. */
   readonly readonly = input(false);
   /** The most cells drawn at once; the server returns no more curves in one read. */

@@ -2,8 +2,9 @@ import { Router } from '@angular/router';
 import { TestBed } from '@angular/core/testing';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { fireEvent, screen, waitFor, within } from '@testing-library/angular';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { defaults, emaCapability, preflight } from '../../components/golden-search/testing/fixtures';
 import type { JobState } from '../../services/jobs.service';
 import { harnessEntry, registryEntry } from '../testing/fixtures';
 import { emptyWorld } from '../testing/signal-strategy-world';
@@ -149,6 +150,40 @@ describe('a strategy’s Explore', () => {
       `/signal-strategies/${EMA}/explore/sweep?search=grid-search-0001`,
     );
     expect(within(fromSweep).getByText('Training and test lengths')).toBeTruthy();
+    expect(calls.jobs.started).toEqual([]);
+  });
+
+  it('walks a run and a sweep into a golden plan by their own links: unlocked, the explored window flagged, nothing started (T12)', async () => {
+    const createStudy = vi.fn();
+    const command = vi.fn();
+    const golden = { defaults: vi.fn(async () => defaults()), preflight: vi.fn(async () => preflight()), list: vi.fn(async () => []), createStudy, command };
+    const { providers, calls } = provideExploreWorld(
+      emptyWorld({ entries: [registryEntry()], schemas: [sweepableEma()], capabilities: [emaCapability()] }),
+      { runs: { 91: savedRun({ symbol: 'SPY' }) }, searches: { 'grid-search-0001': savedSearch() } },
+      {},
+      { golden },
+    );
+    TestBed.configureTestingModule({ providers });
+    const harness = await RouterTestingHarness.create();
+    const router = TestBed.inject(Router);
+
+    await harness.navigateByUrl(`/signal-strategies/${EMA}/explore/backtest?run=91`);
+    fireEvent.click(await screen.findByRole('link', { name: 'Plan a golden search from this run' }));
+    const fromRun = await screen.findByRole('region', { name: 'Started from' });
+    expect(router.url).toBe(`/signal-strategies/${EMA}/golden/studies?run=91`);
+    expect(within(fromRun).getByRole('link', { name: 'backtest run #91' }).getAttribute('href')).toBe(`/signal-strategies/${EMA}/explore/backtest?run=91`);
+
+    await harness.navigateByUrl(`/signal-strategies/${EMA}/explore/sweep?search=grid-search-0001`);
+    fireEvent.click(await screen.findByRole('link', { name: /Plan a golden search over these ranges/ }));
+    const fromSweep = await screen.findByRole('region', { name: 'Started from' });
+
+    expect(router.url).toBe(`/signal-strategies/${EMA}/golden/studies?search=grid-search-0001`);
+    expect(within(fromSweep).getByRole('link', { name: /^sweep / }).getAttribute('href')).toBe(`/signal-strategies/${EMA}/explore/sweep?search=grid-search-0001`);
+    // The sweep viewed 2026-01-02 to 2026-06-30, which reaches the plan's final test: the plan says so and does not call those dates unexposed.
+    expect(await screen.findByText(/Final-test dates: already viewed in Explore\./)).toBeTruthy();
+    expect(screen.queryByText(/Final-test dates: Not opened/)).toBeNull();
+    expect(createStudy).not.toHaveBeenCalled();
+    expect(command).not.toHaveBeenCalled();
     expect(calls.jobs.started).toEqual([]);
   });
 

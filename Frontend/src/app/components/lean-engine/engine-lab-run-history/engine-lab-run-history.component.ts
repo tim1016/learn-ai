@@ -69,9 +69,8 @@ export class EngineLabRunHistoryComponent {
   /** Emitted when a row is clicked — the parent component routes this to
    *  the Results tab. The id is the run's numeric id as a string. */
   readonly runSelected = output<string>();
+  /** A run is to be selected as the baseline run, or its review opened: Golden → Configuration review does both. */
   readonly goldenRunRequested = output<number>();
-  /** Monotonic host-owned refresh token after a Golden designation or review. */
-  readonly goldenRefreshToken = input(0);
 
   /** Column-visibility set, persisted to localStorage so a researcher's
    *  layout survives reloads. Defaults to "core columns only" so the
@@ -111,7 +110,7 @@ export class EngineLabRunHistoryComponent {
   readonly goldenCatalogReadable = computed(() => this.goldenCatalog.hasValue());
   readonly goldenCatalogFailed = computed(() => this.goldenCatalog.error() !== undefined);
   readonly goldenLimit = GOLDEN_VALIDATION_LIST_LIMIT;
-  /** A catalog exactly as long as one read asked for may be cut short, leaving an older golden run unbadged. */
+  /** A catalog exactly as long as one read asked for may be cut short, leaving an older baseline run unbadged. */
   readonly goldenCatalogCapped = computed(
     () => this.goldenCatalog.hasValue() && this.goldenCatalog.value().length >= GOLDEN_VALIDATION_LIST_LIMIT,
   );
@@ -160,9 +159,6 @@ export class EngineLabRunHistoryComponent {
       if (newlyCompleted.length === 0) return;
       newlyCompleted.forEach((j) => this.seenCompletedIds.add(j.id));
       this.history.reload();
-    });
-    effect(() => {
-      if (this.goldenRefreshToken() > 0) this.goldenCatalog.reload();
     });
   }
 

@@ -67,7 +67,7 @@ describe('PageHeaderComponent slots', () => {
 
 describe('PageHeaderComponent trail', () => {
   const routes = [
-    { path: 'golden-search/:studyId', component: RouteStub },
+    { path: 'options-golden-search/:studyId', component: RouteStub },
     { path: 'docs/broker-manual', component: RouteStub },
     { path: '**', component: RouteStub, data: { notFound: true } },
   ];
@@ -84,19 +84,19 @@ describe('PageHeaderComponent trail', () => {
   }
 
   it('leads a page back to its menu group, landing on the group\'s first page', async () => {
-    expect(await trailAt('/golden-search/study-9', 'Golden Search')).toEqual(['Signal strategies -> /signal-strategies']);
+    expect(await trailAt('/options-golden-search/study-9', 'Options Golden Search')).toEqual(['Options setups -> /options-backtest']);
   });
 
   it('also leads back to the listed page a deeper heading sits inside', async () => {
-    expect(await trailAt('/golden-search/study-9', 'Study 9')).toEqual([
-      'Signal strategies -> /signal-strategies',
-      'Golden Search -> /golden-search',
+    expect(await trailAt('/options-golden-search/study-9', 'Study 9')).toEqual([
+      'Options setups -> /options-backtest',
+      'Options Golden Search -> /options-golden-search',
     ]);
   });
 
   it.each([
     ['a document, which belongs to no group', '/docs/broker-manual'],
-    ['an address no page answers, which must not borrow a prefix\'s group', '/golden-search/study-9/nothing'],
+    ['an address no page answers, which must not borrow a prefix\'s group', '/options-golden-search/study-9/nothing'],
   ])('draws no trail for %s', async (_name, url) => {
     expect(await trailAt(url, 'Anything')).toEqual([]);
   });

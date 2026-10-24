@@ -12,12 +12,12 @@ import { WorkspaceStateBlockComponent } from '../shared/workspace/workspace-stat
 import { WorkspaceTabListComponent, type WorkspaceTabItem } from '../shared/workspace/workspace-tab-list.component';
 import { ExploreScopeComponent } from './explore/explore-scope.component';
 import { PROOF_TONES, proofSummaryOf } from './signal-strategy-evidence';
+import { goldenLocation } from './golden/golden-tabs';
 import { SignalStrategyChipComponent } from './signal-strategy-chip.component';
 import {
   SIGNAL_STRATEGIES_RECENCY_ROUTE,
   SIGNAL_STRATEGIES_ROUTE,
   SIGNAL_STRATEGY_TABS,
-  UNAVAILABLE_TAB_REASONS,
   signalStrategyLocation,
   signalStrategyTabRoute,
 } from './signal-strategy-tabs';
@@ -89,21 +89,11 @@ export class SignalStrategyWorkspaceComponent {
   });
 
   protected readonly tabs = computed<readonly WorkspaceTabItem[]>(() =>
-    SIGNAL_STRATEGY_TABS.tabs.map((tab) => {
-      const reason = UNAVAILABLE_TAB_REASONS[tab.id];
-      return reason === undefined
-        ? { ...tab, route: signalStrategyTabRoute(this.store.key(), tab.id) }
-        : { ...tab, route: null, unavailableReason: reason };
-    }),
+    SIGNAL_STRATEGY_TABS.tabs.map((tab) => ({ ...tab, route: signalStrategyTabRoute(this.store.key(), tab.id) })),
   );
 
-  /** Tabs the place declares but nothing serves yet, with why, where the reader can see it. */
-  protected readonly pendingTabs = computed(() =>
-    SIGNAL_STRATEGY_TABS.tabs.flatMap((tab) => {
-      const reason = UNAVAILABLE_TAB_REASONS[tab.id];
-      return reason === undefined ? [] : [{ id: tab.id, label: tab.label, reason }];
-    }),
-  );
+  /** The study open under Golden, so its manual returns to it. */
+  protected readonly studyId = computed(() => goldenLocation(this.currentUrl())?.studyId ?? undefined);
 
   /** What the place says in the page's body when it has no strategy to show. */
   protected readonly notice = computed<WorkspaceStateContent>(() => {

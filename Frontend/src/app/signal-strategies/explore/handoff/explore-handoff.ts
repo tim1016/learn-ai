@@ -1,5 +1,6 @@
 import type { GridSearchDetail, GridSearchSpecRequest } from '../../../components/grid-search/grid-search.types';
 import type { StrategyLabRunInputs, StrategyInfo } from '../../../components/strategy-lab/strategy-lab.models';
+import type { WalkForwardStudyDetail } from '../../../components/walk-forward-study/walk-forward-study.types';
 import { RESEARCH_DEFAULT_FILL_MODE, fillModeLabel, isFillModeName } from '../../../models/fill-mode';
 import type { BacktestRunDetail } from '../../../services/backtest-runs.types';
 import { etDayEndMs, etIsoDate, etMidnightMs } from '../../../shared/date/et-midnight';
@@ -16,12 +17,13 @@ import type { ExploreTabId } from '../explore-tabs';
  * opens its form on `spec`, checks it against its own schema as it checks any
  * edit, and runs only when the owner presses its run control.
  */
-export type HandoffDestination = Extract<ExploreTabId, 'sweep' | 'walk-forward'>;
+export type HandoffDestination = Extract<ExploreTabId, 'sweep' | 'walk-forward'> | 'golden';
 
 /** Where the handoff came from, by the source's own native id. */
 export type HandoffSource =
   | { readonly kind: 'backtest'; readonly runId: number }
-  | { readonly kind: 'sweep'; readonly searchId: string };
+  | { readonly kind: 'sweep'; readonly searchId: string }
+  | { readonly kind: 'walk-forward'; readonly studyId: string };
 
 /** Which strategy and which evidence a handoff stands on. */
 export interface HandoffLineage {
@@ -46,11 +48,10 @@ export interface HandoffGap {
   readonly reason: string;
 }
 
-export interface ExploreHandoff {
+/** What a handoff notice tells: where it came from, what arrived, what did not and what is left to choose. */
+export interface HandoffAccount {
   readonly lineage: HandoffLineage;
   readonly destination: HandoffDestination;
-  /** What the destination's form opens on. The form still preflights it. */
-  readonly spec: GridSearchSpecRequest;
   readonly carried: readonly HandoffCarried[];
   /** Fields of the source the destination cannot take. Never silently dropped. */
   readonly unsupported: readonly HandoffGap[];
@@ -58,8 +59,34 @@ export interface ExploreHandoff {
   readonly toChoose: readonly HandoffGap[];
 }
 
+export interface ExploreHandoff extends HandoffAccount {
+  /** What the destination's form opens on. The form still preflights it. */
+  readonly spec: GridSearchSpecRequest;
+  /** The fold lengths a walk-forward source used, for a destination that has folds of its own. */
+  readonly folds?: { readonly trainingMonths: number; readonly testMonths: number };
+}
+
+/** What each destination is called in the words of what it cannot take. */
+const DESTINATION_WORDS: Readonly<Record<HandoffDestination, string>> = {
+  sweep: 'Sweep',
+  'walk-forward': 'Walk-forward',
+  golden: 'Golden Search',
+};
+
 /** The destination's own settings a source cannot have chosen. */
-function destinationChoices(destination: HandoffDestination): HandoffGap[] {
+export function destinationChoices(destination: HandoffDestination): HandoffGap[] {
+  if (destination === 'golden') {
+    return [
+      {
+        field: 'Final test dates',
+        reason: 'Explore never chooses the final interval. The plan lays its own dates out from the lake and says whether the window Explore already viewed overlaps them.',
+      },
+      {
+        field: 'Objective, trade floors and audits',
+        reason: 'An in-sample ranking is not a choice for the final decision, so these start at Golden Search’s own values.',
+      },
+    ];
+  }
   const shared: HandoffGap[] = [
     { field: 'Ranking measure and minimum trades', reason: 'The source does not rank settings, so these start at the form’s own values.' },
   ];
@@ -97,16 +124,26 @@ export function handoffFromBacktest(input: {
   const policy = inputs.dataPolicy;
   const carried: HandoffCarried[] = [];
   const unsupported: HandoffGap[] = [];
-  const target = destination === 'sweep' ? 'Sweep' : 'Walk-forward';
+  const target = DESTINATION_WORDS[destination];
 
   carried.push({ field: 'Strategy', value: `${strategy.display_name} (${entry.strategy_key}, program ${entry.program_version ?? 'none'})` });
   carried.push({ field: 'Symbol', value: inputs.range.symbol });
-  carried.push({ field: 'Window', value: `${inputs.range.from} to ${inputs.range.to}` });
+  if (destination === 'golden') {
+    unsupported.push({
+      field: 'Window',
+      reason: `The run viewed ${inputs.range.from} to ${inputs.range.to}. A golden search lays its own dates out and never takes an explored window as its study range; the plan marks this one as already viewed.`,
+    });
+  } else {
+    carried.push({ field: 'Window', value: `${inputs.range.from} to ${inputs.range.to}` });
+  }
 
   const sourceBars = barsOf(inputs);
   const supportedBars = strategy.supported_resolutions;
+  // A golden search reads minute bars only; Sweep and Walk-forward take what the strategy supports.
   const resolution: 'minute' | 'daily' =
-    sourceBars !== null && supportedBars.includes(sourceBars) ? sourceBars : supportedBars.includes('daily') && !supportedBars.includes('minute') ? 'daily' : 'minute';
+    destination === 'golden'
+      ? 'minute'
+      : sourceBars !== null && supportedBars.includes(sourceBars) ? sourceBars : supportedBars.includes('daily') && !supportedBars.includes('minute') ? 'daily' : 'minute';
   if (sourceBars === resolution) {
     carried.push({ field: 'Resolution', value: resolution });
   } else {
@@ -125,10 +162,15 @@ export function handoffFromBacktest(input: {
     paramRanges[name] = { type: 'value_list', values: [value] };
   }
   const used = [...numeric].filter((name) => typeof inputs.parameters[name] === 'number');
-  carried.push({
-    field: 'Settings',
-    value: used.length === 0 ? 'the strategy’s defaults' : used.map((name) => `${name} = ${String(inputs.parameters[name])}`).join(', '),
-  });
+  const usedText = used.length === 0 ? 'the strategy’s defaults' : used.map((name) => `${name} = ${String(inputs.parameters[name])}`).join(', ');
+  if (destination === 'golden') {
+    unsupported.push({
+      field: 'Settings',
+      reason: `The run used one point (${usedText}). A golden search explores ranges from its own incumbent, so one exploratory point is carried neither as a range nor as a starting point.`,
+    });
+  } else {
+    carried.push({ field: 'Settings', value: usedText });
+  }
   const properties = strategy.params_schema.properties ?? {};
   for (const [name, value] of Object.entries(inputs.parameters)) {
     if (name === 'symbol' || numeric.has(name)) continue;
@@ -157,14 +199,14 @@ export function handoffFromBacktest(input: {
   if (!flatCommission) {
     unsupported.push({
       field: 'Commission',
-      reason: `The run used ${engineWords(inputs.engine)}; fees were charged per fill by the engine’s own model and no flat commission was recorded. ${target} takes a flat commission per order, so it starts at 0.`,
+      reason: `The run used ${engineWords(inputs.engine)}; fees were charged per fill by the engine’s own model and no flat commission was recorded. ${target} takes a flat commission per order, so ${destination === 'golden' ? 'the plan keeps Golden Search’s own commission' : 'it starts at 0'}.`,
     });
   } else {
     carried.push({ field: 'Commission per order', value: String(inputs.commissionPerOrder) });
   }
   unsupported.push({
     field: 'Slippage',
-    reason: `A saved run report does not carry its slippage; ${target} starts at 0 per share.`,
+    reason: `A saved run report does not carry its slippage; ${destination === 'golden' ? 'the plan keeps Golden Search’s own slippage' : `${target} starts at 0 per share`}.`,
   });
   carried.push({ field: 'Starting capital', value: String(inputs.initialCash) });
 
@@ -227,28 +269,19 @@ function rangeText(name: string, range: ParamRange): string {
     : `${name} ${range.values.length === 1 ? `= ${range.values[0]}` : `in ${range.values.join(', ')}`}`;
 }
 
-/**
- * A Grid Search's request as Walk-forward's starting form: the same grid, window,
- * costs and ranking, to be tested out of sample. The search's own results do not
- * travel: a walk-forward picks a winner afresh on every training window.
- */
-export function handoffFromSweep(input: {
-  readonly search: GridSearchDetail;
-  readonly strategy: StrategyInfo | null;
-  readonly entry: StrategyRegistryEntry;
-}): ExploreHandoff {
-  const { search, strategy, entry } = input;
-  const request = search.request;
+/** The grid a request describes in the words a handoff carries, and the ET dates of the window it covered. */
+function gridOf(request: GridSearchSpecRequest, strategy: StrategyInfo | null, entry: StrategyRegistryEntry, destination: HandoffDestination) {
   const from = etIsoDate(request.start_ms);
   const to = etIsoDate(request.end_ms - 1);
   const varied = Object.entries(request.param_ranges).filter(([, range]) => rangeVaries(range));
   const fixed = Object.entries(request.param_ranges).filter(([, range]) => !rangeVaries(range));
+  const golden = destination === 'golden';
 
   const carried: HandoffCarried[] = [
     { field: 'Strategy', value: `${strategy?.display_name ?? entry.display_name} (${entry.strategy_key}, program ${entry.program_version ?? 'none'})` },
     { field: 'Symbol', value: request.symbol },
-    { field: 'Window', value: `${from} to ${to}` },
-    { field: 'Resolution', value: request.resolution },
+    // A golden search lays its own dates out: the window is the lineage's, and is not carried as the study range.
+    ...(golden ? [] : [{ field: 'Window', value: `${from} to ${to}` }, { field: 'Resolution', value: request.resolution }]),
     {
       field: 'Grid',
       value: varied.length === 0 ? 'no setting varied' : varied.map(([name, range]) => rangeText(name, range)).join('; '),
@@ -258,16 +291,50 @@ export function handoffFromSweep(input: {
     { field: 'Commission per order', value: String(request.commission_per_order) },
     { field: 'Slippage per share', value: String(request.slippage_per_share) },
     { field: 'Starting capital', value: String(request.initial_cash) },
-    { field: 'Ranking', value: `${request.measure}, at least ${request.min_trades} trades` },
-    { field: 'Session and adjustment', value: 'regular session, split-adjusted (both tools read only these)' },
+    ...(golden ? [] : [{ field: 'Ranking', value: `${request.measure}, at least ${request.min_trades} trades` }]),
+    { field: 'Session and adjustment', value: `regular session, split-adjusted (${golden ? 'every Explore tool and Golden Search read' : 'both tools read'} only these)` },
   ];
 
-  const unsupported: HandoffGap[] = [
-    {
-      field: 'Leader and cell results',
-      reason: 'The sweep’s results are in-sample. A walk-forward picks its own winner on each training window, so the sweep’s leader is not an input.',
-    },
-  ];
+  const unsupported: HandoffGap[] = [];
+  if (golden) {
+    unsupported.push(
+      {
+        field: 'Window',
+        reason: `The source viewed ${from} to ${to}. A golden search lays its own dates out and never takes an explored window as its study range; the plan marks this one as already viewed.`,
+      },
+      {
+        field: 'Ranking',
+        reason: `The source ranked by ${request.measure} with at least ${request.min_trades} trades, in-sample. Golden Search starts at its own objective and trade floor.`,
+      },
+    );
+  }
+  return { from, to, carried, unsupported };
+}
+
+/**
+ * A Grid Search's request as the next tool's starting form: the same grid, window,
+ * costs and ranking for Walk-forward, to be tested out of sample, or the same
+ * ranges, costs and capital for a golden search plan. The search's own results do
+ * not travel: a walk-forward picks a winner afresh on every training window, and
+ * a golden search never starts from, or is shown, an in-sample leader.
+ */
+export function handoffFromSweep(input: {
+  readonly search: GridSearchDetail;
+  readonly strategy: StrategyInfo | null;
+  readonly entry: StrategyRegistryEntry;
+  readonly destination?: HandoffDestination;
+}): ExploreHandoff {
+  const { search, strategy, entry, destination = 'walk-forward' } = input;
+  const request = search.request;
+  const { from, to, carried, unsupported } = gridOf(request, strategy, entry, destination);
+
+  unsupported.unshift({
+    field: 'Leader and cell results',
+    reason:
+      destination === 'golden'
+        ? 'The sweep’s results are in-sample. A golden search never starts from the sweep’s leader, and its final test is not shown it.'
+        : 'The sweep’s results are in-sample. A walk-forward picks its own winner on each training window, so the sweep’s leader is not an input.',
+  });
   if (search.incomplete) {
     unsupported.push({
       field: 'Unfinished cells',
@@ -283,12 +350,58 @@ export function handoffFromSweep(input: {
       from,
       to,
     },
-    destination: 'walk-forward',
+    destination,
     spec: request,
     carried,
     unsupported,
-    toChoose: [
-      { field: 'Training and test lengths', reason: 'A walk-forward cuts the window into folds; choose how many months train and how many test.' },
-    ],
+    toChoose:
+      destination === 'golden'
+        ? destinationChoices('golden')
+        : [{ field: 'Training and test lengths', reason: 'A walk-forward cuts the window into folds; choose how many months train and how many test.' }],
+  };
+}
+
+/**
+ * A walk-forward study's request as a golden search plan: its grid, costs, capital
+ * and fold lengths. The study's folds, winners and verdict are in-sample evidence
+ * about a selection procedure and do not travel: a golden search repeats its own
+ * procedure on its own windows and opens one final test it has not shown.
+ */
+export function handoffFromWalkForward(input: {
+  readonly study: WalkForwardStudyDetail;
+  readonly strategy: StrategyInfo | null;
+  readonly entry: StrategyRegistryEntry;
+}): ExploreHandoff {
+  const { study, strategy, entry } = input;
+  const request = study.request;
+  const { from, to, carried, unsupported } = gridOf(request, strategy, entry, 'golden');
+  carried.push(
+    { field: 'Training window', value: `${request.training_months} months` },
+    { field: 'Test window', value: `${request.test_months} months` },
+  );
+  unsupported.unshift({
+    field: 'Folds, winners and verdict',
+    reason: 'The study’s folds and its verdict describe how a selection procedure held up on those windows. A golden search runs its own nested folds and never starts from the study’s winners.',
+  });
+  if (study.incomplete) {
+    unsupported.push({
+      field: 'Unfinished folds',
+      reason: `The study is ${study.status} with ${study.fold_count - study.completed_folds - study.failed_folds} folds not completed; the grid and fold lengths travel, not its partial results.`,
+    });
+  }
+  return {
+    lineage: {
+      source: { kind: 'walk-forward', studyId: study.id },
+      strategyKey: entry.strategy_key,
+      programVersion: entry.program_version,
+      from,
+      to,
+    },
+    destination: 'golden',
+    spec: request,
+    folds: { trainingMonths: request.training_months, testMonths: request.test_months },
+    carried,
+    unsupported,
+    toChoose: destinationChoices('golden'),
   };
 }

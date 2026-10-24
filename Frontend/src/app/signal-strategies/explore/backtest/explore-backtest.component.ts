@@ -12,7 +12,6 @@ import { Drawer } from "primeng/drawer";
 import { Tab, TabList, TabPanel, TabPanels, Tabs } from "primeng/tabs";
 
 import { EngineLabRunHistoryComponent } from "../../../components/lean-engine/engine-lab-run-history/engine-lab-run-history.component";
-import { GoldenValidationWorkbenchComponent } from "../../../components/golden-validation-workbench/golden-validation-workbench.component";
 import { LeanSourceEditorComponent } from "../../../components/strategy-lab/lean-source-editor/lean-source-editor.component";
 import { StrategyLabRunStatsComponent } from "../../../components/strategy-lab/run-stats/strategy-lab-run-stats.component";
 import { StrategyLabConfigRailComponent } from "../../../components/strategy-lab/strategy-lab-config-rail/strategy-lab-config-rail.component";
@@ -31,6 +30,7 @@ import type { WorkspaceStateContent } from "../../../shared/workspace/workspace-
 import { WorkspaceStateBlockComponent } from "../../../shared/workspace/workspace-state-block.component";
 import { EXPLORE_RUN_PARAM, exploreTabRoute } from "../explore-tabs";
 import { ExploreSession } from "../explore-session";
+import { GOLDEN_RUN_PARAM, goldenTabRoute } from "../../golden/golden-tabs";
 
 /**
  * Explore's Backtest: Strategy Lab's workbench and run history for one strategy.
@@ -56,7 +56,6 @@ import { ExploreSession } from "../explore-session";
     RunDockComponent,
     StrategyLabRunStatsComponent,
     StrategyLabStageComponent,
-    GoldenValidationWorkbenchComponent,
     WorkspaceStateBlockComponent,
   ],
   templateUrl: "./explore-backtest.component.html",
@@ -75,10 +74,10 @@ export class ExploreBacktestComponent {
   protected readonly sweepRoute = computed(() => exploreTabRoute(this.key(), "sweep"));
   protected readonly walkForwardRoute = computed(() => exploreTabRoute(this.key(), "walk-forward"));
   protected readonly sweepCapability = this.session.sweepCapability;
+  protected readonly goldenCapability = this.session.goldenCapability;
+  protected readonly goldenRoute = computed(() => goldenTabRoute(this.key(), "studies"));
 
   protected readonly leanSourceOpen = signal(false);
-  protected readonly goldenCandidateRunId = signal<number | null>(null);
-  protected readonly goldenRefreshToken = signal(0);
 
   /**
    * The report resource re-emits a new run object on every 5s poll. Collapsing
@@ -226,12 +225,13 @@ export class ExploreBacktestComponent {
     });
   }
 
+  /**
+   * Selecting a run as the baseline run is Golden's configuration review, not
+   * Explore's: Explore never approves settings. The run's number travels in its
+   * own query key, and the page it opens reads the run before it offers it.
+   */
   selectGoldenCandidate(runId: number): void {
-    this.goldenCandidateRunId.set(runId);
-  }
-
-  refreshGoldenHistory(): void {
-    this.goldenRefreshToken.update((token) => token + 1);
+    void this.router.navigate([...goldenTabRoute(this.key(), "configuration")], { queryParams: { [GOLDEN_RUN_PARAM]: runId } });
   }
 
   /**

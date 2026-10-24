@@ -26,7 +26,7 @@
           @if (state.kind === 'loading') {
             <p class="notice" role="status">Reading the search.</p>
           } @else if (state.kind === 'own') {
-            <app-grid-search-result [searchId]="state.id" [strategies]="strategies()" [walkForwardRoute]="walkForwardRoute()" (closed)="closeSearch()" (deleted)="closeSearch()" />
+            <app-grid-search-result [searchId]="state.id" [strategies]="strategies()" [walkForwardRoute]="walkForwardRoute()" [goldenRoute]="goldenRoute()" (closed)="closeSearch()" (deleted)="closeSearch()" />
           } @else {
             @if (state.kind === 'refused') {
               <app-workspace-state-block [state]="state.state" />

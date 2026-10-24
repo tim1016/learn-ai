@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { Drawer } from 'primeng/drawer';
 
-import { LeanTwinSourceComponent } from '../../components/strategy-validation/lean-twin-source/lean-twin-source.component';
+import { LeanTwinSourceComponent } from '../proof/lean-twin-source/lean-twin-source.component';
 import { SignalStrategyWorkspaceStore } from '../signal-strategy-workspace.store';
 import { SignalStrategyApprovedConfigurationsComponent } from './approved-configurations.component';
 import { SignalStrategyDeclaredParametersComponent } from './declared-parameters.component';

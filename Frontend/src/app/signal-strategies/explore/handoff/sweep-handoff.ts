@@ -5,7 +5,7 @@ import { GridSearchService } from '../../../components/grid-search/grid-search.s
 import { readStateOf } from '../../read-state';
 import { ExploreSession } from '../explore-session';
 import { EXPLORE_SEARCH_PARAM, exploreTabRoute } from '../explore-tabs';
-import { handoffFromSweep } from './explore-handoff';
+import { handoffFromSweep, type HandoffDestination } from './explore-handoff';
 import type { HandoffState } from './backtest-handoff';
 
 function refused(happened: string, why: string, next: string): HandoffState {
@@ -13,12 +13,16 @@ function refused(happened: string, why: string, next: string): HandoffState {
 }
 
 /**
- * The handoff a `?search=` names for Walk-forward, read from the saved Grid
- * Search's own request. `null` when the address names no search; otherwise
- * loading, ready or refused in words (a search another strategy ran, one that
- * does not exist, a read that failed). Call it from a field initializer.
+ * The handoff a `?search=` names for Walk-forward or a golden search plan, read
+ * from the saved Grid Search's own request. `null` when the address names no
+ * search; otherwise loading, ready or refused in words (a search another
+ * strategy ran, one that does not exist, a read that failed). Call it from a
+ * field initializer.
  */
-export function injectSweepHandoff(searchParam: Signal<string | undefined>): Signal<HandoffState | null> {
+export function injectSweepHandoff(
+  searchParam: Signal<string | undefined>,
+  destination: HandoffDestination = 'walk-forward',
+): Signal<HandoffState | null> {
   const session = inject(ExploreSession);
   const searches = inject(GridSearchService);
   const read = resource({
@@ -67,6 +71,6 @@ export function injectSweepHandoff(searchParam: Signal<string | undefined>): Sig
     if (catalog.kind === 'failed') {
       return refused("This strategy's declared settings could not be read.", catalog.message, 'The form below starts empty.');
     }
-    return { kind: 'ready', handoff: handoffFromSweep({ search, strategy: catalog.value, entry }) };
+    return { kind: 'ready', handoff: handoffFromSweep({ search, strategy: catalog.value, entry, destination }) };
   });
 }

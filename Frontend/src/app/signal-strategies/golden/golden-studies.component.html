@@ -1,0 +1,41 @@
+<section class="studies" aria-label="Golden studies">
+  @if (blocked(); as state) {
+    <app-workspace-state-block [state]="state" (actionTriggered)="onAction($event)" />
+  } @else {
+    <p class="intro">Search on development data, check the method over time, then open one held-back final test.</p>
+    <p-tabs [value]="activeTab()" (valueChange)="setTab($event)">
+      <p-tablist>
+        <p-tab value="new"><i class="pi pi-sliders-h" aria-hidden="true"></i> New study</p-tab>
+        <p-tab value="history"><i class="pi pi-history" aria-hidden="true"></i> History</p-tab>
+      </p-tablist>
+      <p-tabpanels>
+        <p-tabpanel value="new">
+          @if (reviseError(); as message) { <p class="notice notice--error" role="alert">{{ message }}</p> }
+          @if (handoff(); as source) {
+            @if (source.kind === 'loading') {
+              <p class="notice" role="status">Reading the evidence to start from.</p>
+            } @else if (source.kind === 'refused') {
+              <app-workspace-state-block [state]="source.state" />
+            } @else {
+              <app-explore-handoff-notice [handoff]="source.handoff" />
+            }
+          }
+          @if (revise() && reviseFrom() === null && reviseError() === null) {
+            <p class="notice" role="status">Loading the study to revise…</p>
+          } @else {
+            <app-golden-search-plan-form
+              [capabilities]="capabilities()"
+              [pinnedStrategy]="key()"
+              [reviseFrom]="reviseFrom()"
+              [handoff]="readyHandoff()"
+              (locked)="onLocked($event)"
+            />
+          }
+        </p-tabpanel>
+        <p-tabpanel value="history">
+          <app-golden-search-history [strategyKey]="key()" />
+        </p-tabpanel>
+      </p-tabpanels>
+    </p-tabs>
+  }
+</section>

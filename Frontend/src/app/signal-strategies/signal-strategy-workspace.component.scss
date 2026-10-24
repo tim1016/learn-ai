@@ -15,13 +15,3 @@
 }
 
 .notice { padding: 0 var(--space-4) var(--space-2); }
-
-.pending {
-  margin: 0;
-  padding: var(--space-2) var(--space-4) 0;
-  list-style: none;
-  color: var(--text-subtle);
-  font-size: var(--fs-xs);
-
-  strong { margin-right: var(--space-1); color: var(--text-secondary); }
-}

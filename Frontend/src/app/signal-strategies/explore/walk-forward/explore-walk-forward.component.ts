@@ -8,6 +8,7 @@ import { WalkForwardStudyService } from '../../../components/walk-forward-study/
 import type { WorkspaceStateContent } from '../../../shared/workspace/workspace-state';
 import { WorkspaceStateBlockComponent } from '../../../shared/workspace/workspace-state-block.component';
 import { ExploreSession } from '../explore-session';
+import { goldenTabRoute } from '../../golden/golden-tabs';
 import { injectBacktestHandoff } from '../handoff/backtest-handoff';
 import { ExploreHandoffNoticeComponent } from '../handoff/explore-handoff-notice.component';
 import { injectSweepHandoff } from '../handoff/sweep-handoff';
@@ -51,6 +52,8 @@ export class ExploreWalkForwardComponent {
   readonly run = input<string | undefined>(undefined);
 
   protected readonly key = this.session.key;
+  /** Golden plans a search from a study's grid, where the registry allows a golden search at all. */
+  protected readonly goldenRoute = computed(() => (this.session.goldenCapability()?.supported === true ? goldenTabRoute(this.key(), 'studies') : null));
 
   readonly activeTab = signal<WalkForwardTab>('new');
   readonly openStudyId = signal<string | null>(null);

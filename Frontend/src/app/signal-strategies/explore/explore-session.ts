@@ -47,6 +47,9 @@ export class ExploreSession {
   /** The registry's answer on whether this strategy may be swept, which Sweep and Walk-forward share. */
   readonly sweepCapability = computed(() => this.entry()?.capabilities.sweep ?? null);
 
+  /** The registry's answer on whether a golden search may be planned for this strategy, which the handoff links into Golden share. */
+  readonly goldenCapability = computed(() => this.entry()?.capabilities.golden ?? null);
+
   /** Strategy Lab's catalog entry for this strategy: its declared parameters and sweep eligibility. */
   readonly catalog = computed<ReadState<StrategyInfo | null>>(() => {
     const state = this.workspace.declarations();

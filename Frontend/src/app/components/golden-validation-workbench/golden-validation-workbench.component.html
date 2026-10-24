@@ -1,38 +1,38 @@
-<section class="golden-workbench" aria-label="Validation Golden Runs">
+<section class="golden-workbench" aria-label="Selected baseline runs">
   <header class="golden-workbench__header">
     <div>
-      <h2>Validation Golden Runs</h2>
-      <p>A frozen baseline links one ticker and parameter set to its engine evidence and human judgment.</p>
+      <h2>Selected baseline runs</h2>
+      <p>A selected baseline run freezes one ticker and parameter set with its engine evidence, and holds the human judgment on that exact configuration. It is not a benchmark baseline, and not a Golden Search version.</p>
     </div>
     @if (sourceRunId() !== null) { <span class="golden-workbench__run">Python run #{{ sourceRunId() }}</span> }
     <button type="button" class="golden-workbench__refresh" [disabled]="busy()" (click)="refreshEvidence()">Refresh evidence</button>
   </header>
 
   @if (catalog.isLoading()) {
-    <p class="golden-workbench__notice" role="status">Loading golden validation history…</p>
+    <p class="golden-workbench__notice" role="status">Loading selected baseline runs…</p>
   } @else if (catalog.error()) {
-    <p class="golden-workbench__error" role="alert">Golden validation history could not be loaded.</p>
+    <p class="golden-workbench__error" role="alert">Selected baseline runs could not be loaded.</p>
   } @else {
     @if (catalogCapped()) {
-      <p class="golden-workbench__notice" role="status">Only the newest {{ catalogLimit }} Validation Golden Runs are listed; an older run may already be designated.</p>
+      <p class="golden-workbench__notice" role="status">Only the newest {{ catalogLimit }} selected baseline runs are listed; an older run may already be selected.</p>
     }
 
     @if (canDesignate()) {
       <form class="golden-workbench__form" novalidate (submit)="$event.preventDefault(); designate()">
         <div>
-          <h3>Designate this Python run</h3>
+          <h3>Select this Python run as the baseline run</h3>
           <p>This freezes its exact strategy, ticker, parameters, time window, data policy, and execution assumptions.</p>
         </div>
         <label><span>Label <em>optional</em></span><input [value]="designationLabel()" (input)="setDesignationLabel($event)" placeholder="e.g. SPY baseline, Sept 2026" /></label>
         <label><span>Why is this the chosen baseline?</span><textarea [value]="designationRationale()" (input)="setDesignationRationale($event)" rows="3" required></textarea></label>
-        <button type="submit" [disabled]="busy()">Designate golden run</button>
+        <button type="submit" [disabled]="busy()">Select as baseline run</button>
       </form>
     }
 
     @if (sourceRunId() === null) {
       @let cases = catalogCases();
       @if (cases.length > 0) {
-        <nav class="golden-workbench__catalog" aria-label="Validation Golden Run catalog">
+        <nav class="golden-workbench__catalog" aria-label="Selected baseline run catalog">
           @for (entry of cases; track entry.id) {
             <button type="button" [class.selected]="selected()?.id === entry.id" (click)="selectCase(entry)">
               <span>{{ entry.label ?? entry.strategy_name }}</span>
@@ -41,7 +41,7 @@
           }
         </nav>
       } @else {
-        <p class="golden-workbench__notice">No Validation Golden Runs have been designated yet.</p>
+        <p class="golden-workbench__notice">No baseline run has been selected yet.</p>
       }
     }
 

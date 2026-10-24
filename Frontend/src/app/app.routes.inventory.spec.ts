@@ -15,6 +15,8 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { appConfig } from './app.config';
 import { routes } from './app.routes';
 import { GridSearchService } from './components/grid-search/grid-search.service';
+import { GoldenSearchService } from './components/golden-search/golden-search.service';
+import { studyDetail } from './components/golden-search/testing/fixtures';
 import { provideFleetDirectory } from './fleet/fleet-directory-testing';
 import { BacktestRunsService } from './services/backtest-runs.service';
 import { activeMenuNodeFor, APP_MENU } from './shell/app-menu';
@@ -66,6 +68,7 @@ const DOCUMENT: Row = { group: null };
 const OWNER = 'ema_crossover_signal';
 const BACKTEST_OF_RUN_7 = `/signal-strategies/${OWNER}/explore/backtest?run=7`;
 const RESOLVED_RUN: Row = { group: SIGNAL, lands: BACKTEST_OF_RUN_7, resolvesOwner: true };
+const RESOLVED_STUDY: Row = { group: SIGNAL, lands: `/signal-strategies/${OWNER}/golden/studies/7`, resolvesOwner: true };
 const RETIRED_BROKER_ALIAS: Row = { group: ACCOUNTS, lands: ACCOUNT_LIST };
 
 const ROWS: Readonly<Record<string, Row>> = {
@@ -129,7 +132,7 @@ const ROWS: Readonly<Record<string, Row>> = {
   'grid-search': { group: SIGNAL },
   'walk-forward': { group: SIGNAL },
   'golden-search': { group: SIGNAL },
-  'golden-search/:studyId': { group: SIGNAL },
+  'golden-search/:studyId': RESOLVED_STUDY,
   'strategy-validation': { group: SIGNAL },
   'research-lab/backtests/recency-chart': { group: SIGNAL, lands: '/signal-strategies/recency' },
   'signal-strategies': { group: SIGNAL },
@@ -142,9 +145,16 @@ const ROWS: Readonly<Record<string, Row>> = {
   'signal-strategies/:key/explore/backtest': { group: SIGNAL },
   'signal-strategies/:key/explore/sweep': { group: SIGNAL },
   'signal-strategies/:key/explore/walk-forward': { group: SIGNAL },
+  'signal-strategies/:key/golden': { group: SIGNAL, lands: '/signal-strategies/7/golden/studies' },
+  'signal-strategies/:key/golden/studies': { group: SIGNAL },
+  'signal-strategies/:key/golden/studies/:studyId': { group: SIGNAL },
+  'signal-strategies/:key/golden/versions': { group: SIGNAL },
+  'signal-strategies/:key/golden/configuration': { group: SIGNAL },
+  'signal-strategies/:key/proof': { group: SIGNAL },
   // Evidence whose owner is not in its address resolves it from the record.
   'signal-strategies/evidence/run/:id': RESOLVED_RUN,
   'signal-strategies/evidence/search/:id': { group: SIGNAL, lands: `/signal-strategies/${OWNER}/explore/sweep?search=7`, resolvesOwner: true },
+  'signal-strategies/evidence/study/:id': RESOLVED_STUDY,
 
   // ── Options setups ───────────────────────────────────────────────────────
   'options-backtest': { group: OPTIONS },
@@ -302,9 +312,10 @@ describe('the route inventory (T01)', () => {
         providers: [
           ...appConfig.providers,
           { provide: fleet.provide, useValue: fleet.useValue },
-          // The records the owner-resolving routes read: a run and a search of one registered strategy.
+          // The records the owner-resolving routes read: a run, a search and a study of one registered strategy.
           { provide: BacktestRunsService, useValue: { get: (id: number) => of(savedRun({ id, strategyName: OWNER })) } },
           { provide: GridSearchService, useValue: { get: async (id: string) => savedSearch({ id, strategy_key: OWNER }) } },
+          { provide: GoldenSearchService, useValue: { get: async (id: string) => studyDetail('awaiting_validation', { id, strategy_key: OWNER }) } },
           { provide: SignalStrategyRegistryService, useValue: { entries: async () => [registryEntry({ strategy_key: OWNER })] } },
         ],
       });

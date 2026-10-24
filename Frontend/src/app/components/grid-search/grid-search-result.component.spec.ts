@@ -48,7 +48,7 @@ function curves(hashes: readonly string[]): GridSearchCellCurves {
   };
 }
 
-async function renderResult(service: Partial<GridSearchService>, inputs: { maxDrawn?: number; walkForwardRoute?: readonly string[] } = {}) {
+async function renderResult(service: Partial<GridSearchService>, inputs: { maxDrawn?: number; walkForwardRoute?: readonly string[]; goldenRoute?: readonly string[] } = {}) {
   return render(GridSearchResultComponent, {
     inputs: { searchId: 'abc', pollMs: 0, ...inputs },
     providers: [
@@ -86,6 +86,13 @@ describe('GridSearchResultComponent', () => {
     await waitFor(() => expect(screen.getByRole('note').textContent).toMatch(/in-sample/i));
     const link = screen.getByRole('link', { name: /walk-forward/i }) as HTMLAnchorElement;
     expect(link.getAttribute('href')).toBe('/signal-strategies/sma_crossover/explore/walk-forward?search=abc');
+  });
+
+  it('routes into the host’s Golden plan with the search when the host offers one, and says nothing of Golden otherwise', async () => {
+    await renderResult({}, { goldenRoute: ['/signal-strategies', 'sma_crossover', 'golden', 'studies'] });
+
+    await waitFor(() => expect(screen.getByRole('note').textContent).toMatch(/in-sample/i));
+    expect(screen.getByRole('link', { name: /Plan a golden search over these ranges/ }).getAttribute('href')).toBe('/signal-strategies/sma_crossover/golden/studies?search=abc');
   });
 
   it('offers no way on to Walk-forward when its host names none', async () => {

@@ -23,7 +23,7 @@
         <p-tabpanel value="history">
           @if (lookupMessage(); as message) { <p class="notice" role="status">{{ message }}</p> }
           @if (openStudyId(); as id) {
-            <app-walk-forward-study-result [studyId]="id" [strategies]="strategies()" (closed)="closeStudy()" (deleted)="closeStudy()" />
+            <app-walk-forward-study-result [studyId]="id" [strategies]="strategies()" [goldenRoute]="goldenRoute()" (closed)="closeStudy()" (deleted)="closeStudy()" />
           } @else {
             <app-walk-forward-study-history [strategies]="strategies()" [strategyKey]="key()" (opened)="openStudy($event)" />
           }

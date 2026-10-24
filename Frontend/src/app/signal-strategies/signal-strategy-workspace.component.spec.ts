@@ -51,21 +51,17 @@ describe('a strategy’s place', () => {
     expect(await screen.findByText('The strategy registry could not be read.')).toBeTruthy();
   });
 
-  it('links the tabs it has pages for, and shows the rest unavailable with the reason in view', async () => {
+  it('links every tab it declares, each to its own page', async () => {
     await open(`/signal-strategies/${EMA}/overview`, emptyWorld({ entries: [registryEntry()] }));
 
     const strip = await screen.findByRole('navigation', { name: 'Strategy sections' });
-    for (const tab of ['Overview', 'Define', 'Explore']) {
+    for (const tab of ['Overview', 'Define', 'Explore', 'Golden', 'Proof']) {
       expect(within(strip).getByRole('link', { name: tab })).toBeTruthy();
     }
     expect(within(strip).getByRole('link', { name: 'Explore' }).getAttribute('href')).toBe(`/signal-strategies/${EMA}/explore`);
-    for (const tab of ['Golden', 'Proof']) {
-      expect(within(strip).queryByRole('link', { name: tab })).toBeNull();
-      expect(within(strip).getByText(tab).getAttribute('aria-disabled')).toBe('true');
-    }
-    // The reason is in view beside the strip, not only read out from it.
-    expect(screen.getByText('Golden', { selector: 'strong' }).closest('li')?.textContent).toMatch(/Golden Search and configuration review open here in an upcoming change/);
-    expect(screen.queryByText('Explore', { selector: 'strong' })).toBeNull();
+    expect(within(strip).getByRole('link', { name: 'Golden' }).getAttribute('href')).toBe(`/signal-strategies/${EMA}/golden`);
+    expect(within(strip).getByRole('link', { name: 'Proof' }).getAttribute('href')).toBe(`/signal-strategies/${EMA}/proof`);
+    expect(screen.queryByText(/upcoming change/)).toBeNull();
   });
 
   it('reads nothing again when the owner moves between tabs', async () => {

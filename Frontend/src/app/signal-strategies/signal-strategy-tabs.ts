@@ -25,16 +25,6 @@ export const SIGNAL_STRATEGY_TABS = defineWorkspaceTabs<SignalStrategyTabId>(
   ['overview', 'define', 'explore', 'golden', 'proof'],
 );
 
-/**
- * Tabs the place declares but no page serves yet, each with the words the
- * strip shows beside it. A tab leaves this list when its page is routed, and
- * the strip then links to it.
- */
-export const UNAVAILABLE_TAB_REASONS: Readonly<Partial<Record<SignalStrategyTabId, string>>> = {
-  golden: 'Golden Search and configuration review open here in an upcoming change. Until then, use Golden Search and Strategy Validation in the menu.',
-  proof: 'Program proof opens here in an upcoming change. Until then, use Strategy Validation in the menu.',
-};
-
 /** Router commands for one strategy's tab. */
 export function signalStrategyTabRoute(strategyKey: string, tab: SignalStrategyTabId): readonly string[] {
   return [SIGNAL_STRATEGIES_ROUTE, strategyKey, tab];

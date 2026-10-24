@@ -164,6 +164,9 @@ describe('app menu projections', () => {
     ['/signal-strategies/ema_crossover_signal/overview', 'Signal strategies', 'Signal strategies'],
     ['/signal-strategies/ema_crossover_signal/define', 'Signal strategies', 'Signal strategies'],
     ['/signal-strategies/ema_crossover_signal/explore/sweep', 'Signal strategies', 'Signal strategies'],
+    ['/signal-strategies/ema_crossover_signal/golden/studies/study-9', 'Signal strategies', 'Signal strategies'],
+    ['/signal-strategies/ema_crossover_signal/golden/configuration', 'Signal strategies', 'Signal strategies'],
+    ['/signal-strategies/ema_crossover_signal/proof', 'Signal strategies', 'Signal strategies'],
     ['/signal-strategies/evidence/run/91', 'Signal strategies', 'Signal strategies'],
     ['/signal-strategies/recency', 'Signal strategies', 'Recency Chart'],
     ['/options-backtest', 'Options setups', 'Options Backtest'],
@@ -261,9 +264,9 @@ describe('app menu projections', () => {
     });
 
     it('adds the listed page a deeper heading sits inside', () => {
-      expect(menuTrailFor('/golden-search/study-9', 'Study 9')).toEqual([
-        { label: 'Signal strategies', route: '/signal-strategies' },
-        { label: 'Golden Search', route: '/golden-search' },
+      expect(menuTrailFor('/options-golden-search/study-9', 'Study 9')).toEqual([
+        { label: 'Options setups', route: '/options-backtest' },
+        { label: 'Options Golden Search', route: '/options-golden-search' },
       ]);
     });
 
@@ -274,8 +277,8 @@ describe('app menu projections', () => {
     });
 
     it('does not repeat the heading the page already has', () => {
-      expect(menuTrailFor('/golden-search/study-9', 'Golden Search')).toEqual([
-        { label: 'Signal strategies', route: '/signal-strategies' },
+      expect(menuTrailFor('/options-golden-search/study-9', 'Options Golden Search')).toEqual([
+        { label: 'Options setups', route: '/options-backtest' },
       ]);
     });
 

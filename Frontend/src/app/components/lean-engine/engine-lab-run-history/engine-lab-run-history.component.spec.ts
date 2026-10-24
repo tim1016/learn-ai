@@ -143,7 +143,7 @@ describe("EngineLabRunHistoryComponent", () => {
     fakeJobsSignal.set([]);
   });
 
-  it("renders the default run history: every engine's runs as one fixed page, with each row's strategy, symbol, bars summary, open-at-end note and Mark golden", async () => {
+  it("renders the default run history: every engine's runs as one fixed page, with each row's strategy, symbol, bars summary, open-at-end note and Select baseline run", async () => {
     const runs = makeRunsService();
     const fixture = await setup(runs);
     const element = fixture.nativeElement as HTMLElement;
@@ -156,11 +156,11 @@ describe("EngineLabRunHistoryComponent", () => {
     expect.soft(html, "renders the symbol stored on the run").toContain("AAPL");
     expect.soft(html, "renders the DataPolicy bars summary with explicit input and strategy cadences").toContain("Input M1 / Strategy M15");
     expect.soft(html, "renders 'Open at end' for rows with a synthetic exit").toContain("Open at end");
-    expect.soft(buttons, "offers Mark golden for a Python run when the catalog was read and does not list it").toContain("Mark golden");
-    expect.soft(html, "does not say the Golden catalog could not be read when it was read").not.toContain("Golden catalog could not be read");
+    expect.soft(buttons, "offers Select baseline run for a Python run when the catalog was read and does not list it").toContain("Select baseline run");
+    expect.soft(html, "does not say the selected baseline runs could not be read when it was read").not.toContain("selected baseline runs could not be read");
   });
 
-  it("badges a designated run and opens its Golden Validation workflow", async () => {
+  it("badges a designated run and opens its configuration review", async () => {
     goldenValidationMock.list.mockReturnValue(of([{ source_run_id: 30, state: "candidate" }]));
     const fixture = await setup();
     const requested = vi.fn();
@@ -168,13 +168,13 @@ describe("EngineLabRunHistoryComponent", () => {
     fixture.detectChanges();
 
     const button = Array.from(fixture.nativeElement.querySelectorAll("button"))
-      .find((entry) => (entry as HTMLButtonElement).textContent?.includes("Golden · Candidate")) as HTMLButtonElement;
+      .find((entry) => (entry as HTMLButtonElement).textContent?.includes("Baseline run · Candidate")) as HTMLButtonElement;
     button.click();
 
     expect(requested).toHaveBeenCalledWith(30);
   });
 
-  it("marks a Golden badge whose review no longer applies to the current evidence", async () => {
+  it("marks a baseline badge whose review no longer applies to the current evidence", async () => {
     goldenValidationMock.list.mockReturnValue(of([
       { source_run_id: 30, state: "accepted_engine_agreement", review_is_current: false },
       { source_run_id: 31, state: "accepted_engine_agreement", review_is_current: true },
@@ -183,29 +183,29 @@ describe("EngineLabRunHistoryComponent", () => {
     const badges = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>("button.badge--golden"));
 
     expect(badges.map((badge) => badge.textContent?.trim())).toEqual([
-      "Golden · Accepted Engine Agreement · review no longer applies",
-      "Golden · Accepted Engine Agreement",
+      "Baseline run · Accepted Engine Agreement · review no longer applies",
+      "Baseline run · Accepted Engine Agreement",
     ]);
   });
 
-  it("does not offer Mark golden, and says so, when the Golden catalog could not be read", async () => {
+  it("does not offer Select baseline run, and says so, when the selected baseline runs could not be read", async () => {
     goldenValidationMock.list.mockReturnValue(throwError(() => new Error("catalog down")));
     const fixture = await setup();
     const element = fixture.nativeElement as HTMLElement;
     const buttons = Array.from(element.querySelectorAll("button")).map((button) => button.textContent?.trim());
 
-    expect(buttons).not.toContain("Mark golden");
-    expect(element.textContent).toContain("Golden catalog could not be read");
+    expect(buttons).not.toContain("Select baseline run");
+    expect(element.textContent).toContain("selected baseline runs could not be read");
     expect(element.textContent).toContain("sma_crossover");
   });
 
-  it("says Golden badges stop at the newest 100 designated runs when the catalog is exactly that long", async () => {
+  it("says baseline badges stop at the newest 100 selected runs when the catalog is exactly that long", async () => {
     goldenValidationMock.list.mockReturnValue(
       of(Array.from({ length: 100 }, (_, index) => ({ source_run_id: 5000 + index, state: "candidate" }))),
     );
     const fixture = await setup();
 
-    expect((fixture.nativeElement as HTMLElement).textContent).toContain("newest 100 Validation Golden Runs");
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain("newest 100 selected baseline runs");
   });
 
   it("renders the empty state when no rows are returned", async () => {
