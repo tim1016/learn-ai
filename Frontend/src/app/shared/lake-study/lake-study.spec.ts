@@ -14,7 +14,7 @@ const FRIDAY = Date.UTC(2024, 2, 8, 5, 0);
 function group(over: Partial<LakeCoverageGroupRaw> = {}): LakeCoverageGroupRaw {
   return {
     expected_sessions: 5, reused: 0, added: 5, missing: 0, failed: 0,
-    building: 0, corrupt: 0, unavailable_from_provider: 0, ...over,
+    building: 0, corrupt: 0, captured_before_final: 0, unavailable_from_provider: 0, ...over,
   };
 }
 
@@ -54,7 +54,7 @@ describe('lake study data source', () => {
       symbol: 'SPY', priceAdjustmentMode: 'polygon_split_adjusted', sessionPolicy: 'extended', barMinutes: 5,
       snapshotDigest: 'b'.repeat(64), barsUsed: 1920, effectiveWindow: { startMs: MONDAY, endMs: FRIDAY },
     });
-    expect(source.coverage?.window).toMatchObject({ expectedSessions: 5, reused: 2, added: 3, unavailableFromProvider: 0 });
+    expect(source.coverage?.window).toMatchObject({ expectedSessions: 5, reused: 2, added: 3, unavailableFromProvider: 0, capturedBeforeFinal: 0 });
     expect(source.cache).toEqual({ hit: false, cachedAtMs: null });
   });
 

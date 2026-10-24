@@ -42,7 +42,6 @@ from app.data_lake.bar_validation import (
     assert_publishable_stored_minute_bars,
 )
 from app.data_lake.cache_import import import_minute_trade_dch
-from app.data_lake.capture_finality import captured_early
 from app.data_lake.data_contract import data_contract_hash as _dch
 from app.data_lake.derived_daily import (
     MinuteBarReadError,
@@ -574,25 +573,6 @@ async def _cached_bars_still_valid(cached: ArtifactRecord, spec: DataRunSpec) ->
     return True
 
 
-async def _captured_before_final(cached: ArtifactRecord, spec: DataRunSpec) -> bool:
-    """Does this spec need a day that was captured before the data it reads stopped forming?
-
-    Only a spec that names a session (``require_final_capture_for``) asks; every other consumer reuses the day as
-    it always has, and costs no query. A day that fails this is refreshed exactly as a provider correction is.
-    """
-    if spec.require_final_capture_for is None or cached.trading_date is None:
-        return False
-    times = await catalog_client.select_minute_capture_times(
-        cached.market or spec.market,
-        cached.symbol or "",
-        "trade",
-        cached.trading_date,
-        cached.trading_date,
-        price_adjustment_mode=spec.price_adjustment_mode,
-    )
-    return captured_early(times.get(cached.trading_date), cached.trading_date, spec.require_final_capture_for)
-
-
 def _is_minute_trade(identity: ArtifactIdentity) -> bool:
     return (
         identity.artifact_kind == "time_series_bars"
@@ -677,11 +657,9 @@ async def _process_minute_trade_artifact(
         )
         if existing:
             cached = existing[0]
-            if (
-                _minute_trade_cache_matches(cached, dch, resolve_lake_root(spec.price_adjustment_mode), adjustment_version)
-                and await _cached_bars_still_valid(cached, spec)
-                and not await _captured_before_final(cached, spec)
-            ):
+            if _minute_trade_cache_matches(
+                cached, dch, resolve_lake_root(spec.price_adjustment_mode), adjustment_version
+            ) and await _cached_bars_still_valid(cached, spec):
                 return cached, None, True
             prior = await catalog_client.refresh_complete_artifact(
                 artifact_id=cached.id, worker_id=_WORKER_ID, lease_ttl_ms=_LEASE_TTL_MS,

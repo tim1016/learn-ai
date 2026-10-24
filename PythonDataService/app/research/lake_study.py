@@ -40,10 +40,15 @@ The job's phase table must name ``admitting_data``, ``loading_bars`` and
 ``completed``. Blocking: runs on the job's worker thread.
 
 Cache identity (T09): the key is the study's identity, the data root, the
-admitted snapshot digest, the calculation version and ``cache_extra``, under a
-namespace of its own, looked up *after* admission because the digest needs the
-bytes. Repaired or refreshed lake data yields a new key; an entry the provider
-path wrote can never be found. Nothing is relabelled.
+admitted snapshot digest, the calculation version and ``cache_extra`` (kept under
+its own ``study`` key, so a study's field can never take the place of the
+digest), under a namespace of its own, looked up *after* admission because the
+digest needs the bytes. Repaired or refreshed lake data yields a new key; an
+entry the provider path wrote can never be found. Nothing is relabelled.
+
+``subject`` is echoed at the top of a refusal's payload, beside the keys the run
+sets itself (:data:`RESULT_KEYS`); a subject that names one of those is refused
+when the study is built, since it would otherwise replace the run's own answer.
 """
 
 from __future__ import annotations
@@ -72,6 +77,9 @@ from app.utils.session_anchors import et_midnight_ms
 
 logger = logging.getLogger(__name__)
 
+
+#: The keys the run sets in a refusal's payload; a study's ``subject`` cannot use them.
+RESULT_KEYS = frozenset({"success", "status", "error", "refusal", "data_source"})
 
 #: What a request's ``session`` ("rth" or "extended", as every ticker request spells it) asks the lake reader for.
 SESSION_POLICY_FOR_REQUEST: Mapping[str, SessionPolicy] = {"rth": "regular", "extended": "extended"}
@@ -154,6 +162,11 @@ class LakeStudy:
     #: Inputs beyond the lake identity that decide the result (feature name, configuration): part of the cache key.
     cache_extra: Mapping[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        shadowed = RESULT_KEYS & self.subject.keys()
+        if shadowed:
+            raise ValueError(f"subject names keys the run sets in its own payload: {sorted(shadowed)}")
+
 
 # ---------------------------------------------------------------------------
 # Provenance and cache identity
@@ -173,7 +186,7 @@ def cache_key(
         "data_root_id": str(admitted.data_root_id),
         "snapshot_digest": admitted.snapshot_digest,
         "calculation_version": calculation_version,
-        **extra,
+        "study": dict(extra),
     }
 
 
@@ -291,16 +304,21 @@ def run_lake_study(
     except StudyInputRefusal as refusal:
         logger.warning(
             "lake study refused",
-            extra={"action": "lake_study_refused", "study": study.job_type, "code": refusal.code, **study.subject},
+            extra={
+                "action": "lake_study_refused",
+                "study": study.job_type,
+                "code": refusal.code,
+                "subject": dict(study.subject),
+            },
         )
         emit.log(refusal.reason, level="warn")
         emit.failed(
             refusal.code,
             refusal.reason,
             result={
+                **study.subject,
                 "success": False,
                 "status": "refused",
-                **study.subject,
                 "error": refusal.reason,
                 "refusal": refusal.as_dict(),
                 "data_source": data_source_block(
