@@ -8,10 +8,15 @@ module is the receipt for what that move changes, case by case. Both paths read 
 * the **lake path** is the real admission — vendor HTTP, ``ensure_data``, the lake writer, committed-byte admission,
   the reader — and the study's fold.
 
-Each case records changed timestamps, prices, precision, counts and derived outputs (every feature's values, the
-mean IC, the forward-target validity), and names the cause in the reconcile taxonomy (``timestamp``, ``warmup``,
-``precision``, ``off-by-one``, ``data-quality``). A case that moves nothing says so by asserting zero. Unexplained drift
-fails here; an *intentional* divergence is the owner's decision (D02) and is listed in the PR.
+Each case records changed timestamps, prices, counts and derived outputs (every feature's values, the mean IC, the
+forward-target validity), and names the cause in the reconcile taxonomy (``timestamp``, ``warmup``, ``precision``,
+``off-by-one``, ``data-quality``). A case that moves nothing says so by asserting zero. Unexplained drift fails here; an
+*intentional* divergence is the owner's decision (D02) and is listed in the PR.
+
+The lake's 1/10,000 price grid is ``data-quality``, never ``precision``: it changes the input data, and ``precision``
+is floating-point accumulation. A tolerance may loosen only for the latter, so each output this divergence moves is
+pinned at its *measured* magnitude (``test_prices_finer_than_the_lake_grid...``), with a stated margin, at three price
+levels, because the movement of an indicator such as RSI depends on the price it is computed at.
 
 Not provable offline: that Polygon's own N-minute aggregates equal a fold of its minute aggregates. Cases that fold use
 an independent reference for the vendor side (``vendor_fold``); the equivalence with the live API is an assumption of
@@ -48,6 +53,9 @@ from tests._helpers.pinned_vendor import VendorBar, VendorCalls, mock_vendor, sc
 FEATURES = ["momentum_5m", "rsi_14", "realized_vol_30", "volume_zscore", "macd_signal"]
 NOW_MS = 1_735_689_600_000  # 2025-01-01
 
+#: The lake writer rounds half-up to 1/10,000 (``lean_writer.to_deci_cent``): a price moves by at most half of it.
+HALF_GRID = 5e-5
+
 #: 2024-03-10 is the spring-forward Sunday.
 DST_WINDOW = expected_sessions(date(2024, 3, 4), date(2024, 3, 15))
 #: 2024-07-03 is an early close (13:00 ET) and 2024-07-04 a holiday.
@@ -57,8 +65,8 @@ HALF_DAY_WINDOW = expected_sessions(date(2024, 7, 1), date(2024, 7, 12))
 DENSE = {"regular_keep": 0.995, "extended_keep": 0.92}
 
 
-def tape_for(window: list[date], **options: object) -> dict[date, list[VendorBar]]:
-    return vendor_history(window, seed=11, start_price=150.0, **{**DENSE, **options})  # type: ignore[arg-type]
+def tape_for(window: list[date], *, start_price: float = 150.0, **options: object) -> dict[date, list[VendorBar]]:
+    return vendor_history(window, seed=11, start_price=start_price, **{**DENSE, **options})  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -155,17 +163,18 @@ class Comparison:
 
     @property
     def causes(self) -> list[str]:
-        """The reconcile taxonomy's reading of what moved. Rules, not judgement: a count or a magnitude decides."""
-        found: list[str] = []
-        if self.timestamps_changed:
-            found.append("data-quality")  # bars present on one side only: the input itself differs
-        if self.prices_changed and self.max_price_diff <= 5e-5 + 1e-9:
-            found.append("precision")  # at most half of the lake's 1/10,000 grid
-        elif self.prices_changed:
-            found.append("data-quality")
-        if self.volume_changed:
-            found.append("data-quality")
-        return list(dict.fromkeys(found))
+        """The reconcile taxonomy's reading of what moved. Rules, not judgement: a count decides.
+
+        Every input that differs between the paths is ``data-quality``: a bar on one side only, a price, a volume.
+        ``precision`` is floating-point accumulation, and nothing here accumulates: a lake price is the exact decimal
+        the writer encoded, converted to the nearest float once.
+        """
+        return ["data-quality"] if self.timestamps_changed or self.prices_changed or self.volume_changed else []
+
+    @property
+    def quantization_only(self) -> bool:
+        """Every price that moved moved by at most half of the lake's 1/10,000 grid: input quantization, not a new tape."""
+        return self.prices_changed > 0 and self.max_price_diff <= HALF_GRID + 1e-9
 
 
 def _report(rows: list[dict], window: list[date]):
@@ -261,22 +270,51 @@ def test_coarser_bars_fold_to_the_same_bars_as_the_vendor_side_aggregate(world, 
     assert max(comparison.feature_max_diff.values()) <= 1e-9
 
 
-def test_prices_finer_than_the_lake_grid_move_by_at_most_half_a_ten_thousandth(world):
-    """Cause: ``precision``. The lake rounds half-up to 1/10,000 (``lean_writer.to_deci_cent``); the provider path does not."""
-    tape = tape_for(DST_WINDOW, decimals=5)
+#: What the lake's price grid moves, measured on this pinned payload (seed 11, the DST window, 9,130 bars) at three
+#: price levels, as the largest absolute difference between the two paths' values at a shared bar, and the window's
+#: mean IC. Prices carry five or six decimals, finer than the grid. The movement of RSI and momentum grows as the price
+#: falls: a rounding of at most 5e-5 is a larger share of a bar-to-bar change on a $2 name than on a $150 one.
+#: Re-measure (print ``feature_max_diff`` and ``mean_ic`` per case) only when the pinned tape or the lake's encoding
+#: intentionally changes; never to make a failing test pass.
+QUANTIZATION_MEASURED = {
+    "price_150": (150.0, 5, {"mean_ic": 4.64e-6, "momentum_5m": 6.02e-7, "rsi_14": 1.109e-2, "realized_vol_30": 2.04e-7, "macd_signal": 8.52e-6}),
+    "price_12": (12.0, 5, {"mean_ic": 3.99e-4, "momentum_5m": 7.50e-6, "rsi_14": 1.118e-1, "realized_vol_30": 2.21e-6, "macd_signal": 8.49e-6}),
+    "price_2": (2.0, 6, {"mean_ic": 4.17e-4, "momentum_5m": 4.77e-5, "rsi_14": 6.354e-1, "realized_vol_30": 1.61e-5, "macd_signal": 8.98e-6}),
+}
+#: The headroom over a measured movement. The tape is seeded and the arithmetic deterministic, so this only absorbs
+#: platform differences in float summation order inside pandas and numpy; a real change in the lake's encoding, or in
+#: a feature's math, moves these by orders of magnitude more.
+MEASURED_MARGIN = 1.5
+
+
+@pytest.mark.parametrize(("start_price", "decimals", "measured"), QUANTIZATION_MEASURED.values(), ids=QUANTIZATION_MEASURED)
+def test_prices_finer_than_the_lake_grid_move_each_output_by_its_measured_amount_which_depends_on_the_price(
+    world, start_price, decimals, measured
+):
+    """Cause: ``data-quality`` (input quantization). The lake rounds half-up to 1/10,000 (``lean_writer.to_deci_cent``);
+    the provider path does not. That changes the input data, so it is not ``precision`` and no float tolerance covers it.
+
+    Each recorded output is pinned at its measured movement times ``MEASURED_MARGIN``, so a lake encoding change that
+    moved the mean IC by 1e-3 would fail here. The table above is what D02 is decided on: RSI moves by about 0.01 point
+    on a $150 name, 0.1 on a $12 name and 0.6 on a $2 name; the mean IC by 5e-6, 4e-4 and 4e-4.
+    """
+    tape = tape_for(DST_WINDOW, start_price=start_price, decimals=decimals)
     mock_vendor("SPY", tape, adjusted=tape)
 
     comparison = compare(provider_rows(tape, DST_WINDOW), lake_rows(DST_WINDOW), DST_WINDOW)
 
     assert comparison.errors == (None, None)
     assert comparison.timestamps_changed == 0
-    assert comparison.prices_changed > 0
-    assert comparison.max_price_diff <= 5e-5 + 1e-9
-    assert comparison.causes == ["precision"]
-    # Prices that differ by 5e-5 on a $150 name move the unit-free features and the IC by far less than their own
-    # sampling error; the bound below is measured, not assumed, and is the size of the divergence the owner is shown.
-    assert comparison.feature_max_diff["momentum_5m"] < 1e-3
-    assert comparison.mean_ic[1] == pytest.approx(comparison.mean_ic[0], abs=5e-3)
+    assert comparison.quantization_only, "every price that moved moved by at most half a ten-thousandth"
+    assert comparison.causes == ["data-quality"]
+    assert comparison.feature_valid_moved == 0 and comparison.target_valid[0] == comparison.target_valid[1]
+    assert comparison.feature_max_diff["volume_zscore"] == 0.0, "volume is not a price"
+    for name in ("momentum_5m", "rsi_14", "realized_vol_30", "macd_signal"):
+        # atol is the measured movement with its margin; rtol is 0 because the quantity compared is itself a difference.
+        assert 0 < comparison.feature_max_diff[name] <= measured[name] * MEASURED_MARGIN, name
+    ic_provider, ic_lake = comparison.mean_ic
+    np.testing.assert_allclose(ic_lake, ic_provider, atol=measured["mean_ic"] * MEASURED_MARGIN, rtol=0)
+    assert abs(ic_lake - ic_provider) > 0, "the divergence is real: the IC does move"
 
 
 def test_fractional_share_volume_is_kept_exactly_by_both_paths(world):

@@ -15,7 +15,9 @@ and what it reads now, field by field:
   and are now refused up front with a reason (#3527).
 * **Adjustment.** Before: Polygon ``adjusted=True`` (split-only), never set
   explicitly. Now: the lake's ``polygon_split_adjusted`` mode, named in the
-  identity. Prices sit on the lake's 1/10,000 grid (rounded half-up).
+  identity. Prices sit on the lake's 1/10,000 grid (rounded half-up): a change
+  to the input data, not float rounding, whose effect on RSI and the mean IC
+  grows as the price falls (measured at $150, $12 and $2 in the comparison test).
 * **Session.** Before and now: **extended hours** — every bar the provider
   served, 04:00 to 20:00 ET. The browser sends ``session: "rth"`` and the
   backend never read it; that label stays inert so this migration does not
