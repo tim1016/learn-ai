@@ -3,8 +3,8 @@ import { Router, provideRouter } from '@angular/router';
 import { TestBed } from '@angular/core/testing';
 import { describe, expect, it } from 'vitest';
 
-import { HOME_ROUTE } from './app-menu';
-import { NOT_FOUND_TITLE, NotFoundComponent } from './not-found.component';
+import { HOME_ROUTE, NOT_FOUND_TITLE } from './app-menu';
+import { NotFoundComponent } from './not-found.component';
 
 describe('NotFoundComponent', () => {
   it('says no page is at the address, without the query or fragment, and leads back to Markets', async () => {
