@@ -1,6 +1,6 @@
 """Options contract finder for research pipeline.
 
-Formula: Select the available strike nearest target delta (BSM delta = N(d1) for calls, N(d1)-1 for puts, d1 = (ln(S/K) + (r + σ²/2)·T) / (σ·√T)); choose, for each trading date d, the latest listed expiry 7 to 30 calendar days out and the earliest 31 to 45 days out, so 30 days is always inside the pair; an expiry exactly 30 days out becomes the far end when nothing is listed beyond it. Within a month a date keeps the previous date's pair while it still brackets 30 days and its near expiry is at least 7 days out, and picks afresh when it does not; the expiries are listed once per month, and again as of a later date when that date's pick finds no near or no far expiry in a list taken earlier. No strike interpolation occurs.
+Formula: Select the available strike nearest target delta (BSM delta = N(d1) for calls, N(d1)-1 for puts, d1 = (ln(S/K) + (r + σ²/2)·T) / (σ·√T)); choose, for each trading date d, the latest listed expiry 7 to 30 calendar days out and the earliest 31 to 45 days out, so 30 days is always inside the pair; an expiry exactly 30 days out becomes the far end when nothing is listed beyond it. Within a month a date keeps the previous date's pair while it still brackets 30 days and its near expiry is at least 7 days out, and picks afresh when it does not; the expiries are listed once per month, and again as of a later date when that date's pick finds no near or no far expiry in a list taken earlier, or when the month's first lookup raised. No strike interpolation occurs; an expiry's ATM and 25Δ strikes are chosen at its first use in the run and reused until it leaves the pair, so a date's IV can depend on where the window starts.
 Reference: BSM delta per Hull §19.4; nearest-strike and expiry selection are internal rules, not an external port.
 Canonical implementation: app/research/options/contract_finder.py
 Validated against: NONE — pending (no golden fixture); the expiry pair is pinned by tests/research/options/test_contract_finder_bracket.py and tests/research/options/test_iv_builder_bracket_window.py
@@ -31,9 +31,11 @@ DEFAULT_IV = 0.25  # Default IV for delta estimation when not available
 TARGET_DTE = 30  # The constant maturity the expiry pair brackets
 MIN_DTE_DAYS = 7  # An expiry nearer than this is never used: no IV is derived for it
 EXPIRY_MAX_DTE = 45  # The far expiry of a date's pair is at most this many days out
-# The contracts one expiry lookup may return per calendar day of its window. A chain with a daily expiry lists about
-# 36 calls a calendar day within 5% of the money; the cap only binds on a chain denser than this one.
-EXPIRY_LOOKUP_CONTRACTS_PER_DAY = 50
+# The contracts one expiry lookup may return per calendar day of its window. SPY at ~$690 with every daily expiry
+# listed has about 69 calls within 5% of the money on each of about 48 expiries a month, some 3,300 contracts, which
+# 50 a day would cut short. 150 a day leaves room for a chain three times as dense. Paging stops at the vendor's last
+# page, so a lighter chain pays nothing for the headroom.
+EXPIRY_LOOKUP_CONTRACTS_PER_DAY = 150
 
 
 class BracketGap(StrEnum):
@@ -252,8 +254,8 @@ def pick_bracket_expiries(expiries: Collection[str], trade_date: str) -> tuple[s
     return BracketGap.NO_FAR_EXPIRY
 
 
-# The gaps a later-listed expiry could fill: the list was taken before it existed
-_RELISTABLE_GAPS = (BracketGap.NO_NEAR_EXPIRY, BracketGap.NO_FAR_EXPIRY)
+# The gaps a later lookup could fill: the list was taken before an expiry existed, or the lookup raised
+_RELISTABLE_GAPS = (BracketGap.NO_NEAR_EXPIRY, BracketGap.NO_FAR_EXPIRY, BracketGap.LOOKUP_FAILED)
 
 
 def _dte(expiry: str, trade_date: str) -> int:
@@ -264,32 +266,35 @@ def _dte(expiry: str, trade_date: str) -> int:
 class _MonthListing:
     """A month's expiry list, and the session it was taken as of (an expiry is visible from its listing date)."""
 
+    month: str
     listed_on: str
     expiries: frozenset[str] | BracketGap  # a BracketGap is a lookup that failed or was cut short
 
 
 class _BracketPicker:
-    """Picks each session's expiry pair, keeping a month's one expiry lookup and the pair in use.
+    """Picks each session's expiry pair, keeping the month's expiry lookup and the pair in use.
 
     A month costs one lookup, taken as of its first session. Within the month a date keeps the previous date's pair
-    while it still brackets 30 days and its near expiry is at least 7 days out, which is the pair (and so the strikes
-    chosen for it) the month-long reuse before #3528 used wherever that pair still answered. Otherwise it picks
-    afresh. An expiry listed after the lookup is invisible to it, so a date whose fresh pick finds no near or no
-    far expiry takes a new lookup as of that date, which replaces the month's list.
+    while it still brackets 30 days and its near expiry is at least 7 days out: the pair the month-long reuse before
+    #3528 carried. Otherwise it picks afresh. An expiry's strikes are fixed at its first use in the run, which after
+    a re-list can be a different session from the pre-#3528 code's, so a value can differ from it on a chain that is
+    not fully listed. An expiry listed after the lookup is invisible to it, so a date whose fresh pick finds no near
+    or no far expiry takes a new lookup as of that date, which replaces the month's list; so does a date after a first
+    lookup that raised, and it costs that date only if the new lookup raises too.
     """
 
     def __init__(self, polygon_client: PolygonClientService, underlying: str, last_date_by_month: dict[str, str]):
         self._polygon_client = polygon_client
         self._underlying = underlying
         self._last_date_by_month = last_date_by_month
-        self._listings: dict[str, _MonthListing] = {}
+        self._listing: _MonthListing | None = None  # the current month's: an earlier month's is never read again
         self._pair: tuple[str, str] | None = None  # the previous session's pair; None after a date with none
 
     def pair_for(self, date_str: str, stock_close: float) -> tuple[str, str] | BracketGap:
         month = date_str[:7]
-        listing = self._listings.get(month)
-        if listing is None:
-            listing = self._listings[month] = self._list(month, date_str, stock_close)
+        listing = self._listing
+        if listing is None or listing.month != month:
+            listing = self._listing = self._list(month, date_str, stock_close)
         elif self._pair is not None and self._still_brackets(self._pair, date_str):
             return self._pair
 
@@ -299,7 +304,7 @@ class _BracketPicker:
             if isinstance(fresh.expiries, BracketGap):
                 pair = fresh.expiries  # the date's gap is the failed lookup; the earlier list stays for the next date
             else:
-                self._listings[month] = fresh
+                self._listing = fresh
                 pair = self._pick(fresh, date_str)
         self._pair = None if isinstance(pair, BracketGap) else pair
         return pair
@@ -312,7 +317,7 @@ class _BracketPicker:
             datetime.strptime(self._last_date_by_month[month], "%Y-%m-%d"),
             stock_close=stock_close,
         )
-        return _MonthListing(date_str, expiries)
+        return _MonthListing(month, date_str, expiries)
 
     @staticmethod
     def _pick(listing: _MonthListing, date_str: str) -> tuple[str, str] | BracketGap:
@@ -358,7 +363,8 @@ def find_bracket_contracts(
          high_dte_atm_put_contract, high_dte_put_contract, high_dte_call_contract, bracket_gap]
         ``bracket_gap`` is None when the date has a pair, else the ``BracketGap`` value saying why it has none.
         The pair comes from the month's expiry lookup (``_BracketPicker``: one per month, taken again on a date that
-        finds no near or no far expiry in it), so 30 days is inside ``[low_dte, high_dte]`` on every date that has one.
+        finds no near or no far expiry in it, or after a first lookup that raised), so 30 days is inside
+        ``[low_dte, high_dte]`` on every date that has one.
     """
     # Build date→close map from stock bars
     date_close_map: dict[str, float] = {}

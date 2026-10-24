@@ -6,7 +6,7 @@ is outside ``[dte_low, dte_high]``, so any session more than ``dte_high - 30`` d
 raised, and the whole ticker was lost. A month still costs one expiry lookup, taken as of its first session; a date
 keeps the previous date's pair while it still brackets 30 days and its near expiry is 7 or more days out, picks afresh
 when it does not, and takes a new lookup as of that date when the fresh pick finds no near or no far expiry in a list
-taken earlier (an expiry listed after the first session is invisible to it).
+taken earlier (an expiry listed after the first session is invisible to it), or when the month's first lookup raised.
 
 The chain is a pinned listed weekly-Friday chain priced with a known volatility, served in place of
 ``PolygonClientService`` (``list_options_contracts`` and ``fetch_aggregates``; the underlying's own bars are the
@@ -360,6 +360,25 @@ def test_a_carried_pair_is_dropped_once_its_near_expiry_is_under_seven_days_out_
         assert pd.isna(rows[day][0]) and pd.isna(rows[day][1]), day
 
 
+def test_a_date_that_finds_no_near_expiry_lists_again_and_picks_up_one_listed_since():
+    """Jun 28 is listed on Jun 12: the June 3 list has no expiry 7 to 30 days out on Jun 17, when Jun 21 is too near."""
+    monthlies = (date(2024, 4, 19), date(2024, 5, 17), date(2024, 6, 21), date(2024, 7, 19), date(2024, 8, 16))
+    expiries = (*monthlies, date(2024, 6, 28))
+    sessions = [day for day in JUNE_SESSIONS if day <= date(2024, 6, 18)]
+    client = chain(sessions, expiries=expiries, listed_on={date(2024, 6, 28): date(2024, 6, 12)})
+
+    frame = find_bracket_contracts("SPY", "2024-06-03", "2024-06-18", client, stock_rows(sessions))
+
+    rows = {row.date: (row.low_dte, row.high_dte, row.bracket_gap) for row in frame.itertuples()}
+    assert rows["2024-06-14"][:2] == (7, 35), "Jun 21 is 7 days out: its last day"
+    assert rows["2024-06-17"][:2] == (11, 32) and pd.isna(rows["2024-06-17"][2]), "Jun 28 and Jul 19 bracket Jun 30"
+    assert rows["2024-06-18"][:2] == (10, 31) and pd.isna(rows["2024-06-18"][2]), "carried: still brackets 30 days"
+    assert [lookup["as_of_date"] for lookup in client.expiry_lookups] == [
+        "2024-06-03",
+        "2024-06-17",  # the first date whose fresh pick found no near expiry in the June 3 list
+    ]
+
+
 # ---------------------------------------------------------------------------
 # A date no listed pair brackets is a typed missing day, not a raise for the ticker
 # ---------------------------------------------------------------------------
@@ -387,13 +406,31 @@ def test_sessions_no_listed_pair_brackets_are_typed_missing_days_not_a_raise_for
     assert math.isclose(may_15["iv_30d_atm"], flat_sigma(date(2024, 5, 15), 30), abs_tol=IV_ATOL, rel_tol=0)
 
 
-def test_a_failed_expiry_lookup_marks_the_month_missing_with_its_own_reason():
+def test_a_month_whose_every_expiry_lookup_fails_is_missing_with_its_own_reason():
     client = chain(MAY_SESSIONS, expiry_lookup_error=RuntimeError("vendor down"))
 
     frame = sessions_of(build(MAY_SESSIONS, client), MAY_SESSIONS)
 
     assert (frame["iv_quality"] == "missing").all()
     assert (frame["missing_reason"] == "expiry_lookup_failed").all(), "a lookup that failed is not an empty chain"
+    assert len(client.expiry_lookups) == len(MAY_SESSIONS), "each date asks again, and costs itself only"
+
+
+def test_a_failed_first_lookup_costs_its_date_only_and_the_next_date_lists_again():
+    client = chain(MAY_SESSIONS, expiry_lookup_error=RuntimeError("vendor down"), failing_lookups=frozenset({1}))
+
+    frame = sessions_of(build(MAY_SESSIONS, client), MAY_SESSIONS)
+
+    reasons = dict(zip(frame["date"], frame["missing_reason"], strict=True))
+    assert reasons.pop("2024-05-01") == "expiry_lookup_failed", "the first lookup that raised"
+    assert all(pd.isna(reason) for reason in reasons.values()), "the month is not lost with its first date"
+    assert [lookup["as_of_date"] for lookup in client.expiry_lookups] == ["2024-05-01", "2024-05-02"], (
+        "one more lookup, as of the next date, and the month's list is that one"
+    )
+    expected = [flat_sigma(day, 30) for day in MAY_SESSIONS[1:]]
+    np.testing.assert_allclose(
+        frame["iv_30d_atm"].to_numpy(dtype=float)[1:], expected, atol=IV_ATOL, rtol=0, err_msg="iv_30d_atm"
+    )
 
 
 def test_a_lookup_that_hits_its_cap_marks_the_month_instead_of_picking_from_a_cut_list(monkeypatch: pytest.MonkeyPatch):
