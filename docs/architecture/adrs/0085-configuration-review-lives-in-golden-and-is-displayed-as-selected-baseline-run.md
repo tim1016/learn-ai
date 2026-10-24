@@ -41,6 +41,8 @@ Strategy Validation was one page holding three different facts: the program's pr
 
 9. **Golden → Deploy carries the strategy and the version.** "Use in Deploy" (a study's decision and a ready version) opens the account list with `strategy=<registry key>&golden_qualification=<id>`, Deploy's own keys. Deploy applies the version's own strategy, symbol and settings and the owner still chooses the account; navigation holds no command authority. Deploy's "View validation" link now leads to the strategy's Proof.
 
+10. **A strategy's header offers "Deploy a bot", and the account list holds the exact version while an account is chosen.** The header button opens a choice, not a deploy. The owner takes a ready version by its own id, or the strategy alone at its registered point, which needs no saved version. The current default is marked where it is displayed and linked by the id shown, never as "the default", so a later change of default cannot substitute another version. A stale, revoked or unreadable version is listed with why and has no link. Each link opens the account list with the same `strategy` and `golden_qualification` keys: no new URL key exists. The list names the exact version it carries (its strategy, symbol and settings) and reads Deploy's own offer for it again every 15 seconds while it is open. A version that is no longer ready, cannot be read, or is answered as another is refused by name; the refusal stays until the owner asks again, and no other version or account is put in its place. The cards still carry the version they were given, so Deploy refuses it by the same facts at its own boundary. Nothing in this path sends a command.
+
 ## Considered options
 
 - **Move the whole Strategy Validation page to Proof.** Rejected: the embedded workbench would approve settings outside Golden, and its result would pass for program proof (F04).
@@ -49,6 +51,7 @@ Strategy Validation was one page holding three different facts: the program's pr
 - **Rename the stored types and wire fields.** Rejected: ADR 0061's records and every historical decision keep their wording; only the display term moves.
 - **Carry an Explore window as the plan's study range.** Rejected: the final test would sit inside the window the owner already saw, and Explore would be choosing the final interval.
 - **Add a revoke control to Versions.** Rejected for this move: revocation is an existing server action with no control today, and a new state-changing control is a promotion rule.
+- **Link the header's "Deploy a bot" straight to the default version, or to the first account.** Rejected: a handoff that picks for the owner is the substitution F09 names. A version or the strategy alone is the owner's click, and the account is chosen in the list.
 
 ## Consequences
 
