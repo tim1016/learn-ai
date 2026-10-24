@@ -156,8 +156,11 @@ describe('app menu projections', () => {
     ['/golden-search', 'Signal strategies', 'Golden Search'],
     ['/golden-search/study-9', 'Signal strategies', 'Golden Search'],
     ['/strategy-validation', 'Signal strategies', 'Strategy Validation'],
-    // The multi-strategy comparison belongs to Signal strategies, though the Research Lab shell still hosts it.
-    ['/research-lab/backtests/recency-chart', 'Signal strategies', 'Recency Chart'],
+    ['/signal-strategies', 'Signal strategies', 'Signal strategies'],
+    // A strategy's place and the multi-strategy comparison both belong to the list's group.
+    ['/signal-strategies/ema_crossover_signal/overview', 'Signal strategies', 'Signal strategies'],
+    ['/signal-strategies/ema_crossover_signal/define', 'Signal strategies', 'Signal strategies'],
+    ['/signal-strategies/recency', 'Signal strategies', 'Recency Chart'],
     ['/options-backtest', 'Options setups', 'Options Backtest'],
     ['/options-golden-search', 'Options setups', 'Options Golden Search'],
     ['/options-golden-search/study-9', 'Options setups', 'Options Golden Search'],
@@ -254,7 +257,7 @@ describe('app menu projections', () => {
 
     it('adds the listed page a deeper heading sits inside', () => {
       expect(menuTrailFor('/golden-search/study-9', 'Study 9')).toEqual([
-        { label: 'Signal strategies', route: '/strategy-lab' },
+        { label: 'Signal strategies', route: '/signal-strategies' },
         { label: 'Golden Search', route: '/golden-search' },
       ]);
     });
@@ -267,7 +270,7 @@ describe('app menu projections', () => {
 
     it('does not repeat the heading the page already has', () => {
       expect(menuTrailFor('/golden-search/study-9', 'Golden Search')).toEqual([
-        { label: 'Signal strategies', route: '/strategy-lab' },
+        { label: 'Signal strategies', route: '/signal-strategies' },
       ]);
     });
 

@@ -116,7 +116,13 @@ const ROWS: Readonly<Record<string, Row>> = {
   'golden-search': { group: SIGNAL },
   'golden-search/:studyId': { group: SIGNAL },
   'strategy-validation': { group: SIGNAL },
-  'research-lab/backtests/recency-chart': { group: SIGNAL },
+  'research-lab/backtests/recency-chart': { group: SIGNAL, lands: '/signal-strategies/recency' },
+  'signal-strategies': { group: SIGNAL },
+  'signal-strategies/recency': { group: SIGNAL },
+  // A strategy's address always carries its tab: a bare key names nothing.
+  'signal-strategies/:key': { group: null, notFound: true },
+  'signal-strategies/:key/overview': { group: SIGNAL },
+  'signal-strategies/:key/define': { group: SIGNAL },
 
   // ── Options setups ───────────────────────────────────────────────────────
   'options-backtest': { group: OPTIONS },

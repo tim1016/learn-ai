@@ -1,0 +1,47 @@
+@let state = store.entry();
+@if (state.kind === 'found') {
+  @let strategy = state.entry;
+  <app-workspace-header [title]="title()" [breadcrumb]="breadcrumb()" [secondaryActions]="actions()">
+    @if (activeTab() === 'define') {
+      <app-how-this-works workspaceHelp route="/strategy-docs" />
+    }
+    <div workspaceFacts class="facts">
+      <code>{{ strategy.strategy_key }}</code>
+      <span>program {{ strategy.program_version ?? 'none' }}</span>
+      <app-signal-strategy-chip>
+        {{ strategy.strategy_category === 'production_candidate' ? 'Production candidate' : 'Operational harness' }}
+      </app-signal-strategy-chip>
+      @if (store.proof(); as proof) {
+        @if (proof.kind === 'ready' && proof.value !== null) {
+          @let summary = summaryOf(proof.value);
+          <app-signal-strategy-chip [tone]="proofTones[summary.state]">
+            Program proof: {{ summary.state | receiptLabel | lowercase }}
+          </app-signal-strategy-chip>
+        } @else if (proof.kind === 'failed') {
+          <app-signal-strategy-chip tone="unknown">Program proof: unknown</app-signal-strategy-chip>
+        }
+      }
+    </div>
+  </app-workspace-header>
+
+  @if (strategy.experimental_notice; as notice) {
+    <div class="notice"><app-experimental-notice [notice]="notice" /></div>
+  }
+
+  <app-workspace-tab-list [tabs]="tabs()" [activeId]="activeTab()" label="Strategy sections" />
+
+  @if (pendingTabs().length > 0) {
+    <ul class="pending">
+      @for (tab of pendingTabs(); track tab.id) {
+        <li><strong>{{ tab.label }}</strong> {{ tab.reason }}</li>
+      }
+    </ul>
+  }
+
+  <router-outlet />
+} @else {
+  <app-workspace-header [title]="title()" [breadcrumb]="breadcrumb()" />
+  <div class="notice">
+    <app-workspace-state-block [state]="notice()" (actionTriggered)="onAction($event)" />
+  </div>
+}

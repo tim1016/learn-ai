@@ -58,6 +58,9 @@ describe('AppComponent', () => {
           { path: 'research-lab/baselines/:id', component: ShellSmokeRouteComponent },
           { path: 'research-lab/signal-report/:id', component: ShellSmokeRouteComponent },
           { path: 'strategy-lab/docs', component: ShellSmokeRouteComponent },
+          { path: 'signal-strategies', pathMatch: 'full', component: ShellSmokeRouteComponent },
+          { path: 'signal-strategies/recency', component: ShellSmokeRouteComponent },
+          { path: 'signal-strategies/:key/define', component: ShellSmokeRouteComponent },
           // The workspace's own URLs, stubbed: these specs grade the window
           // title the shell computes from them, not what the tabs render.
           { path: 'brokers/alpaca/clerks/:clerkId/settings', component: ShellSmokeRouteComponent },
@@ -224,6 +227,10 @@ describe('AppComponent', () => {
       ['/options-lab', 'Options Lab · Markets'],
       ['/data-lab', 'Stocks · Markets'],
       ['/options-backtest', 'Options Backtest · Options setups'],
+      ['/signal-strategies', 'Signal strategies'],
+      ['/signal-strategies/recency', 'Recency Chart · Signal strategies'],
+      // A strategy's page is titled by the entity and its tab, then the group.
+      ['/signal-strategies/ema_crossover_signal/define', 'ema_crossover_signal · Define · Signal strategies'],
       ['/research-lab/strategy-runs/run-42', 'Research Lab · Research'],
       // A document is titled by itself: the help index is its home, not the page it explains.
       ['/strategy-lab/docs', 'Strategy Lab Manual'],

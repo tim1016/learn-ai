@@ -1,0 +1,59 @@
+<app-signal-strategy-section
+  title="Running bots"
+  scope="This strategy's bots that are running now, on every account the fleet could read."
+  [read]="fleet()"
+  (retry)="retry.emit()"
+>
+  @if (fleet(); as state) {
+    @if (state.kind === 'ready') {
+      @let result = answer();
+      <p class="note">
+        @switch (result.state) {
+          @case ('none') { No bot of this strategy is running. }
+          @case ('some') {
+            {{ result.atLeast ? 'At least ' : '' }}{{ result.bots.length }} running
+            @for (world of result.worlds; track world.world) { · {{ world.label }} {{ world.count }} }
+          }
+          @default { Unknown: the fleet could not be read in full, so this strategy's bots are not counted. }
+        }
+        @if (result.observedAtMs !== null) {
+          · as of <app-timestamp-display [value]="result.observedAtMs" mode="local" />
+        }
+      </p>
+
+      @if (lines().length > 0) {
+        <table class="rows">
+          <thead>
+            <tr><th>Bot</th><th>Account</th><th>Mode</th><th>Started</th></tr>
+          </thead>
+          <tbody>
+            @for (line of lines(); track line.key) {
+              <tr>
+                <td>
+                  @if (line.page; as page) {
+                    <a [routerLink]="page">{{ line.bot.strategy_instance_id }}</a>
+                  } @else {
+                    <span class="mono">{{ line.bot.strategy_instance_id }}</span>
+                  }
+                  <app-bot-instrument [symbol]="line.bot.symbol" [traded]="line.bot.traded" />
+                </td>
+                <td>{{ line.account }}</td>
+                <td><app-alpaca-lane-mode-chip [chip]="line.world" /></td>
+                <td><app-timestamp-display [value]="line.bot.started_at_ms" mode="local" fallback="never ran" /></td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+
+      @if (unreadable().length > 0) {
+        <p class="note">Not read:</p>
+        <ul class="note">
+          @for (gap of unreadable(); track gap.key) {
+            <li>{{ gap.account }}: {{ gap.reason }}</li>
+          }
+        </ul>
+      }
+    }
+  }
+</app-signal-strategy-section>

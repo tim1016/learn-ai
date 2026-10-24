@@ -88,15 +88,16 @@ export const APP_MENU: readonly AppMenuGroup[] = [
     title: 'Signal strategies',
     icon: 'pi pi-briefcase',
     items: [
+      { title: 'Signal strategies', route: '/signal-strategies' },
+      // These tools sit beside the strategy list until each moves into a strategy's tabs.
       { title: 'Strategy Lab', route: '/strategy-lab' },
       { title: 'Grid Search', route: '/grid-search' },
       { title: 'Walk-Forward', route: '/walk-forward' },
       { title: 'Golden Search', route: '/golden-search' },
       { title: 'Strategy Validation', route: '/strategy-validation' },
     ],
-    // The multi-strategy comparison stays a Research Lab tab until the
-    // signal strategy list hosts it.
-    pages: [{ title: 'Recency Chart', route: '/research-lab/backtests/recency-chart' }],
+    // The multi-strategy comparison is one link from the list, not a menu entry.
+    pages: [{ title: 'Recency Chart', route: '/signal-strategies/recency' }],
   },
   {
     id: 'options-setups',
@@ -145,9 +146,12 @@ export const APP_MENU: readonly AppMenuGroup[] = [
  */
 export const HOME_ROUTE = APP_MENU[0].items[0].route;
 
-/** The menu's name for a listed route, so a page can take its title from the entry that leads to it. */
+/**
+ * The menu's name for a route the menu lists or a group owns, so a page can take
+ * its title from the entry that leads to it.
+ */
 export function menuLabelFor(route: string): string {
-  const item = APP_MENU.flatMap((group) => group.items).find((candidate) => candidate.route === route);
+  const item = APP_MENU.flatMap((group) => [...group.items, ...(group.pages ?? [])]).find((candidate) => candidate.route === route);
   if (item === undefined) throw new Error(`No menu entry lists ${route}.`);
   return item.title;
 }

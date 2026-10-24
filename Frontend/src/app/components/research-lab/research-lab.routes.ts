@@ -1,5 +1,7 @@
 import { Routes } from '@angular/router';
 
+import { redirectKeepingState } from '../../shell/route-redirects';
+
 export const researchLabRoutes: Routes = [
   // Detail routes retain focused content while inheriting the root application
   // shell. Listed before the research-lab child shell so their more-specific
@@ -117,13 +119,11 @@ export const researchLabRoutes: Routes = [
           ),
         data: { title: 'Backtest Runs' },
       },
+      // The multi-strategy comparison moved under the Signal strategies list.
       {
         path: 'backtests/recency-chart',
-        loadComponent: () =>
-          import(
-            './recency-chart/recency-chart-page.component'
-          ).then((m) => m.RecencyChartPageComponent),
-        data: { title: 'Recency Chart' },
+        redirectTo: redirectKeepingState(['/signal-strategies', 'recency']),
+        pathMatch: 'full',
       },
 
       // Nav-invisible routes (no longer surfaced in sub-nav but still reachable)

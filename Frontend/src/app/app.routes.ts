@@ -107,6 +107,15 @@ export const routes: Routes = [
       ),
   },
   {
+    // The Signal strategies place: the registry list, the Recency Chart
+    // comparison and one strategy's workspace (ADR 0084).
+    path: "signal-strategies",
+    loadChildren: () =>
+      import("./signal-strategies/signal-strategies.routes").then(
+        (m) => m.SIGNAL_STRATEGIES_ROUTES
+      ),
+  },
+  {
     path: "options-lab",
     data: { fullBleed: true },
     loadComponent: () =>
