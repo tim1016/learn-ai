@@ -1,0 +1,55 @@
+:host {
+  display: block;
+  flex: 0 0 auto;
+}
+
+.workspace-tabs {
+  display: flex;
+  gap: var(--space-1);
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.workspace-tab {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 2px solid transparent;
+  color: var(--text-subtle);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semi);
+  text-decoration: none;
+}
+
+.workspace-tab:hover {
+  color: var(--text-primary);
+}
+
+.workspace-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.workspace-tab.is-active {
+  border-bottom-color: var(--workspace-tab-accent, var(--accent));
+  color: var(--text-primary);
+}
+
+.workspace-tab--unavailable {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.workspace-tab__reason {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .workspace-tabs {
+    overflow-x: auto;
+    padding: 0 var(--space-2);
+  }
+}

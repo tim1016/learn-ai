@@ -1,0 +1,52 @@
+<ng-template #windowText let-bounds>
+  <app-timestamp-display [value]="bounds.startMs" [mode]="windowMode()" />
+  →
+  <app-timestamp-display [value]="bounds.endMs" [mode]="windowMode()" />
+</ng-template>
+
+@if (summary(); as line) {
+  <details class="data-source-line">
+    <summary class="data-source-line__summary">
+      <span class="data-source-line__label">Data source</span>
+      <span>{{ line.sources }}</span>
+      @if (line.bounds; as bounds) {
+        <span><ng-container [ngTemplateOutlet]="windowText" [ngTemplateOutletContext]="{ $implicit: bounds }" /></span>
+      }
+      @if (line.resolution) { <span>{{ line.resolution }}</span> }
+      @if (line.adjustment) { <span>{{ line.adjustment }}</span> }
+      @if (line.missing > 0) { <span class="data-source-line__flag">{{ line.missing }} missing</span> }
+      @if (line.limitations > 0) {
+        <span class="data-source-line__flag">{{ line.limitations }} {{ line.limitations === 1 ? 'limitation' : 'limitations' }}</span>
+      }
+    </summary>
+
+    <dl class="data-source-line__details">
+      @for (row of rows(); track row.label) {
+        @let value = row.value;
+        <div>
+          <dt>{{ row.label }}</dt>
+          <dd>
+            @switch (value.kind) {
+              @case ('text') { {{ value.text }} }
+              @case ('code') { <code>{{ value.text }}</code> }
+              @case ('time') { <app-timestamp-display [value]="value.ms" mode="local" /> }
+              @case ('window') {
+                <ng-container [ngTemplateOutlet]="windowText" [ngTemplateOutletContext]="{ $implicit: value.bounds }" />
+              }
+              @case ('list') {
+                <ul>
+                  @for (item of value.items; track $index) { <li>{{ item }}</li> }
+                </ul>
+              }
+            }
+          </dd>
+        </div>
+      }
+    </dl>
+  </details>
+} @else {
+  <p class="data-source-line">
+    <span class="data-source-line__label">Data source</span>
+    <span>{{ NOT_RECORDED }}</span>
+  </p>
+}

@@ -98,37 +98,6 @@
         </div>
       }
     </div>
-
-    <!-- Actions -->
-    <div class="hero__actions">
-      <button
-        type="button"
-        class="action action--primary"
-        (click)="onCta('send-to-preflight')"
-      >
-        <span class="action__title">Send to Pre-flight</span>
-        <span class="action__sub">
-          {{ analysis().bestHorizonLabel }} · {{ analysis().indicatorDisplay }} · {{ analysis().ticker }}
-        </span>
-        <span class="action__kbd mono">⏎</span>
-      </button>
-      <button
-        type="button"
-        class="action"
-        (click)="onCta('save-verdict')"
-      >
-        <span class="action__title">Save to tested indicators</span>
-        <span class="action__sub">Persist verdict + params</span>
-      </button>
-      <button
-        type="button"
-        class="action"
-        (click)="onCta('run-on-another-ticker')"
-      >
-        <span class="action__title">Run on another ticker</span>
-        <span class="action__sub">Reuse current params</span>
-      </button>
-    </div>
   </div>
 
   <!-- ── Decision band: WHEN / WHERE / HOW ────────────────── -->

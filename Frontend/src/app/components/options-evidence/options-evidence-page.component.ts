@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, inject, input, resource }
 import { RouterLink } from '@angular/router';
 
 import { AssetIdentityComponent } from '../../shared/asset-identity';
+import { BreadcrumbComponent } from '../../shared/breadcrumb/breadcrumb.component';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
 import { extractServerMessage } from '../broker/operation-error';
@@ -14,7 +15,7 @@ import { OptionsHistoricalComparisonComponent } from './options-historical-compa
 
 @Component({
   selector: 'app-options-evidence-page',
-  imports: [RouterLink, AssetIdentityComponent, ReceiptLabelPipe, TimestampDisplayComponent, RunResultComponent, SetupSentencesComponent, OptionsResearchLineageComponent, OptionsHistoricalComparisonComponent],
+  imports: [BreadcrumbComponent, RouterLink, AssetIdentityComponent, ReceiptLabelPipe, TimestampDisplayComponent, RunResultComponent, SetupSentencesComponent, OptionsResearchLineageComponent, OptionsHistoricalComparisonComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './options-evidence-page.component.html',
   styleUrl: './options-evidence-page.component.scss',

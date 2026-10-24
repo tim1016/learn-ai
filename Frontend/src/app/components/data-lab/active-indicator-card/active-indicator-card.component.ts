@@ -36,7 +36,6 @@ export class ActiveIndicatorCardComponent {
   timeframeWarning = input<string>('');
 
   configure = output();
-  remove = output();
   resetDefaults = output();
 
   protected reference = computed<IndicatorReferenceEntry | null>(() =>
@@ -95,11 +94,6 @@ export class ActiveIndicatorCardComponent {
   protected onConfigure(ev: MouseEvent): void {
     ev.stopPropagation();
     this.configure.emit();
-  }
-
-  protected onRemove(ev: MouseEvent): void {
-    ev.stopPropagation();
-    this.remove.emit();
   }
 
   protected onReset(ev: MouseEvent): void {

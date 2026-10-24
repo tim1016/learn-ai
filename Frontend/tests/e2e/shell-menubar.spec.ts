@@ -9,12 +9,12 @@ import { expect, test, type Locator } from '@playwright/test';
 
 /** Every group AppMenu exposes, in menubar order (see app/shell/app-menu.ts). */
 const GROUPS = [
-  'Stocks',
-  'Options',
+  'Markets',
   'Research',
-  'Alpaca',
-  'Strategy Tools',
-  'Documentation',
+  'Signal strategies',
+  'Options setups',
+  'Accounts',
+  'Operations',
 ] as const;
 
 /** Straddles AppMenubarComponent's 1150px collapse breakpoint. */

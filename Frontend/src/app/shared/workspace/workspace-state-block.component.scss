@@ -1,0 +1,67 @@
+:host {
+  display: block;
+}
+
+.state-block {
+  --state-tone: var(--border-strong);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-width: 44rem;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--state-tone);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+}
+
+.state-block[data-tone='good'] { --state-tone: var(--bull); }
+.state-block[data-tone='warn'] { --state-tone: var(--warn); }
+.state-block[data-tone='bad'] { --state-tone: var(--bear); }
+
+.state-block p {
+  margin: 0;
+}
+
+.state-block__kind {
+  color: var(--text-subtle);
+  font-size: var(--fs-xxs);
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+}
+
+.state-block__happened {
+  color: var(--text-primary);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semi);
+}
+
+.state-block__why,
+.state-block__next {
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+  line-height: 1.5;
+}
+
+.state-block__progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.state-block__progress progress {
+  flex: 1 1 8rem;
+  max-width: 16rem;
+  height: 0.5rem;
+  accent-color: var(--accent);
+}
+
+.state-block__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}

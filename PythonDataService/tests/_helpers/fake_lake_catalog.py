@@ -120,8 +120,12 @@ class FakeCatalog:
             "data_root_id": identity.data_root_id,
         }
 
+    # ``completed_at_ms`` is the capture time: read only through ``select_minute_capture_times``, as in the real catalog.
     _BOOKKEEPING_KEYS = frozenset(
-        {"status", "attempt_count", "last_error", "lease_owner", "lease_expires_at_ms", "lease_generation"}
+        {
+            "status", "attempt_count", "last_error", "lease_owner", "lease_expires_at_ms", "lease_generation",
+            "completed_at_ms",
+        }
     )
 
     @classmethod
@@ -355,6 +359,26 @@ class FakeCatalog:
             and _in_window(row["trading_date"])
         ]
 
+    async def select_minute_capture_times(
+        self, market, symbol, data_type, start_trading_date, end_trading_date, *, price_adjustment_mode,
+        data_root_id=None,
+    ) -> dict:
+        root_id = data_root_id if data_root_id is not None else root_identity.active_root_id()
+        return {
+            row["trading_date"]: row["completed_at_ms"]
+            for row in self.rows.values()
+            if row["artifact_kind"] == "time_series_bars"
+            and row["resolution"] == "minute"
+            and row["data_root_id"] == root_id
+            and row["market"] == market
+            and row["symbol"] == symbol
+            and row["data_type"] == data_type
+            and row["price_adjustment_mode"] == price_adjustment_mode
+            and row["status"] == "complete"
+            and row.get("completed_at_ms") is not None
+            and start_trading_date <= row["trading_date"] <= end_trading_date
+        }
+
     async def select_complete_minute_bar_symbols(
         self, market, symbols, data_type, trading_date, *, price_adjustment_mode, provider, data_root_id=None
     ) -> frozenset[str]:
@@ -492,6 +516,7 @@ class FakeCatalog:
             file_sha256=file_sha256,
             data_contract_hash=data_contract_hash if data_contract_hash is not None else row["data_contract_hash"],
             corporate_action_version=corporate_action_version or row.get("corporate_action_version"),
+            completed_at_ms=self._now_ms(),
             last_error=None,
             lease_owner=None,
             lease_expires_at_ms=None,
@@ -632,6 +657,7 @@ FAKE_CATALOG_FUNCTIONS: tuple[str, ...] = (
     "select_minute_bar_claim_state",
     "steal_or_retry_minute_bar",
     "select_coverage_minute_bars",
+    "select_minute_capture_times",
     "claim_aggregated_bar_artifact",
     "select_complete_aggregated_bar_artifact",
     "claim_corp_action_artifact",

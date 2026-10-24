@@ -222,10 +222,7 @@
     <!-- Verdict hero — decide-for-me summary up top -->
     @if (verdictAnalysis(); as va) {
       <div class="verdict-hero-wrap mb-4">
-        <app-indicator-verdict-hero
-          [analysis]="va"
-          (cta)="onVerdictCta($event)"
-        />
+        <app-indicator-verdict-hero [analysis]="va" />
       </div>
     }
 
@@ -292,14 +289,6 @@
 
           <!-- Actions -->
           <div class="hero-actions">
-            <button class="big-action primary" disabled pTooltip="Pre-flight check not wired in v1" tooltipPosition="left">
-              <span class="big-action-title">Send to Pre-flight</span>
-              <span class="big-action-sub">{{ best.horizon }}-bar · {{ res.display_name }} · <app-asset-identity [symbol]="res.ticker" size="sm" /></span>
-            </button>
-            <button class="big-action" disabled pTooltip="Save to tested indicators not wired in v1" tooltipPosition="left">
-              <span class="big-action-title">Save to tested indicators</span>
-              <span class="big-action-sub">Persist verdict + params</span>
-            </button>
             <button class="big-action" (click)="runOnAnotherTicker()">
               <span class="big-action-title">Run on another ticker</span>
               <span class="big-action-sub">MSFT · GOOGL · NVDA</span>

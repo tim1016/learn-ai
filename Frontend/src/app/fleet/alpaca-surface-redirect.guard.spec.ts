@@ -1,6 +1,6 @@
 import { Component } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import { provideRouter, Router } from '@angular/router';
+import { NavigationEnd, provideRouter, Router } from '@angular/router';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { alpacaSurfaceRedirectGuard } from './alpaca-surface-redirect.guard';
@@ -16,37 +16,44 @@ describe('alpacaSurfaceRedirectGuard', () => {
     TestBed.configureTestingModule({
       providers: [
         provideRouter([
-          { path: 'desk', canActivate: [alpacaSurfaceRedirectGuard], component: RouteStubComponent },
-          { path: 'brokers/alpaca/bots', component: RouteStubComponent },
-          { path: 'brokers/alpaca/gallery', component: RouteStubComponent },
+          { path: 'brokers/alpaca', canActivate: [alpacaSurfaceRedirectGuard], component: RouteStubComponent },
         ]),
       ],
     });
     router = TestBed.inject(Router);
   });
 
-  it('redirects the retired surface hint bookmarks to the real chooser routes', async () => {
-    await router.navigateByUrl('/desk?surface=bots');
-    expect(router.url).toBe('/brokers/alpaca/bots');
+  async function landed(url: string): Promise<string[]> {
+    const visited: string[] = [];
+    router.events.subscribe((event) => {
+      if (event instanceof NavigationEnd) visited.push(event.urlAfterRedirects);
+    });
+    await router.navigateByUrl(url);
+    return visited;
+  }
 
-    await router.navigateByUrl('/desk?surface=gallery');
-    expect(router.url).toBe('/brokers/alpaca/gallery');
-  });
+  it.each(['bots', 'gallery'])(
+    'sends the retired ?surface=%s bookmark straight to the account list, never through a chooser page',
+    async (surface) => {
+      expect(await landed(`/brokers/alpaca?surface=${surface}`)).toEqual(['/brokers/alpaca']);
+    },
+  );
 
   it.each([
-    ['carries co-traveling query parameters through the redirect, never the retired lens',
-      '/desk?surface=bots&deploy=&lens=operator', '/brokers/alpaca/bots?deploy='],
-    ['drops a retired ?lens= from a desk URL it otherwise leaves alone', '/desk?lens=operator&deploy=', '/desk?deploy='],
-  ])('drops the retired ?lens=: %s', async (_name, url, expected) => {
-    await router.navigateByUrl(url);
-    expect(router.url).toBe(expected);
+    [
+      'carries the deploy intent, its strategy, a qualification handoff and the fragment through the redirect, never the retired lens',
+      '/brokers/alpaca?surface=bots&deploy=&strategy=momentum&golden_qualification=abc&lens=operator#start',
+      '/brokers/alpaca?deploy=&strategy=momentum&golden_qualification=abc#start',
+    ],
+    ['drops a retired ?lens= from the list URL it otherwise leaves alone', '/brokers/alpaca?lens=operator&deploy=', '/brokers/alpaca?deploy='],
+  ])('%s', async (_name, url, expected) => {
+    const visited = await landed(url);
+
+    expect(visited).toEqual([expected]);
   });
 
-  it('leaves every other desk URL alone, including unknown surface values', async () => {
-    await router.navigateByUrl('/desk?deploy=');
-    expect(router.url).toBe('/desk?deploy=');
-
-    await router.navigateByUrl('/desk?surface=nonsense');
-    expect(router.url).toBe('/desk?surface=nonsense');
+  it('leaves every other list URL alone, including unknown surface values', async () => {
+    expect(await landed('/brokers/alpaca?deploy=')).toEqual(['/brokers/alpaca?deploy=']);
+    expect(await landed('/brokers/alpaca?surface=nonsense')).toEqual(['/brokers/alpaca?surface=nonsense']);
   });
 });

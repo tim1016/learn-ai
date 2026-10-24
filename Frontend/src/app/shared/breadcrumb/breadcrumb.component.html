@@ -1,0 +1,15 @@
+@if (trail().length > 0) {
+  <nav class="breadcrumb" aria-label="Breadcrumb">
+    <ol>
+      @for (crumb of trail(); track $index) {
+        <li>
+          @if (crumb.route; as route) {
+            <a [routerLink]="route" [queryParams]="crumb.queryParams">{{ crumb.label }}</a>
+          } @else {
+            <span>{{ crumb.label }}</span>
+          }
+        </li>
+      }
+    </ol>
+  </nav>
+}

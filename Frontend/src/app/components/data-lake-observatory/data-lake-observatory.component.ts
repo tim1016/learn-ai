@@ -9,6 +9,7 @@ import {
   viewChild,
 } from '@angular/core';
 
+import { HowThisWorksLinkComponent } from '../../shared/help/how-this-works-link.component';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 import { AssetIdentityComponent } from '../../shared/asset-identity/asset-identity.component';
 import { formatTimestampDisplay } from '../../shared/timestamp/timestamp-display';
@@ -114,6 +115,7 @@ function tradingDateAt(ms: number): string {
   styleUrl: './data-lake-observatory.component.scss',
   imports: [
     PageHeaderComponent,
+    HowThisWorksLinkComponent,
     AssetIdentityComponent,
     ArtifactInspectorDrawerComponent,
     CoverageHeatmapComponent,

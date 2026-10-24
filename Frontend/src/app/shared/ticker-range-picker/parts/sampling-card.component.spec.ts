@@ -56,11 +56,14 @@ describe('SamplingCardComponent', () => {
     expect(changes).toEqual([{ multiplier: 15 }]);
   });
 
-  it('setSession to extended is ignored when sessionMode=disabled', () => {
-    fixture.componentRef.setInput('sessionMode', 'disabled');
+  it('offers Extended hours as disabled, with the reason beside it, and never reports it chosen', () => {
     fixture.detectChanges();
+    const ext = Array.from<HTMLButtonElement>(fixture.nativeElement.querySelectorAll('.session-btn'))
+      .find((b) => b.textContent?.trim() === 'Ext');
+    expect.soft(ext?.disabled, 'the Ext button is disabled').toBe(true);
+    expect.soft(fixture.nativeElement.querySelector('[data-testid="session-reason"]')?.textContent).toContain('RTH only');
     component.setSession('extended');
-    expect(changes).toEqual([]);
+    expect.soft(changes).toEqual([]);
   });
 
   it('hides the entire session group when sessionMode=hidden', () => {
