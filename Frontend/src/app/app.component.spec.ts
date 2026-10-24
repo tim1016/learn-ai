@@ -89,6 +89,7 @@ describe('AppComponent', () => {
     const nav = fixture.nativeElement.querySelector('[data-shell-slot="nav"]');
     expect.soft(nav?.querySelector('app-menubar'), 'renders the app menubar inside the top bar').toBeTruthy();
     expect.soft(fixture.nativeElement.querySelector('.shell > app-top-bar'), 'renders the universal top bar').toBeTruthy();
+    expect.soft(fixture.nativeElement.querySelector('[data-shell-slot="help"] app-help-index'), 'offers the help index in the top bar').toBeTruthy();
     expect.soft(fixture.nativeElement.querySelector('app-page-body'), 'renders the page body').toBeTruthy();
     expect.soft(TestBed.inject(Title).getTitle(), 'applies the fallback browser title').toBe('Botasur');
   });

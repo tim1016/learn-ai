@@ -4,6 +4,7 @@ import { ActivatedRouteSnapshot, RouterOutlet } from '@angular/router';
 import { Toast } from 'primeng/toast';
 import { AlpacaLiveBannerComponent } from './shell/alpaca-live-banner.component';
 import { LaneAttentionBellComponent } from './shell/lane-attention-bell.component';
+import { HelpIndexComponent } from './shell/help-index.component';
 import { IbkrFeedPillComponent } from './shell/ibkr-feed-pill.component';
 import { MarkdownDrawerHostComponent } from './shared/markdown-drawer/markdown-drawer-host.component';
 import { AlpacaLiveVerdictService, verdictModeChip } from './services/alpaca-live-verdict.service';
@@ -34,6 +35,7 @@ import { laneDisplayNameText } from './fleet/fleet-directory.types';
     AppMenubarComponent,
     AlpacaLiveBannerComponent,
     LaneAttentionBellComponent,
+    HelpIndexComponent,
     IbkrFeedPillComponent,
     TopBarComponent,
     PageBodyComponent,
@@ -132,6 +134,7 @@ import { laneDisplayNameText } from './fleet/fleet-directory.types';
               <app-alpaca-live-banner [lane]="null" />
             }
           </nav>
+          <app-help-index shell-help />
         </app-top-bar>
       }
       <main class="main" [class.main--sticky-content]="hasStickyContent()">

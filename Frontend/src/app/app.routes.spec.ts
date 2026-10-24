@@ -21,6 +21,7 @@ import { BotPanelShellComponent } from './components/broker/v2-panel/panel-shell
 import { EntryComponent } from './components/entry/entry.component';
 import { OptionsBacktestPageComponent } from './components/options-backtest/options-backtest-page.component';
 import { accountWorkspaceFixRoute, type AccountWorkspaceFixDestination } from './fleet/account-workspace';
+import { HELP_DOCUMENTS } from './shared/help/help-documents';
 import { routes } from './app.routes';
 
 describe('routes', () => {
@@ -38,6 +39,14 @@ describe('routes', () => {
       redirectTo: 'strategy-lab/docs',
       pathMatch: 'full',
     });
+  });
+
+  it('routes every served document, so the help index and the Documentation menu have no dead link', () => {
+    const paths = new Set(routes.map((route) => route.path));
+
+    for (const document of HELP_DOCUMENTS) {
+      expect.soft(paths.has(document.route.slice(1)), `${document.title} is served at ${document.route}`).toBe(true);
+    }
   });
 
   it.each([
