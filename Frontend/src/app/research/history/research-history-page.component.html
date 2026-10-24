@@ -1,0 +1,130 @@
+<app-workspace-header title="History" [purpose]="purpose" />
+
+<section class="history" aria-label="Research history">
+  <div class="history-filters" role="group" aria-label="Filter history">
+    <label class="history-filters__field">
+      <span>Kind</span>
+      <select #type (change)="filter('type', type.value)">
+        <option value="" [selected]="query().type === null">Any kind</option>
+        @for (choice of typeChoices; track choice.id) {
+          <option [value]="choice.id" [selected]="query().type === choice.id">{{ choice.label }}</option>
+        }
+      </select>
+    </label>
+    <label class="history-filters__field">
+      <span>Status</span>
+      <select #status (change)="filter('status', status.value)">
+        <option value="" [selected]="query().status === null">Any status</option>
+        @for (choice of statusChoices; track choice.id) {
+          <option [value]="choice.id" [selected]="query().status === choice.id">{{ choice.label }}</option>
+        }
+      </select>
+    </label>
+    <div class="history-filters__symbol">
+      <app-symbol-picker
+        appearance="field"
+        label="Symbol or universe member"
+        [universe]="symbolUniverse()"
+        [symbol]="query().symbol ?? ''"
+        (symbolChange)="filter('symbol', $event)"
+      />
+      @if (query().symbol) {
+        <button type="button" class="history-filters__clear" (click)="filter('symbol', null)">Any symbol</button>
+      }
+    </div>
+    <div class="history-filters__dates">
+      <app-date-range-picker
+        label="Saved between"
+        [from]="query().from ?? ''"
+        [to]="query().to ?? ''"
+        [sessionsOnly]="false"
+        [ranges]="noRanges"
+        (changed)="chooseDates($event)"
+      />
+    </div>
+  </div>
+
+  @if (notice(); as state) {
+    <app-workspace-state-block [state]="state" (actionTriggered)="retry()" />
+  }
+
+  <p #listStatus class="history__status" tabindex="-1" role="status">{{ statusText() }}</p>
+
+  @if (entries().length > 0) {
+    <div class="history__list" [attr.aria-busy]="history.isLoading()">
+      <table class="history-table">
+        <caption class="history-table__sr-only">Saved studies and runs, newest first</caption>
+        <thead>
+          <tr>
+            <th scope="col">Kind</th>
+            <th scope="col">What it asked</th>
+            <th scope="col">Instrument or universe</th>
+            <th scope="col">Window</th>
+            <th scope="col">Status</th>
+            <th scope="col">Saved</th>
+            <th scope="col">Finished</th>
+            <th scope="col">Data</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (row of entries(); track row.key) {
+            @let entry = row.entry;
+            <tr class="history-table__row" [attr.data-type]="entry.type">
+              <td>{{ row.kind }}</td>
+              <td>
+                @if (row.link; as link) {
+                  <a class="history-table__question" [routerLink]="link">{{ entry.question }}</a>
+                } @else {
+                  <span class="history-table__question-text">{{ entry.question }}</span>
+                }
+                @if (entry.headline; as headline) {
+                  <span class="history-table__meta">{{ headline }}</span>
+                }
+                @if (!row.link) {
+                  <span class="history-table__meta">Headline only: no more of it was saved.</span>
+                }
+                <span class="history-table__meta">
+                  ID <code class="history-table__id">{{ entry.native_id }}</code>
+                  @if (row.parent; as parent) {
+                    · from <a class="history-table__parent" [routerLink]="parent.link">{{ parent.label }}</a>
+                  }
+                </span>
+              </td>
+              <td>{{ row.symbols || notRecorded }}</td>
+              <td>
+                @if (entry.window; as window) {
+                  <app-timestamp-display [value]="window.start_ms" mode="date-et" granularity="date" />
+                  to
+                  <app-timestamp-display [value]="window.end_ms" mode="date-et" granularity="date" />
+                } @else {
+                  {{ notRecorded }}
+                }
+              </td>
+              <td>
+                {{ row.status }}
+                @if (entry.status_detail; as detail) {
+                  <span class="history-table__meta">{{ detail }}</span>
+                }
+              </td>
+              <td><app-timestamp-display [value]="entry.created_at_ms" mode="local" /></td>
+              <td><app-timestamp-display [value]="entry.completed_at_ms" mode="local" [fallback]="notRecorded" /></td>
+              <td>{{ entry.provenance ?? notRecorded }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+
+  @if (shown(); as page) {
+    @if (page.total > 0) {
+      <nav class="history__pages" aria-label="History pages">
+        <button type="button" [disabled]="page.page <= 1" (click)="goToPage(page.page - 1)">Newer</button>
+        <button type="button" [disabled]="page.page >= pageCount()" (click)="goToPage(page.page + 1)">Older</button>
+        @if (entries().length === 0) {
+          <button type="button" (click)="goToPage(pageCount())">Last page</button>
+        }
+      </nav>
+    }
+  }
+</section>

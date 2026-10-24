@@ -1,4 +1,6 @@
-"""The experiment history against the real ``"ResearchExperiments"`` / ``"SignalExperiments"`` / ``"Tickers"`` tables.
+"""The experiment tables against the real ``"ResearchExperiments"`` / ``"SignalExperiments"`` / ``"Tickers"`` tables.
+
+A signal report is served by its experiment's id, and both tables are two stores of the Research History.
 
 These run only against a database attested as disposable (``POSTGRES_URL_IS_EPHEMERAL=1``) and skip without one. Every
 test seeds tickers of its own (a symbol made from the test's tag); removing them removes their experiments with them,
@@ -8,9 +10,10 @@ as the tables' foreign keys cascade.
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import asyncpg
@@ -21,6 +24,8 @@ from httpx import ASGITransport
 from app.config import settings
 from app.data_lake import catalog_client
 from app.main import app
+from app.research.history.registry import default_history_sources
+from app.routers.research_history import get_history_sources
 from tests._helpers.stored_signal_report import a_busy_signal_report, served, stored_text
 from tests.research.conftest import second_conn as second_conn
 from tests.research.conftest import unique as unique
@@ -142,90 +147,6 @@ async def _signal_row(
     )
 
 
-async def test_a_tickers_research_experiments_come_newest_first_and_only_its_own(
-    client: httpx.AsyncClient, db: asyncpg.Connection, tickers: Tickers
-) -> None:
-    oldest = await _research_row(db, tickers.id, "rsi_14", OLDEST)
-    middle = await _research_row(db, tickers.id, "macd", MIDDLE, PassedValidation=True, IsStationary=False)
-    newest = await _research_row(db, tickers.id, "rsi_14", NEWEST)
-    tied = await _research_row(db, tickers.id, "ema_20", NEWEST)
-    await _research_row(db, tickers.other_id, "rsi_14", NEWEST)
-
-    response = await client.get(f"{BASE}/experiments", params={"ticker": tickers.symbol.lower()})
-
-    assert response.status_code == 200, response.text
-    rows = response.json()
-    # A tie on the creation instant falls back to the newer id, so the order is the same on every call.
-    assert [row["id"] for row in rows] == [tied, newest, middle, oldest]
-    assert {row["ticker"] for row in rows} == {tickers.symbol}
-    assert rows[3] == {
-        "id": oldest,
-        "ticker": tickers.symbol,
-        "feature_name": "rsi_14",
-        "start_date": "2025-01-02",
-        "end_date": "2025-06-30",
-        "bars_used": 48_750,
-        "mean_ic": 0.12345678,
-        "ic_t_stat": 2.5,
-        "ic_p_value": 0.012,
-        "adf_p_value": 0.001,
-        "kpss_p_value": 0.4,
-        "is_stationary": True,
-        "passed_validation": False,
-        "monotonicity_ratio": 0.8,
-        "is_monotonic": True,
-        "created_at_ms": OLDEST_MS,
-    }
-    assert (rows[2]["created_at_ms"], rows[2]["passed_validation"], rows[2]["is_stationary"]) == (
-        MIDDLE_MS,
-        True,
-        False,
-    )
-    assert rows[1]["created_at_ms"] == NEWEST_MS
-
-
-async def test_a_ticker_with_no_experiments_has_an_empty_list(client: httpx.AsyncClient, tickers: Tickers) -> None:
-    for path in ("experiments", "signal-experiments"):
-        response = await client.get(f"{BASE}/{path}", params={"ticker": tickers.symbol})
-        assert (response.status_code, response.json()) == (200, [])
-    unknown = await client.get(f"{BASE}/experiments", params={"ticker": "NOSUCHTICKER"})
-    assert (unknown.status_code, unknown.json()) == (200, [])
-
-
-async def test_a_tickers_signal_experiments_come_newest_first_with_their_headlines(
-    client: httpx.AsyncClient, db: asyncpg.Connection, tickers: Tickers
-) -> None:
-    oldest = await _signal_row(
-        db, tickers.id, "momentum_5m", OLDEST, OverallGrade="F", StatusLabel="Exploratory", OverallPassed=False
-    )
-    newest = await _signal_row(db, tickers.id, "momentum_5m", NEWEST)
-    await _signal_row(db, tickers.other_id, "momentum_5m", MIDDLE)
-
-    response = await client.get(f"{BASE}/signal-experiments", params={"ticker": tickers.symbol})
-
-    assert response.status_code == 200, response.text
-    rows = response.json()
-    assert [row["id"] for row in rows] == [newest, oldest]
-    assert rows[1] == {
-        "id": oldest,
-        "ticker": tickers.symbol,
-        "feature_name": "momentum_5m",
-        "start_date": "2025-01-02",
-        "end_date": "2025-06-30",
-        "bars_used": 48_750,
-        "overall_grade": "F",
-        "status_label": "Exploratory",
-        "overall_passed": False,
-        "mean_oos_sharpe": 0.65,
-        "best_threshold": 1.0,
-        "best_cost_bps": 2.5,
-        "flip_sign": False,
-        "regime_gate_enabled": True,
-        "created_at_ms": OLDEST_MS,
-    }
-    assert (rows[0]["created_at_ms"], rows[0]["overall_grade"]) == (NEWEST_MS, "B")
-
-
 async def test_a_stored_report_is_served_whole_by_the_experiments_id(
     client: httpx.AsyncClient, db: asyncpg.Connection, tickers: Tickers
 ) -> None:
@@ -265,3 +186,134 @@ async def test_a_report_no_row_has_is_a_404(client: httpx.AsyncClient) -> None:
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "SIGNAL_EXPERIMENT_NOT_FOUND"
+
+
+# ── The Research History over these two tables ─────────────────────
+
+HISTORY = "/api/research/history"
+JAN_2_2025_ET, JUN_30_2025_ET = 1_735_794_000_000, 1_751_256_000_000
+
+
+@pytest.fixture
+def history_over_no_files(tmp_path: Path) -> Iterator[None]:
+    """The real stores, with the file stores pointed at an artifacts root that holds nothing."""
+    app.dependency_overrides[get_history_sources] = lambda: default_history_sources(tmp_path)
+    yield
+    app.dependency_overrides.pop(get_history_sources, None)
+
+
+async def _history(client: httpx.AsyncClient, **params: Any) -> dict[str, Any]:
+    response = await client.get(HISTORY, params=params)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+async def test_both_tables_page_as_one_history_with_ties_inside_a_millisecond_broken_by_id(
+    client: httpx.AsyncClient, db: asyncpg.Connection, tickers: Tickers, history_over_no_files: None
+) -> None:
+    same = datetime(2026, 2, 3, 4, 5, 6, 700_000, tzinfo=UTC)
+    # Two instants inside one millisecond. The store orders them by their microseconds (the later first); the shared
+    # order compares milliseconds, so the lower id must come first or a merge of pages would repeat or skip a row.
+    early, late = datetime(2026, 2, 3, 4, 5, 7, 123_100, tzinfo=UTC), datetime(2026, 2, 3, 4, 5, 7, 123_900, tzinfo=UTC)
+    research = [await _research_row(db, tickers.id, f"f{i}", when) for i, when in enumerate([same, same, early, late])]
+    signal = [await _signal_row(db, tickers.id, f"s{i}", when) for i, when in enumerate([same, early, late])]
+    await _research_row(db, tickers.other_id, "other", same)
+
+    expected = [
+        ("feature-experiment", research[2]),
+        ("feature-experiment", research[3]),
+        ("signal-report", signal[1]),
+        ("signal-report", signal[2]),
+        ("feature-experiment", research[0]),
+        ("feature-experiment", research[1]),
+        ("signal-report", signal[0]),
+    ]
+    seen: list[tuple[str, int]] = []
+    for page in (1, 2, 3, 4):
+        body = await _history(client, symbol=tickers.symbol.lower(), page=page, page_size=2)
+        assert body["total"] == 7
+        seen.extend((e["type"], int(e["native_id"])) for e in body["entries"])
+
+    assert seen == expected
+    everything = await _history(client, symbol=tickers.symbol, page_size=100)
+    assert [(e["type"], int(e["native_id"])) for e in everything["entries"]] == expected
+    assert {e["created_at_ms"] for e in everything["entries"]} == {1_770_091_506_700, 1_770_091_507_123}
+
+
+async def test_an_experiment_reads_as_its_store_holds_it_and_nothing_more(
+    client: httpx.AsyncClient, db: asyncpg.Connection, tickers: Tickers, history_over_no_files: None
+) -> None:
+    feature = await _research_row(db, tickers.id, "rsi_14", OLDEST)
+    signal = await _signal_row(db, tickers.id, "momentum_5m", NEWEST, OverallGrade="F", StatusLabel="Exploratory")
+
+    body = await _history(client, symbol=tickers.symbol)
+
+    by_type = {e["type"]: e for e in body["entries"]}
+    assert by_type["feature-experiment"] == {
+        "type": "feature-experiment",
+        "native_id": str(feature),
+        "question": f"Does rsi_14 predict the next move of {tickers.symbol}?",
+        "symbols": [tickers.symbol],
+        "window": {"start_ms": JAN_2_2025_ET, "end_ms": JUN_30_2025_ET},
+        "status": "completed",
+        "status_detail": None,
+        "created_at_ms": OLDEST_MS,
+        "completed_at_ms": None,
+        "provenance": None,
+        "headline": "Mean IC 0.1235, t-stat 2.50; did not pass validation; 48,750 bars",
+        "parent": None,
+    }
+    assert by_type["signal-report"]["native_id"] == str(signal)
+    assert by_type["signal-report"]["headline"] == "Grade F (Exploratory); mean OOS Sharpe 0.65; best threshold 1; 48,750 bars"
+    assert by_type["signal-report"]["created_at_ms"] == NEWEST_MS
+    assert by_type["signal-report"]["provenance"] is None and by_type["signal-report"]["completed_at_ms"] is None
+
+
+async def test_the_symbol_filter_offers_every_symbol_in_range_and_narrows_only_the_entries(
+    client: httpx.AsyncClient, db: asyncpg.Connection, tickers: Tickers, history_over_no_files: None
+) -> None:
+    await _research_row(db, tickers.id, "rsi_14", OLDEST)
+    await _signal_row(db, tickers.other_id, "momentum_5m", NEWEST)
+
+    body = await _history(client, symbol=tickers.symbol)
+
+    assert body["total"] == 1
+    assert {tickers.symbol, tickers.other_symbol} <= set(body["symbols"])
+
+
+async def test_a_status_other_than_completed_matches_none_of_the_legacy_rows(
+    client: httpx.AsyncClient, db: asyncpg.Connection, tickers: Tickers, history_over_no_files: None
+) -> None:
+    await _research_row(db, tickers.id, "rsi_14", OLDEST)
+    await _signal_row(db, tickers.id, "momentum_5m", NEWEST)
+
+    failed = await _history(client, symbol=tickers.symbol, status="failed")
+    completed = await _history(client, symbol=tickers.symbol, status="completed")
+
+    assert (failed["total"], failed["entries"], failed["partial"]) == (0, [], False)
+    assert completed["total"] == 2
+
+
+async def test_the_time_filter_is_half_open_on_the_millisecond_the_rows_are_ordered_by(
+    client: httpx.AsyncClient, db: asyncpg.Connection, tickers: Tickers, history_over_no_files: None
+) -> None:
+    oldest = await _research_row(db, tickers.id, "a", OLDEST)
+    middle = await _research_row(db, tickers.id, "b", MIDDLE)
+    newest = await _research_row(db, tickers.id, "c", NEWEST)
+
+    from_middle = await _history(client, symbol=tickers.symbol, created_from_ms=MIDDLE_MS)
+    before_middle = await _history(client, symbol=tickers.symbol, created_before_ms=MIDDLE_MS)
+
+    assert [int(e["native_id"]) for e in from_middle["entries"]] == [newest, middle]
+    assert [int(e["native_id"]) for e in before_middle["entries"]] == [oldest]
+
+
+async def test_a_stored_window_that_is_not_a_date_reads_as_not_recorded_and_the_row_stays(
+    client: httpx.AsyncClient, db: asyncpg.Connection, tickers: Tickers, history_over_no_files: None
+) -> None:
+    row = await _research_row(db, tickers.id, "rsi_14", OLDEST, StartDate="last spring")
+
+    body = await _history(client, symbol=tickers.symbol)
+
+    assert [(e["native_id"], e["window"]) for e in body["entries"]] == [(str(row), None)]
+    assert body["total"] == 1

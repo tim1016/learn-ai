@@ -13,3 +13,7 @@ the `int64 ms UTC` timestamp convention; they are not golden trading results.
 - `golden-search-importance-order-v1.json` pins the Golden Search search order
   (ADR 0074 decision 10) that Python's `protocol.by_importance` freezes and
   Angular's `byImportance` shows, so the two cannot drift apart.
+- `signal-engine-job-result-v1.json` is the result the Signal study's job delivers
+  (`_serialize_signal_report` over a report with every field set). Python tests that
+  the serializer still writes it, and the Angular runner's mapper reads it, so a
+  field's shape cannot change on one side only.

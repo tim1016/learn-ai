@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.research.study_records.models import RecordId
 from app.schemas.ticker_request import TickerRequest
 
 StrengthLabel = Literal["Noise", "Weak", "Moderate", "Strong"]
@@ -52,6 +53,10 @@ class IndicatorReliabilityRequest(TickerRequest):
     include_slope: bool = Field(
         default=False,
         description="Also compute IC on indicator slope (1-bar change)",
+    )
+    rerun_of: RecordId | None = Field(
+        default=None,
+        description="The saved run this one was prefilled from (the History's Rerun); lineage only, never an input.",
     )
 
 

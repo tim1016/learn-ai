@@ -114,10 +114,6 @@ export interface StrategyRunResponse {
   result: BacktestRunResult;
 }
 
-export interface StrategyRunListResponse {
-  runs: RunLedger[];
-}
-
 /**
  * Request payload for `POST /api/research/strategy-runs`. Mirrors the
  * Pydantic `StrategyRunRequest` model. The embedded `spec` is the full
@@ -138,15 +134,4 @@ export interface StrategyRunRequest {
   strategy_spec_id?: string;
   parent_run_id?: string | null;
   parent_spec_hash?: string | null;
-}
-
-/** Filters mirror the FastAPI listing endpoint's query params. */
-export interface StrategyRunListFilters {
-  spec_hash?: string;
-  symbol?: string;
-  status?: RunStatus;
-  parent_run_id?: string;
-  parent_spec_hash?: string;
-  since_ms?: number;
-  limit?: number;
 }

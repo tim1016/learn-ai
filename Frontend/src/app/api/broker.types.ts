@@ -5746,26 +5746,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/research/experiments": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Research Experiments
-         * @description A ticker's stored feature-research experiments, newest first.
-         */
-        get: operations["list_research_experiments_api_research_experiments_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/research/golden-option-setups": {
         parameters: {
             query?: never;
@@ -6353,6 +6333,26 @@ export interface paths {
          * @description The named cells' daily curves: cumulative return and fall from peak at each session close (#2935).
          */
         get: operations["get_grid_search_cell_curves_api_research_grid_search__search_id__cells_curves_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Research History
+         * @description One page of the merged history, newest first, with the count the pages add up to.
+         */
+        get: operations["list_research_history_api_research_history_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -7185,26 +7185,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/research/signal-experiments": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Signal Experiments
-         * @description A ticker's stored signal-engine experiments, newest first, each as its headline without the full report.
-         */
-        get: operations["list_signal_experiments_api_research_signal_experiments_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/research/signal-experiments/{experiment_id}/report": {
         parameters: {
             query?: never;
@@ -7402,6 +7382,26 @@ export interface paths {
          *     actionable.
          */
         get: operations["get_run_api_research_strategy_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/study-records/{study}/{record_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Study Record
+         * @description One recorded run. A record that cannot be read is a 500 that says so, never a partial one.
+         */
+        get: operations["get_study_record_api_research_study_records__study___record_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -12463,6 +12463,8 @@ export interface components {
              * @default 1
              */
             multiplier?: number;
+            /** Rerunof */
+            rerunOf?: string | null;
             /**
              * Session
              * @default rth
@@ -14958,6 +14960,8 @@ export interface components {
              * @default 1
              */
             multiplier?: number;
+            /** Rerunof */
+            rerunOf?: string | null;
             /**
              * Session
              * @default rth
@@ -20913,6 +20917,11 @@ export interface components {
              * @default 1
              */
             multiplier?: number;
+            /**
+             * Rerun Of
+             * @description The saved run this one was prefilled from (the History's Rerun); lineage only, never an input.
+             */
+            rerun_of?: string | null;
             /**
              * Session
              * @default rth
@@ -28644,6 +28653,11 @@ export interface components {
              */
             iv_series?: Record<string, never>[] | null;
             /**
+             * Rerun Of
+             * @description The saved run this one was prefilled from (the History's Rerun); lineage only, never an input.
+             */
+            rerun_of?: string | null;
+            /**
              * Session
              * @description Session for the HF RV estimator. ETH = 04:00-20:00 ET (default), RTH = 09:30-16:00 ET.
              * @default ETH
@@ -29290,42 +29304,160 @@ export interface components {
             detail: components["schemas"]["ResearchExperimentRefusal"];
         };
         /**
-         * ResearchExperimentResponse
-         * @description One stored feature-research (information-coefficient) experiment.
+         * ResearchHistoryEntry
+         * @description One stored study or run, as its own store describes it.
          */
-        ResearchExperimentResponse: {
-            /** Adf P Value */
-            adf_p_value: number;
-            /** Bars Used */
-            bars_used: number;
+        ResearchHistoryEntry: {
+            /**
+             * Completed At Ms
+             * @description ``null`` when the store records no completion time.
+             */
+            completed_at_ms: number | null;
             /** Created At Ms */
             created_at_ms: number;
-            /** End Date */
-            end_date: string;
-            /** Feature Name */
-            feature_name: string;
-            /** Ic P Value */
-            ic_p_value: number;
-            /** Ic T Stat */
-            ic_t_stat: number;
-            /** Id */
-            id: number;
-            /** Is Monotonic */
-            is_monotonic: boolean;
-            /** Is Stationary */
-            is_stationary: boolean;
-            /** Kpss P Value */
-            kpss_p_value: number;
-            /** Mean Ic */
-            mean_ic: number;
-            /** Monotonicity Ratio */
-            monotonicity_ratio: number;
-            /** Passed Validation */
-            passed_validation: boolean;
-            /** Start Date */
-            start_date: string;
-            /** Ticker */
-            ticker: string;
+            /**
+             * Headline
+             * @description The stored headline result, for a store whose list row holds one.
+             */
+            headline: string | null;
+            /** Native Id */
+            native_id: string;
+            /** @description The record this one was derived from, when the store links one. */
+            parent: components["schemas"]["ResearchHistoryRef"] | null;
+            /**
+             * Provenance
+             * @description The inputs and data it ran on, as the store recorded them; ``null`` when none.
+             */
+            provenance: string | null;
+            /**
+             * Question
+             * @description What this record asked, in a sentence built from what the store holds.
+             */
+            question: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "completed" | "partial" | "failed" | "cancelled" | "unreadable";
+            /**
+             * Status Detail
+             * @description Why it failed, or what part failed; ``null`` when none was recorded.
+             */
+            status_detail: string | null;
+            /**
+             * Symbols
+             * @description The instrument (one symbol) or the universe (several) it covered; empty when not recorded.
+             */
+            symbols: string[];
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "spec-run" | "walk-forward" | "monte-carlo" | "baseline" | "signal-report" | "feature-experiment" | "feature-study" | "signal-study" | "cross-sectional-study" | "indicator-reliability" | "realized-vs-iv";
+            /** @description The requested window; ``null`` when not recorded. */
+            window: components["schemas"]["ResearchHistoryWindow"] | null;
+        };
+        /**
+         * ResearchHistoryPage
+         * @description One page of the merged history, with the count it is a page of.
+         */
+        ResearchHistoryPage: {
+            /** Entries */
+            entries: components["schemas"]["ResearchHistoryEntry"][];
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+            /**
+             * Partial
+             * @description A queried store was unavailable or held unreadable records: ``total`` and the entries leave them out.
+             */
+            partial: boolean;
+            /** Sources */
+            sources: components["schemas"]["ResearchHistorySource"][];
+            /**
+             * Symbols
+             * @description Every symbol in the stores read, within the time filter, for the symbol filter to offer.
+             */
+            symbols: string[];
+            /**
+             * Total
+             * @description Matching records across every ``read`` store; the pages add up to exactly this.
+             */
+            total: number;
+        };
+        /**
+         * ResearchHistoryRef
+         * @description Another record, named the only way a record can be named: its type and its native id.
+         */
+        ResearchHistoryRef: {
+            /** Native Id */
+            native_id: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "spec-run" | "walk-forward" | "monte-carlo" | "baseline" | "signal-report" | "feature-experiment" | "feature-study" | "signal-study" | "cross-sectional-study" | "indicator-reliability" | "realized-vs-iv";
+        };
+        /** ResearchHistoryRefusal */
+        ResearchHistoryRefusal: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+            /** Sources */
+            sources: components["schemas"]["ResearchHistorySource"][];
+        };
+        /**
+         * ResearchHistoryRefusalBody
+         * @description The 503 body: FastAPI wraps an ``HTTPException`` detail as ``{"detail": ...}``.
+         */
+        ResearchHistoryRefusalBody: {
+            detail: components["schemas"]["ResearchHistoryRefusal"];
+        };
+        /**
+         * ResearchHistorySource
+         * @description What one registered store contributed to this page, so a gap is never mistaken for an empty store.
+         */
+        ResearchHistorySource: {
+            /**
+             * Error
+             * @description Why the store could not be read; ``null`` unless ``unavailable``.
+             */
+            error: string | null;
+            /** Label */
+            label: string;
+            /**
+             * State
+             * @description ``read``: counted in ``total``. ``unavailable``: failed, so absent from ``total``. ``not_queried``: left out by the type filter.
+             * @enum {string}
+             */
+            state: "read" | "unavailable" | "not_queried";
+            /**
+             * Total
+             * @description Records in this store matching the filters; ``null`` unless ``read``.
+             */
+            total: number | null;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "spec-run" | "walk-forward" | "monte-carlo" | "baseline" | "signal-report" | "feature-experiment" | "feature-study" | "signal-study" | "cross-sectional-study" | "indicator-reliability" | "realized-vs-iv";
+            /**
+             * Unreadable
+             * @description Stored records that could not be read and so are in neither ``total`` nor the entries.
+             */
+            unreadable: number;
+        };
+        /**
+         * ResearchHistoryWindow
+         * @description The window the study was asked about: the store's own start and end instants.
+         */
+        ResearchHistoryWindow: {
+            /** End Ms */
+            end_ms: number;
+            /** Start Ms */
+            start_ms: number;
         };
         /** Resolution */
         Resolution: {
@@ -30811,6 +30943,8 @@ export interface components {
              * @default true
              */
             regimeGateEnabled?: boolean;
+            /** Rerunof */
+            rerunOf?: string | null;
             /**
              * Session
              * @default rth
@@ -30919,42 +31053,6 @@ export interface components {
              */
             ticker: string;
             walk_forward: components["schemas"]["SignalReportWalkForward"] | null;
-        };
-        /**
-         * SignalExperimentResponse
-         * @description One stored signal-engine experiment: the headline of its report.
-         */
-        SignalExperimentResponse: {
-            /** Bars Used */
-            bars_used: number;
-            /** Best Cost Bps */
-            best_cost_bps: number;
-            /** Best Threshold */
-            best_threshold: number;
-            /** Created At Ms */
-            created_at_ms: number;
-            /** End Date */
-            end_date: string;
-            /** Feature Name */
-            feature_name: string;
-            /** Flip Sign */
-            flip_sign: boolean;
-            /** Id */
-            id: number;
-            /** Mean Oos Sharpe */
-            mean_oos_sharpe: number;
-            /** Overall Grade */
-            overall_grade: string;
-            /** Overall Passed */
-            overall_passed: boolean;
-            /** Regime Gate Enabled */
-            regime_gate_enabled: boolean;
-            /** Start Date */
-            start_date: string;
-            /** Status Label */
-            status_label: string;
-            /** Ticker */
-            ticker: string;
         };
         /** SignalReportAlphaDecay */
         SignalReportAlphaDecay: {
@@ -32268,6 +32366,83 @@ export interface components {
             symbols?: components["schemas"]["SymbolCoverageSpan"][];
         };
         /**
+         * StoredStudyRecord
+         * @description A finished run, read back without running anything.
+         */
+        StoredStudyRecord: {
+            /**
+             * Completed At Ms
+             * @description When it ended, whichever way it ended.
+             */
+            completed_at_ms: number;
+            /**
+             * Created At Ms
+             * @description When the run started.
+             */
+            created_at_ms: number;
+            /**
+             * Data Identity
+             * @description A digest of the data the request carried (Realized vs IV); ``null`` for a study that reads its own data.
+             */
+            data_identity: string | null;
+            /**
+             * Data Source
+             * @description The result's own provenance block, when it carried one; ``null`` reads "not recorded".
+             */
+            data_source: Record<string, never> | null;
+            /**
+             * Inputs
+             * @description What the run was asked, as its request validated it. The study's page prefills a rerun from this.
+             */
+            inputs: Record<string, never>;
+            /**
+             * Job Id
+             * @description The job that produced it; ``null`` for a synchronous study.
+             */
+            job_id: string | null;
+            /**
+             * Question
+             * @description What the run asked, in a sentence built from its inputs.
+             */
+            question: string;
+            /** Record Id */
+            record_id: string;
+            /** @description The record this run was prefilled from, when it was a rerun. */
+            rerun_of: components["schemas"]["ResearchHistoryRef"] | null;
+            /**
+             * Result
+             * @description The study's result as delivered; ``null`` when the run produced none (a failed or cancelled run).
+             */
+            result: Record<string, never> | null;
+            /**
+             * Schema Version
+             * @description The version of the record's files, for a reader that must know it.
+             */
+            schema_version: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "completed" | "partial" | "failed" | "cancelled";
+            /**
+             * Status Detail
+             * @description Why it failed or stopped, or what part of it failed; ``null`` for a clean finish.
+             */
+            status_detail: string | null;
+            /**
+             * Study
+             * @enum {string}
+             */
+            study: "feature-study" | "signal-study" | "cross-sectional-study" | "indicator-reliability" | "realized-vs-iv";
+            /**
+             * Symbols
+             * @description The instrument (one symbol) or the universe (several) it covered.
+             */
+            symbols: string[];
+            /** @description The requested window; ``null`` when not recorded. */
+            window: components["schemas"]["ResearchHistoryWindow"] | null;
+        };
+        /**
          * StrategyAnalyzeRequest
          * @description Request to analyze an options strategy.
          */
@@ -33206,6 +33381,20 @@ export interface components {
             status: string;
             /** Underlying */
             underlying: string;
+        };
+        /** StudyRecordRefusal */
+        StudyRecordRefusal: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+        };
+        /**
+         * StudyRecordRefusalBody
+         * @description The 404 and 500 body: FastAPI wraps an ``HTTPException`` detail as ``{"detail": ...}``.
+         */
+        StudyRecordRefusalBody: {
+            detail: components["schemas"]["StudyRecordRefusal"];
         };
         /** StudySummary */
         StudySummary: {
@@ -45560,38 +45749,6 @@ export interface operations {
             };
         };
     };
-    list_research_experiments_api_research_experiments_get: {
-        parameters: {
-            query: {
-                /** @description The ticker's symbol; case does not matter. */
-                ticker: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ResearchExperimentResponse"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_golden_setups_api_research_golden_option_setups_get: {
         parameters: {
             query?: {
@@ -47425,6 +47582,57 @@ export interface operations {
             };
         };
     };
+    list_research_history_api_research_history_get: {
+        parameters: {
+            query?: {
+                /** @description Only this kind of record. */
+                type?: ("spec-run" | "walk-forward" | "monte-carlo" | "baseline" | "signal-report" | "feature-experiment" | "feature-study" | "signal-study" | "cross-sectional-study" | "indicator-reliability" | "realized-vs-iv") | null;
+                /** @description Only records that covered this symbol; case does not matter. */
+                symbol?: string | null;
+                /** @description Only records that ended this way. */
+                status?: ("running" | "completed" | "partial" | "failed" | "cancelled" | "unreadable") | null;
+                /** @description Only records created at or after this instant. */
+                created_from_ms?: number | null;
+                /** @description Only records created before this instant. */
+                created_before_ms?: number | null;
+                page?: number;
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchHistoryPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchHistoryRefusalBody"];
+                };
+            };
+        };
+    };
     get_indicator_params_api_research_indicator_params__indicator_name__get: {
         parameters: {
             query?: never;
@@ -49140,38 +49348,6 @@ export interface operations {
             };
         };
     };
-    list_signal_experiments_api_research_signal_experiments_get: {
-        parameters: {
-            query: {
-                /** @description The ticker's symbol; case does not matter. */
-                ticker: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SignalExperimentResponse"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_signal_experiment_report_api_research_signal_experiments__experiment_id__report_get: {
         parameters: {
             query?: never;
@@ -49635,6 +49811,56 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_study_record_api_research_study_records__study___record_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                study: "feature-study" | "signal-study" | "cross-sectional-study" | "indicator-reliability" | "realized-vs-iv";
+                record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StoredStudyRecord"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudyRecordRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudyRecordRefusalBody"];
                 };
             };
         };

@@ -8,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { StrategyRunsService } from './strategy-runs.service';
 import type {
-  StrategyRunListResponse,
   StrategyRunResponse,
 } from './strategy-runs.types';
 import { environment } from '../../environments/environment';
@@ -96,53 +95,6 @@ describe('StrategyRunsService', () => {
 
   afterEach(() => {
     httpMock.verify();
-  });
-
-  describe('listRuns', () => {
-    it('GETs the base URL with no params when no filters are passed', async () => {
-      const mock: StrategyRunListResponse = { runs: [makeLedger()] };
-
-      const promise = service.listRuns();
-      const req = httpMock.expectOne((r) => r.url === BASE_URL);
-      expect(req.request.method).toBe('GET');
-      expect(req.request.params.keys()).toHaveLength(0);
-      req.flush(mock);
-
-      const result = await promise;
-      expect(result.runs).toHaveLength(1);
-      expect(result.runs[0]?.symbol).toBe('SPY');
-    });
-
-    it('passes every filter through as a query param', async () => {
-      const promise = service.listRuns({
-        spec_hash: 'abc',
-        symbol: 'SPY',
-        status: 'completed',
-        parent_run_id: 'parent',
-        parent_spec_hash: 'pspec',
-        since_ms: 1700000000000,
-        limit: 50,
-      });
-      const req = httpMock.expectOne((r) => r.url === BASE_URL);
-      const params = req.request.params;
-      expect(params.get('spec_hash')).toBe('abc');
-      expect(params.get('symbol')).toBe('SPY');
-      expect(params.get('status')).toBe('completed');
-      expect(params.get('parent_run_id')).toBe('parent');
-      expect(params.get('parent_spec_hash')).toBe('pspec');
-      expect(params.get('since_ms')).toBe('1700000000000');
-      expect(params.get('limit')).toBe('50');
-      req.flush({ runs: [] });
-      await promise;
-    });
-
-    it('omits filters whose value is undefined or empty', async () => {
-      const promise = service.listRuns({ symbol: 'SPY' });
-      const req = httpMock.expectOne((r) => r.url === BASE_URL);
-      expect(req.request.params.keys()).toEqual(['symbol']);
-      req.flush({ runs: [] });
-      await promise;
-    });
   });
 
   describe('getRun', () => {

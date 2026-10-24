@@ -79,7 +79,9 @@ from app.routers import (
     recency,
     research_divergence,
     research_experiments,
+    research_history,
     research_runs,
+    research_study_records,
     return_distribution,
     snapshot,
     spec_strategy,
@@ -1435,6 +1437,12 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     # Legacy experiment history the Research Lab screens still read: literal ``/experiments`` and
     # ``/signal-experiments`` segments, so nothing under ``/api/research`` can shadow them.
     app.include_router(research_experiments.router, prefix="/api/research", tags=["research-experiments"])
+    # The Research History: one typed index over the research stores (literal ``/history`` segment).
+    app.include_router(research_history.router, prefix="/api/research/history", tags=["research-history"])
+    # One recorded run of a study (#3520): the detail a History entry of a study type opens.
+    app.include_router(
+        research_study_records.router, prefix="/api/research/study-records", tags=["research-study-records"]
+    )
     # Research-pipeline walk-forward (Phase C). Registered BEFORE
     # ``research_runs`` so the literal ``/walk-forward`` segment wins
     # against the ``GET /{run_id}`` route on the parent router.

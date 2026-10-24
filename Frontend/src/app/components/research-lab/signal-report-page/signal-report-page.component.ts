@@ -7,7 +7,7 @@ import {
   OnInit,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, RouterLink } from '@angular/router';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { catchError, of, finalize } from 'rxjs';
 import { ResearchService, SignalEngineResult } from '../../../services/research.service';
@@ -18,7 +18,7 @@ import { MessageModule } from 'primeng/message';
 @Component({
   selector: 'app-signal-report-page',
   standalone: true,
-  imports: [CommonModule, SignalReportComponent, ProgressSpinnerModule, MessageModule],
+  imports: [CommonModule, RouterLink, SignalReportComponent, ProgressSpinnerModule, MessageModule],
   templateUrl: './signal-report-page.component.html',
   styleUrls: ['./signal-report-page.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,

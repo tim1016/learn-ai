@@ -1,94 +1,43 @@
-import {
-  ChangeDetectionStrategy,
-  Component,
-  computed,
-  inject,
-} from '@angular/core';
-import {
-  ActivatedRoute,
-  NavigationEnd,
-  Router,
-  RouterLink,
-  RouterLinkActive,
-  RouterOutlet,
-} from '@angular/router';
+import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
+import { ActivatedRoute, NavigationEnd, Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { filter, map } from 'rxjs/operators';
-import { HowThisWorksLinkComponent } from '../../shared/help/how-this-works-link.component';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
-import { NavGroup, RESEARCH_LAB_NAV, type StudyHelp } from './research-lab-nav.config';
+import { RESEARCH_LAB_NAV } from './research-lab-nav.config';
 
-interface NavState {
-  data: Record<string, unknown>;
-  /** Matched route config path of the deepest active route, e.g.
-   *  `'features/validate'` or `'signals/engine'`. */
-  path: string | null;
-}
-
+/**
+ * The sub-nav shell for the pages Research Lab still hosts (see
+ * `RESEARCH_LAB_NAV`). The studies it used to open on live under `/research`.
+ */
 @Component({
   selector: 'app-research-lab',
-  imports: [
-    RouterLink,
-    RouterLinkActive,
-    RouterOutlet,
-    HowThisWorksLinkComponent,
-    PageHeaderComponent,
-  ],
+  imports: [RouterLink, RouterLinkActive, RouterOutlet, PageHeaderComponent],
   templateUrl: './research-lab.component.html',
   styleUrls: ['./research-lab.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class ResearchLabComponent {
-  readonly groups = RESEARCH_LAB_NAV;
+  readonly items = RESEARCH_LAB_NAV;
 
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
 
-  /** Refreshes on every successful navigation; powers title
-   *  and which parent group's children should be shown in row 2. */
-  private readonly navState = toSignal(
+  /** Refreshes on every successful navigation; powers the title. */
+  private readonly routeData = toSignal(
     this.router.events.pipe(
       filter((e): e is NavigationEnd => e instanceof NavigationEnd),
-      map(() => this.snapshotNavState()),
+      map(() => this.snapshotRouteData()),
     ),
-    { initialValue: this.snapshotNavState() },
+    { initialValue: this.snapshotRouteData() },
   );
 
   readonly title = computed<string>(
-    () => (this.navState().data['title'] as string | undefined) ?? 'Research Lab',
+    () => (this.routeData()['title'] as string | undefined) ?? 'Research Lab',
   );
-  /** The document that explains the open study, if it has one. */
-  readonly help = computed<StudyHelp | null>(() => {
-    const path = this.navState().path;
-    return this.groups.flatMap((g) => g.items).find((item) => item.path === path)?.help ?? null;
-  });
-  /** Group whose child is currently active. Falls back to the first group
-   *  for the brief moment between landing on `/research-lab` and the
-   *  redirect to `features/validate` resolving. */
-  readonly activeGroup = computed<NavGroup>(() => {
-    const path = this.navState().path;
-    const match = this.groups.find((g) =>
-      g.items.some((item) => item.path === path),
-    );
-    return match ?? this.groups[0];
-  });
 
-  /** Click handler for a parent pill — navigates to its first child.
-   *  No-op when the clicked parent is already the active one, so
-   *  re-clicking doesn't bounce the user out of a sibling page. */
-  selectGroup(group: NavGroup): void {
-    if (group === this.activeGroup()) return;
-    const first = group.items[0];
-    if (!first) return;
-    void this.router.navigate([first.path], { relativeTo: this.route });
-  }
-
-  private snapshotNavState(): NavState {
+  private snapshotRouteData(): Record<string, unknown> {
     let r: ActivatedRoute | null = this.route;
     while (r?.firstChild) r = r.firstChild;
-    return {
-      data: r?.snapshot?.data ?? {},
-      path: r?.snapshot?.routeConfig?.path ?? null,
-    };
+    return r?.snapshot?.data ?? {};
   }
 }
