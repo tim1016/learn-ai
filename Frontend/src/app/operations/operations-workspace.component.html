@@ -1,0 +1,12 @@
+<app-workspace-header title="Operations" [purpose]="purpose">
+  @if (help(); as route) {
+    <app-how-this-works workspaceHelp [route]="route" />
+  }
+  <app-health-chips workspaceFacts />
+</app-workspace-header>
+
+<app-workspace-tab-list label="Operations" [tabs]="tabs" [activeId]="activeTab()" />
+
+<div class="operations-body">
+  <router-outlet />
+</div>

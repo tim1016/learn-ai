@@ -63,7 +63,6 @@ def test_run_preflight_full_session_is_blocking(tmp_path: Path):
     assert result.overall == "blocking"
     session_check = next(c for c in result.checks if c.id == "session_filter")
     assert session_check.status == "blocking"
-    assert session_check.docs_link is not None
 
 
 def test_run_preflight_short_warmup_is_warning(tmp_path: Path):

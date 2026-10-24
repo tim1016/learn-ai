@@ -77,7 +77,7 @@ def test_backup_restore_health_is_independent_and_actionable(job: str, receipt: 
     state = ArchiveStateDoc(version=1, jobs={job: JobReceipt(**receipt)})
     health = project_health(state, now_ms=wall_clock_ms(date(2026, 10, 21), 60), config=ArchiveSettings(ENABLED=True))
     item = health.backup if job == "backup" else health.test_restore
-    assert item.severity == expected and item.reason and health.attention
+    assert item.severity == expected and item.reason
 
 
 def test_backup_health_names_unverified_generations_and_keeps_the_recorded_failure_beside_a_missing_destination() -> None:
@@ -132,7 +132,7 @@ def test_snapshot_gap_needs_attention_while_capture_is_catching_up(gap: str) -> 
     spy, qqq, iwm = health.underlyings
     assert qqq.severity == iwm.severity == "catching_up"
     assert health.backup.severity == health.test_restore.severity == "healthy"
-    assert spy.severity == "at_risk" and spy.reason and health.attention
+    assert spy.severity == "at_risk" and spy.reason
 
 
 def test_account_probe_pins_inclusive_weekday_anniversary() -> None:

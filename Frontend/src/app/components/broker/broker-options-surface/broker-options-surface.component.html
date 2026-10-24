@@ -18,6 +18,8 @@
   />
 </app-page-header>
 
+<app-health-notice [needs]="healthNeeds" />
+
 @if (bannerState() === 'disabled') {
   <div class="disabled-banner" role="status">
     <i class="pi pi-info-circle" aria-hidden="true"></i>

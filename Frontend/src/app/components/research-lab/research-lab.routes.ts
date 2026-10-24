@@ -1,5 +1,8 @@
 import { Routes } from '@angular/router';
 
+import { dataCheckRoute } from '../../operations/data-checks/data-checks';
+import { redirectKeepingState } from '../../shell/route-redirects';
+
 export const researchLabRoutes: Routes = [
   // Detail routes retain focused content while inheriting the root application
   // shell. Listed before the research-lab child shell so their more-specific
@@ -126,23 +129,10 @@ export const researchLabRoutes: Routes = [
         data: { title: 'Recency Chart' },
       },
 
-      // Nav-invisible routes (no longer surfaced in sub-nav but still reachable)
-      {
-        path: 'inspect/data-divergence',
-        loadComponent: () =>
-          import('./data-divergence/data-divergence.component').then(
-            (m) => m.DataDivergenceComponent,
-          ),
-        data: { title: 'Data Divergence' },
-      },
-      {
-        path: 'inspect/pre-flight',
-        loadComponent: () =>
-          import('./strategy-preflight/strategy-preflight.component').then(
-            (m) => m.StrategyPreflightComponent,
-          ),
-        data: { title: 'Strategy Pre-flight' },
-      },
+      // Data divergence and Strategy pre-flight moved to Operations → Data checks.
+      // Each address goes straight there, carrying its query and fragment.
+      { path: 'inspect/data-divergence', redirectTo: redirectKeepingState(dataCheckRoute('divergence')), pathMatch: 'full' },
+      { path: 'inspect/pre-flight', redirectTo: redirectKeepingState(dataCheckRoute('pre-flight')), pathMatch: 'full' },
 
       // Legacy redirects — old build/* and inspect/* paths → new canonical paths
       { path: 'build/validate', redirectTo: 'features/validate', pathMatch: 'full' },
@@ -158,8 +148,8 @@ export const researchLabRoutes: Routes = [
       { path: 'indicator-reliability', redirectTo: 'backtests/reliability', pathMatch: 'full' },
       { path: 'signal-engine', redirectTo: 'signals/engine', pathMatch: 'full' },
       { path: 'cross-sectional', redirectTo: 'features/cross-sectional', pathMatch: 'full' },
-      { path: 'data-divergence', redirectTo: 'inspect/data-divergence', pathMatch: 'full' },
-      { path: 'strategy-preflight', redirectTo: 'inspect/pre-flight', pathMatch: 'full' },
+      { path: 'data-divergence', redirectTo: redirectKeepingState(dataCheckRoute('divergence')), pathMatch: 'full' },
+      { path: 'strategy-preflight', redirectTo: redirectKeepingState(dataCheckRoute('pre-flight')), pathMatch: 'full' },
       { path: 'experiment-history', redirectTo: 'features/experiments', pathMatch: 'full' },
     ],
   },

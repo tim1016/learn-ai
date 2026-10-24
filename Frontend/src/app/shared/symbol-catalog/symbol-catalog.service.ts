@@ -15,8 +15,8 @@ import type { PickerSymbol } from './symbol-catalog.types';
  * with what the lake actually holds (ADR — symbol picker, 2026-09-20).
  *
  * Membership used to be the lake itself: the picker offered only symbols the
- * lake held, and anything else was a dead end that sent the operator to the
- * Observatory. The card now owns an ensure-coverage gate, so "not held" is
+ * lake held, and anything else was a dead end that sent the operator to
+ * Operations → Lake. The card now owns an ensure-coverage gate, so "not held" is
  * no longer unselectable — picking it backfills first — and the honest menu
  * becomes the vendor's listing universe with the lake's coverage badge on
  * each row. The lake stays the only thing anything *reads*; this service

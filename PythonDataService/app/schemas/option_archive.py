@@ -62,7 +62,6 @@ class ArchiveJobHealth(BaseModel):
 class OptionArchiveHealth(BaseModel):
     enabled: bool
     generated_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
-    attention: bool
     underlyings: list[UnderlyingArchiveHealth]
     backup: ArchiveJobHealth
     test_restore: ArchiveJobHealth

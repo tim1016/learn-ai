@@ -126,14 +126,23 @@ const ROWS: Readonly<Record<string, Row>> = {
   'options-lab/strategy-builder': { group: OPTIONS },
 
   // ── Operations ───────────────────────────────────────────────────────────
-  'data-lake': { group: OPERATIONS },
-  'golden-fixtures': { group: OPERATIONS },
-  'data-lab/validate': { group: OPERATIONS },
-  'data-quality': { group: OPERATIONS, lands: '/data-lab/validate' },
-  'research-lab/inspect/data-divergence': { group: OPERATIONS },
-  'research-lab/inspect/pre-flight': { group: OPERATIONS },
-  'research-lab/data-divergence': { group: OPERATIONS, lands: '/research-lab/inspect/data-divergence' },
-  'research-lab/strategy-preflight': { group: OPERATIONS, lands: '/research-lab/inspect/pre-flight' },
+  'data-lake': { group: OPERATIONS, lands: '/operations/lake' },
+  operations: { group: OPERATIONS, lands: '/operations/lake' },
+  'operations/lake': { group: OPERATIONS },
+  'operations/option-archive': { group: OPERATIONS },
+  'operations/backups': { group: OPERATIONS },
+  'operations/math-checks': { group: OPERATIONS },
+  'operations/data-checks': { group: OPERATIONS, lands: '/operations/data-checks/tradingview' },
+  'operations/data-checks/tradingview': { group: OPERATIONS },
+  'operations/data-checks/divergence': { group: OPERATIONS },
+  'operations/data-checks/pre-flight': { group: OPERATIONS },
+  'golden-fixtures': { group: OPERATIONS, lands: '/operations/math-checks' },
+  'data-lab/validate': { group: OPERATIONS, lands: '/operations/data-checks/tradingview' },
+  'data-quality': { group: OPERATIONS, lands: '/operations/data-checks/tradingview' },
+  'research-lab/inspect/data-divergence': { group: OPERATIONS, lands: '/operations/data-checks/divergence' },
+  'research-lab/inspect/pre-flight': { group: OPERATIONS, lands: '/operations/data-checks/pre-flight' },
+  'research-lab/data-divergence': { group: OPERATIONS, lands: '/operations/data-checks/divergence' },
+  'research-lab/strategy-preflight': { group: OPERATIONS, lands: '/operations/data-checks/pre-flight' },
 
   // ── Documents: the help index is their home, so they have no group ───────
   'strategy-docs': DOCUMENT,
@@ -413,17 +422,46 @@ describe('the route inventory (T01)', () => {
     });
 
     it.each([
-      ['/data-lab?mode=build&ticker=SPY#option-archive-SPY', '/data-lab/export?ticker=SPY#option-archive-SPY'],
-      ['/data-lab?mode=validate', '/data-lab/validate'],
+      ['/data-lab?mode=build&ticker=SPY#scope', '/data-lab/export?ticker=SPY#scope'],
+      // The archive card left Data Lab, so its anchors lead to the tab that holds each part of it.
+      ['/data-lab#option-archive-SPY', '/operations/option-archive#option-archive-SPY'],
+      ['/data-lab?ticker=SPY#option-archive', '/operations/option-archive?ticker=SPY#option-archive'],
+      ['/data-lab#option-archive-backup', '/operations/backups#option-archive-backup'],
+      ['/data-lab#option-archive-restore', '/operations/backups#option-archive-restore'],
+      // Validate left Data Lab, so a mode that names it goes to Operations with its scope.
+      ['/data-lab?mode=validate', '/operations/data-checks/tradingview'],
+      ['/data-lab?mode=validate&ticker=SPY&from=2026-01-02&to=2026-03-31', '/operations/data-checks/tradingview?ticker=SPY&from=2026-01-02&to=2026-03-31'],
       ['/data-lab?mode=bogus&ticker=SPY', '/data-lab/explore?mode=bogus&ticker=SPY'],
-      ['/data-quality?ticker=SPY&from=2026-01-02&foo=1', '/data-lab/validate?ticker=SPY&from=2026-01-02&foo=1'],
-      ['/data-quality?mode=build&ticker=SPY', '/data-lab/export?ticker=SPY'],
     ])('lands the legacy Data Lab address %s on %s in one navigation', async (url, landsOn) => {
       const { router, ended, cancelled } = await load(url);
 
       expect(router.url).toBe(landsOn);
       expect(ended).toHaveLength(1);
       expect(cancelled).toEqual([]);
+    });
+
+    it.each([
+      // The comparison's scope is the link's query; the page it started from does not matter.
+      ['/data-quality?ticker=SPY&from=2026-01-02&to=2026-03-31', '/operations/data-checks/tradingview?ticker=SPY&from=2026-01-02&to=2026-03-31'],
+      ['/data-lab/validate?ticker=AAPL&from=2026-04-15&to=2026-05-15', '/operations/data-checks/tradingview?ticker=AAPL&from=2026-04-15&to=2026-05-15'],
+      ['/operations/data-checks?ticker=SPY#run', '/operations/data-checks/tradingview?ticker=SPY#run'],
+      ['/golden-fixtures#cat-indicators', '/operations/math-checks#cat-indicators'],
+      ['/research-lab/inspect/pre-flight?strategy=spy_ema_crossover', '/operations/data-checks/pre-flight?strategy=spy_ema_crossover'],
+      ['/research-lab/strategy-preflight', '/operations/data-checks/pre-flight'],
+      ['/research-lab/data-divergence?tf=1h', '/operations/data-checks/divergence?tf=1h'],
+    ])('lands the old checks address %s straight on %s', async (url, landsOn) => {
+      const { router, ended, cancelled } = await load(url);
+
+      expect(router.url).toBe(landsOn);
+      expect(ended).toHaveLength(1);
+      expect(cancelled).toEqual([]);
+    });
+
+    it('fails in place on a Data check it does not have, rather than opening the first', async () => {
+      const { router } = await load('/operations/data-checks/nothing');
+
+      expect(router.url).toBe('/operations/data-checks/nothing');
+      expect(routeTreeHasData(router.routerState.snapshot.root, 'notFound')).toBe(true);
     });
 
     it('keeps everything else a persisted-run bookmark carried, and lets the path decide the run', async () => {
