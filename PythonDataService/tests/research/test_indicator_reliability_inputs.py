@@ -31,7 +31,6 @@ from app.data_lake.polygon_fetcher import polygon_history_floor
 from app.lean_sidecar.trading_calendar import expected_sessions, session_close_ms_utc, session_open_ms_utc
 from app.research.indicator_reliability import compute_forward_return
 from app.research.study_inputs import lead_in_sessions
-from app.services import dataset_service
 from app.services.dataset_service import calculate_dynamic_indicators, resolve_indicator_window
 from app.services.indicator_reliability_service import (
     SUPPORTED_MINUTE_MULTIPLIERS,
@@ -69,15 +68,9 @@ class World:
 def world(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     catalog = install_fake_catalog(monkeypatch)
     lake = point_lake_writer_at_tmp(tmp_path, monkeypatch)
-    set_clock(monkeypatch, NOW_MS)
     with respx.mock:
         mock_launcher()
         yield World(catalog, lake)
-
-
-def set_clock(monkeypatch: pytest.MonkeyPatch, now_ms: int) -> None:
-    """The warmup sizing reads the clock for the provider's history floor; admission is handed the same instant."""
-    monkeypatch.setattr(dataset_service, "now_ms_utc", lambda: now_ms)
 
 
 def params(window: list[date], **overrides) -> ReliabilityParams:
@@ -123,11 +116,9 @@ def digests(study: AdmittedReliabilityInputs) -> tuple[str, str, str]:
     return source["identity_digest"], source["snapshot_digest"], source["result_identity_digest"]
 
 
-def clock_for(monkeypatch: pytest.MonkeyPatch, today: date) -> int:
-    """Move 'now' to ``today`` for both the warmup sizing and admission; returns the instant to hand admission."""
-    now = et_midnight_ms(today)
-    set_clock(monkeypatch, now)
-    return now
+def clock_for(today: date) -> int:
+    """'Now' as ``today``'s ET midnight: the one instant the warmup sizing and admission are both handed."""
+    return et_midnight_ms(today)
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +163,7 @@ def test_a_bar_size_the_lake_cannot_form_exactly_is_refused_before_the_lake_is_t
 @respx.mock
 def test_the_lead_in_is_the_sessions_the_sizing_names_admitted_beside_the_window_and_counted_apart(world):
     window = MARCH[4:]
-    sizing = resolve_indicator_window(window[0].isoformat(), max_lookback=200, bar_minutes=1)
+    sizing = resolve_indicator_window(window[0].isoformat(), max_lookback=200, bar_minutes=1, now_ms=NOW_MS)
     lead = expected_sessions(date.fromisoformat(sizing.fetch_from), window[0] - timedelta(days=1))
     assert (sizing.warmup_bars, len(lead)) == (1000, 3), "three fully traded one-minute sessions cover 1,000 bars"
     mock_vendor("SPY", tape_for([*lead, *window], regular_keep=1.0))
@@ -184,7 +175,7 @@ def test_the_lead_in_is_the_sessions_the_sizing_names_admitted_beside_the_window
     assert counts(source["coverage"]["window"]) == (0, len(window), 0, 0)
     assert source["warmup"] == {
         "policy": "allow_shortened", "requested_bars": 1000, "requested_sessions": 3, "admitted_sessions": 3,
-        "admitted_bars": 3 * 390, "shortened": False, "shortfall_bars": 0, "cause": "none",
+        "admitted_bars": 3 * 390, "shortened": False, "shortfall_bars": 0, "cause": "none", "notice": None,
     }
     lead_rows = study.frame[study.frame["timestamp"] < study.window_start_ms]
     assert len(lead_rows) == 3 * 390
@@ -194,11 +185,11 @@ def test_the_lead_in_is_the_sessions_the_sizing_names_admitted_beside_the_window
 
 
 @respx.mock
-def test_a_lead_in_cut_short_by_the_providers_history_floor_is_reported_and_the_run_goes_ahead(world, monkeypatch):
+def test_a_lead_in_cut_short_by_the_providers_history_floor_is_reported_and_the_run_goes_ahead(world):
     today = date(2029, 3, 6)
     assert polygon_history_floor(today) == date(2024, 3, 8), "the provider's history begins on Friday Mar 8"
     window = expected_sessions(date(2024, 3, 11), date(2024, 3, 15))
-    now = clock_for(monkeypatch, today)
+    now = clock_for(today)
     mock_vendor("SPY", tape_for(expected_sessions(date(2024, 3, 8), window[-1]), regular_keep=1.0))
 
     study = admit(params(window, **EMA_200), now_ms=now)
@@ -211,9 +202,9 @@ def test_a_lead_in_cut_short_by_the_providers_history_floor_is_reported_and_the_
 
 
 @respx.mock
-def test_require_full_refuses_a_lead_in_the_floor_cuts_short_and_says_how_short(world, monkeypatch):
+def test_require_full_refuses_a_lead_in_the_floor_cuts_short_and_says_how_short(world):
     window = expected_sessions(date(2024, 3, 11), date(2024, 3, 15))
-    now = clock_for(monkeypatch, date(2029, 3, 6))
+    now = clock_for(date(2029, 3, 6))
     mock_vendor("SPY", tape_for(expected_sessions(date(2024, 3, 8), window[-1]), regular_keep=1.0))
 
     refusal = refusal_of(params(window, warmup_policy="require_full", **EMA_200), now_ms=now)
@@ -228,12 +219,12 @@ def test_require_full_refuses_a_lead_in_the_floor_cuts_short_and_says_how_short(
 
 
 @respx.mock
-def test_a_retained_window_older_than_the_floor_stays_readable_with_no_lead_in_and_says_so(world, monkeypatch):
+def test_a_retained_window_older_than_the_floor_stays_readable_with_no_lead_in_and_says_so(world):
     """The sizing never reaches before the floor, so a window the floor already passed gets no lead-in at all."""
     window = expected_sessions(date(2024, 3, 4), date(2024, 3, 7))
     mock_vendor("SPY", full_tape(window))
     admit(params(window))  # the lake holds the window (and its one lead-in session) while it is in the provider's history
-    now = clock_for(monkeypatch, date(2029, 3, 6))  # the Mar 8 floor has now passed the window
+    now = clock_for(date(2029, 3, 6))  # the Mar 8 floor has now passed the window
 
     study = admit(params(window, **EMA_200), now_ms=now)
 
@@ -243,11 +234,11 @@ def test_a_retained_window_older_than_the_floor_stays_readable_with_no_lead_in_a
 
 
 @respx.mock
-def test_a_window_day_older_than_the_floor_that_the_lake_never_held_is_refused_and_never_asked_of_the_vendor(world, monkeypatch):
+def test_a_window_day_older_than_the_floor_that_the_lake_never_held_is_refused_and_never_asked_of_the_vendor(world):
     window = expected_sessions(date(2024, 3, 4), date(2024, 3, 7))
     calls = VendorCalls()
     mock_vendor("SPY", full_tape(window), calls=calls)
-    now = clock_for(monkeypatch, date(2029, 3, 6))  # the Mar 8 floor has passed the whole window
+    now = clock_for(date(2029, 3, 6))  # the Mar 8 floor has passed the whole window
 
     refusal = refusal_of(params(window), now_ms=now)
 
@@ -270,7 +261,8 @@ def test_a_symbol_whose_history_starts_inside_the_lead_in_runs_on_the_sessions_i
     warmup = study.warmup
     assert (warmup.requested_sessions, warmup.admitted_sessions) == (3, 2)
     assert warmup.shortened and warmup.cause == "symbol_history_starts" and warmup.admitted_bars == 2 * 390
-    assert counts(study.data_source()["coverage"]["warmup"]) == (0, 2, 0, 0), "the lead-in actually admitted"
+    assert counts(study.data_source()["coverage"]["warmup"]) == (0, 2, 0, 1), "two admitted, and the one the vendor had no bars for"
+    assert study.admitted.coverage.dropped == (lead[0],)
     lead_rows = study.frame[study.frame["timestamp"] < study.window_start_ms]
     assert lead_rows["timestamp"].min() >= session_open_ms_utc(lead[1])
     assert study.identity.inputs.warmup_sessions == 2, "the identity is the lead-in the numbers came from"
@@ -286,12 +278,14 @@ def test_a_window_that_opens_on_the_symbols_first_session_runs_with_no_lead_in_a
     warmup = study.warmup
     assert (warmup.requested_sessions, warmup.admitted_sessions, warmup.admitted_bars) == (3, 0, 0)
     assert warmup.shortened and warmup.cause == "symbol_history_starts" and warmup.shortfall_bars == 1000
-    assert counts(study.data_source()["coverage"]["warmup"]) == (0, 0, 0, 0)
+    assert counts(study.data_source()["coverage"]["warmup"]) == (0, 0, 0, 3), "all three were asked for and none had bars"
+    assert len(study.admitted.coverage.dropped) == 3
     assert study.frame["timestamp"].min() >= study.window_start_ms
 
 
 @respx.mock
-def test_require_full_refuses_that_lead_in_names_it_as_the_warmups_and_is_a_different_identity_from_the_shorter_run(world):
+def test_require_full_refuses_a_symbol_listed_inside_the_lead_in_with_warmup_shortened(world):
+    """#3523 review m2: the field's own description promises this code; it used to be a data outage."""
     window = MARCH[4:]
     lead = lead_in_sessions(window[0], 3)
     tape = tape_for([*lead, *window], regular_keep=1.0)
@@ -301,12 +295,52 @@ def test_require_full_refuses_that_lead_in_names_it_as_the_warmups_and_is_a_diff
     refusal = refusal_of(params(window, warmup_policy="require_full", **EMA_200))
     shorter = admit(params(window, **EMA_200))
 
+    assert refusal.code == "warmup_shortened"
+    assert "1000 bars" in refusal.reason and "780" in refusal.reason
+    assert "symbol has no bars before its first listed session" in refusal.reason and "Start the window later" in refusal.reason
+    warmup = refusal.data_source["warmup"]
+    assert (warmup["shortened"], warmup["cause"], warmup["policy"], warmup["admitted_sessions"]) == (True, "symbol_history_starts", "require_full", 2)
+    assert refusal.coverage.dropped == (lead[0],) and counts(refusal.data_source["coverage"]["warmup"]) == (0, 2, 0, 1)
+    assert refusal.data_source["snapshot_digest"] is not None, "the bytes were admitted; the policy refused the result"
+    assert refusal.data_source["identity_digest"] == digests(shorter)[0], "the refusal names the lead-in that was read"
+
+
+@respx.mock
+def test_require_full_over_sparse_sessions_does_not_tell_the_caller_to_start_later(world):
+    window = MARCH[4:]
+    mock_vendor("SPY", tape_for([*lead_in_sessions(window[0], 3), *window], regular_keep=0.4))
+
+    refusal = refusal_of(params(window, warmup_policy="require_full", **EMA_200))
+
+    assert refusal.code == "warmup_shortened" and refusal.data_source["warmup"]["cause"] == "sparse_session_bars"
+    assert "Allow a shortened warmup" in refusal.reason and "Start the window later" not in refusal.reason
+
+
+@pytest.mark.parametrize("fault", ["duplicate", "out_of_order"])
+@pytest.mark.parametrize("policy", ["allow_shortened", "require_full"])
+@respx.mock
+def test_a_tape_the_lake_rejects_on_the_oldest_lead_in_session_refuses_and_is_not_a_symbol_that_lists_late(world, policy, fault):
+    """#3523 review M1: a vendor failure is not 'the symbol's history starts here', and it stays in the counts.
+
+    The oldest lead-in session's tape has a duplicate (or out-of-order) timestamp, so the lake's publication gate
+    refuses it. Only a session the vendor answered with no bars may be dropped from the lead-in.
+    """
+    window = MARCH[4:]
+    lead = lead_in_sessions(window[0], 3)
+    tape = tape_for([*lead, *window], regular_keep=1.0)
+    bars = tape[lead[0]]
+    tape[lead[0]] = [*bars[:5], bars[4], *bars[5:]] if fault == "duplicate" else [*bars[:5], bars[6], bars[5], *bars[7:]]
+    mock_vendor("SPY", tape)
+
+    refusal = refusal_of(params(window, warmup_policy=policy, **EMA_200))
+
     assert refusal.code == "data_unavailable_from_provider"
-    assert [(i.group, i.trading_date, i.outcome) for i in refusal.coverage.issues] == [
-        ("warmup", lead[0], "unavailable_from_provider")
+    assert [(i.group, i.trading_date, i.outcome, i.failure_reason) for i in refusal.coverage.issues] == [
+        ("warmup", lead[0], "unavailable_from_provider", "validation_failed")
     ]
-    assert "warmup lead-in" in refusal.reason and lead[0].isoformat() in refusal.reason
-    assert refusal.data_source["identity_digest"] != digests(shorter)[0], "the run that dropped a session is another identity"
+    assert "validation_failed" in refusal.reason
+    assert counts(refusal.data_source["coverage"]["warmup"]) == (0, 2, 0, 1), "the failed session is counted, not zeroed"
+    assert refusal.data_source["warmup"] is None and refusal.data_source["snapshot_digest"] is None
 
 
 @pytest.mark.parametrize("policy", ["allow_shortened", "require_full"])
@@ -506,11 +540,11 @@ def test_no_bar_is_read_past_the_requested_end_so_the_last_horizon_bars_have_no_
 
 
 @respx.mock
-def test_the_indicators_first_valid_value_sits_in_the_lead_in_when_there_is_one_and_in_the_window_when_there_is_not(world, monkeypatch):
+def test_the_indicators_first_valid_value_sits_in_the_lead_in_when_there_is_one_and_in_the_window_when_there_is_not(world):
     window = expected_sessions(date(2024, 3, 4), date(2024, 3, 7))
     mock_vendor("SPY", full_tape(window, regular_keep=1.0))
     warm = admit(params(window))
-    now = clock_for(monkeypatch, date(2029, 3, 6))  # the floor has passed the window: the lake still holds it, with no lead-in
+    now = clock_for(date(2029, 3, 6))  # the floor has passed the window: the lake still holds it, with no lead-in
     cold = admit(params(window), now_ms=now)
     entry = [{"name": "rsi", "params": {"length": 14}}]
 

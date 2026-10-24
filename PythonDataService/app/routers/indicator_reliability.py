@@ -15,6 +15,7 @@ import logging
 from datetime import date
 
 from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import JSONResponse
 
 from app.models.indicator_reliability_models import (
     DecayCurvePoint,
@@ -24,7 +25,7 @@ from app.models.indicator_reliability_models import (
     IndicatorReliabilityResponse,
     RegimeICPoint,
     RegimeResults,
-    ReliabilityDataSource,
+    ReliabilityRefusedResult,
     VerdictModel,
 )
 from app.research.indicator_reliability import (
@@ -48,6 +49,7 @@ from app.research.indicator_reliability import (
     generate_warnings,
     get_indicator_category,
 )
+from app.research.lake_study import refused_result
 from app.services.dataset_service import (
     calculate_dynamic_indicators,
     get_indicator_configs,
@@ -62,15 +64,15 @@ from app.services.indicator_reliability_service import (
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-#: A refusal that no change to the lake can fix is the caller's to correct (422); one the lake's state decides is a
-#: conflict (409); a lake that cannot be asked at all is unavailable (503).
-_REFUSAL_STATUS = {
-    "resolution_unsupported": status.HTTP_422_UNPROCESSABLE_ENTITY,
-    "symbol_not_addressable": status.HTTP_422_UNPROCESSABLE_ENTITY,
-    "no_sessions_in_window": status.HTTP_422_UNPROCESSABLE_ENTITY,
-    "window_not_complete": status.HTTP_422_UNPROCESSABLE_ENTITY,
-    "lake_unavailable": status.HTTP_503_SERVICE_UNAVAILABLE,
-}
+
+def _refusal_status(code: str) -> int:
+    """A refusal is the lake's state (409) unless the lake cannot be asked at all (503).
+
+    A request refused whatever the lake held (an unsupported bar size) is 409 too. Neither 400 nor 422 would do:
+    FastAPI answers 422 with ``{detail: [...]}`` for a request that fails validation, this route answers 400 with a
+    ``detail`` sentence, and a refusal's body is the shared refused result, so a client tells the three apart by status.
+    """
+    return status.HTTP_503_SERVICE_UNAVAILABLE if code == "lake_unavailable" else status.HTTP_409_CONFLICT
 
 
 def _to_horizon_ic_result(
@@ -156,23 +158,29 @@ def _build_verdict(
     response_model=IndicatorReliabilityResponse,
     responses={
         status.HTTP_409_CONFLICT: {
+            "model": ReliabilityRefusedResult,
             "description": (
-                "The lake cannot admit the window, or the warmup policy refuses a shortened lead-in. The body is "
-                "{detail: {code, message, sessions, sessions_total, coverage, data_source}}."
-            )
+                "The study did not run: the request names an input it cannot read (a bar size the lake cannot form, "
+                "a symbol it cannot hold, a window with no session or one still forming), the lake cannot admit "
+                "the window, or the warmup policy refuses a shortened lead-in. The refusal carries a typed code, the "
+                "reason, the sessions that could not be made ready and the counts admission reached."
+            ),
         },
-        status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "The data lake's catalog is unavailable; same body as 409."},
+        status.HTTP_503_SERVICE_UNAVAILABLE: {
+            "model": ReliabilityRefusedResult,
+            "description": "The data lake's catalog is unavailable; same body as 409.",
+        },
     },
 )
 async def calculate_indicator_reliability(
     request: IndicatorReliabilityRequest,
-) -> IndicatorReliabilityResponse:
+) -> IndicatorReliabilityResponse | JSONResponse:
     """Analyze indicator reliability using IC with OOS validation.
 
     This endpoint:
     1. Admits regular-hours OHLCV bars for the ticker and date range (warmup lead-in included) from the data
        lake, materializing what it lacks; a window the lake cannot admit is refused with a typed code and the
-       coverage counts (409, 503, or 422 for a request that can never run), never computed on a shorter series
+       coverage counts (409, or 503 when the lake cannot be asked), never computed on a shorter series
     2. Calculates the specified indicator using pandas-ta
     3. Splits data into 70% train / 30% test
     4. Computes IC on both splits for each horizon
@@ -226,10 +234,10 @@ async def calculate_indicator_reliability(
                 "[Reliability] refused",
                 extra={"action": "reliability_refused", "code": refusal.code, "symbol": request.symbol},
             )
-            raise HTTPException(
-                status_code=_REFUSAL_STATUS.get(refusal.code, status.HTTP_409_CONFLICT),
-                detail=refusal.as_detail(),
-            ) from refusal
+            return JSONResponse(
+                status_code=_refusal_status(refusal.code),
+                content=refused_result({"ticker": request.symbol}, refusal, data_source=refusal.data_source),
+            )
 
         df = study.frame
         max_lookback = study.max_lookback
@@ -430,7 +438,7 @@ async def calculate_indicator_reliability(
             next_steps=next_steps,
             info_footnotes=info_footnotes,
             warnings=warnings,
-            data_source=ReliabilityDataSource.model_validate(study.data_source(bars_used=len(df))),
+            data_source=study.data_source(bars_used=len(df)),
         )
 
     except HTTPException:

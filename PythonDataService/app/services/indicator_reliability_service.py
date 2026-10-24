@@ -29,7 +29,8 @@ and what it reads now, field by field:
   length holds exactly the regular-hours minutes inside it. A bar that straddles the
   open (lengths that do not divide 30 minutes: 4, 12, 20, 60) holds only those minutes;
   the vendor's aggregate for the same bucket also held the pre-open trades. The
-  request's ``session`` field was ignored and stays ignored.
+  request's ``session`` field was ignored before; it now accepts only ``rth``, the one
+  session the study has ever computed on.
 * **Window.** The scheduled sessions in ``[from_date, to_date]`` (canonical calendar).
   A window that ends on a session that has not finished is refused: the lake holds
   completed sessions only, where the provider path computed on the forming session's
@@ -39,13 +40,15 @@ and what it reads now, field by field:
   the provider's history floor. Before: a lead-in cut short by the floor, the symbol's
   listing date, a gap or sparse sessions was computed on without a word. Now: the
   sessions the sizing names are admitted with the window (counted apart as warmup) and
-  the result says how many bars the lead-in really held (:class:`WarmupReport`).
+  the result says how many bars the lead-in really held (:class:`ReliabilityWarmup`).
+  The oldest lead-in sessions the vendor answered with no bars (``provider_no_data``:
+  the symbol had not started trading) are dropped by admission itself
+  (``lead_in="trim_unsupplied_prefix"``) and stay in the warmup counts. Any other
+  vendor failure on a lead-in session — a rate limit, an API error, a tape the lake's
+  publication gate rejected — refuses, as does a hole after the first admitted session.
   ``warmup_policy`` decides what a shortfall may do. ``allow_shortened`` (the default,
-  what the study always did, now reported) computes on the lead-in that exists — the
-  oldest lead-in sessions the provider cannot supply are dropped and counted.
-  ``require_full`` refuses with ``warmup_shortened``. A hole *after* the first
-  admitted lead-in session is refused whatever the policy: the indicator will not run
-  across a missing session silently.
+  what the study always did, now reported) computes on the lead-in that exists.
+  ``require_full`` refuses any shortfall with ``warmup_shortened``.
 * **Look-forward.** Horizons of 1 to 100 bars (default 1, 5, 10, 15, 30). A forward
   return that crosses a UTC date is masked, nothing is read past ``to_date`` so the last
   bars of the window have no label, and the IC decay curve runs to the largest horizon
@@ -62,6 +65,14 @@ and what it reads now, field by field:
   version, under :data:`RESULT_NAMESPACE`. A repaired lake gives the same request a new
   snapshot digest; a changed policy gives it a new identity digest.
 
+The shared lake-study pieces (:mod:`app.research.lake_study`) this study uses: the
+identity (:class:`~app.research.lake_study.FoldedStudyIdentity`), the ``data_source``
+block, the cache key its result identity is built from, and the refused-result body.
+The one it does not: :func:`~app.research.lake_study.run_lake_study`, which is a job
+runner — phases, progress events, cancellation, the result cache and the job's terminal
+events. This study is one synchronous request with none of those, so it admits, folds and
+hands the router a frame, and the router computes.
+
 Differences a run can show against the provider path are documented and measured in
 ``tests/research/test_indicator_reliability_lake_vs_provider.py``.
 """
@@ -76,56 +87,40 @@ from typing import Any, Literal
 
 import pandas as pd
 
-from app.data_lake.polygon_fetcher import polygon_history_floor
 from app.lean_sidecar.trading_calendar import expected_sessions
-from app.models.indicator_reliability_models import WarmupPolicy, WarmupShortfallCause
+from app.models.indicator_reliability_models import ReliabilityWarmup, WarmupPolicy, WarmupShortfallCause
 from app.research.indicator_reliability import DEFAULT_VOL_WINDOW, MAX_DECAY_HORIZON, RANDOM_SIMULATIONS, TRAIN_RATIO
+from app.research.lake_study import FoldedStudyIdentity, cache_key, data_source_block
 from app.research.runs.hashing import hash_payload
 from app.research.study_inputs import (
     AdmittedMinuteInputs,
     MinuteWindowIdentity,
+    RefusalCode,
     StudyCoverage,
     StudyInputRefusal,
     admit_minute_inputs,
     bars_as_rows,
     fold_minute_bars,
-    lead_in_sessions,
 )
 from app.services.dataset_service import INDICATOR_CONFIGS, bar_minutes_for, resolve_indicator_window
 from app.services.indicator_warmup_policy import requested_indicator_warmup_lookback
-from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
-#: Bump when the IC, correction, baseline, regime or IR-proxy math changes: a result is the product of the code that
-#: made it, and this version is what tells a result of the new math apart from one of the old.
+#: Bump when the indicator series (``calculate_dynamic_indicators``, pandas-ta, ``INDICATOR_CONFIGS``) or the IC,
+#: correction, baseline, regime or IR-proxy math changes: a result is the product of the code that made it, and this
+#: version is what tells a result of the new math apart from one of the old.
 RELIABILITY_CALCULATION_VERSION = "indicator-reliability/1"
 
 #: The namespace a result cache or saved result for lake-sourced reliability studies would live under. Nothing is
 #: stored in it today; the identity digests are computed under it so a later cache cannot collide with another study's.
 RESULT_NAMESPACE = "indicator_reliability:lake:v1"
 
-#: The fold rule named in the identity: what a coarser bar is made of.
-FOLD_RULE = "minute_fold_et_wall_clock_no_fill"
-
 _REQUESTER = "indicator-reliability"
 
 #: Minute bar lengths that start every bar on a wall-clock boundary (they divide the hour).
 SUPPORTED_MINUTE_MULTIPLIERS: tuple[int, ...] = tuple(m for m in range(1, 61) if 60 % m == 0)
-
-ReliabilityRefusalCode = Literal[
-    "resolution_unsupported",
-    "symbol_not_addressable",
-    "no_sessions_in_window",
-    "window_not_complete",
-    "data_unavailable_from_provider",
-    "data_corrupt",
-    "data_building",
-    "data_missing",
-    "lake_unavailable",
-    "warmup_shortened",
-]
 
 _FRAME_COLUMNS = ["timestamp", "open", "high", "low", "close", "volume"]
 
@@ -153,25 +148,20 @@ class ReliabilityParams:
 
 
 @dataclass(frozen=True)
-class ReliabilityIdentity:
-    """Every input that decides this study's numbers: the lake input plus how the study shapes it."""
+class ReliabilityIdentity(FoldedStudyIdentity):
+    """Every input that decides this study's numbers: the folded lake input plus how the study shapes it."""
 
-    inputs: MinuteWindowIdentity
     timespan: str
     multiplier: int
-    bar_minutes: int
     indicator_name: str
     indicator_params: tuple[tuple[str, int | float], ...]
     horizons: tuple[int, ...]
     include_slope: bool
 
-    def as_dict(self) -> dict[str, Any]:
+    def study_fields(self) -> dict[str, Any]:
         return {
-            **self.inputs.as_dict(),
             "timespan": self.timespan,
             "multiplier": self.multiplier,
-            "bar_minutes": self.bar_minutes,
-            "aggregation": FOLD_RULE,
             "indicator": {"name": self.indicator_name, "params": dict(self.indicator_params)},
             "horizons": list(self.horizons),
             "include_slope": self.include_slope,
@@ -183,8 +173,29 @@ class ReliabilityIdentity:
             },
         }
 
-    def digest(self) -> str:
-        return hash_payload(self.as_dict())
+
+# ---------------------------------------------------------------------------
+# Refusal, warmup
+# ---------------------------------------------------------------------------
+
+
+class ReliabilityRefusal(StudyInputRefusal):
+    """No result: the study's required input was not admitted, or the request names an input it cannot read.
+
+    A :class:`StudyInputRefusal` that also carries the ``data_source`` block it was refused against (``None`` when
+    nothing was read), so the response can show the counts beside the reason.
+    """
+
+    def __init__(
+        self,
+        code: RefusalCode,
+        reason: str,
+        *,
+        coverage: StudyCoverage | None = None,
+        data_source: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(code, reason, coverage=coverage)
+        self.data_source = data_source
 
 
 def study_bar_minutes(timespan: str, multiplier: int) -> int:
@@ -207,75 +218,19 @@ def study_bar_minutes(timespan: str, multiplier: int) -> int:
     raise ReliabilityRefusal("resolution_unsupported", reason)
 
 
-# ---------------------------------------------------------------------------
-# Refusal, warmup
-# ---------------------------------------------------------------------------
-
-
-class ReliabilityRefusal(StudyInputRefusal):
-    """No result: the study's required input was not admitted, or the request names an input it cannot read.
-
-    A :class:`StudyInputRefusal` (admission's own) plus the study's ``warmup_shortened`` and the data-source
-    block that says what was reached, so the response can show the counts beside the reason.
-    """
-
-    def __init__(
-        self,
-        code: ReliabilityRefusalCode,
-        reason: str,
-        *,
-        coverage: StudyCoverage | None = None,
-        data_source: dict[str, Any] | None = None,
-    ) -> None:
-        super().__init__(code, reason, coverage=coverage)
-        self.data_source = data_source
-
-    def as_detail(self) -> dict[str, Any]:
-        """The refusal as an HTTP error detail: ``message`` is the sentence, ``data_source`` what admission reached."""
-        body = self.as_dict()
-        body["message"] = body.pop("reason")
-        body["data_source"] = self.data_source
-        return body
-
-
-@dataclass(frozen=True)
-class WarmupReport:
-    """The warmup lead-in the policy asked for against the one the lake supplied.
-
-    ``requested_bars`` is the policy's own number (lookback times the multiplier); ``requested_sessions`` the
-    scheduled sessions its sizing named, never before the provider floor. ``admitted_*`` is what the study ran on.
-    ``cause`` says why a shortfall happened, first match winning: the provider could not supply the oldest
-    lead-in sessions (the symbol had no bars yet), the sizing was limited by the provider floor, or every named
-    session was admitted but held fewer bars than a fully traded session.
-    """
-
-    policy: WarmupPolicy
-    requested_bars: int
-    requested_sessions: int
-    admitted_sessions: int
-    admitted_bars: int
-    shortened: bool
-    shortfall_bars: int
-    cause: WarmupShortfallCause
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "policy": self.policy,
-            "requested_bars": self.requested_bars,
-            "requested_sessions": self.requested_sessions,
-            "admitted_sessions": self.admitted_sessions,
-            "admitted_bars": self.admitted_bars,
-            "shortened": self.shortened,
-            "shortfall_bars": self.shortfall_bars,
-            "cause": self.cause,
-        }
-
-
 _CAUSE_WORDS: dict[WarmupShortfallCause, str] = {
     "none": "no shortfall",
     "provider_history_floor": "the provider's history does not reach back further",
     "symbol_history_starts": "the symbol has no bars before its first listed session",
     "sparse_session_bars": "the lead-in sessions hold fewer bars than a fully traded session",
+}
+
+#: What `require_full` tells the caller to change, by cause: starting later cannot add bars to a lead-in that is sparse.
+_REMEDY: dict[WarmupShortfallCause, str] = {
+    "none": "",
+    "provider_history_floor": "Start the window later, or allow a shortened warmup.",
+    "symbol_history_starts": "Start the window later, or allow a shortened warmup.",
+    "sparse_session_bars": "Allow a shortened warmup to run on the bars it has.",
 }
 
 
@@ -286,19 +241,26 @@ def warmup_report(
     requested_sessions: int,
     admitted_sessions: int,
     admitted_bars: int,
+    dropped_sessions: int,
     floor_limited: bool,
-) -> WarmupReport:
+) -> ReliabilityWarmup:
+    """The lead-in the sizing asked for against the one admitted, and why it fell short, first match winning.
+
+    ``dropped_sessions`` are the oldest lead-in sessions the vendor answered with no bars (the symbol had not started
+    trading); ``floor_limited`` is the sizing's own answer that the provider's history floor ended the lead-in; a
+    shortfall with neither is a lead-in whose every session was admitted but held fewer bars than a fully traded one.
+    """
     shortfall = max(requested_bars - admitted_bars, 0)
     cause: WarmupShortfallCause
     if shortfall == 0:
         cause = "none"
-    elif admitted_sessions < requested_sessions:
+    elif dropped_sessions:
         cause = "symbol_history_starts"
     elif floor_limited:
         cause = "provider_history_floor"
     else:
         cause = "sparse_session_bars"
-    return WarmupReport(
+    return ReliabilityWarmup(
         policy=policy,
         requested_bars=requested_bars,
         requested_sessions=requested_sessions,
@@ -307,6 +269,12 @@ def warmup_report(
         shortened=shortfall > 0,
         shortfall_bars=shortfall,
         cause=cause,
+        notice=(
+            None
+            if shortfall == 0
+            else f"Warmup is {shortfall} bars short of the {requested_bars} the sizing asks for "
+            f"({_CAUSE_WORDS[cause]}); the indicator's first values may be less settled."
+        ),
     )
 
 
@@ -319,42 +287,32 @@ def result_identity(identity: ReliabilityIdentity, admitted: AdmittedMinuteInput
     """What a stored result of this study is a result *of*: data policy, admitted bytes, inputs and the code."""
     return {
         "namespace": RESULT_NAMESPACE,
-        "identity": identity.as_dict(),
-        "data_root_id": str(admitted.data_root_id),
-        "snapshot_digest": admitted.snapshot_digest,
-        "calculation_version": RELIABILITY_CALCULATION_VERSION,
+        **cache_key(identity, admitted, calculation_version=RELIABILITY_CALCULATION_VERSION, extra={}),
     }
 
 
-def data_source_block(
+def reliability_data_source(
     identity: ReliabilityIdentity,
     *,
-    warmup: WarmupReport | None,
+    warmup: ReliabilityWarmup | None,
     coverage: StudyCoverage | None,
     admitted: AdmittedMinuteInputs | None = None,
     bars_used: int | None = None,
 ) -> dict[str, Any]:
-    """The provenance a data-source line shows: the identity read, the admitted bytes, and the coverage counts."""
-    inputs = identity.inputs.as_dict()
+    """The shared ``data_source`` block, plus the warmup report and the identity a stored result would key on."""
+    block = data_source_block(
+        identity,
+        calculation_version=RELIABILITY_CALCULATION_VERSION,
+        coverage=coverage,
+        admitted=admitted,
+        bars_used=bars_used,
+    )
+    if block is None:
+        raise ValueError("a reliability run always has an identity to name its source by")
     return {
-        "kind": "lake",
-        "provider": inputs["provider"],
-        "price_adjustment_mode": inputs["price_adjustment_mode"],
-        "session_policy": inputs["session_policy"],
-        "bar_minutes": identity.bar_minutes,
-        "aggregation": FOLD_RULE,
-        "window_start_ms": inputs["window_start_ms"],
-        "window_end_ms": inputs["window_end_ms"],
-        "warmup": warmup.as_dict() if warmup is not None else None,
-        "calculation_version": RELIABILITY_CALCULATION_VERSION,
-        "identity_digest": identity.digest(),
-        "snapshot_digest": admitted.snapshot_digest if admitted is not None else None,
+        **block,
+        "warmup": warmup.model_dump() if warmup is not None else None,
         "result_identity_digest": hash_payload(result_identity(identity, admitted)) if admitted is not None else None,
-        "data_root_id": str(admitted.data_root_id) if admitted is not None else None,
-        "corporate_action_versions": dict(admitted.snapshot.corporate_action_versions) if admitted is not None else {},
-        "coverage": coverage.as_dict() if coverage is not None else None,
-        "minute_bars_read": len(admitted.warmup_bars) + len(admitted.window_bars) if admitted is not None else None,
-        "bars_used": bars_used,
     }
 
 
@@ -376,11 +334,11 @@ class AdmittedReliabilityInputs:
     frame: pd.DataFrame
     window_start_ms: int
     max_lookback: int
-    warmup: WarmupReport
+    warmup: ReliabilityWarmup
     admitted: AdmittedMinuteInputs
 
     def data_source(self, *, bars_used: int | None = None) -> dict[str, Any]:
-        return data_source_block(
+        return reliability_data_source(
             self.identity,
             warmup=self.warmup,
             coverage=self.admitted.coverage,
@@ -389,64 +347,10 @@ class AdmittedReliabilityInputs:
         )
 
 
-def _shorter_lead_in(refusal: StudyInputRefusal, inputs: MinuteWindowIdentity) -> int | None:
-    """The lead-in length that drops the oldest sessions the provider cannot supply, or ``None`` for any other refusal.
-
-    Only a refusal whose every failed session is an unsupplied lead-in session, and whose failed sessions are the
-    oldest ones, is a symbol whose history starts inside the lead-in. A hole after an admitted session is a gap, and
-    a corrupt, building or window session is not a shortfall at all: none of those are trimmed away.
-    """
-    coverage = refusal.coverage
-    if coverage is None or not coverage.issues or inputs.warmup_sessions == 0:
-        return None
-    if any(issue.group != "warmup" or issue.outcome != "unavailable_from_provider" for issue in coverage.issues):
-        return None
-    window = expected_sessions(inputs.window_start, inputs.window_end)
-    lead = lead_in_sessions(window[0], inputs.warmup_sessions)
-    failed = {issue.trading_date for issue in coverage.issues}
-    oldest = 0
-    while oldest < len(lead) and lead[oldest] in failed:
-        oldest += 1
-    return len(lead) - oldest if oldest == len(failed) else None
-
-
-def _coverage_without_dropped_lead_in(first: StudyCoverage, *, kept: int) -> StudyCoverage:
-    """Coverage as the first attempt saw it, less the lead-in sessions the provider has no bars for.
-
-    The attempt that reads the shortened lead-in finds every session already held — the first attempt filled them —
-    so its own counts would file this run's work under "reused". The first attempt's counts are the true ones.
-    """
-    return replace(first, warmup=replace(first.warmup, expected=kept, unavailable_from_provider=0), issues=())
-
-
-def _admit(
-    inputs: MinuteWindowIdentity, policy: WarmupPolicy, now: int
-) -> tuple[MinuteWindowIdentity, AdmittedMinuteInputs]:
-    """Admit the identity; under ``allow_shortened`` retry once without the lead-in sessions the provider has no bars for."""
-    try:
-        return inputs, admit_minute_inputs(inputs, requester=_REQUESTER, now_ms=now)
-    except StudyInputRefusal as refusal:
-        shorter = _shorter_lead_in(refusal, inputs) if policy == "allow_shortened" else None
-        if shorter is None or refusal.coverage is None:
-            raise
-        logger.info(
-            "reliability warmup lead-in starts after its first sessions",
-            extra={
-                "action": "reliability_warmup_prefix_dropped",
-                "symbol": inputs.symbol,
-                "requested_sessions": inputs.warmup_sessions,
-                "kept_sessions": shorter,
-            },
-        )
-        trimmed = replace(inputs, warmup_sessions=shorter)
-        retried = admit_minute_inputs(trimmed, requester=_REQUESTER, now_ms=now)
-        return trimmed, replace(retried, coverage=_coverage_without_dropped_lead_in(refusal.coverage, kept=shorter))
-
-
 def _lead_in_aware(refusal: StudyInputRefusal, from_date: date) -> str:
-    """Say that the failed sessions are the warmup's when every one of them is."""
+    """Say that the sessions that stop the run are the warmup's when every one of them is."""
     coverage = refusal.coverage
-    if coverage is None or not coverage.issues or any(issue.group != "warmup" for issue in coverage.issues):
+    if coverage is None or not coverage.blocking or any(issue.group != "warmup" for issue in coverage.blocking):
         return refusal.reason
     return f"{refusal.reason} Every failed session lies in the warmup lead-in before {from_date.isoformat()}."
 
@@ -467,21 +371,10 @@ def admit_reliability_inputs(params: ReliabilityParams, *, now_ms: int | None = 
         params.from_date.isoformat(),
         max_lookback=max_lookback,
         bar_minutes=bar_minutes_for(params.timespan, params.multiplier),
+        now_ms=now,
     )
     fetch_from = date.fromisoformat(window.fetch_from)
     lead = expected_sessions(fetch_from, params.from_date - timedelta(days=1)) if fetch_from < params.from_date else []
-
-    def identity_for(inputs: MinuteWindowIdentity) -> ReliabilityIdentity:
-        return ReliabilityIdentity(
-            inputs=inputs,
-            timespan=params.timespan,
-            multiplier=params.multiplier,
-            bar_minutes=bar_minutes,
-            indicator_name=params.indicator_name,
-            indicator_params=tuple(sorted(params.indicator_params.items())),
-            horizons=params.horizons,
-            include_slope=params.include_slope,
-        )
 
     requested_inputs = MinuteWindowIdentity(
         symbol=params.symbol,
@@ -491,33 +384,45 @@ def admit_reliability_inputs(params: ReliabilityParams, *, now_ms: int | None = 
         window_end=params.to_date,
         warmup_sessions=len(lead),
     )
+    requested = ReliabilityIdentity(
+        inputs=requested_inputs,
+        bar_minutes=bar_minutes,
+        timespan=params.timespan,
+        multiplier=params.multiplier,
+        indicator_name=params.indicator_name,
+        indicator_params=tuple(sorted(params.indicator_params.items())),
+        horizons=params.horizons,
+        include_slope=params.include_slope,
+    )
     try:
-        admitted_inputs, admitted = _admit(requested_inputs, params.warmup_policy, now)
+        admitted = admit_minute_inputs(
+            requested_inputs, requester=_REQUESTER, now_ms=now, lead_in="trim_unsupplied_prefix"
+        )
     except StudyInputRefusal as refusal:
         raise ReliabilityRefusal(
             refusal.code,
             _lead_in_aware(refusal, params.from_date),
             coverage=refusal.coverage,
-            data_source=data_source_block(identity_for(requested_inputs), warmup=None, coverage=refusal.coverage),
+            data_source=reliability_data_source(requested, warmup=None, coverage=refusal.coverage),
         ) from refusal
 
-    identity = identity_for(admitted_inputs)
+    identity = replace(requested, inputs=admitted.identity)
     frame = pd.DataFrame(
         bars_as_rows(fold_minute_bars((*admitted.warmup_bars, *admitted.window_bars), bar_minutes)),
         columns=_FRAME_COLUMNS,
     )
-    admitted_bars = int((frame["timestamp"] < window.window_start_ms).sum())
     report = warmup_report(
         params.warmup_policy,
         requested_bars=window.warmup_bars,
         requested_sessions=len(lead),
-        admitted_sessions=admitted_inputs.warmup_sessions,
-        admitted_bars=admitted_bars,
-        floor_limited=fetch_from <= polygon_history_floor(et_date_at_ms(now)),
+        admitted_sessions=admitted.identity.warmup_sessions,
+        admitted_bars=int((frame["timestamp"] < window.window_start_ms).sum()),
+        dropped_sessions=len(admitted.coverage.dropped),
+        floor_limited=window.floor_limited,
     )
     if report.shortened:
         logger.info(
-            "reliability warmup shorter than the policy asks",
+            "reliability warmup shorter than the sizing asks",
             extra={
                 "action": "reliability_warmup_shortened",
                 "symbol": params.symbol,
@@ -531,9 +436,9 @@ def admit_reliability_inputs(params: ReliabilityParams, *, now_ms: int | None = 
         raise ReliabilityRefusal(
             "warmup_shortened",
             f"The warmup asks for {report.requested_bars} bars before {params.from_date.isoformat()} and the lake holds "
-            f"{report.admitted_bars} ({_CAUSE_WORDS[report.cause]}). Start the window later, or allow a shortened warmup.",
+            f"{report.admitted_bars} ({_CAUSE_WORDS[report.cause]}). {_REMEDY[report.cause]}",
             coverage=admitted.coverage,
-            data_source=data_source_block(identity, warmup=report, coverage=admitted.coverage, admitted=admitted),
+            data_source=reliability_data_source(identity, warmup=report, coverage=admitted.coverage, admitted=admitted),
         )
     return AdmittedReliabilityInputs(
         identity=identity,
@@ -543,4 +448,3 @@ def admit_reliability_inputs(params: ReliabilityParams, *, now_ms: int | None = 
         warmup=report,
         admitted=admitted,
     )
-

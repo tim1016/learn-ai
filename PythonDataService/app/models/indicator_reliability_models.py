@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.models.lake_study_models import LakeDataSource, LakeRefusedResult
 from app.schemas.ticker_request import TickerRequest
 
 StrengthLabel = Literal["Noise", "Weak", "Moderate", "Strong"]
@@ -58,11 +59,15 @@ class IndicatorReliabilityRequest(TickerRequest):
     warmup_policy: WarmupPolicy = Field(
         default="allow_shortened",
         description=(
-            "What to do when the lake cannot supply the whole warmup lead-in the policy sizes (history floor, "
+            "What to do when the lake cannot supply the whole warmup lead-in the sizing asks for (history floor, "
             "symbol listing, sparse bars). 'allow_shortened' computes on the lead-in that exists and reports the "
-            "shortfall in data_source.warmup; 'require_full' refuses with code 'warmup_shortened'."
+            "shortfall in data_source.warmup; 'require_full' refuses with code 'warmup_shortened'. A lead-in session "
+            "the vendor failed to supply (rather than answered with no bars) refuses under either policy."
         ),
     )
+    # The study has always computed on regular hours only and ignored this field. A value it cannot honour is refused
+    # at validation instead of answered with a sample the caller did not ask for.
+    session: Literal["rth"] = "rth"
 
 
 class HorizonICResult(BaseModel):
@@ -186,74 +191,34 @@ class RegimeResults(BaseModel):
     )
 
 
-class ReliabilityCoverageGroup(BaseModel):
-    """Distinct-session counts from lake admission for the window or its warmup lead-in."""
-
-    expected_sessions: int
-    reused: int = Field(..., description="Sessions ready before this run began")
-    added: int = Field(..., description="Sessions this run made ready")
-    missing: int = Field(..., description="Sessions not held and not fetched")
-    failed: int = Field(..., description="building + corrupt + unavailable_from_provider")
-    building: int
-    corrupt: int
-    unavailable_from_provider: int
-
-
-class ReliabilityArtifactCounts(BaseModel):
-    """Artifact counts, kept apart from session counts (a session is one minute artifact plus metadata)."""
-
-    fetched: int
-    reused: int
-    refreshed: int
-
-
-class ReliabilityCoverage(BaseModel):
-    window: ReliabilityCoverageGroup
-    warmup: ReliabilityCoverageGroup
-    artifacts: ReliabilityArtifactCounts
-
-
 class ReliabilityWarmup(BaseModel):
-    """The warmup lead-in the policy asked for against the one the lake supplied.
+    """The warmup lead-in the sizing asked for against the one the lake supplied.
 
     Before the lake, a lead-in cut short by the provider's history floor, the symbol's listing date or sparse
-    sessions was computed on without a word. ``shortened`` and ``cause`` say it; ``policy`` says what the run was
-    allowed to do about it.
+    sessions was computed on without a word. ``shortened`` and ``cause`` say it, ``notice`` says it in a sentence,
+    and ``policy`` is the request's ``warmup_policy``: what the run was allowed to do about it.
     """
 
     policy: WarmupPolicy
-    requested_bars: int = Field(..., description="Warmup bars the policy sizes: indicator lookback x the warmup multiplier")
-    requested_sessions: int = Field(..., description="Lead-in sessions the policy asks for, never before the provider floor")
+    requested_bars: int = Field(..., description="Warmup bars the sizing asks for: indicator lookback x the warmup multiplier")
+    requested_sessions: int = Field(..., description="Lead-in sessions the sizing asks for, never before the provider floor")
     admitted_sessions: int
     admitted_bars: int = Field(..., description="Bars at the study's resolution before the window's first session")
     shortened: bool
     shortfall_bars: int
     cause: WarmupShortfallCause
+    notice: str | None = Field(None, description="The shortfall in a sentence; null when there is none")
 
 
-class ReliabilityDataSource(BaseModel):
-    """Where this study's bars came from: the lake input identity, the admitted bytes, and what admission did."""
+class ReliabilityDataSource(LakeDataSource):
+    """The lake data source of a reliability run, plus its warmup report and the identity a stored result would key on."""
 
-    kind: Literal["lake"] = "lake"
-    provider: str
-    price_adjustment_mode: Literal["raw", "polygon_split_adjusted"]
-    session_policy: Literal["regular", "extended"]
-    bar_minutes: int
-    aggregation: str
-    window_start_ms: int = Field(..., description="Requested first date, ET midnight, int64 ms UTC")
-    window_end_ms: int = Field(..., description="Requested last date, ET midnight, int64 ms UTC")
     warmup: ReliabilityWarmup | None = Field(
         None, description="Requested against admitted lead-in; null when a refusal came before any bar was read"
     )
-    calculation_version: str
-    identity_digest: str | None = Field(None, description="Hash of every input that decides the numbers")
-    snapshot_digest: str | None = Field(None, description="sha256 of every byte admitted; null when nothing was admitted")
-    result_identity_digest: str | None = Field(None, description="identity + admitted snapshot + calculation version")
-    data_root_id: str | None = None
-    corporate_action_versions: dict[str, str] = Field(default_factory=dict)
-    coverage: ReliabilityCoverage | None = None
-    minute_bars_read: int | None = None
-    bars_used: int | None = Field(None, description="Bars the statistics ran on, after the warmup was trimmed")
+    result_identity_digest: str | None = Field(
+        None, description="identity + admitted snapshot + calculation version; null when nothing was admitted"
+    )
 
 
 class IndicatorReliabilityResponse(BaseModel):
@@ -338,11 +303,20 @@ class IndicatorReliabilityResponse(BaseModel):
     # Warnings
     warnings: list[str] = Field(default_factory=list)
 
-    data_source: ReliabilityDataSource | None = Field(
-        None, description="The lake input behind this result: identity, admitted snapshot, coverage and warmup"
+    data_source: ReliabilityDataSource = Field(
+        ..., description="The lake input behind this result: identity, admitted snapshot, coverage and warmup"
     )
 
     error: str | None = None
+
+
+class ReliabilityRefusedResult(LakeRefusedResult):
+    """The body of a refused run (409, or 503 when the lake cannot be asked): the shared refusal for this study."""
+
+    ticker: str
+    data_source: ReliabilityDataSource | None = Field(
+        None, description="Null when the refusal came before anything was read"
+    )
 
 
 class IndicatorInfo(BaseModel):

@@ -61,8 +61,8 @@ def api() -> FastAPI:
 def world(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     catalog = install_fake_catalog(monkeypatch)
     lake = point_lake_writer_at_tmp(tmp_path, monkeypatch)
-    monkeypatch.setattr(dataset_service, "now_ms_utc", lambda: NOW_MS)
     monkeypatch.setattr(indicator_reliability_service, "now_ms_utc", lambda: NOW_MS)
+    monkeypatch.setattr(dataset_service, "now_ms_utc", lambda: NOW_MS)  # the old provider path, rebuilt for comparison
     monkeypatch.setattr(router, "RANDOM_SIMULATIONS", 20)
     with respx.mock:
         mock_launcher()
@@ -120,7 +120,7 @@ async def test_a_completed_study_carries_a_lake_data_source_with_coverage_warmup
     assert source["coverage"]["warmup"]["expected_sessions"] == 1 and source["coverage"]["warmup"]["added"] == 1
     assert source["warmup"] == {
         "policy": "allow_shortened", "requested_bars": 140, "requested_sessions": 1, "admitted_sessions": 1,
-        "admitted_bars": 390, "shortened": False, "shortfall_bars": 0, "cause": "none",
+        "admitted_bars": 390, "shortened": False, "shortfall_bars": 0, "cause": "none", "notice": None,
     }
     assert source["bars_used"] == result["bar_count"] and source["minute_bars_read"] == result["bar_count"] + 390
     assert len(source["snapshot_digest"]) == 64 and len(source["identity_digest"]) == 64
@@ -129,15 +129,16 @@ async def test_a_completed_study_carries_a_lake_data_source_with_coverage_warmup
 
 
 @pytest.mark.asyncio
-async def test_the_legacy_session_label_stays_inert_and_the_sample_is_always_regular_hours(api, world):
+async def test_a_session_the_study_cannot_compute_on_is_refused_not_answered_with_regular_hours(api, world):
+    """#3523 review m11: the study has only ever computed on regular hours; ``extended`` used to be accepted and ignored."""
     mock_vendor("SPY", tape(WINDOW))
 
-    regular = (await post(api, body(session="rth"))).json()
-    extended = (await post(api, body(session="extended"))).json()
+    regular = await post(api, body(session="rth"))
+    extended = await post(api, body(session="extended"))
 
-    assert regular["data_source"]["session_policy"] == extended["data_source"]["session_policy"] == "regular"
-    assert regular["bar_count"] == extended["bar_count"]
-    assert regular["data_source"]["identity_digest"] == extended["data_source"]["identity_digest"]
+    assert regular.status_code == 200 and regular.json()["data_source"]["session_policy"] == "regular"
+    assert extended.status_code == 422
+    assert any("session" in str(err["loc"]) for err in extended.json()["detail"])
 
 
 # ---------------------------------------------------------------------------
@@ -227,10 +228,12 @@ async def test_a_daily_request_is_refused_with_a_reason_not_answered_with_zero_b
 
     response = await post(api, body(timespan="day", multiplier=1))
 
-    assert response.status_code == 422
-    detail = response.json()["detail"]
-    assert detail["code"] == "resolution_unsupported" and "daily rollup" in detail["message"]
-    assert detail["coverage"] is None and detail["data_source"] is None
+    assert response.status_code == 409
+    refused = response.json()
+    assert (refused["success"], refused["status"], refused["ticker"]) == (False, "refused", "SPY")
+    assert refused["refusal"]["code"] == "resolution_unsupported" and "daily rollup" in refused["refusal"]["reason"]
+    assert refused["error"] == refused["refusal"]["reason"]
+    assert refused["refusal"]["coverage"] is None and refused["data_source"] is None
     assert world[0].rows == {}, "refused before the lake was touched"
 
 
@@ -249,13 +252,17 @@ async def test_a_window_the_lake_cannot_admit_is_refused_with_the_session_and_th
     response = await post(api, body())
 
     assert response.status_code == 409
-    detail = response.json()["detail"]
-    assert detail["code"] == "data_unavailable_from_provider" and missing_day.isoformat() in detail["message"]
-    assert [(s["group"], s["outcome"]) for s in detail["sessions"]] == [("window", "unavailable_from_provider")]
-    assert detail["sessions_total"] == 1
-    window = detail["coverage"]["window"]
+    refusal = response.json()["refusal"]
+    assert refusal["code"] == "data_unavailable_from_provider" and missing_day.isoformat() in refusal["reason"]
+    assert [(s["group"], s["outcome"], s["failure_reason"]) for s in refusal["sessions"]] == [
+        ("window", "unavailable_from_provider", "provider_no_data")
+    ]
+    assert refusal["sessions_total"] == 1
+    window = refusal["coverage"]["window"]
     assert (window["expected_sessions"], window["added"], window["failed"]) == (len(WINDOW), len(WINDOW) - 1, 1)
-    assert detail["data_source"]["snapshot_digest"] is None and detail["data_source"]["identity_digest"] is not None
+    source = response.json()["data_source"]
+    assert source["snapshot_digest"] is None and source["identity_digest"] is not None
+    assert source["coverage"] == refusal["coverage"], "the source line shows the counts admission reached"
 
 
 @pytest.mark.asyncio
@@ -268,20 +275,19 @@ async def test_a_lake_that_cannot_be_asked_is_unavailable_not_a_server_error(api
     response = await post(api, body())
 
     assert response.status_code == 503
-    assert response.json()["detail"]["code"] == "lake_unavailable"
+    assert response.json()["refusal"]["code"] == "lake_unavailable"
 
 
 @pytest.mark.asyncio
 async def test_a_window_ending_on_a_session_that_has_not_finished_is_refused(api, world, monkeypatch):
     mid_session = int(datetime(2024, 3, 15, 12, 0, tzinfo=ET).timestamp() * 1000)
     monkeypatch.setattr(indicator_reliability_service, "now_ms_utc", lambda: mid_session)
-    monkeypatch.setattr(dataset_service, "now_ms_utc", lambda: mid_session)
     mock_vendor("SPY", tape(WINDOW))
 
     response = await post(api, body())
 
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "window_not_complete"
+    assert response.status_code == 409
+    assert response.json()["refusal"]["code"] == "window_not_complete"
 
 
 @pytest.mark.asyncio
@@ -289,7 +295,6 @@ async def test_require_full_refuses_a_lead_in_the_provider_floor_cut_short_and_t
     window = expected_sessions(date(2024, 3, 11), date(2024, 3, 15))
     now = et_midnight_ms(date(2029, 3, 6))  # the provider's history begins on Friday Mar 8
     monkeypatch.setattr(indicator_reliability_service, "now_ms_utc", lambda: now)
-    monkeypatch.setattr(dataset_service, "now_ms_utc", lambda: now)
     mock_vendor("SPY", vendor_history(expected_sessions(date(2024, 3, 8), window[-1]), seed=11, start_price=150.0, **DENSE))
     payload = body(
         from_date=window[0].isoformat(), to_date=window[-1].isoformat(), indicator_name="ema", indicator_params={"length": 200},
@@ -303,10 +308,12 @@ async def test_require_full_refuses_a_lead_in_the_provider_floor_cut_short_and_t
     assert allowed.json()["data_source"]["warmup"] == {
         "policy": "allow_shortened", "requested_bars": 1000, "requested_sessions": 1, "admitted_sessions": 1,
         "admitted_bars": 390, "shortened": True, "shortfall_bars": 610, "cause": "provider_history_floor",
+        "notice": allowed.json()["data_source"]["warmup"]["notice"],
     }
+    assert "610 bars short of the 1000" in allowed.json()["data_source"]["warmup"]["notice"]
     assert required.status_code == 409
-    assert required.json()["detail"]["code"] == "warmup_shortened"
-    assert required.json()["detail"]["data_source"]["warmup"]["policy"] == "require_full"
+    assert required.json()["refusal"]["code"] == "warmup_shortened"
+    assert required.json()["data_source"]["warmup"]["policy"] == "require_full"
 
 
 @pytest.mark.asyncio
@@ -315,6 +322,69 @@ async def test_an_unknown_warmup_policy_is_a_validation_error(api, world):
 
     assert response.status_code == 422
     assert any("warmup_policy" in str(err["loc"]) for err in response.json()["detail"])
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_never_shares_a_status_or_a_body_shape_with_fastapis_validation_error(api, world):
+    """#3523 review m6. A request that fails validation is 422 with ``detail`` a list; a refusal is 409 or 503 with none."""
+    mock_vendor("SPY", tape(WINDOW))
+
+    refusal = await post(api, body(timespan="day"))
+    invalid = await post(api, body(from_date="not-a-date"))
+
+    assert refusal.status_code == 409 and "detail" not in refusal.json()
+    assert invalid.status_code == 422 and isinstance(invalid.json()["detail"], list)
+
+
+def test_the_refusals_are_documented_with_their_body_and_422_stays_fastapis(api):
+    responses = api.openapi()["paths"]["/api/research/indicator-reliability"]["post"]["responses"]
+
+    refusal_body = {"$ref": "#/components/schemas/ReliabilityRefusedResult"}
+    assert responses["409"]["content"]["application/json"]["schema"] == refusal_body
+    assert responses["503"]["content"]["application/json"]["schema"] == refusal_body
+    assert responses["422"]["content"]["application/json"]["schema"] == {"$ref": "#/components/schemas/HTTPValidationError"}
+
+
+# ---------------------------------------------------------------------------
+# #3523 review M1 through the route: an empty vendor answer shortens the lead-in, a vendor failure refuses
+# ---------------------------------------------------------------------------
+
+EMA_200 = {"indicator_name": "ema", "indicator_params": {"length": 200}, "horizons": [1]}  # three lead-in sessions
+
+
+@pytest.mark.asyncio
+async def test_a_symbol_that_lists_inside_the_lead_in_computes_on_what_it_has_and_keeps_the_dropped_session_in_the_counts(api, world):
+    vendor = tape(WINDOW)
+    del vendor[LEAD[0]]  # the vendor answers with no bars for the oldest lead-in session
+    mock_vendor("SPY", vendor)
+
+    response = await post(api, body(**EMA_200))
+
+    assert response.status_code == 200, response.text
+    source = response.json()["data_source"]
+    assert source["warmup"]["cause"] == "symbol_history_starts"
+    assert (source["warmup"]["requested_sessions"], source["warmup"]["admitted_sessions"]) == (3, 2)
+    assert source["warmup_sessions"] == 2, "the identity is the lead-in that was read"
+    warmup = source["coverage"]["warmup"]
+    assert (warmup["expected_sessions"], warmup["added"], warmup["unavailable_from_provider"], warmup["failed"]) == (3, 2, 1, 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ["duplicate", "out_of_order"])
+async def test_a_tape_the_lake_rejects_on_the_oldest_lead_in_session_is_a_refusal_not_a_shorter_warmup(api, world, fault):
+    vendor = tape(WINDOW)
+    bars = vendor[LEAD[0]]
+    vendor[LEAD[0]] = [*bars[:5], bars[4], *bars[5:]] if fault == "duplicate" else [*bars[:5], bars[6], bars[5], *bars[7:]]
+    mock_vendor("SPY", vendor)
+
+    response = await post(api, body(**EMA_200))
+
+    assert response.status_code == 409
+    refused = response.json()
+    assert refused["refusal"]["code"] == "data_unavailable_from_provider"
+    assert [(s["group"], s["failure_reason"]) for s in refused["refusal"]["sessions"]] == [("warmup", "validation_failed")]
+    assert refused["data_source"]["coverage"]["warmup"]["unavailable_from_provider"] == 1
+    assert refused["data_source"]["warmup"] is None
 
 
 # ---------------------------------------------------------------------------

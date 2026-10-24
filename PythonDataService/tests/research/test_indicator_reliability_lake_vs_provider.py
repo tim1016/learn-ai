@@ -11,11 +11,15 @@ read the *same* pinned vendor payload:
 * the **lake path** is the real admission — vendor HTTP, ``ensure_data``, the lake writer, committed-byte admission, the
   reader — and the study's fold, then the same indicator and trim.
 
-Each case records changed timestamps, prices, precision, counts and derived outputs (the indicator's values; the in- and
-out-of-sample mean IC of every horizon), and names the cause in the reconcile taxonomy of ``numerical-rigor.md``
-(``timestamp``, ``warmup``, ``precision``, ``off-by-one``, ``data-quality``). A case that moves nothing says so by
-asserting zero. Unexplained drift fails here; an *intentional* divergence is the owner's decision (D02) and is listed in
-the PR.
+Each case records changed timestamps, prices, counts and derived outputs (the indicator's values; the in- and
+out-of-sample mean IC of every horizon), and names the cause with the reconcile categories (``timestamp``, ``warmup``,
+``precision``, ``off-by-one``, ``data-quality``). A case that moves nothing says so by asserting zero. Unexplained drift
+fails here; an *intentional* divergence is the owner's decision (D02) and is listed in the PR.
+
+The lake's 1/10,000 price grid is ``data-quality``, never ``precision``: it changes the input data, and ``precision`` is
+floating-point accumulation. A tolerance may loosen only for the latter, so each output the grid moves is pinned at its
+*measured* magnitude (``test_prices_finer_than_the_lake_grid...``), with a stated margin, at three price levels, because
+the movement of an indicator such as RSI depends on the price it is computed at.
 
 Not provable offline: that Polygon's own N-minute aggregate equals a fold of its minute aggregates. Cases that fold use an
 independent reference for the vendor side (``vendor_fold``); that equivalence with the live API is an assumption of the
@@ -40,6 +44,7 @@ from app.research.study_inputs import lead_in_sessions
 from app.services import dataset_service
 from app.services.dataset_service import CanonicalBarsError, calculate_dynamic_indicators, filter_session
 from app.services.indicator_reliability_service import (
+    SUPPORTED_MINUTE_MULTIPLIERS,
     ReliabilityParams,
     ReliabilityRefusal,
     admit_reliability_inputs,
@@ -62,8 +67,10 @@ ENTRY = {"name": "rsi", "params": {"length": 14}}
 HORIZONS = (1, 5)
 
 
-def tape_for(window: list[date], *, lead: int = 3, **options) -> dict[date, list[VendorBar]]:
-    return vendor_history([*lead_in_sessions(window[0], lead), *window], seed=11, start_price=150.0, **{**DENSE, **options})
+def tape_for(window: list[date], *, lead: int = 3, start_price: float = 150.0, **options) -> dict[date, list[VendorBar]]:
+    return vendor_history(
+        [*lead_in_sessions(window[0], lead), *window], seed=11, start_price=start_price, **{**DENSE, **options}
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +114,7 @@ def lake_frame(
     df, meta = calculate_dynamic_indicators(study.frame, [entry])
     lead_in = int((df["timestamp"] < study.window_start_ms).sum())
     df = df[df["timestamp"] >= study.window_start_ms].reset_index(drop=True)
-    return LakeFrame(df, meta[0]["column"], lead_in, study.warmup.as_dict())
+    return LakeFrame(df, meta[0]["column"], lead_in, study.warmup.model_dump())
 
 
 # ---------------------------------------------------------------------------
@@ -137,15 +144,18 @@ class Comparison:
         return self.only_provider + self.only_lake
 
     @property
+    def quantization_only(self) -> bool:
+        """Every price that moved moved by at most half of the lake's 1/10,000 grid step."""
+        return self.prices_changed > 0 and self.max_price_diff <= 5e-5 + 1e-9
+
+    @property
     def causes(self) -> list[str]:
         """The reconcile taxonomy's reading of what moved. Rules, not judgement: a count or a magnitude decides."""
         found: list[str] = []
         if self.timestamps_changed:
             found.append("data-quality")  # bars present on one side only: the input itself differs
-        if self.prices_changed and self.max_price_diff <= 5e-5 + 1e-9:
-            found.append("precision")  # at most half of the lake's 1/10,000 grid
-        elif self.prices_changed:
-            found.append("data-quality")
+        if self.prices_changed:
+            found.append("data-quality")  # a price that moved is a different input, even by half the lake's grid step
         if self.volume_changed:
             found.append("data-quality")
         if self.lead_in_bars[0] != self.lead_in_bars[1]:
@@ -221,7 +231,14 @@ def test_prices_on_the_grid_across_a_dst_change_an_early_close_and_a_holiday_mov
     assert comparison.lead_in_bars[0] == comparison.lead_in_bars[1] > 0, "the same warmup lead-in, bar for bar"
 
 
-@pytest.mark.parametrize("bar_minutes", [3, 5, 15, 30])
+#: The supported minute lengths whose buckets start on a wall-clock boundary that the 09:30 open also sits on (they
+#: divide 30), so no bucket straddles the open: the lake's fold and the vendor's aggregate hold the same minutes.
+OPEN_ALIGNED_MINUTES = [m for m in SUPPORTED_MINUTE_MULTIPLIERS if m != 1 and 30 % m == 0]
+#: The other supported lengths below an hour. Their bucket that holds 09:30 starts before it, at 09:28, 09:24 or 09:20.
+OPEN_STRADDLING_MINUTES = [m for m in SUPPORTED_MINUTE_MULTIPLIERS if m < 60 and 30 % m != 0]
+
+
+@pytest.mark.parametrize("bar_minutes", OPEN_ALIGNED_MINUTES)
 def test_coarser_minute_bars_fold_to_the_same_bars_as_the_vendor_side_aggregate(world, bar_minutes):
     tape = tape_for(DST_WINDOW)
     mock_vendor("SPY", tape, adjusted=tape)
@@ -265,6 +282,32 @@ def test_the_bar_that_holds_the_open_is_the_one_difference_in_hourly_bars(world)
     assert len(lake.frame) == len(fixed_call.frame) == len(old_call.frame) + sessions
 
 
+@pytest.mark.parametrize("bar_minutes", OPEN_STRADDLING_MINUTES)
+def test_a_minute_length_that_straddles_the_open_differs_from_the_vendor_in_the_one_bar_that_holds_it(world, bar_minutes):
+    """Cause: ``data-quality`` (session scope of a bar that straddles the open), as for the hourly bar below.
+
+    A 4-, 12- or 20-minute bucket holding 09:30 starts at 09:28, 09:24 or 09:20, so the vendor's aggregate holds
+    pre-open trades the lake's, which applies the session before the fold, does not. Every other bar is the same. The
+    old call dropped that bar altogether (``filter_session`` without the bar length).
+    """
+    window = DST_WINDOW
+    assert bar_minutes in (4, 12, 20), "the supported lengths that do not divide the 30 minutes before the half hour"
+    tape = tape_for(window, lead=12, extended_keep=1.0)
+    mock_vendor("SPY", tape, adjusted=tape)
+    sessions = len(window)
+
+    old_call = provider_frame(tape, from_date=window[0], to_date=window[-1], multiplier=bar_minutes)
+    fixed_call = provider_frame(tape, from_date=window[0], to_date=window[-1], multiplier=bar_minutes, filter_with_bar_length=True)
+    lake = lake_frame(window, multiplier=bar_minutes)
+    versus_fixed = compare(fixed_call, lake, derived=False)
+    versus_old = compare(old_call, lake, derived=False)
+
+    assert versus_old.only_lake == sessions and versus_old.only_provider == 0, "the old call lost the open bar every session"
+    assert versus_fixed.timestamps_changed == 0
+    assert versus_fixed.volume_changed == sessions and 0 < versus_fixed.prices_changed <= sessions, "only the open bar differs"
+    assert versus_fixed.causes == ["data-quality"]
+
+
 def test_the_old_session_filter_dropped_every_daily_bar_which_is_why_a_daily_request_is_now_refused():
     """#3527. Daily bars start at ET midnight, before the open; the call that omitted the bar length treated them as one minute."""
     days = expected_sessions(date(2024, 3, 4), date(2024, 3, 8))
@@ -281,23 +324,46 @@ def test_the_old_session_filter_dropped_every_daily_bar_which_is_why_a_daily_req
     # trades), so the study refuses the size with a reason instead (see test_indicator_reliability_inputs.py).
 
 
-def test_prices_finer_than_the_lake_grid_move_by_at_most_half_a_ten_thousandth(world):
-    """Cause: ``precision``. The lake rounds half-up to 1/10,000 (``lean_writer.to_deci_cent``); the provider path does not."""
-    tape = tape_for(DST_WINDOW, decimals=5)
+#: What the lake's price grid moves, measured on this pinned payload (seed 11, the DST window) at three price levels: the
+#: largest absolute difference between the two paths' RSI(14) at a shared bar, and the largest difference in the
+#: in-sample and out-of-sample mean IC over the horizons. Prices carry five or six decimals, finer than the grid. The
+#: movement of RSI grows as the price falls: a rounding of at most 5e-5 is a larger share of a bar-to-bar change on a
+#: $2 name than on a $150 one. Re-measure (print the three ``Comparison`` fields per case) only when the pinned tape or
+#: the lake's encoding intentionally changes; never to make a failing test pass.
+QUANTIZATION_MEASURED = {
+    "price_150": (150.0, 5, {"indicator": 7.021e-3, "is_ic": 3.109e-5, "oos_ic": 3.921e-5}),
+    "price_12": (12.0, 5, {"indicator": 1.0896e-1, "is_ic": 9.602e-5, "oos_ic": 4.453e-4}),
+    "price_2": (2.0, 6, {"indicator": 5.980e-1, "is_ic": 1.235e-4, "oos_ic": 1.2827e-3}),
+}
+#: The headroom over a measured movement. The tape is seeded and the arithmetic deterministic, so this only absorbs
+#: platform differences in float summation order inside pandas and numpy; a real change in the lake's encoding, or in
+#: an indicator's math, moves these by orders of magnitude more.
+MEASURED_MARGIN = 1.5
+
+
+@pytest.mark.parametrize(("start_price", "decimals", "measured"), QUANTIZATION_MEASURED.values(), ids=QUANTIZATION_MEASURED)
+def test_prices_finer_than_the_lake_grid_move_each_output_by_its_measured_amount_which_depends_on_the_price(
+    world, start_price, decimals, measured
+):
+    """Cause: ``data-quality`` (input quantization). The lake rounds half-up to 1/10,000 (``lean_writer.to_deci_cent``);
+    the provider path does not. That changes the input data, so it is not ``precision`` and no float tolerance covers it.
+
+    Each recorded output is pinned at its measured movement times ``MEASURED_MARGIN``, so a lake encoding change that
+    moved the IC by 1e-3 would fail here. The table above is what D02 is decided on.
+    """
+    tape = tape_for(DST_WINDOW, start_price=start_price, decimals=decimals)
     mock_vendor("SPY", tape, adjusted=tape)
 
-    comparison = compare(
-        provider_frame(tape, from_date=DST_WINDOW[0], to_date=DST_WINDOW[-1]), lake_frame(DST_WINDOW)
-    )
+    comparison = compare(provider_frame(tape, from_date=DST_WINDOW[0], to_date=DST_WINDOW[-1]), lake_frame(DST_WINDOW))
 
     assert comparison.timestamps_changed == 0
-    assert comparison.prices_changed > 0
-    assert comparison.max_price_diff <= 5e-5 + 1e-9
-    assert comparison.causes == ["precision"]
-    # A price that moves by 5e-5 on a $150 name moves a 0-100 oscillator and a rank correlation by far less than their
-    # own sampling error; the bounds below are measured on this payload, not assumed, and are what the owner is shown.
-    assert comparison.indicator_max_diff < 2e-2
-    assert comparison.is_ic_max_diff < 1e-3 and comparison.oos_ic_max_diff < 1e-3
+    assert comparison.quantization_only, "every price that moved moved by at most half a ten-thousandth"
+    assert comparison.causes == ["data-quality"]
+    assert comparison.indicator_valid_moved == 0
+    # atol is the measured movement with its margin; rtol is 0 because the quantity compared is itself a difference.
+    assert 0 < comparison.indicator_max_diff <= measured["indicator"] * MEASURED_MARGIN
+    assert 0 < comparison.is_ic_max_diff <= measured["is_ic"] * MEASURED_MARGIN
+    assert 0 < comparison.oos_ic_max_diff <= measured["oos_ic"] * MEASURED_MARGIN
 
 
 def test_fractional_share_volume_is_kept_exactly_by_both_paths(world):
@@ -311,7 +377,7 @@ def test_fractional_share_volume_is_kept_exactly_by_both_paths(world):
     )
 
     assert comparison.volume_changed == 0, "six-decimal volume survives the lake's text encoding exactly"
-    assert comparison.indicator_max_diff <= 1e-6, "OBV accumulates volume; the sum of identical terms is identical"
+    assert comparison.indicator_max_diff <= 1e-9, "OBV accumulates volume; the sum of identical terms is identical (measured 0.0)"
 
 
 def test_the_study_reads_no_vwap_or_transaction_count_so_dropping_them_moves_nothing(world):
@@ -399,7 +465,7 @@ def test_a_symbol_listed_inside_the_lead_in_was_silent_and_is_reported_and_requi
     assert old.lead_in_bars == 2 * 390 and lake.warmup["admitted_bars"] == old.lead_in_bars
     assert lake.warmup["cause"] == "symbol_history_starts" and lake.warmup["requested_sessions"] == 3
     assert comparison.causes == [] and comparison.indicator_max_diff <= 1e-9 and comparison.is_ic_max_diff <= 1e-9
-    assert refused.value.code == "data_unavailable_from_provider"
+    assert refused.value.code == "warmup_shortened"
 
 
 # --- gaps, forming sessions, bad tapes --------------------------------------------------------------------------------
