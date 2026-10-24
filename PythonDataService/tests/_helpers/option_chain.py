@@ -67,6 +67,9 @@ class OptionChain:
     strike_step: float = 1.0
     #: Listed expiries; weekly Fridays around the underlying's path when omitted.
     expiries: tuple[date, ...] | None = None
+    #: The first session an expiry is listed on; an expiry missing here is listed from the start. A listing as of an
+    #: earlier date does not hold it, which is what forces the contract finder to list again.
+    listed_on: Mapping[date, date] = field(default_factory=dict)
     bar_failure: Callable[[str], Exception | None] = lambda ticker: None
     contract_failure: Callable[[str | None], Exception | None] = lambda expiry: None
     contract_requests: list[dict[str, Any]] = field(default_factory=list)
@@ -103,7 +106,7 @@ class OptionChain:
         for expiry in self._expiries():
             if expiry_asked is not None and expiry.isoformat() != expiry_asked:
                 continue
-            if as_of is not None and expiry < as_of:
+            if as_of is not None and (expiry < as_of or self.listed_on.get(expiry, date.min) > as_of):
                 continue
             if (lo is not None and expiry < lo) or (hi is not None and expiry > hi):
                 continue

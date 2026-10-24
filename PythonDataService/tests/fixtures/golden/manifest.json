@@ -3024,6 +3024,55 @@
       "validated_by": [
         "tests/research/test_cross_sectional_lake_vs_provider.py::test_the_regular_fold_of_a_real_spy_week_equals_the_vendors_real_daily_open_high_and_low"
       ]
+    },
+    {
+      "id": "XSIV-001",
+      "name": "The Cross-sectional study's option inputs through the provider path (the vendor's expiries, contracts and daily bars), frozen before they moved to the data lake",
+      "category": "options-pricing",
+      "canonical_module": "PythonDataService/app/research/options/contract_finder.py, PythonDataService/app/research/options/iv_builder.py",
+      "canonical_callable": "find_bracket_contracts, build_iv_history",
+      "reference": {
+        "kind": "internal_regression",
+        "oracle": "self: the study's provider path as of 8c9bba4a (#3540 Part A), whose app/ code the fixture was generated with; the independent check is the volatility the chain was priced with",
+        "citation": "tests/fixtures/golden/options-pricing/XSIV-001/v1/regenerate.py over tests/_helpers/option_chain.OptionChain; https://github.com/tim1016/learn-ai/issues/3524"
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "tests/fixtures/golden/options-pricing/XSIV-001/v1/regenerate.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 0.0,
+        "rtol": 0.0,
+        "note": "The lake path and the frozen provider path run the same contract-selection and IV code on the same prices (the 15:59 close is the day's vw), so selection and every IV column are held bit-exact. Only price_source differs (vwap against close_filtered), by classification; no tolerance is loosened to pass."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "generated": "2026-10-24",
+          "justification": "Frozen before the Cross-sectional study's option inputs moved from the vendor to the data lake (#3540 Part B), so the lake path can be held to what the provider path returned.",
+          "content_sha256": {
+            "input.json": "8faa9ac2084e9752bed93bb971a64ee0df53b989c6129793680cd5306c202c65",
+            "output.json": "4a3524efbc55146241dd5bf69d310105e20916074de464b0efe1336bb519845d",
+            "attribution.md": "eec27c265a513a30217f91c51d2b1b1c3b6907e09326a2d223e56d588bef32fc",
+            "regenerate.py": "ea9f988bc9451438fd77812779fc4101e28e2461cb1187517fa622f245f3a98e"
+          },
+          "file_sha256": {
+            "input.json": "cfef88d941bf1b7acdb252c03956966e02420f9c2c52276207db856f1f5ce7ab",
+            "output.json": "9f303d1153233b039d7397045e32846d82db95ae255de5e4a05d5bcded699472",
+            "attribution.md": "eec27c265a513a30217f91c51d2b1b1c3b6907e09326a2d223e56d588bef32fc",
+            "regenerate.py": "ea9f988bc9451438fd77812779fc4101e28e2461cb1187517fa622f245f3a98e"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/research/test_cross_sectional_options_lake_vs_provider.py"
+      ]
     }
   ]
 }
