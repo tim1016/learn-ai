@@ -21,6 +21,16 @@ export const OPTIONS_ROUTES: Routes = [
         pathMatch: 'full',
         loadComponent: () => import('./chain/options-chain.component').then((m) => m.OptionsChainComponent),
       },
+      {
+        path: 'surface',
+        pathMatch: 'full',
+        loadComponent: () => import('./surface/options-surface.component').then((m) => m.OptionsSurfaceComponent),
+      },
+      {
+        path: 'pricing',
+        pathMatch: 'full',
+        loadComponent: () => import('./pricing/options-pricing.component').then((m) => m.OptionsPricingComponent),
+      },
     ],
   },
 ];

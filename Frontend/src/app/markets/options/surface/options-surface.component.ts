@@ -9,10 +9,10 @@ import {
   inject,
   runInInjectionContext,
   signal,
+  untracked,
   viewChild,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
 import { HealthNoticeComponent } from '../../../shared/scoped-health/health-notice.component';
 import { HEALTH_NEEDS } from '../../../shared/scoped-health/scoped-health';
 import { PageGuideComponent } from '../../../shared/page-guide/page-guide.component';
@@ -23,9 +23,9 @@ import { brokerSse, type SseStatus, type SseStream } from '../../../services/bro
 import type {
   IbkrSurfaceSnapshot,
 } from '../../../api/broker-models';
-import { fmtBrokerExpiryDate, fmtCurrency, fmtTimestampNy } from '../format';
+import { fmtBrokerExpiryDate, fmtCurrency, fmtTimestampNy } from '../../../components/broker/format';
+import { InstrumentContextService } from '../../instrument-context.service';
 
-const DEFAULT_SYMBOL = 'SPY';
 const DEFAULT_DEBOUNCE_MS = 500;
 const DEFAULT_DAYS_OUT = 60;
 const DEFAULT_STRIKES_BAND = 5;
@@ -65,8 +65,13 @@ const Z_METRICS: readonly ZMetricOption[] = [
 ] as const;
 
 /**
- * /broker/options-surface — IBKR live multi-expiry option surface as a
- * pair of 3D bar charts (call | put).
+ * An instrument's Options > Surface view: the IBKR live multi-expiry option
+ * surface as a pair of 3D bar charts (call | put).
+ *
+ * The underlying is the instrument the place is open on. Switching instrument
+ * drops the prepared grid and the stream and leaves Setup to be run again.
+ * Days out, strikes band, metric and monthlies-only are this view's own
+ * inputs; nothing from the chain view is forced into them.
  *
  * Y axis = strikes (default ATM ± 5), X axis = expiries (default 2
  * months out), Z axis = selectable metric (default last). The strike
@@ -80,30 +85,31 @@ const Z_METRICS: readonly ZMetricOption[] = [
  * disables the Load button when over.
  */
 @Component({
-  selector: 'app-broker-options-surface',
+  selector: 'app-options-surface',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     FormsModule,
     HealthNoticeComponent,
-    PageHeaderComponent,
     PageGuideComponent,
     SectionErrorComponent,
   ],
-  styleUrl: './broker-options-surface.component.scss',
-  templateUrl: './broker-options-surface.component.html',
+  styleUrl: './options-surface.component.scss',
+  templateUrl: './options-surface.component.html',
 })
-export class BrokerOptionsSurfaceComponent {
+export class OptionsSurfaceComponent {
   private readonly broker = inject(MarketDataFeedService);
   private readonly health = inject(BrokerHealthService);
   /** The stream is the IBKR feed; its own reason stays where the controls are. */
   protected readonly healthNeeds = HEALTH_NEEDS.liveChain;
   private readonly injector = inject(Injector);
   private readonly destroyRef = inject(DestroyRef);
+  private readonly instrument = inject(InstrumentContextService);
   readonly bannerState = this.health.bannerState;
   private expirationsRequested = false;
   private setupRequestSeq = 0;
 
-  readonly symbol = signal(DEFAULT_SYMBOL);
+  /** The instrument the place is open on. */
+  readonly symbol = this.instrument.symbol;
   readonly daysOut = signal(DEFAULT_DAYS_OUT);
   readonly strikesBand = signal(DEFAULT_STRIKES_BAND);
   readonly zMetric = signal<ZMetric>('last');
@@ -218,6 +224,20 @@ export class BrokerOptionsSurfaceComponent {
       void this.renderCharts().catch((error: unknown) => this.chartError.set(error));
     });
 
+    // Another instrument drops what was prepared for the last one: its grid,
+    // its stream and its expiries. Setup reads them again for the new one.
+    let prepared = this.symbol();
+    effect(() => {
+      const symbol = this.symbol();
+      untracked(() => {
+        if (symbol === prepared) return;
+        prepared = symbol;
+        this.invalidateSetup();
+        this.allExpirations.set([]);
+        this.strikesByExpiry.clear();
+      });
+    });
+
     // Auto-load expirations on first paint when the broker is live.
     effect(() => {
       if (this.canStream() && !this.expirationsRequested) {
@@ -251,14 +271,6 @@ export class BrokerOptionsSurfaceComponent {
     } finally {
       if (seq === this.setupRequestSeq) this.setupLoading.set(false);
     }
-  }
-
-  setSymbol(symbol: string): void {
-    if (symbol === this.symbol()) return;
-    this.invalidateSetup();
-    this.symbol.set(symbol);
-    this.allExpirations.set([]);
-    this.strikesByExpiry.clear();
   }
 
   setDaysOut(days: number): void {

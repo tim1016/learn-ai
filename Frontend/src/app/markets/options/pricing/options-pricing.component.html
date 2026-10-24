@@ -1,16 +1,9 @@
-<div class="pricing-lab bg-slate-900 text-slate-200 min-h-screen px-4 py-3">
-  <app-page-header
-    title="Pricing Lab"
-  />
+<div class="pricing-lab bg-slate-900 text-slate-200 px-4 py-3">
   <!-- Header -->
   <div class="flex items-center gap-3 mb-4 flex-wrap">
-    <app-symbol-picker
-      [symbol]="ticker()"
-      (symbolChange)="onTickerPicked($event)"
-    />
     <p-button
-      label="Load"
-      icon="pi pi-search"
+      label="Reload"
+      icon="pi pi-refresh"
       [loading]="expirationsLoading()"
       (onClick)="fetchExpirations()"
       severity="info"
@@ -46,7 +39,7 @@
       <div class="instructions-steps">
         <div class="step">
           <span class="step-num">1</span>
-          <span>Enter a ticker (e.g. <strong>SPY</strong>) and click <strong>Load</strong></span>
+          <span>The expirations of the open instrument load on their own; <strong>Reload</strong> reads them again</span>
         </div>
         <div class="step">
           <span class="step-num">2</span>
@@ -327,16 +320,16 @@
       <div class="docs-header">
         <h2 class="text-base font-bold text-white flex items-center gap-2">
           <i class="pi pi-book text-purple-400"></i>
-          Pricing Lab — Documentation
+          Pricing — Documentation
         </h2>
       </div>
 
       <div class="docs-content">
         <!-- What this is -->
         <section class="docs-section">
-          <h3>What Is the Pricing Lab?</h3>
+          <h3>What Is the Pricing view?</h3>
           <p>
-            The Pricing Lab is a <strong>validation study</strong> for option pricing. It computes the theoretical
+            The Pricing view is a <strong>validation study</strong> for option pricing. It computes the theoretical
             price and Greeks (Delta, Gamma, Theta, Vega, Rho) for a single option contract using <strong>8
             independent pricing models</strong> across a range of underlying spot prices. By overlaying all
             curves on one chart, you can visually verify that the models agree — and investigate where and
@@ -348,8 +341,9 @@
         <section class="docs-section">
           <h3>Testing Steps</h3>
           <p>
-            <strong>Step 1 — Load a ticker:</strong> Enter the underlying symbol (e.g., SPY, AAPL, QQQ) and click
-            <strong>Load</strong>. This fetches all available option expirations from the market data API.
+            <strong>Step 1 — Load the expirations:</strong> The underlying is the instrument this place is open on.
+            Its available option expirations are fetched from the market data API when the view opens;
+            <strong>Reload</strong> fetches them again.
           </p>
           <p>
             <strong>Step 2 — Pick a contract:</strong> Choose an expiration date, select Calls or Puts, then pick
@@ -385,7 +379,7 @@
         <section class="docs-section">
           <h3>What Was Implemented</h3>
           <p>
-            The Pricing Lab evaluates a single European option at 100 evenly-spaced spot prices (from
+            The Pricing view evaluates a single European option at 100 evenly-spaced spot prices (from
             spot &times; (1 &minus; range%) to spot &times; (1 + range%)). For each spot price, every pricing model
             computes: the option <strong>price</strong> (NPV), and all five first-order <strong>Greeks</strong>.
           </p>

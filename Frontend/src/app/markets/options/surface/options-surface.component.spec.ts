@@ -6,16 +6,24 @@ import { BrokerHealthService } from '../../../services/broker-health.service';
 import { fakeScopedHealth, healthItem, projection } from '../../../shared/scoped-health/testing/scoped-health-fixtures';
 import { MarketDataFeedService } from '../../../services/market-data-feed.service';
 import type { IbkrConnectionHealth } from '../../../api/broker-models';
-import { BrokerOptionsSurfaceComponent, intersectAll, pickMonthlyExpiries, pickStrikesAroundAtm } from './broker-options-surface.component';
+import { InstrumentContextService } from '../../instrument-context.service';
+import { OptionsSurfaceComponent, intersectAll, pickMonthlyExpiries, pickStrikesAroundAtm } from './options-surface.component';
 
-describe('Options Surface page', () => {
+/** The place the view sits in, reduced to the one thing it reads: the instrument. */
+function instrumentOf(symbol: string) {
+  const current = signal(symbol);
+  return { current, provider: { provide: InstrumentContextService, useValue: { symbol: current } } };
+}
+
+describe('Options Surface view', () => {
   it('starts the health poll, opens its controls when connected, and does not retry a failed expiry read forever', async () => {
     const health = signal<IbkrConnectionHealth | null>(null);
     const start = vi.fn();
     const expirations = vi.fn().mockRejectedValue(new Error('feed unavailable'));
-    const { fixture } = await render(BrokerOptionsSurfaceComponent, {
+    const { fixture } = await render(OptionsSurfaceComponent, {
       providers: [
         provideRouter([]),
+        instrumentOf('SPY').provider,
         { provide: BrokerHealthService, useValue: { health, bannerState: signal(null), start } },
         { provide: MarketDataFeedService, useValue: { expirations } },
       ],
@@ -29,15 +37,17 @@ describe('Options Surface page', () => {
     await waitFor(() => expect(screen.getByText('Setup')).toBeTruthy());
     await waitFor(() => expect(screen.getByText('Surface setup failed.')).toBeTruthy());
     expect(expirations).toHaveBeenCalledOnce();
+    expect(expirations).toHaveBeenCalledWith('SPY');
   });
 
   it('says what the data plane makes of the IBKR feed, and keeps its own reason where the controls would be', async () => {
     const feed = fakeScopedHealth(
       projection(healthItem({ kind: 'ibkr_market_data', severity: 'critical', explanation: 'The IBKR session is down. Live option chain and bot feed readiness are affected; archived history is not.' })),
     );
-    await render(BrokerOptionsSurfaceComponent, {
+    await render(OptionsSurfaceComponent, {
       providers: [
         provideRouter([]),
+        instrumentOf('SPY').provider,
         { provide: BrokerHealthService, useValue: { health: signal(null), bannerState: signal(null), start: vi.fn() } },
         { provide: MarketDataFeedService, useValue: { expirations: vi.fn() } },
         feed.provider,
@@ -49,10 +59,12 @@ describe('Options Surface page', () => {
     expect(screen.getByText(/Broker is disconnected/)).toBeTruthy();
   });
 
-  it('clears the prepared grid when the symbol changes', async () => {
-    const { fixture } = await render(BrokerOptionsSurfaceComponent, {
+  it('clears the prepared grid when the instrument changes', async () => {
+    const instrument = instrumentOf('SPY');
+    const { fixture } = await render(OptionsSurfaceComponent, {
       providers: [
         provideRouter([]),
+        instrument.provider,
         { provide: BrokerHealthService, useValue: { health: signal<IbkrConnectionHealth>({ connected: true,
           client_id: 1, connection_state: 'connected', fetched_at_ms: 0, host: 'localhost',
           last_transition_ms: 0, mode: 'paper', port: 4002 }), bannerState: signal(null), start: vi.fn() } },
@@ -65,7 +77,7 @@ describe('Options Surface page', () => {
     fixture.detectChanges();
     expect(screen.getByText('Load Surface').closest('button')?.disabled).toBe(false);
 
-    page.setSymbol('QQQ');
+    instrument.current.set('QQQ');
     fixture.detectChanges();
     expect(screen.getByText('Load Surface').closest('button')?.disabled).toBe(true);
     expect(page.allExpirations()).toEqual([]);

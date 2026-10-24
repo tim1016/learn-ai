@@ -145,11 +145,10 @@ export const routes: Routes = [
       ).then((m) => m.SpecStrategyRunnerComponent),
   },
   {
+    // Moved into an instrument's Options tab; the symbol and the expiry go with it.
     path: "pricing-lab",
-    loadComponent: () =>
-      import("./components/pricing-lab/pricing-lab.component").then(
-        (m) => m.PricingLabComponent
-      ),
+    redirectTo: redirectToOptionsView("pricing"),
+    pathMatch: "full",
   },
   {
     path: "indicator-docs",
@@ -565,11 +564,10 @@ export const routes: Routes = [
     pathMatch: "full",
   },
   {
+    // Moved into an instrument's Options tab; the symbol and the expiry go with it.
     path: "broker/options-surface",
-    loadComponent: () =>
-      import(
-        "./components/broker/broker-options-surface/broker-options-surface.component"
-      ).then((m) => m.BrokerOptionsSurfaceComponent),
+    redirectTo: redirectToOptionsView("surface"),
+    pathMatch: "full",
   },
   ...RETIRED_IBKR_NAVIGATION_ROUTES,
   {

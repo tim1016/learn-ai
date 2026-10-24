@@ -5,6 +5,8 @@ import { BrokerHealthService } from '../../../../services/broker-health.service'
 import { MarketDataFeedService } from '../../../../services/market-data-feed.service';
 import { QuantLibService } from '../../../../services/quantlib.service';
 import { optionExpiryDate } from '../../../../shared/option-contract/option-expiry-date';
+import { HealthNoticeComponent } from '../../../../shared/scoped-health/health-notice.component';
+import { HEALTH_NEEDS } from '../../../../shared/scoped-health/scoped-health';
 import type { WorkspaceStateContent } from '../../../../shared/workspace/workspace-state';
 import { nearestExpiry } from '../chain-expiry';
 import type { ChainPresentation } from '../chain-presentation';
@@ -42,7 +44,7 @@ const STRIKES_DELAY_MS = 250;
  */
 @Component({
   selector: 'app-live-chain',
-  imports: [ExpirationRibbonComponent, LiveStrikePickerComponent, ChainViewComponent],
+  imports: [ExpirationRibbonComponent, HealthNoticeComponent, LiveStrikePickerComponent, ChainViewComponent],
   providers: [LiveChainFeed, LiveEngineReads],
   templateUrl: './live-chain.component.html',
   styleUrl: './live-chain.component.scss',
@@ -54,6 +56,8 @@ export class LiveChainComponent {
   private readonly quantlib = inject(QuantLibService);
   private readonly engine = inject(LiveEngineReads);
   protected readonly feed = inject(LiveChainFeed);
+  /** The stream is the IBKR feed; its own reason stays where the controls are. */
+  protected readonly healthNeeds = HEALTH_NEEDS.liveChain;
 
   readonly symbol = input.required<string>();
   /** The expiry the address names; `null` when it names none. */

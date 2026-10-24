@@ -1,4 +1,6 @@
-import { signal, type WritableSignal } from '@angular/core';
+import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClientTesting } from '@angular/common/http/testing';
+import { signal, type Provider, type WritableSignal } from '@angular/core';
 import { render, screen, waitFor } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import type { Mock, vi as Vi } from 'vitest';
@@ -40,14 +42,20 @@ export function liveWorld(spy: Spy, changes: Partial<LiveWorld> = {}): LiveWorld
   };
 }
 
-/** Renders the live chain behind a host that plays the address, with IBKR, the engine and the stream all faked. */
-export async function renderLive(spy: Spy, world: LiveWorld, start: { symbol?: string; expiryMs?: number } = {}) {
+/**
+ * Renders the live chain behind a host that plays the address, with IBKR, the engine and the stream all faked.
+ * The scoped-health notice above the controls reads over HTTP, which no spec answers unless it passes `more`.
+ */
+export async function renderLive(spy: Spy, world: LiveWorld, start: { symbol?: string; expiryMs?: number } = {}, more: readonly Provider[] = []) {
   const view = await render(LiveHostComponent, {
     providers: [
+      provideHttpClient(),
+      provideHttpClientTesting(),
       { provide: BrokerHealthService, useValue: { health: world.health, lastError: world.healthFailure, start: spy.fn() } },
       { provide: MarketDataFeedService, useValue: { expirations: world.expirations, strikes: world.strikes } },
       { provide: QuantLibService, useValue: { selectedEngine: world.engine, priceOption: world.price } },
       world.feed.provide,
+      ...more,
     ],
   });
   const host = view.fixture.componentInstance;

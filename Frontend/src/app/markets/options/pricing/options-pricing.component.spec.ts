@@ -1,16 +1,18 @@
+import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import { render } from '@testing-library/angular';
+import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
+import { render, screen, waitFor } from '@testing-library/angular';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting, type TestRequest } from '@angular/common/http/testing';
 import { vi } from 'vitest';
-import { PricingLabComponent } from './pricing-lab.component';
-import { etIsoDate } from '../../shared/date/et-midnight';
-import { optionExpiryAnchorMs } from '../../shared/option-contract/option-expiry-date';
-import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
-import { PricingCompareResult, SnapshotContractResult } from '../../services/market-data.types';
-import { bsPrice } from '../../utils/black-scholes';
-import type { components } from '../../api/broker.types';
-import { environment } from '../../../environments/environment';
+import { OptionsPricingComponent } from './options-pricing.component';
+import { InstrumentContextService } from '../../instrument-context.service';
+import { etIsoDate } from '../../../shared/date/et-midnight';
+import { optionExpiryAnchorMs } from '../../../shared/option-contract/option-expiry-date';
+import { PricingCompareResult, SnapshotContractResult } from '../../../services/market-data.types';
+import { bsPrice } from '../../../utils/black-scholes';
+import type { components } from '../../../api/broker.types';
+import { environment } from '../../../../environments/environment';
 
 vi.mock('lightweight-charts', () => {
   const mockTimeScale = { fitContent: vi.fn() };
@@ -116,22 +118,29 @@ function buildContract(overrides: Partial<SnapshotContractResult> = {}): Snapsho
   };
 }
 
-describe('PricingLabComponent', () => {
-  let component: PricingLabComponent;
+/** The place the view sits in, reduced to the one thing it reads: the instrument. */
+function instrumentOf(symbol: string) {
+  const current = signal(symbol);
+  return { current, provider: { provide: InstrumentContextService, useValue: { symbol: current } } };
+}
+
+describe('OptionsPricingComponent', () => {
+  let component: OptionsPricingComponent;
   let httpMock: HttpTestingController;
 
   beforeEach(() => {
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
-      imports: [PricingLabComponent],
+      imports: [OptionsPricingComponent],
       providers: [
+        provideRouter([]),
         provideHttpClient(),
         provideHttpClientTesting(),
-        // The ticker picker must not issue real catalog or jobs reads.
-        ...fakePickerWorld().providers,
+        // These tests drive the loads by hand, so the place holds no instrument that would start one.
+        instrumentOf('').provider,
       ],
     });
-    const fixture = TestBed.createComponent(PricingLabComponent);
+    const fixture = TestBed.createComponent(OptionsPricingComponent);
     component = fixture.componentInstance;
     httpMock = TestBed.inject(HttpTestingController);
   });
@@ -226,6 +235,7 @@ describe('PricingLabComponent', () => {
     }
 
     it('says why the expirations could not be loaded', async () => {
+      component.ticker.set('SPY');
       const promise = component.fetchExpirations();
 
       expectPost(httpMock, 'options/expirations').flush(
@@ -597,16 +607,17 @@ describe('PricingLabComponent', () => {
   });
 });
 
-describe('PricingLabComponent selected contract info', () => {
+describe('OptionsPricingComponent selected contract info', () => {
   it.each([
     [0.2, 'IV: 20.0%'],
     [null, 'IV: —'],
   ])('shows implied volatility %s as "%s"', async (impliedVolatility, expected) => {
-    const { fixture, container } = await render(PricingLabComponent, {
+    const { fixture, container } = await render(OptionsPricingComponent, {
       providers: [
+        provideRouter([]),
         provideHttpClient(),
         provideHttpClientTesting(),
-        ...fakePickerWorld().providers,
+        instrumentOf('SPY').provider,
       ],
     });
 
@@ -615,5 +626,92 @@ describe('PricingLabComponent selected contract info', () => {
 
     const info = container.querySelector('.contract-info');
     expect(info?.textContent?.replace(/\s+/g, ' ')).toContain(expected);
+  });
+});
+
+describe('OptionsPricingComponent under the open instrument', () => {
+  const NEAR = optionExpiryAnchorMs(etIsoDate(Date.now() + 10 * 86_400_000));
+  const FAR = optionExpiryAnchorMs(etIsoDate(Date.now() + 40 * 86_400_000));
+
+  async function open(symbol: string, expiry: string | null = null) {
+    const instrument = instrumentOf(symbol);
+    const rendered = await render(OptionsPricingComponent, {
+      providers: [
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        instrument.provider,
+        {
+          provide: ActivatedRoute,
+          useValue: { snapshot: { queryParamMap: convertToParamMap(expiry === null ? {} : { expiry }) } },
+        },
+      ],
+    });
+    return { ...rendered, instrument, http: TestBed.inject(HttpTestingController) };
+  }
+
+  /** The one pending expirations request for `ticker`, flushed with `expirations`. */
+  async function answerExpirations(http: HttpTestingController, ticker: string, expirations: number[]) {
+    const pending = await waitFor(() => {
+      const matches = http.match((request) => request.url === `${API}/options/expirations` && request.body.underlying_ticker === ticker);
+      expect(matches).toHaveLength(1);
+      return matches[0];
+    });
+    pending.flush(expirationsReply(expirations));
+  }
+
+  /** The chain request for `ticker` at `expirationMs`, flushed with an empty chain. */
+  async function answerChain(http: HttpTestingController, ticker: string, expirationMs: number) {
+    const pending = await waitFor(() => {
+      const matches = http.match(
+        (request) => request.url === `${API}/snapshot/options-chain`
+          && request.body.underlying_ticker === ticker && request.body.expiration_ms === expirationMs,
+      );
+      expect(matches).toHaveLength(1);
+      return matches[0];
+    });
+    pending.flush(chainReply({ underlying: { ticker, price: 100, change: 0, change_percent: 0 } }));
+  }
+
+  it('loads the open instrument\'s expirations on its own, and the next instrument\'s when another opens', async () => {
+    const { instrument, http, fixture } = await open('SPY');
+    await answerExpirations(http, 'SPY', [NEAR, FAR]);
+    await answerChain(http, 'SPY', NEAR);
+    expect(fixture.componentInstance.ticker()).toBe('SPY');
+
+    instrument.current.set('QQQ');
+    fixture.detectChanges();
+    await answerExpirations(http, 'QQQ', [FAR]);
+    await answerChain(http, 'QQQ', FAR);
+
+    expect(fixture.componentInstance.ticker()).toBe('QQQ');
+    expect(fixture.componentInstance.selectedExpiration()).toBe(FAR);
+    http.verify();
+  });
+
+  it('opens on the expiry the address names when the chain lists it', async () => {
+    const { http, fixture } = await open('SPY', String(FAR));
+    await answerExpirations(http, 'SPY', [NEAR, FAR]);
+    await answerChain(http, 'SPY', FAR);
+
+    await waitFor(() => expect(fixture.componentInstance.expirationsLoading()).toBe(false));
+    expect(fixture.componentInstance.selectedExpiration()).toBe(FAR);
+    expect(fixture.componentInstance.statusMessage()).toBeNull();
+    http.verify();
+  });
+
+  it.each([
+    ['one the chain does not list', String(FAR + 86_400_000), /is not an expiration of SPY/],
+    ['text that is no expiry anchor', 'next-friday', /"next-friday"\) is not an expiration of SPY/],
+  ])('opens on the nearest expiry and says so when the address names %s', async (_name, expiry, message) => {
+    const { http, fixture } = await open('SPY', expiry);
+    await answerExpirations(http, 'SPY', [NEAR, FAR]);
+    await answerChain(http, 'SPY', NEAR);
+
+    await waitFor(() => expect(fixture.componentInstance.statusMessage()?.type).toBe('warn'));
+    expect(fixture.componentInstance.selectedExpiration()).toBe(NEAR);
+    expect(fixture.componentInstance.statusMessage()?.text).toMatch(message);
+    expect(screen.getByText(message)).toBeTruthy();
+    http.verify();
   });
 });

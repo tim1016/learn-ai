@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { reads } from '../../../../components/options-backtest/testing/page-actions';
 import { deferred } from '../../../../components/options-backtest/testing/deferred';
+import { fakeScopedHealth, healthItem, projection } from '../../../../shared/scoped-health/testing/scoped-health-fixtures';
 import type { ExpirationsResponse } from '../../../../api/broker-models';
 import {
   AS_OF_MS,
@@ -39,6 +40,20 @@ describe('Now · Live IBKR with no Gateway session', () => {
     expect(world.expirations).not.toHaveBeenCalled();
     expect(world.feed.streams).toHaveLength(0);
     expect(document.querySelector('app-chain-cross-check')).toBeNull();
+  });
+
+  it('says what the data plane makes of the IBKR feed, and keeps its own reason where the controls would be', async () => {
+    const feed = fakeScopedHealth(
+      projection(healthItem({ kind: 'ibkr_market_data', severity: 'critical', explanation: 'The IBKR session is down. Live option chain and bot feed readiness are affected; archived history is not.' })),
+    );
+    const world = liveWorld(vi);
+    world.health.set(disconnectedHealth());
+
+    await renderLive(vi, world, {}, [feed.provider]);
+
+    expect((await screen.findByText(/archived history is not/)).closest('.health-notice')?.textContent).toContain('Failing.');
+    expect(feed.read).toHaveBeenCalledWith({ operations: ['live_chain'], instrument: null });
+    expect(await screen.findByText('Now · Live IBKR is unavailable.')).toBeTruthy();
   });
 
   it('says so too when the data plane did not answer the connection check', async () => {

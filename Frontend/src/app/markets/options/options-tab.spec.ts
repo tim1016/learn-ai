@@ -117,15 +117,13 @@ const facts = () => reads(document.querySelector('app-chain-facts'));
 describe('the Options tab of an instrument', () => {
   afterEach(() => vi.useRealTimers());
 
-  it('is routed beside Chart: Options is open, the Chain view is open, and the views not routed yet are greyed with their reason', async () => {
+  it('is routed beside Chart: Options is open, the Chain view is open, and Surface and Pricing are views beside it', async () => {
     await open('/markets/SPY/options/chain');
 
     expect(screen.getByRole('link', { name: 'Options' }).getAttribute('aria-current')).toBe('page');
     expect(screen.getByRole('link', { name: 'Chain' }).getAttribute('aria-current')).toBe('page');
-    for (const [view, reason] of [['Surface', /Options Surface \(3D\), in the Markets menu/], ['Pricing', /Pricing Lab, in the Markets menu/]] as const) {
-      expect.soft(screen.queryByRole('link', { name: view }), `${view} has no address yet`).toBeNull();
-      expect.soft(screen.getByText(reason), `${view} says why`).toBeTruthy();
-    }
+    expect(screen.getByRole('link', { name: 'Surface' }).getAttribute('href')).toBe('/markets/SPY/options/surface');
+    expect(screen.getByRole('link', { name: 'Pricing' }).getAttribute('href')).toBe('/markets/SPY/options/pricing');
   });
 
   it('explains itself with the manual chapter on the chain, not the chart\'s reference', async () => {

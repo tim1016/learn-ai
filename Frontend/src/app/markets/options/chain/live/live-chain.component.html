@@ -1,3 +1,5 @@
+<app-health-notice [needs]="healthNeeds" />
+
 @if (gate().kind === 'ready') {
   <div class="controls" role="toolbar" aria-label="Live subscription">
     <button type="button" class="action primary" [disabled]="!canStart()" (click)="start()">Start</button>
