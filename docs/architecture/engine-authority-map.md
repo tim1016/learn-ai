@@ -38,6 +38,18 @@ before execution. The legacy Spec environment-root resolver is removed.
 Exact consumed-bar parity and the scope of the fingerprint are documented
 in [the Spec reference note](../references/strategy-spec-layer.md#lake-input-authority-2446).
 
+**Feature study data admission (#3521).** The Feature study (Research Lab →
+Features → Validate) computes from admitted lake bars; its Polygon fetch inside
+the job router is gone. `app/research/study_inputs.py` names the study's input
+identity, asks `run_materialization.materialize_minute_window` (catalog claims
+and lease coordination) for the sessions the lake lacks, admits every session
+through committed-byte admission, and refuses with a typed outcome and coverage
+counts when it cannot. `app/services/feature_study_service.py` keys the result
+cache on that identity and the admitted snapshot digest, in a namespace no
+provider-era entry can reach. No calculation ownership changes: the feature,
+target, IC and robustness math is untouched. The session the study reads
+(extended hours today, as before) is an owner decision (D02 of PRD #3490).
+
 Committed lake-file admission (#2456) is owned by
 `PythonDataService/app/data_lake/admission.py`, backed by committed catalog
 receipts. Python reads and LEAN preflight refuse files whose exact bytes have

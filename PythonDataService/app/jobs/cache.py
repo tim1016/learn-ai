@@ -100,12 +100,15 @@ def store(job_type: str, params: Mapping[str, Any], result: Any) -> str:
     return h
 
 
-def serve_cached_result(job_id: str, job_type: str, cached: dict) -> None:
+def serve_cached_result(job_id: str, job_type: str, cached: dict, *, announce_start: bool = True) -> None:
     """Write a cached result into a fresh job_id slot and emit terminal events.
 
     Mirrors what ``ProgressEmitter.completed`` does, plus a ``cached=True``
     marker on the completion event so the frontend can render the report
     without showing the live-progress panel.
+
+    ``announce_start=False`` is for a worker that found its hit after its
+    thread had already emitted ``job.started``: only the completion is new.
     """
     from app.jobs.progress import active_set_key, result_key, state_key  # local to avoid cycles
 
@@ -135,7 +138,8 @@ def serve_cached_result(job_id: str, job_type: str, cached: dict) -> None:
     from app.jobs.progress import ProgressEmitter
 
     emitter = ProgressEmitter(job_id)
-    emitter._emit("job.started", {"cached": True})
+    if announce_start:
+        emitter._emit("job.started", {"cached": True})
     emitter._emit(
         "job.completed",
         {

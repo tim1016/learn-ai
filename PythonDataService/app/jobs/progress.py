@@ -477,8 +477,15 @@ class ProgressEmitter:
         )
         self._r.srem(active_set_key(), self.job_id)
 
-    def failed(self, code: str, message: str) -> None:
+    def failed(self, code: str, message: str, *, result: Any = None) -> None:
+        """Mark the job failed. A ``result`` is the typed refusal payload a failed job may still answer with.
+
+        It lands at the same key a completed job's result does, so
+        ``GET /api/jobs/{id}/result`` serves it; the status stays ``failed``.
+        """
         self._flush_progress()
+        if result is not None:
+            self._r.set(result_key(self.job_id), json.dumps(result, default=str), ex=JOB_TTL_SECONDS)
         self._patch_state(
             status="failed",
             error_code=code,
