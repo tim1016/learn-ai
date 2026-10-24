@@ -1,38 +1,53 @@
-"""Cross-sectional stock bars: the old provider path against the admitted lake path, on one pinned vendor payload (#3524; R14, T08, D02).
+"""Cross-sectional stock bars: the old provider path against the admitted lake path, over a MODELED daily payload (#3524; R14, T08, D02).
 
 Slice 34 of the UX redesign moves the study's stock bars from ``PolygonClientService.fetch_aggregates(..., "day")`` to
 the lake. This module is the receipt for what that move changes, case by case. Both paths read the *same* pinned
 minute tape:
 
 * the **provider path** is the real ``fetch_aggregates`` (the code the study used), fed ``Agg`` objects from the
-  Polygon SDK's own parser, over a daily payload the test builds from that tape (``vendor_daily``);
+  Polygon SDK's own parser, over a daily payload the test **models** from that tape (``modeled_daily``);
 * the **lake path** is the real admission — vendor HTTP, ``ensure_data``, the lake writer, committed-byte admission,
   the reader — and the study's daily fold.
 
-Each case records changed timestamps, prices, precision, counts and derived outputs, and names the cause in the
-reconcile taxonomy (``timestamp``, ``precision``, ``off-by-one``, ``data-quality``). The derived outputs are the three
-things a stock bar feeds in this study: the daily returns behind the N_eff correlation, the forward targets the IC is
-measured against, and — through the stock close — the ATM contract pick and the IV spot. A case that moves nothing
-says so by asserting zero. Unexplained drift fails here; an *intentional* divergence is the owner's decision (D02).
+Each case records changed timestamps, prices, counts and derived outputs, and names the cause in the reconcile taxonomy
+(``timestamp``, ``data-quality``, ``off-by-one``). The derived outputs are the three things a stock bar feeds in this
+study: the daily returns behind the N_eff correlation, the forward targets the IC is measured against, and — through the
+stock close — the ATM contract pick and the IV spot. A case that moves nothing says so by asserting zero. Unexplained
+drift fails here; an *intentional* divergence is the owner's decision (D02).
 
-What is not provable offline, and is carried to the owner as an assumption: that Polygon's own daily aggregate equals
-the regular-session fold of its minute aggregates. ``vendor_daily`` models the daily bar that way, because the repo
-treats the daily close as the regular-session close (``dataset_service.fetch_rth_closes``) and the census marks the rest
-unverified. Differences that come from the *vendor's* construction of a daily bar (the official closing cross, odd-lot
-rules) are outside this comparison and unverified against live data.
+What this comparison does NOT measure, and the decision it leaves open. ``modeled_daily`` builds the daily bar as the
+regular-session fold of the same minutes, so under the default ``regular`` policy the two paths agree on price and volume
+by construction. The cases that use it prove the plumbing (the admitted lake path equals an independent fold; the
+anchor, grid, gap, early-close and DST behaviour) and what the policy choice moves. They do not show that Polygon's own
+daily aggregate equals the regular fold. **That is unmeasured: no real Polygon daily payload is held in this repository.**
+The one real thing the repo holds is a week of Polygon one-minute SPY bars (2025-01-13..17), and
+``test_the_regular_fold_of_a_real_spy_week_...`` below measures on it what the regular fold leaves out: the 16:00
+closing-auction minute. If Polygon's daily close is the closing print, the regular fold's close is the wrong one on every
+session of that week, by the amounts pinned there; if it is the 15:59 close, it is the same. Closing the question takes
+ONE real daily payload for that week (``/v2/aggs/ticker/SPY/range/1/day/2025-01-13/2025-01-17``, ``adjusted=false``),
+pinned beside the minute capture with an attribution file and compared to the pinned fold. It is not fetched here:
+a vendor call is the owner's to authorise. Until then the choice between a regular fold and one that keeps the 16:00
+print is D02 on measured minutes and an unmeasured daily.
 
 The IV and contract-pick comparison runs on the first fortnight of March 2024, the span over which the monthly expiry
 bracket still holds 30 days (see ``tests/research/options/test_iv_builder_provider_inputs.py``). The study's IC itself
 cannot be compared end to end for that reason: on master, no chain passes the IV diagnostics over a window long enough
-to compute one.
+to compute one. Derived-output parity for the IC, N_eff and the binomial test is therefore not shown end to end; returns,
+targets, the ATM pick, the spot and the IV are.
+
+The lake's 1/10,000 price grid is ``data-quality`` (input quantization), never ``precision``: it changes the input data,
+and ``precision`` is floating-point accumulation. Each output it moves is pinned at its measured magnitude with a stated
+margin and explicit ``atol``/``rtol`` (``test_prices_finer_than_the_lake_grid...``).
 """
 
 from __future__ import annotations
 
+import json
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -66,12 +81,12 @@ HALF_DAY_WINDOW = expected_sessions(date(2024, 7, 1), date(2024, 7, 12))
 LOW_EXPIRY, HIGH_EXPIRY = date(2024, 3, 29), date(2024, 4, 15)
 
 TARGETS = ("directional", "volatility", "abs_return")
-#: A decimal place of precision beyond the lake grid is half of 1/10,000.
+#: The lake writer rounds half-up to 1/10,000 (``lean_writer.to_deci_cent``): a price moves by at most half of it.
 HALF_GRID = 5e-5
 
 
-def tape_for(window: list[date], **options: object) -> dict[date, list[VendorBar]]:
-    return vendor_history(window, seed=11, start_price=150.0, **{"regular_keep": 0.9, "extended_keep": 0.4, **options})  # type: ignore[arg-type]
+def tape_for(window: list[date], *, start_price: float = 150.0, **options: object) -> dict[date, list[VendorBar]]:
+    return vendor_history(window, seed=11, start_price=start_price, **{"regular_keep": 0.9, "extended_keep": 0.4, **options})  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -79,12 +94,13 @@ def tape_for(window: list[date], **options: object) -> dict[date, list[VendorBar
 # ---------------------------------------------------------------------------
 
 
-def vendor_daily(tape: Mapping[date, list[VendorBar]]) -> list[VendorBar]:
-    """An independent stand-in for the vendor's daily aggregate of the same trades: the regular session, stamped 00:00 ET.
+def modeled_daily(tape: Mapping[date, list[VendorBar]]) -> list[VendorBar]:
+    """A MODEL of the vendor's daily aggregate of the same trades: the regular session, stamped 00:00 ET.
 
     First/high/low/last/sum over the minutes the calendar puts in the scheduled session (an early close ends it at
     13:00), the volume-weighted average of the minutes' VWAPs, summed trade counts. ``math.fsum`` so the sum is exactly
-    rounded, as the lake's decimal sum is.
+    rounded, as the lake's decimal sum is. This is the assumption the module docstring names, not Polygon's bar: a case
+    that compares the lake with it under ``regular`` agrees by construction.
     """
     bars: list[VendorBar] = []
     for day, minutes in sorted(tape.items()):
@@ -109,7 +125,7 @@ def vendor_daily(tape: Mapping[date, list[VendorBar]]) -> list[VendorBar]:
 
 
 class _SdkDailyTape:
-    """The SDK's ``RESTClient.list_aggs`` over a pinned daily payload: it pages ``Agg`` objects exactly as the SDK would."""
+    """The SDK's ``RESTClient.list_aggs`` over a daily payload: it pages ``Agg`` objects exactly as the SDK would."""
 
     def __init__(self, daily: list[VendorBar]) -> None:
         self.daily = daily
@@ -123,9 +139,9 @@ class _SdkDailyTape:
 
 
 def provider_rows(tape: Mapping[date, list[VendorBar]], window: list[date]) -> list[dict]:
-    """What the study read before #3524: ``fetch_aggregates`` daily, adjusted, for the window."""
+    """What the study read before #3524: ``fetch_aggregates`` daily, adjusted, over the modeled daily payload."""
     service = PolygonClientService()
-    service.client = _SdkDailyTape(vendor_daily(tape))  # type: ignore[assignment]
+    service.client = _SdkDailyTape(modeled_daily(tape))  # type: ignore[assignment]
     return service.fetch_aggregates(
         ticker="SPY", multiplier=1, timespan="day", from_date=window[0].isoformat(), to_date=window[-1].isoformat(), adjusted=True
     )
@@ -184,19 +200,24 @@ class Comparison:
 
     @property
     def causes(self) -> list[str]:
-        """The reconcile taxonomy's reading of what moved. Rules, not judgement: a count or a magnitude decides."""
+        """The reconcile taxonomy's reading of what moved. Rules, not judgement: a count decides.
+
+        A different instant stamped on the same session is ``timestamp``. Every input that differs between the paths is
+        ``data-quality``: a session on one side only, a price, a volume. ``precision`` is floating-point accumulation,
+        and nothing here accumulates: a lake price is the exact decimal the writer encoded, converted to the nearest
+        float once.
+        """
         found: list[str] = []
         if self.anchor_changed:
-            found.append("timestamp")  # same session, a different instant stamped on it
-        if self.sessions_changed:
-            found.append("data-quality")  # a session present on one side only: the input itself differs
-        if self.prices_changed and self.max_price_diff <= HALF_GRID + 1e-9:
-            found.append("precision")  # at most half of the lake's 1/10,000 grid
-        elif self.prices_changed:
+            found.append("timestamp")
+        if self.sessions_changed or self.prices_changed or self.volume_changed:
             found.append("data-quality")
-        if self.volume_changed:
-            found.append("data-quality")
-        return list(dict.fromkeys(found))
+        return found
+
+    @property
+    def quantization_only(self) -> bool:
+        """Every price that moved moved by at most half of the lake's 1/10,000 grid: input quantization, not a new tape."""
+        return self.prices_changed > 0 and self.max_price_diff <= HALF_GRID + 1e-9
 
 
 def compare(provider: list[dict], lake: list[dict]) -> Comparison:
@@ -251,10 +272,14 @@ class OptionSide:
     iv_days: int
 
 
-def option_side(provider: list[dict], lake: list[dict], true_closes: Mapping[date, float], window: list[date]) -> OptionSide:
+def option_side(
+    provider: list[dict], lake: list[dict], true_closes: Mapping[date, float], window: list[date], *, strike_step: float = 1.0
+) -> OptionSide:
     """Run the real contract finder and IV builder over one chain with each path's rows, and compare the days they share."""
     def run(rows: list[dict]) -> tuple[pd.DataFrame, pd.DataFrame]:
-        chain = OptionChain("SPY", true_closes, rate=DEFAULT_RISK_FREE_RATE, expiries=(LOW_EXPIRY, HIGH_EXPIRY))
+        chain = OptionChain(
+            "SPY", true_closes, rate=DEFAULT_RISK_FREE_RATE, expiries=(LOW_EXPIRY, HIGH_EXPIRY), strike_step=strike_step
+        )
         service = PolygonClientService()
         service.client = chain  # type: ignore[assignment]
         args = ("SPY", window[0].isoformat(), window[-1].isoformat(), service, rows)
@@ -275,7 +300,7 @@ def option_side(provider: list[dict], lake: list[dict], true_closes: Mapping[dat
 
 def true_closes_of(tape: Mapping[date, list[VendorBar]]) -> dict[date, float]:
     """The regular-session close the options are priced off: what the chain's market saw at 16:00."""
-    return {bar_day: bar["c"] for bar_day, bar in zip(sorted(tape), vendor_daily(tape), strict=True)}
+    return {bar_day: bar["c"] for bar_day, bar in zip(sorted(tape), modeled_daily(tape), strict=True)}
 
 
 @pytest.fixture
@@ -293,8 +318,12 @@ def world(monkeypatch: pytest.MonkeyPatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_regular_hours_over_a_dst_week_differ_only_in_the_instant_stamped_on_a_session(world):
-    """Cause: ``timestamp``. Polygon stamps 00:00 ET; the study stamps the canonical session open. Same UTC date, so no output moves."""
+def test_under_a_modeled_regular_daily_a_dst_window_differs_only_in_the_instant_stamped_on_a_session(world):
+    """Cause: ``timestamp``. Polygon stamps 00:00 ET; the study stamps the canonical session open. Same UTC date, so no output moves.
+
+    The price and volume equality asserted here is by construction (the daily is ``modeled_daily``); what is proven is
+    that the admitted lake path equals an independent fold, and that the anchor move changes no downstream output.
+    """
     tape = tape_for(DST_WINDOW)
     mock_vendor("SPY", tape, adjusted=tape)
     provider, lake = provider_rows(tape, DST_WINDOW), lake_rows(DST_WINDOW)
@@ -313,7 +342,7 @@ def test_regular_hours_over_a_dst_week_differ_only_in_the_instant_stamped_on_a_s
     assert options.iv_days == len(DST_WINDOW) and options.max_iv_diff <= 1e-9, "the same spot prices the same IV, to the strict-float default"
 
 
-def test_an_early_close_week_matches_under_regular_hours_and_the_holiday_has_no_row(world):
+def test_an_early_close_week_matches_a_modeled_regular_daily_and_the_holiday_has_no_row(world):
     tape = tape_for(HALF_DAY_WINDOW)
     mock_vendor("SPY", tape, adjusted=tape)
 
@@ -325,7 +354,7 @@ def test_an_early_close_week_matches_under_regular_hours_and_the_holiday_has_no_
 
 
 def test_extended_hours_is_a_different_daily_bar_and_moves_the_spot_and_the_contract_pick(world):
-    """Cause: ``data-quality`` (session scope). The lake's own daily rollup folds 04:00-20:00 ET; Polygon's close is the 16:00 close. D02.
+    """Cause: ``data-quality`` (session scope). The lake's own daily rollup folds 04:00-20:00 ET; the modeled daily's close is the 16:00 close. D02.
 
     The stock close sets the IV spot and the ATM strike. The numbers below are measured on the pinned synthetic tape: how much
     the policy moves the inputs, not how much it would move a live name.
@@ -350,22 +379,148 @@ def test_extended_hours_is_a_different_daily_bar_and_moves_the_spot_and_the_cont
     assert options.max_iv_diff > 1e-5, "so the solved IV moves, not only the target"
 
 
-def test_prices_finer_than_the_lake_grid_move_by_at_most_half_a_ten_thousandth(world):
-    """Cause: ``precision``. The lake rounds every minute half-up to 1/10,000 (``lean_writer.to_deci_cent``); the provider path does not."""
-    tape = tape_for(DST_WINDOW, decimals=5)
+# ---------------------------------------------------------------------------
+# The one real Polygon tape in the repo: what the regular fold leaves out (D02)
+# ---------------------------------------------------------------------------
+
+#: A week of real Polygon one-minute SPY bars (``adjusted=false``, extended hours included), captured 2026-05-20.
+SPY_CAPTURE = Path(__file__).resolve().parents[1] / "fixtures" / "polygon_capture" / "spy_minute_2025-01-13_2025-01-17" / "bars.json"
+SPY_WEEK = expected_sessions(date(2025, 1, 13), date(2025, 1, 17))
+SPY_WEEK_NOW_MS = 1_738_540_800_000  # 2025-02-03: every session of the week is complete
+
+#: The lake's regular-session fold of that week, as (open, high, low, close, volume) per session. The close is the 15:59
+#: minute's close. Measured through the lake (vendor HTTP, ``ensure_data``, writer, admission, fold) and equal to a fold of
+#: the capture computed independently from ``bars.json``.
+SPY_REGULAR_FOLD = {
+    date(2025, 1, 13): (575.77, 581.75, 575.35, 581.54, 36986595.0),
+    date(2025, 1, 14): (584.36, 585.0, 578.35, 582.19, 40987960.0),
+    date(2025, 1, 15): (590.325, 593.94, 589.195, 592.78, 42142340.0),
+    date(2025, 1, 16): (594.175, 594.35, 590.93, 591.7, 30959922.0),
+    date(2025, 1, 17): (596.96, 599.36, 595.61, 597.57, 46714655.0),
+}
+#: The minute the regular fold drops, the one stamped 16:00 ET (it holds the closing-auction print and the first
+#: after-hours trades), as (open, high, low, close, volume), read from the same capture.
+SPY_CLOSING_MINUTE = {
+    date(2025, 1, 13): (581.52, 581.55, 581.17, 581.5, 124967.0),
+    date(2025, 1, 14): (582.16, 582.61, 581.93, 582.6, 270425.0),
+    date(2025, 1, 15): (592.74, 592.84, 592.62, 592.81, 500043.0),
+    date(2025, 1, 16): (591.71, 591.74, 591.35, 591.64, 160774.0),
+    date(2025, 1, 17): (597.53, 597.62, 597.4, 597.51, 433889.0),
+}
+
+
+def spy_capture_tape() -> dict[date, list[VendorBar]]:
+    """The capture as the vendor served it, one list of minute aggregates per New York session."""
+    tape: dict[date, list[VendorBar]] = {}
+    for bar in json.loads(SPY_CAPTURE.read_text()):
+        day = datetime.fromtimestamp(bar["timestamp"] / 1000, ET).date()
+        tape.setdefault(day, []).append(
+            {"t": bar["timestamp"], "o": bar["open"], "h": bar["high"], "l": bar["low"], "c": bar["close"], "v": bar["volume"], "vw": bar["vwap"], "n": bar["transactions"]}
+        )
+    return tape
+
+
+def test_the_regular_fold_of_a_real_spy_week_stops_at_the_15_59_minute_and_leaves_out_the_16_00_closing_minute(world):
+    """Cause, if Polygon's daily bar keeps the closing print: ``data-quality`` (session boundary). Polygon's daily bar for
+    this week is NOT held, so whether it does is unmeasured; this measures what the regular fold drops, on real minutes.
+
+    The lake reads ``[open, close)``, so a session's last minute is 15:59. The 16:00 minute holds the closing-auction
+    print: on this week its close sits from 0.03 to 0.41 away from the fold's close (SPY at about $580-$600), and it
+    carries 0.3 to 1.2 percent of the session's regular volume. SPY had no split in 2025, so the split-adjusted tape the lake
+    reads is the raw one. A close that moves by $0.41 on 2025-01-14 sets a different IV spot and ATM strike for that day.
+    """
+    tape = spy_capture_tape()
+    mock_vendor("SPY", tape, adjusted=tape)
+
+    regular = {_session(r): r for r in lake_rows(SPY_WEEK, now_ms=SPY_WEEK_NOW_MS)}
+    extended = {_session(r): r for r in lake_rows(SPY_WEEK, session="extended", now_ms=SPY_WEEK_NOW_MS)}
+
+    assert sorted(regular) == SPY_WEEK == sorted(SPY_REGULAR_FOLD)
+    for day in SPY_WEEK:
+        row = regular[day]
+        open_ms, close_ms = session_open_ms_utc(day), session_close_ms_utc(day)
+        by_stamp = {m["t"]: m for m in tape[day]}
+        # The pinned fold is the capture's own: first open, extremes, the 15:59 close, summed volume.
+        inside = [m for m in tape[day] if open_ms <= m["t"] < close_ms]
+        independent = (inside[0]["o"], max(m["h"] for m in inside), min(m["l"] for m in inside), inside[-1]["c"], math.fsum(m["v"] for m in inside))
+        np.testing.assert_allclose(independent, SPY_REGULAR_FOLD[day], atol=1e-9, rtol=0, err_msg=f"{day} fold of the capture")
+        np.testing.assert_allclose(
+            (row["open"], row["high"], row["low"], row["close"], row["volume"]), SPY_REGULAR_FOLD[day], atol=1e-9, rtol=0, err_msg=f"{day} lake"
+        )
+        assert inside[-1]["t"] == close_ms - 60_000, "the last regular minute is 15:59"
+        closing = by_stamp[close_ms]
+        np.testing.assert_allclose(
+            (closing["o"], closing["h"], closing["l"], closing["c"], closing["v"]), SPY_CLOSING_MINUTE[day], atol=1e-9, rtol=0, err_msg=f"{day} 16:00 minute"
+        )
+        assert row["close"] != closing["c"], "the lake's close is not the 16:00 minute's"
+        assert extended[day]["volume"] > row["volume"] + closing["v"], "and the extended fold holds it and the rest of the after-hours tape"
+    # The distance the choice makes, per session: the 16:00 minute's close against the fold's close, and its share of volume.
+    close_moves = [SPY_CLOSING_MINUTE[day][3] - SPY_REGULAR_FOLD[day][3] for day in SPY_WEEK]
+    volume_share = [SPY_CLOSING_MINUTE[day][4] / SPY_REGULAR_FOLD[day][4] for day in SPY_WEEK]
+    np.testing.assert_allclose(close_moves, [-0.04, 0.41, 0.03, -0.06, -0.06], atol=1e-9, rtol=0)
+    assert min(volume_share) > 0.003 and max(volume_share) < 0.012
+
+
+#: What the lake's price grid moves, measured on this pinned payload (seed 11, the DST window, 11 sessions) at three
+#: price levels: the largest absolute difference between the two paths' values at a shared session. Prices carry five or
+#: six decimals, finer than the grid. The movement grows as the price falls: a rounding of at most 5e-5 is a larger share
+#: of a day's change on a $2 name than on a $150 one. ``iv`` is the largest solved-IV difference over the days the option
+#: chain could solve (11, 10 and 3 of 11), pinned only where there are enough of them to mean something; a $2 underlying
+#: leaves 3. Re-measure (print the ``Comparison`` and ``OptionSide`` fields per case) only when the pinned tape or the
+#: lake's encoding intentionally changes; never to make a failing test pass.
+GRID_MEASURED = {
+    "price_150": (150.0, 5, 1.0, {"returns": 4.76e-7, "directional": 4.80e-7, "abs_return": 4.80e-7, "volatility": 9.94e-7, "iv": 1.23e-6}),
+    "price_12": (12.0, 5, 0.5, {"returns": 5.41e-6, "directional": 5.35e-6, "abs_return": 5.35e-6, "volatility": 3.81e-5, "iv": 5.24e-6}),
+    "price_2": (2.0, 6, None, {"returns": 3.39e-5, "directional": 3.46e-5, "abs_return": 3.46e-5, "volatility": 4.08e-4}),
+}
+#: The headroom over a measured movement. The tape is seeded and the arithmetic deterministic, so this only absorbs
+#: platform differences in float summation order inside pandas and numpy; a real change in the lake's encoding, or in a
+#: target's math, moves these by orders of magnitude more.
+MEASURED_MARGIN = 1.5
+
+
+def worst_case_volatility_target_move(lowest_close: float) -> float:
+    """A close moves by at most ``HALF_GRID``, so a log return by at most 2*HALF_GRID/P. The target is sqrt(252) times the
+    sample standard deviation of five returns, which is 1-Lipschitz in the returns' L2 norm over sqrt(5-1), so it moves
+    by at most sqrt(252) * sqrt(5) * 2*HALF_GRID / (2 * P) = sqrt(1260) * HALF_GRID / P."""
+    return math.sqrt(1260) * HALF_GRID / lowest_close
+
+
+@pytest.mark.parametrize(("start_price", "decimals", "strike_step", "measured"), GRID_MEASURED.values(), ids=GRID_MEASURED)
+def test_prices_finer_than_the_lake_grid_move_each_output_by_its_measured_amount_which_depends_on_the_price(
+    world, start_price, decimals, strike_step, measured
+):
+    """Cause: ``data-quality`` (input quantization). The lake rounds every minute half-up to 1/10,000
+    (``lean_writer.to_deci_cent``); the provider path does not. That changes the input data, so it is not ``precision`` and no
+    float tolerance covers it.
+
+    Each recorded output is pinned at its measured movement times ``MEASURED_MARGIN``, with ``rtol=0`` because the quantity
+    compared is itself a difference. The table above is what D02 is decided on: the daily returns move by about 5e-7 on a
+    $150 name, 5e-6 on a $12 name and 3e-5 on a $2 name; the five-day volatility target by 1e-6, 4e-5 and 4e-4; the solved IV
+    by 1e-6 and 5e-6 where it can be solved. ``worst_case_volatility_target_move`` is the bound the measured movement must sit
+    under whatever the tape.
+    """
+    tape = tape_for(DST_WINDOW, start_price=start_price, decimals=decimals)
     mock_vendor("SPY", tape, adjusted=tape)
     provider, lake = provider_rows(tape, DST_WINDOW), lake_rows(DST_WINDOW)
 
     comparison = compare(provider, lake)
-    options = option_side(provider, lake, true_closes_of(tape), DST_WINDOW)
 
-    assert comparison.sessions_changed == 0
-    assert comparison.prices_changed > 0 and comparison.max_price_diff <= HALF_GRID + 1e-9
-    assert comparison.causes == ["timestamp", "precision"]
-    # A $150 price moved by 5e-5 moves a daily return by about 7e-7 and a 5-day annualized volatility by far less than its own noise.
-    assert comparison.max_return_diff <= 2e-6
-    assert max(comparison.max_target_diff.values()) <= 1e-4
-    assert options.max_iv_diff <= 1e-5, "and the solved IV by less than a hundredth of a volatility point"
+    assert comparison.sessions_changed == 0 and comparison.volume_changed == 0
+    assert comparison.quantization_only, "every price that moved moved by at most half a ten-thousandth"
+    assert comparison.causes == ["timestamp", "data-quality"]
+    assert comparison.target_validity_moved == 0
+    moved = {"returns": comparison.max_return_diff, **comparison.max_target_diff}
+    for name in ("returns", *TARGETS):
+        # atol is the measured movement with its margin; rtol is 0 because the quantity compared is itself a difference.
+        np.testing.assert_allclose(moved[name], 0.0, atol=measured[name] * MEASURED_MARGIN, rtol=0, err_msg=name)
+        assert moved[name] > 0, f"{name}: the divergence is real, so the output does move"
+    assert moved["volatility"] <= worst_case_volatility_target_move(min(r["close"] for r in lake))
+    if strike_step is not None:
+        options = option_side(provider, lake, true_closes_of(tape), DST_WINDOW, strike_step=strike_step)
+        assert options.iv_days >= 10 and options.atm_changed_days == 0
+        np.testing.assert_allclose(options.max_iv_diff, 0.0, atol=measured["iv"] * MEASURED_MARGIN, rtol=0, err_msg="iv")
+        assert options.max_iv_diff > 0
 
 
 def test_fractional_share_volume_sums_to_the_same_number_on_both_paths(world):

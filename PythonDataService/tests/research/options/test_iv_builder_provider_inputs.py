@@ -33,10 +33,11 @@ from tests._helpers.option_chain import OptionChain, option_ticker, parse_option
 WINDOW = [date(2024, 3, 1), *(date(2024, 3, d) for d in (4, 5, 6, 7, 8, 11, 12, 13, 14, 15))]
 LOW_EXPIRY, HIGH_EXPIRY = date(2024, 3, 29), date(2024, 4, 15)
 
-#: Option prices are rounded to 1e-4; vega is at least 5 per unit of volatility for these 14-45 day options on a
-#: $150 underlying, so a half-ten-thousandth of price moves an implied volatility by at most 1e-5. A tenth of a
-#: point of volatility is ten times that.
-IV_ATOL = 1e-4
+#: Option prices are rounded to 1e-4, so a price is off by at most 5e-5; vega is at least 5 per unit of volatility for
+#: these 14-45 day options on a $150 underlying (ATM about 12, a 25-delta wing about 9). The implied volatility is
+#: therefore recovered to within 5e-5 / 5 = 1e-5, which is the tolerance: the derived worst case, not a round number.
+#: Measured on this payload the largest error is 3.1e-6 (put wing); the solver's own tolerance adds nothing visible.
+IV_ATOL = 1e-5
 
 
 def stock_rows(days: list[date], *, start: float = 150.0, step: float = 0.37) -> list[dict]:
