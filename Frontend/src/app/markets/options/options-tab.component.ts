@@ -8,7 +8,7 @@ import { CurrentUrlService } from '../../shell/current-url.service';
 import { instrumentCommands } from '../instrument-address';
 import { InstrumentContextService } from '../instrument-context.service';
 import { optionsViewOf } from './options-address';
-import { OPTIONS_VIEWS, UNAVAILABLE_OPTIONS_VIEWS } from './options-views';
+import { OPTIONS_VIEWS } from './options-views';
 
 /**
  * An instrument's Options tab: its views side by side, one open at a time.
@@ -16,8 +16,7 @@ import { OPTIONS_VIEWS, UNAVAILABLE_OPTIONS_VIEWS } from './options-views';
  * Each view keeps its own inputs and its own provenance; this shell holds
  * none of them, only the strip that moves between views and the address they
  * share. A link in the strip keeps the instrument's context and the expiry the
- * address names, so the contract is the same one under every view. A view this
- * tab does not route yet stays in the strip, greyed, with its reason.
+ * address names, so the contract is the same one under every view.
  */
 @Component({
   selector: 'app-options-tab',
@@ -43,11 +42,6 @@ export class OptionsTabComponent {
     const symbol = this.context.symbol();
     const expiry = this.expiry();
     const carried = { ...this.context.carriedQuery(), ...(expiry === null ? {} : { expiry }) };
-    return OPTIONS_VIEWS.tabs.map((view) => {
-      const reason = UNAVAILABLE_OPTIONS_VIEWS[view.id];
-      return reason === undefined
-        ? { ...view, route: instrumentCommands(symbol, 'options', [view.id]), queryParams: carried }
-        : { ...view, route: null, unavailableReason: reason };
-    });
+    return OPTIONS_VIEWS.tabs.map((view) => ({ ...view, route: instrumentCommands(symbol, 'options', [view.id]), queryParams: carried }));
   });
 }

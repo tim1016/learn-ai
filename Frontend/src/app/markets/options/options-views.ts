@@ -10,10 +10,3 @@ export const OPTIONS_VIEWS = defineWorkspaceTabs<OptionsView>(
 
 /** The view `/markets/:symbol/options` opens on. */
 export const DEFAULT_OPTIONS_VIEW: OptionsView = 'chain';
-
-/**
- * The views this tab does not route yet, each with the reason its entry shows greyed. A view
- * leaves this list when its page is routed under `/markets/:symbol/options/<view>`; the strip,
- * the labels and the redirects need no other edit. Chain, Surface and Pricing are all routed.
- */
-export const UNAVAILABLE_OPTIONS_VIEWS: Readonly<Partial<Record<OptionsView, string>>> = {};

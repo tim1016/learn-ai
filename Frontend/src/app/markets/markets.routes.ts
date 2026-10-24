@@ -7,9 +7,7 @@ import { OPTIONS_ROUTES } from './options/options.routes';
  * place at `/markets/:symbol/<tab>`.
  *
  * The instrument's shell owns the context its tabs share, so it stays mounted
- * while the tab or the instrument changes. A tab that is not routed yet has no
- * entry here and shows greyed in the strip (`UNAVAILABLE_INSTRUMENT_TABS`); a
- * tab leaves that list when its route is added below.
+ * while the tab or the instrument changes.
  */
 export const MARKETS_ROUTES: Routes = [
   {

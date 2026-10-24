@@ -84,7 +84,7 @@ The Data Lab's dataset builder and its saved setups are the instrument place's. 
 
 ## Amendment 2026-10-24: the Options tab's chain and its four modes (#3505)
 
-The instrument's **Options** tab is built: `/markets/:symbol/options` opens its Chain view, and `/markets/:symbol/options/(chain|surface|pricing)` are the three views, declared once (`OPTIONS_VIEWS`). A view the tab does not route yet stays in the strip, greyed with its reason, and leaves `UNAVAILABLE_OPTIONS_VIEWS` when its route is added.
+The instrument's **Options** tab is built: `/markets/:symbol/options` opens its Chain view, and `/markets/:symbol/options/(chain|surface|pricing)` are the three views, declared once (`OPTIONS_VIEWS`).
 
 - **The tab's own context.** The chain's address keys are `?source=(snapshot|live|archive)`, `expiry` (the option expiry anchor, 16:00 New York time on its date, `int64 ms UTC`), and for the past `date` (the session date, the date picker's `YYYY-MM-DD` form value, ADR 0075 and ADR 0022 (f); the archive host builds New York midnight from it at its own request) and `at` (the instant within that session, `int64 ms UTC`; absent reads the session's close). None is a key of the instrument context, so moving an option date or instant never moves the chart's window, and Chart still has its window on return. A link between the tab's views carries the instrument context and the expiry, and no other key of the chain. Over the Options tab the instrument bar offers only the instrument, and a window the chart cannot use stops nothing there.
 - **One presentation, typed source adapters.** Every source maps into one chain presentation, so the grid can show only what a source's type can carry. A contract's fields are a complete record, each filled or absent with a reason; a last-trade price is the `last` field and never a `bid` or `ask`; a Greek, an open interest or a volume appears only from a source that holds one, and the archive holds none, so each is absent for it and no current value stands in for a past one.
@@ -105,7 +105,7 @@ The instrument's **Options** tab is built: `/markets/:symbol/options` opens its 
 
 ## Amendment 2026-10-24: Surface and Pricing are views of the Options tab (#3507)
 
-Surface (3D) and Pricing Lab are `/markets/:symbol/options/surface` and `/markets/:symbol/options/pricing`; with Chain, every view of `OPTIONS_VIEWS` is routed and `UNAVAILABLE_OPTIONS_VIEWS` is empty.
+Surface (3D) and Pricing Lab are `/markets/:symbol/options/surface` and `/markets/:symbol/options/pricing`; with Chain, every view of `OPTIONS_VIEWS` is routed.
 
 - **The instrument is the underlying.** Neither view asks for a symbol. Each keeps its own inputs (days out, strikes band and metric; rate, range and models) and its own provenance. Pricing opens on the expiry the address names and says so when the chain does not list it. Moving to another instrument keeps the view and follows the instrument.
 - **The live views say what the data plane makes of the IBKR feed.** The Live IBKR chain and Surface each show the scoped-health notice for the `live_chain` operation, above their controls; whatever refuses an action keeps its own reason at that action.

@@ -2,7 +2,7 @@ import { inject } from '@angular/core';
 import { Router, type Params, type RedirectFunction } from '@angular/router';
 
 import { routePathOf } from '../fleet/account-workspace';
-import { INSTRUMENT_TABS, UNAVAILABLE_INSTRUMENT_TABS, type InstrumentTab } from './instrument-tabs';
+import { INSTRUMENT_TABS, type InstrumentTab } from './instrument-tabs';
 
 /*
  * Where an instrument lives (ADR 0084): `/markets/:symbol/(chart|returns|options|data)`.
@@ -31,8 +31,7 @@ export function instrumentHeadlinesCommands(symbol: string): string[] {
 
 /** Where the Markets list sends a pick: the tab it was asked to open, else Chart. */
 export function openableTab(then: string | null | undefined): InstrumentTab {
-  const named = INSTRUMENT_TABS.tabs.find((tab) => tab.id === then);
-  return named !== undefined && UNAVAILABLE_INSTRUMENT_TABS[named.id] === undefined ? named.id : 'chart';
+  return INSTRUMENT_TABS.tabs.find((tab) => tab.id === then)?.id ?? 'chart';
 }
 
 function firstString(value: unknown): string | null {
