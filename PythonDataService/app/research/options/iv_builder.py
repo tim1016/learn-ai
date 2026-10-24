@@ -1,9 +1,9 @@
 """IV term-structure builder for research options pipeline.
 
-Formula: 30-day constant-maturity IV via variance-time interpolation between the two expiries bracketing 30 calendar days (T1 ≤ 30 < T2, chosen by ``contract_finder._find_bracket_expiries``): σ²_30·30 = w·σ²_T1·T1 + (1-w)·σ²_T2·T2, with w = (T2 - 30)/(T2 - T1) and T in calendar days. Equal-maturity inputs retain the internal arithmetic-mean fallback.
+Formula: 30-day constant-maturity IV via variance-time interpolation between the two expiries bracketing 30 calendar days (T1 ≤ 30 < T2, chosen for each date by ``contract_finder.pick_bracket_expiries``): σ²_30·30 = w·σ²_T1·T1 + (1-w)·σ²_T2·T2, with w = (T2 - 30)/(T2 - T1) and T in calendar days. Equal-maturity inputs retain the internal arithmetic-mean fallback.
 Reference: Cboe VIX Methodology (2019), constant-maturity total-variance interpolation step only; this module uses selected-contract BSM IVs and does not replicate the model-free VIX calculation.
 Canonical implementation: app/research/options/iv_builder.py
-Validated against: NONE — pending fixture
+Validated against: NONE — pending fixture; the per-date pair and the end-to-end recovery are pinned by tests/research/options/test_iv_builder_bracket_window.py
 """
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from typing import Any
 import pandas as pd
 
 from app.engine.edge.features_realtime.iv30_constructor import variance_interpolated_iv
-from app.research.options.contract_finder import find_bracket_contracts
+from app.research.options.contract_finder import MIN_DTE_DAYS, TARGET_DTE, find_bracket_contracts
 from app.services.fred_service import get_risk_free_rate
 from app.services.polygon_client import PolygonClientService
 from app.volatility.solver import implied_volatility
@@ -25,9 +25,7 @@ logger = logging.getLogger(__name__)
 MIN_OPTION_PRICE = 0.05
 MIN_IV = 0.05
 MAX_IV = 3.0
-MIN_DTE_DAYS = 7
 MIN_VOLUME = 50
-TARGET_DTE = 30
 MAX_FFILL_DAYS = 2
 
 
@@ -205,7 +203,7 @@ def _interpolate_iv(iv_low: float, dte_low: int, iv_high: float, dte_high: int) 
     Formula: σ²_30·30 = w·σ²_low·T_low + (1-w)·σ²_high·T_high.
     Reference: Cboe VIX Methodology (2019), maturity interpolation only.
     Canonical implementation: app/engine/edge/features_realtime/iv30_constructor.py::variance_interpolated_iv.
-    Validated against: tests/edge/test_iv30_and_vrp.py and tests/research/options/test_iv_builder.py.
+    Validated against: tests/edge/test_iv30_and_vrp.py, tests/research/options/test_iv_builder.py and tests/research/options/test_iv_builder_bracket_window.py.
     """
     if dte_high == dte_low:
         return (iv_low + iv_high) / 2
@@ -241,7 +239,10 @@ def build_iv_history(
 
     Returns:
         DataFrame with columns:
-        [date, iv_30d_atm, iv_30d_put, iv_30d_call, stock_close, dte_low, dte_high, price_source]
+        [date, iv_30d_atm, iv_30d_put, iv_30d_call, stock_close, dte_low, dte_high, price_source, missing_reason,
+        iv_quality]
+        ``missing_reason`` is the ``BracketGap`` value for a date that has no expiry pair bracketing 30 days
+        (such a date has ``iv_quality`` "missing"), else empty (NaN, as ``price_source`` is on a date with no price).
     """
     logger.info(f"[IV BUILDER] Building IV history for {underlying} [{start_date} → {end_date}]")
 
@@ -300,6 +301,7 @@ def build_iv_history(
             "dte_low": dte_low,
             "dte_high": dte_high,
             "price_source": None,
+            "missing_reason": row.get("bracket_gap"),
         }
 
         # Derive ATM IV (synthetic forward: average of call and put IV at ATM strike)
