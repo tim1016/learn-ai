@@ -142,13 +142,17 @@ export function describeLakeHolding(
     };
   }
   const toCapture = holding.toCapture;
+  const them = toCapture === 1 ? 'it' : 'them';
   // A run that is refused for a session older than the provider serves fetches nothing, so it is not "slow" either.
-  const slow = holding.beforeProviderHistory === 0 ? ['The first run fetches them one session at a time, so it will be slow.'] : [];
+  const slow =
+    holding.beforeProviderHistory === 0
+      ? [toCapture === 1 ? 'The first run fetches it from the provider, so it will be slower.' : `The first run fetches ${them} one session at a time, so it will be slow.`]
+      : [];
   return {
     kind: 'partial',
     happened: `${toCapture} of ${sessionsText(holding.sessions)} ${toCapture === 1 ? 'isn’t' : 'aren’t'} in the lake yet.`,
     why: [...slow, ...(blocked.length > 0 ? ['More cannot be captured now.', ...blocked] : [])].join(' '),
-    next: 'Capture them first.',
+    next: `Capture ${them} first.`,
     actions: [{ id: CAPTURE_ACTION_ID, label: `Capture ${sessionsText(toCapture)}` }],
   };
 }

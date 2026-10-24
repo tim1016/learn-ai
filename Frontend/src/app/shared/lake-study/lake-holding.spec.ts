@@ -57,6 +57,8 @@ describe('describeLakeHolding', () => {
     const state = describeLakeHolding(read({ sessions: 60, missing: 1 }), IDLE, null);
 
     expect.soft(state?.happened).toBe('1 of 60 sessions isn’t in the lake yet.');
+    expect.soft(state?.why).toBe('The first run fetches it from the provider, so it will be slower.');
+    expect.soft(state?.next).toBe('Capture it first.');
     expect.soft(state?.actions?.[0].label).toBe('Capture 1 session');
   });
 
