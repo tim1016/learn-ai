@@ -5,7 +5,7 @@ import { RunRefusedError } from '../options-backtest.service';
 import type { RunDetail, RunListItem, RunStatus } from '../options-backtest.types';
 import { fakeJobs } from '../testing/fake-jobs';
 import { expectTradingDatesInNewYork, lettingGo, reads } from '../testing/page-actions';
-import { fakeService } from '../testing/render-page';
+import { fakeService } from '../testing/fake-service';
 import { readsAs, renderRunPanel } from '../testing/render-run';
 import { runDetail, runItem, runWithoutSetup, SETUP_CANNOT_OPEN_REASON } from '../testing/run-fixtures';
 

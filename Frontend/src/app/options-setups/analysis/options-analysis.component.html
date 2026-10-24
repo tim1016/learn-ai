@@ -1,0 +1,13 @@
+<app-workspace-header
+  [title]="title()"
+  purpose="Analysis of fixed option legs: their profit and loss at expiry, from fixed strikes, premiums and implied volatility."
+  [secondaryActions]="[useAsSetup]"
+>
+  <div workspaceFacts class="facts">
+    <span class="chip">Analytical: not a deployable setup</span>
+    <span class="reason">{{ reason }}</span>
+  </div>
+</app-workspace-header>
+
+<app-workspace-tab-list [tabs]="tabs" [activeId]="view()" label="Analysis views" />
+<router-outlet />

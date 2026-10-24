@@ -1,10 +1,11 @@
 import { computed, signal } from '@angular/core';
 
 /**
- * The name a run is recorded under. A run is recorded under the name of the setup that was opened or last saved, but
- * only while the setup on screen is still that one: once it is edited it is another setup, and a run of it carries no
- * name. Every way the form is replaced says so here: `set` for a setup that was opened or saved, and `clear` for one
- * that has no name, so that the rule lives in one place and no way of replacing the form can forget half of it.
+ * The name a draft was opened or last saved under. The draft is that saved setup only while it is still as it was: once
+ * it is edited it is another setup, and `nameFor` says so. Every way the form is replaced says so here: `set` for a
+ * setup that was opened or saved, and `clear` for one that has no name, so that the rule lives in one place and no way
+ * of replacing the form can forget half of it. (A backtest is recorded under the saved name and tests the saved setup,
+ * never the draft, so it does not ask.)
  */
 export class RunNameTracker {
   private readonly loaded = signal<{ readonly name: string; readonly body: string | null } | null>(null);
@@ -30,7 +31,7 @@ export class RunNameTracker {
     this.replaced += 1;
   }
 
-  /** The name a run is recorded under for the setup whose request body is this JSON, or null when it is no longer the one that was named. */
+  /** The name of the setup whose request body is this JSON, or null when the draft is no longer the one that was named. */
   nameFor(body: string | null): string | null {
     const loaded = this.loaded();
     return loaded !== null && loaded.body === body ? loaded.name : null;

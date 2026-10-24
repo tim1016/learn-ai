@@ -4864,6 +4864,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/engine/strategy-registry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Strategy Registry
+         * @description Every registered strategy with what the registry allows for it (#3508).
+         *
+         *     Unlike ``GET /strategies`` this lists the compatibility entries the picker
+         *     hides, and it answers Sweep, Golden Search and Live for each, with the
+         *     reason when one is not allowed. Allowed never means proven, approved or
+         *     deployable: those are judged by their own reads.
+         */
+        get: operations["list_strategy_registry_api_engine_strategy_registry_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/golden-fixtures": {
         parameters: {
             query?: never;
@@ -5738,7 +5763,7 @@ export interface paths {
         };
         /**
          * List Backtest Runs
-         * @description Run history, newest first.
+         * @description Run history, newest first; the limit applies after the filters.
          */
         get: operations["list_backtest_runs_api_research_backtest_runs_get"];
         put?: never;
@@ -6791,6 +6816,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/options-backtest/setup-index": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Setup Index
+         * @description The saved setups and all Options evidence in one read, each with its exact content hash; nothing is joined by name.
+         */
+        get: operations["get_setup_index_api_research_options_backtest_setup_index_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/options-backtest/setups": {
         parameters: {
             query?: never;
@@ -6801,6 +6846,9 @@ export interface paths {
         /**
          * List Setups
          * @description The two shipped examples, then the saved setups, newest first. One that cannot be opened says why.
+         *
+         *     Each setup carries the hash of its content. Evidence is matched to a setup by an equal hash, so this lists no
+         *     approved version and picks none for a name (``GET /setup-index`` lists the evidence).
          */
         get: operations["list_setups_api_research_options_backtest_setups_get"];
         put?: never;
@@ -6913,8 +6961,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** History */
-        get: operations["history_api_research_options_golden_search_studies_get"];
+        get?: never;
         put?: never;
         /** Create */
         post: operations["create_api_research_options_golden_search_studies_post"];
@@ -9204,6 +9251,8 @@ export interface components {
             closingBarSkips: components["schemas"]["BacktestRunClosingBarSkipResponse"][];
             /** Commissionperorder */
             commissionPerOrder: number | null;
+            /** Customsource */
+            customSource: boolean;
             /** Datapolicy */
             dataPolicy: Record<string, never> | null;
             /** Durationms */
@@ -9366,6 +9415,8 @@ export interface components {
             brokeragePolicy: string | null;
             /** Commissionperorder */
             commissionPerOrder: number | null;
+            /** Customsource */
+            customSource: boolean;
             /** Datapolicy */
             dataPolicy: Record<string, never> | null;
             /** Enddate */
@@ -10950,6 +11001,19 @@ export interface components {
              * @enum {string}
              */
             verdict: "meets_rules" | "does_not_meet_rules" | "not_enough_evidence" | "could_not_evaluate";
+        };
+        /**
+         * CapabilityAnswer
+         * @description Whether the registry allows one action for a strategy; ``reason`` says why not.
+         */
+        CapabilityAnswer: {
+            /**
+             * Reason
+             * @description Set exactly when the action is not supported.
+             */
+            reason?: string | null;
+            /** Supported */
+            supported: boolean;
         };
         /**
          * CaptureReceiptModel
@@ -15081,10 +15145,11 @@ export interface components {
          *     refused with a reason (``app.services.feature_study_service``).
          *
          *     **Default override**: ``session="extended"``. ``session`` is the one
-         *     control for which bars the study computes on: ``extended`` is every bar the
-         *     provider served, 04:00-20:00 ET, which is what the study has always read;
-         *     ``rth`` is the scheduled session. The base default (``rth``) would have
-         *     silently moved every caller that omits it onto a different sample (D02).
+         *     control for which bars the study computes on, and the page offers both:
+         *     ``extended`` is every bar the provider served, 04:00-20:00 ET, which is what
+         *     the study has always read; ``rth`` is the scheduled session. The base
+         *     default (``rth``) would have silently moved every caller that omits it onto
+         *     a different sample (#3521).
          */
         FeatureResearchJobRequest: {
             /** Featurename */
@@ -20902,6 +20967,82 @@ export interface components {
             strikes: number[];
             /** Symbol */
             symbol: string;
+        };
+        /** IndexedApproval */
+        IndexedApproval: {
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Id */
+            id: string;
+            /**
+             * Origin
+             * @enum {string}
+             */
+            origin: "backtest" | "search" | "not_recorded";
+            /** Recorded Name */
+            recorded_name: string;
+            /** Setup Sha256 */
+            setup_sha256: string;
+            /** Source Run Id */
+            source_run_id: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ready" | "stale" | "revoked";
+            /** Study Id */
+            study_id?: string | null;
+            /** Underlying */
+            underlying?: string | null;
+        };
+        /** IndexedRun */
+        IndexedRun: {
+            /** Created At Ms */
+            created_at_ms: number;
+            /** First Session Open Ms */
+            first_session_open_ms: number;
+            /** Id */
+            id: number;
+            /** Last Session Open Ms */
+            last_session_open_ms: number;
+            /** Net Profit Usd */
+            net_profit_usd?: string | null;
+            /** Recorded Name */
+            recorded_name?: string | null;
+            /** Sessions Requested */
+            sessions_requested: number;
+            /** Setup Sha256 */
+            setup_sha256?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "complete" | "failed" | "cancelled" | "interrupted";
+            /** Underlying */
+            underlying: string;
+            /** Unreadable Reason */
+            unreadable_reason?: string | null;
+        };
+        /** IndexedStudy */
+        IndexedStudy: {
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Id */
+            id: string;
+            /** Phase */
+            phase: string;
+            /** Recorded Name */
+            recorded_name: string;
+            /** Setup Sha256 */
+            setup_sha256?: string | null;
+            /** Status */
+            status: string;
+            /** Underlying */
+            underlying: string;
+            /** Unreadable Reason */
+            unreadable_reason?: string | null;
+            /** Updated At Ms */
+            updated_at_ms: number;
         };
         /** IndicatorBetween */
         IndicatorBetween: {
@@ -27277,6 +27418,26 @@ export interface components {
             /** Winning Sessions */
             winning_sessions: number;
         };
+        /**
+         * OptionsSetupIndexResponse
+         * @description Newest first within each list. A list shorter than its ``*_total`` was cut, and the page says so.
+         */
+        OptionsSetupIndexResponse: {
+            /** Approvals */
+            approvals: components["schemas"]["IndexedApproval"][];
+            /** Approvals Total */
+            approvals_total: number;
+            /** Read At Ms */
+            read_at_ms: number;
+            /** Runs */
+            runs: components["schemas"]["IndexedRun"][];
+            /** Runs Total */
+            runs_total: number;
+            /** Studies */
+            studies: components["schemas"]["IndexedStudy"][];
+            /** Studies Total */
+            studies_total: number;
+        };
         /** OptionsWatchedPremiumView */
         OptionsWatchedPremiumView: {
             /** Close Ms */
@@ -30619,17 +30780,16 @@ export interface components {
             cannot_open_reason?: string | null;
             /** Example */
             example: boolean;
-            /** Golden Setup Id */
-            golden_setup_id?: string | null;
-            /** Golden Status */
-            golden_status?: ("ready" | "stale" | "revoked") | null;
-            /** Golden Status Explanation */
-            golden_status_explanation?: string | null;
             /** Name */
             name: string;
             /** Saved At Ms */
             saved_at_ms?: number | null;
             setup?: components["schemas"]["OptionsBacktestSetup-Output"] | null;
+            /**
+             * Setup Sha256
+             * @description The exact identity of the setup's content, present when the setup is. A run, a search or an approved version is matched to a saved setup by an equal hash and never by name: a name can be edited, deleted and reused, and two names with identical content share one hash.
+             */
+            setup_sha256?: string | null;
         };
         /** ScopedHealthResponse */
         ScopedHealthResponse: {
@@ -32929,6 +33089,18 @@ export interface components {
              */
             verdict: "accepted_for_deploy" | "evidence_only" | "rejected";
         };
+        /**
+         * StrategyCapabilities
+         * @description What the registry allows. Allowed is not approved: proof, qualification and admission are judged elsewhere.
+         */
+        StrategyCapabilities: {
+            /** @description A Golden Search study. */
+            golden: components["schemas"]["CapabilityAnswer"];
+            /** @description A bot of this strategy on a Live account. */
+            live: components["schemas"]["CapabilityAnswer"];
+            /** @description Sweep, Walk-forward and Recency Chart, which share one eligibility rule. */
+            sweep: components["schemas"]["CapabilityAnswer"];
+        };
         /** StrategyEvidenceSnapshot */
         StrategyEvidenceSnapshot: {
             /** Audit Copy Ref */
@@ -33164,6 +33336,42 @@ export interface components {
              * @enum {string}
              */
             state?: "current" | "stale" | "missing" | "unreadable";
+        };
+        /**
+         * StrategyRegistryEntry
+         * @description One registered strategy, as its registry entry declares it.
+         */
+        StrategyRegistryEntry: {
+            capabilities: components["schemas"]["StrategyCapabilities"];
+            /** Catalog Visible */
+            catalog_visible: boolean;
+            /** Description */
+            description: string;
+            /** Display Name */
+            display_name: string;
+            /** Experimental Notice */
+            experimental_notice: string | null;
+            /** Parameter Units */
+            parameter_units: {
+                [key: string]: string;
+            };
+            /** Program Version */
+            program_version: string | null;
+            /** Rule Statement */
+            rule_statement: string | null;
+            /**
+             * Strategy Category
+             * @enum {string}
+             */
+            strategy_category: "production_candidate" | "operational_validation_harness";
+            /** Strategy Key */
+            strategy_key: string;
+            /** Validated Settings */
+            validated_settings: {
+                [key: string]: string | number | boolean;
+            };
+            /** Validated Symbols */
+            validated_symbols: string[];
         };
         /**
          * StrategyRunRequest
@@ -33681,21 +33889,6 @@ export interface components {
          */
         StudyRecordRefusalBody: {
             detail: components["schemas"]["StudyRecordRefusal"];
-        };
-        /** StudySummary */
-        StudySummary: {
-            /** Id */
-            id: string;
-            /** Phase */
-            phase: string;
-            /** Setup Name */
-            setup_name: string;
-            /** Status */
-            status: string;
-            /** Underlying */
-            underlying: string;
-            /** Updated At Ms */
-            updated_at_ms: number;
         };
         /** Subtract */
         "Subtract-Input": {
@@ -34382,6 +34575,11 @@ export interface components {
              * @default 100000
              */
             starting_cash?: number;
+            /**
+             * Strategy Key
+             * @description Registry key of the strategy whose Explore submitted ``algorithm_source``. A custom source is not a bundled template, so this key becomes the saved run's owner (its ``strategy_name``) and the run opens under that strategy. Accepted only with ``algorithm_source``: a bundled template run is already owned by the strategy that registers the template as its LEAN twin.
+             */
+            strategy_key?: string | null;
             /**
              * Strategy Parameters
              * @description Validated strategy-logic parameters for a bundled trusted template. Accepted by the parameterized EMA twins; omitted values use that template's declared defaults.
@@ -36365,6 +36563,8 @@ export interface operations {
                 symbol?: string | null;
                 /** @description Only this bot, with all of its runs. */
                 strategy_instance_id?: string | null;
+                /** @description Only this strategy's bots, by registry key. */
+                strategy_key?: string | null;
                 page?: number;
                 page_size?: number;
             };
@@ -44675,6 +44875,26 @@ export interface operations {
             };
         };
     };
+    list_strategy_registry_api_engine_strategy_registry_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyRegistryEntry"][];
+                };
+            };
+        };
+    };
     get_golden_fixtures_api_golden_fixtures_get: {
         parameters: {
             query?: never;
@@ -45984,6 +46204,8 @@ export interface operations {
         parameters: {
             query?: {
                 engine?: ("PYTHON" | "LEAN") | null;
+                /** @description Only this strategy's runs. */
+                strategy_name?: string | null;
                 limit?: number;
             };
             header?: never;
@@ -48744,6 +48966,35 @@ export interface operations {
             };
         };
     };
+    get_setup_index_api_research_options_backtest_setup_index_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsSetupIndexResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+        };
+    };
     list_setups_api_research_options_backtest_setups_get: {
         parameters: {
             query?: never;
@@ -48980,37 +49231,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Preflight"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    history_api_research_options_golden_search_studies_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StudySummary"][];
                 };
             };
             /** @description Validation Error */

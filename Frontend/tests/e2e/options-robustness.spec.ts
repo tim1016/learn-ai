@@ -22,8 +22,8 @@ test('inspects actual partial robustness and declared neighbors without evaluati
     else if (path === '/api/jobs') await route.fulfill({ json: [] });
     else await route.fulfill({ status: 503, json: { detail: 'Outside this retained fixture.' } });
   });
-  await page.goto(`/options-golden-search/${study.id}`);
-  const workbench = page.locator('app-options-golden-search-page');
+  await page.goto(`/options-setups/evidence/study/${study.id}`);
+  const workbench = page.locator('app-options-study-workbench');
   await workbench.getByRole('button', { name: 'Compare and final test', exact: true }).click();
   await workbench.getByRole('button', { name: 'Inspect evidence', exact: true }).click();
   expect(reads.filter(path => path.endsWith('/robustness') || path.endsWith('/neighbors'))).toEqual([]);

@@ -1,5 +1,5 @@
 <section class="study" [attr.aria-labelledby]="report() ? 'report-title' : 'gs-study-title'">
-  <a class="back" routerLink="/golden-search"><i class="pi pi-arrow-left" aria-hidden="true"></i> All studies</a>
+  <a class="back" [routerLink]="studiesRoute()"><i class="pi pi-arrow-left" aria-hidden="true"></i> All studies</a>
   @if (loadError(); as message) { <p class="refusal" role="alert">{{ message }}</p> }
   @if (refreshNotice(); as notice) { <p class="muted" role="status">{{ notice }}</p> }
   <p class="sr-only" role="status">{{ announcement() }}</p>

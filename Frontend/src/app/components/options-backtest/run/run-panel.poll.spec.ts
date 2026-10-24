@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { RunDetail, RunListItem } from '../options-backtest.types';
 import { fakeJobs } from '../testing/fake-jobs';
-import { fakeService } from '../testing/render-page';
+import { fakeService } from '../testing/fake-service';
 import { readsAs, renderRunPanel } from '../testing/render-run';
 import { runDetail, runItem } from '../testing/run-fixtures';
 

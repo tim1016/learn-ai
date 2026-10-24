@@ -4,7 +4,7 @@
     <h2 id="gs-study-title">{{ capability()?.display_name ?? (s.strategy_key | receiptLabel) }} · <app-asset-identity [symbol]="s.symbol" size="sm" /></h2>
     <p class="muted">
       Study <code>{{ s.id.slice(0, 8) }}</code> · locked <app-timestamp-display [value]="s.created_at_ms" mode="local" />
-      @if (s.parent_study_id; as parent) { · revised from <a [routerLink]="['/golden-search', parent]"><code>{{ parent.slice(0, 8) }}</code></a> }
+      @if (s.parent_study_id; as parent) { · revised from <a [routerLink]="parentRoute(parent)"><code>{{ parent.slice(0, 8) }}</code></a> }
     </p>
   </div>
   <div class="tags">

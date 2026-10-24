@@ -1,0 +1,271 @@
+import { HttpClient } from "@angular/common/http";
+import { signal } from "@angular/core";
+import { fireEvent, render, screen, within } from "@testing-library/angular";
+import { of } from "rxjs";
+import { describe, expect, it, vi } from "vitest";
+
+import { RecencyLaunchConfigComponent } from "./recency-launch-config.component";
+import { JobsService } from "../../../services/jobs.service";
+import type { StrategyInfo } from "../../../components/strategy-lab/strategy-lab.models";
+import type { VendorSymbolEntry } from "../../../shared/symbol-catalog/vendor-catalog.service";
+import { fakePickerWorld } from "../../../shared/symbol-picker/testing/fake-picker-world";
+
+/** Held rows only — the lake half of the joined catalog the card joins. */
+const LAKE_POOL = [
+  { symbol: "SPY", name: "SPDR S&P 500", firstHeld: "2024-01-02", lastHeld: "2026-09-18" },
+  { symbol: "AAPL", name: "Apple Inc.", firstHeld: "2024-01-02", lastHeld: "2026-09-18" },
+];
+
+/** A listed active symbol the lake does not hold — the gate's subject. */
+const LISTED_UNHELD: VendorSymbolEntry = {
+  symbol: "TSLA",
+  name: "Tesla, Inc.",
+  asset_class: "us_equity",
+  exchange: "NASDAQ",
+  status: "active",
+};
+
+function makeStrategy(overrides: Partial<StrategyInfo> = {}): StrategyInfo {
+  return {
+    name: "ema_crossover_2_bps",
+    display_name: "EMA Crossover (2 bps)",
+    description: "",
+    params_schema: {
+      properties: {
+        symbol: { type: "string", default: "SPY" },
+        gap_bps: { type: "number", default: 2, title: "Crossover gap (bps)" },
+        rsi_min: { type: "number", default: 50, title: "RSI lower gate" },
+      },
+    },
+    supported_resolutions: ["minute"],
+    strategy_bars: { timespan: "minute", multiplier: 15 },
+    recency_supported: true,
+    ...overrides,
+  };
+}
+
+async function renderConfig(
+  strategies: StrategyInfo[],
+  startJob = vi.fn(async () => "job-1"),
+  job: (id: string) => { status: string } | undefined = () => undefined,
+  vendorEntries: readonly VendorSymbolEntry[] = [],
+) {
+  const world = fakePickerWorld(LAKE_POOL, vendorEntries);
+  const view = await render(RecencyLaunchConfigComponent, {
+    providers: [
+      { provide: HttpClient, useValue: { get: () => of(strategies) } },
+      { provide: JobsService, useValue: { startJob, job } },
+      ...world.providers,
+    ],
+  });
+  return { view, startJob, coverage: world.coverage, vendor: world.vendor };
+}
+
+/** Adds a symbol through the shared multi card's search, as an operator does. */
+async function addSymbol(view: { fixture: { whenStable: () => Promise<unknown> } }, query: string): Promise<void> {
+  fireEvent.input(screen.getByLabelText("Search to add a ticker"), { target: { value: query } });
+  const option = await screen.findByRole("option", { name: new RegExp(query, "i") });
+  fireEvent.click(option);
+  await view.fixture.whenStable();
+}
+
+describe("RecencyLaunchConfigComponent", () => {
+  it("lists only recency-supported strategies in the picker", async () => {
+    await renderConfig([
+      makeStrategy({ name: "ema_crossover_2_bps", display_name: "EMA Crossover (2 bps)", recency_supported: true }),
+      makeStrategy({ name: "spy_ema_crossover_options", display_name: "EMA Options Spread", recency_supported: false }),
+    ]);
+
+    expect(screen.getByText("EMA Crossover (2 bps)")).not.toBeNull();
+    expect(screen.queryByText("EMA Options Spread")).toBeNull();
+  });
+
+  it("prepopulates a ready-to-run timeline configuration with a range input per numeric param for the preselected strategy", async () => {
+    const { view } = await renderConfig([makeStrategy()]);
+    await view.fixture.whenStable();
+
+    expect.soft(screen.getByText("SPY"), "prepopulates the default symbol").not.toBeNull();
+    expect.soft((screen.getByRole("checkbox", { name: /ema crossover \(2 bps\)/i }) as HTMLInputElement).checked, "preselects the strategy").toBe(true);
+    expect.soft(screen.getByText("Crossover gap (bps)"), "prepopulates the crossover gap param").not.toBeNull();
+    expect.soft(screen.getByText("RSI lower gate"), "prepopulates the RSI gate param").not.toBeNull();
+    expect.soft((screen.getByRole("radio", { name: "6 months" }) as HTMLInputElement).checked, "preselects the 6 months window").toBe(true);
+    expect.soft(screen.getByText("1 run"), "counts one run").not.toBeNull();
+    expect.soft(screen.getByText("Crossover gap (bps)"), "shows a range input for the crossover gap param").not.toBeNull();
+    expect.soft(screen.getByText("RSI lower gate"), "shows a range input for the RSI gate param").not.toBeNull();
+    expect.soft(screen.queryByLabelText(/^symbol$/i), "shows no range input for the string symbol param").toBeNull();
+  });
+
+  it("keeps strategy selection interactive through its accessible checkbox", async () => {
+    const { view } = await renderConfig([makeStrategy()]);
+    await view.fixture.whenStable();
+    const strategy = screen.getByRole("checkbox", { name: /ema crossover \(2 bps\)/i });
+
+    fireEvent.click(strategy);
+    await view.fixture.whenStable();
+
+    expect(screen.getByText("0 selected")).not.toBeNull();
+
+    fireEvent.click(strategy);
+    await view.fixture.whenStable();
+
+    expect(screen.getByText("1 selected")).not.toBeNull();
+  });
+
+  it("turns picked symbols into removable timeline lanes — there is no free-text symbols input", async () => {
+    const { view } = await renderConfig([makeStrategy()]);
+
+    // No free-text symbols field survives the ADR 0066 conversion: the
+    // multi card's search is the only way in.
+    expect(screen.queryByRole("textbox", { name: /symbols/i })).toBeNull();
+
+    // SPY is seeded by default, so picking it again proves nothing -- the
+    // chip would survive on dedup alone. Pick a symbol that is not selected.
+    await addSymbol(view, "AAPL");
+
+    expect(screen.getByRole("button", { name: "AAPL (remove)" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "SPY (remove)" })).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "AAPL (remove)" }));
+    await view.fixture.whenStable();
+
+    expect(screen.queryByRole("button", { name: "AAPL (remove)" })).toBeNull();
+    expect(screen.getByRole("button", { name: "SPY (remove)" })).not.toBeNull();
+  });
+
+  it("gates an unheld pick on its backfill — the lane appears only once covered", async () => {
+    const { view, coverage } = await renderConfig([makeStrategy()], undefined, undefined, [LISTED_UNHELD]);
+
+    await addSymbol(view, "TSLA");
+    // The pick reached the gate on the tree the recency job reads.
+    expect(coverage.ensureCalls).toContainEqual({
+      symbol: "TSLA",
+      mode: "polygon_split_adjusted",
+    });
+    // Populate-then-use: not a lane while the backfill runs.
+    expect(screen.queryByRole("button", { name: "TSLA (remove)" })).toBeNull();
+
+    // The fake resolves `ready` immediately; flush the gate's promise chain.
+    await Promise.resolve();
+    await Promise.resolve();
+    await view.fixture.whenStable();
+
+    expect(screen.getByRole("button", { name: "TSLA (remove)" })).not.toBeNull();
+  });
+
+  it("refuses a fractional custom-month window", async () => {
+    const { view } = await renderConfig([makeStrategy()]);
+
+    fireEvent.click(screen.getByLabelText(/custom/i));
+    await view.fixture.whenStable();
+
+    const months = screen.getByLabelText(/custom months/i);
+    fireEvent.input(months, { target: { value: "1.5" } });
+    await view.fixture.whenStable();
+
+    expect(screen.getByText(/whole number of months/i)).not.toBeNull();
+  });
+
+  it("computes the pre-launch run count from symbols and selected strategy ranges", async () => {
+    const { view } = await renderConfig([makeStrategy()]);
+
+    await addSymbol(view, "AAPL");
+
+    // default seeding: each numeric param starts as a single-value list -> 1 combo per symbol
+    expect(screen.getByText(/2 runs?/i)).not.toBeNull();
+  });
+
+  it("blocks launch when no symbols have been selected", async () => {
+    const startJob = vi.fn(async () => "job-1");
+    const { view } = await renderConfig([makeStrategy()], startJob);
+
+    fireEvent.click(screen.getByRole("button", { name: "SPY (remove)" }));
+    fireEvent.click(screen.getByRole("button", { name: /launch timeline/i }));
+    await view.fixture.whenStable();
+
+    expect(startJob).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toMatch(/add at least one symbol/i);
+  });
+
+  it("refuses to launch while a parameter's value list is malformed", async () => {
+    // #1940: a malformed entry used to be dropped and the smaller grid launched.
+    const startJob = vi.fn(async () => "job-1");
+    const { view } = await renderConfig([makeStrategy()], startJob);
+
+    const gapField = within(screen.getByRole("group", { name: "Crossover gap (bps)" })).getByLabelText(/values/i);
+    fireEvent.input(gapField, { target: { value: "2,.3..4" } });
+    await view.fixture.whenStable();
+    fireEvent.click(screen.getByRole("button", { name: /launch timeline/i }));
+    await view.fixture.whenStable();
+
+    expect(startJob).not.toHaveBeenCalled();
+    const alerts = screen.getAllByRole("alert").map((el) => el.textContent ?? "").join(" ");
+    expect(alerts).toContain('".3..4" is not a number.');
+    expect(alerts).toContain("Fix the values for EMA Crossover (2 bps) · Crossover gap (bps) before launching the timeline.");
+  });
+
+  it("refuses to launch a refused list even when another selected strategy still counts runs", async () => {
+    // The run count sums across strategies, so a second strategy's runs must
+    // not mask the refused list on the first.
+    const startJob = vi.fn(async () => "job-1");
+    const other = makeStrategy({ name: "sma_crossover", display_name: "SMA Crossover", params_schema: { properties: { symbol: { type: "string", default: "SPY" }, window: { type: "number", default: 20, title: "Window" } } } });
+    const { view } = await renderConfig([makeStrategy(), other], startJob);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /sma crossover/i }));
+    await view.fixture.whenStable();
+    const gapField = within(screen.getByRole("group", { name: "Crossover gap (bps)" })).getByLabelText(/values/i);
+    fireEvent.input(gapField, { target: { value: "2,.3..4" } });
+    await view.fixture.whenStable();
+    fireEvent.click(screen.getByRole("button", { name: /launch timeline/i }));
+    await view.fixture.whenStable();
+
+    expect(startJob).not.toHaveBeenCalled();
+    expect(screen.getAllByRole("alert").map((el) => el.textContent ?? "").join(" ")).toContain("Fix the values for EMA Crossover (2 bps) · Crossover gap (bps)");
+  });
+
+  it("launches a recency_chart job with the selected symbols and strategy ranges", async () => {
+    const { view, startJob } = await renderConfig([makeStrategy()]);
+
+    fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+    await view.fixture.whenStable();
+
+    expect(startJob).toHaveBeenCalledWith(
+      "recency_chart",
+      expect.objectContaining({
+        symbols: ["SPY"],
+        strategies: expect.arrayContaining([
+          expect.objectContaining({ strategyKey: "ema_crossover_2_bps" }),
+        ]),
+      }),
+    );
+  });
+
+  it("emits launchCompleted once the launched job's status turns completed", async () => {
+    const jobState = signal<{ status: string } | undefined>(undefined);
+    const startJob = vi.fn(async () => "job-1");
+    const { view } = await renderConfig([makeStrategy()], startJob, (id: string) =>
+      id === "job-1" ? jobState() : undefined,
+    );
+    const onCompleted = vi.fn();
+    view.fixture.componentInstance.launchCompleted.subscribe(onCompleted);
+
+    fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+    await view.fixture.whenStable();
+
+    expect(onCompleted).not.toHaveBeenCalled();
+
+    jobState.set({ status: "completed" });
+    await view.fixture.whenStable();
+
+    expect(onCompleted).toHaveBeenCalledTimes(1);
+  });
+
+  it("caps the custom duration input at 24 months", async () => {
+    const { view } = await renderConfig([makeStrategy()]);
+
+    fireEvent.click(screen.getByRole("radio", { name: /custom/i }));
+    fireEvent.input(screen.getByLabelText(/custom months/i), { target: { value: "99" } });
+    await view.fixture.whenStable();
+
+    expect((screen.getByLabelText(/custom months/i) as HTMLInputElement).value).toBe("24");
+  });
+});

@@ -1,0 +1,36 @@
+<section class="report" aria-label="Saved run">
+  <p class="report__note">
+    Run #{{ runId() }} stored the strategy "{{ storedStrategy() }}", which the registry does not list. No strategy's
+    Explore holds it, so it is shown here by itself, read-only: it cannot be re-run, swept or approved, and the record
+    is unchanged.
+    <a [routerLink]="listRoute">Back to Signal strategies</a>
+  </p>
+
+  @if (report.loadError()) {
+    <p class="report__problem" role="alert">Run #{{ runId() }} could not be read. Reload to try again.</p>
+  } @else if (report.notFound()) {
+    <p class="report__problem" role="alert">Saved run #{{ runId() }} was not found.</p>
+  } @else if (report.displayRun(); as run) {
+    <div class="report__body">
+      <div class="report__stats">
+        @if (report.engineResult(); as result) {
+          <app-strategy-lab-run-stats
+            [run]="run"
+            [result]="result"
+            [verdict]="report.verdict()"
+            [parity]="report.parity()"
+            [tradesTruncated]="run.tradesTruncated"
+          />
+        }
+      </div>
+      <div class="report__stage">
+        @for (notice of report.reportNotices(); track notice) {
+          <p class="report__note report__note--aside" role="note">{{ notice }}</p>
+        }
+        <app-strategy-lab-strategy-view [run]="run" [markers]="report.markers()" [equityPoints]="report.equityPoints()" />
+      </div>
+    </div>
+  } @else {
+    <p class="report__note" role="status">Reading the run.</p>
+  }
+</section>

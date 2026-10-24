@@ -59,6 +59,7 @@ import {
   DEPLOY_AGAIN_QUERY_PARAM,
   GOLDEN_QUALIFICATION_QUERY_PARAM,
   accountWorkspaceBotRoute,
+  isQualificationId,
   accountWorkspaceTabRoute,
   type AccountWorkspaceLink,
 } from '../../../fleet/account-workspace';
@@ -129,9 +130,6 @@ import type { QualificationDeployOffer } from '../../golden-search/golden-search
 
 /** A bot id as the backend's path-safe validator admits it (Deploy again's `?from=`). */
 const INSTANCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
-/** A Golden Search qualification id as a path segment may carry it (`?golden_qualification=`, #2696). */
-const QUALIFICATION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
-
 /** What a Golden Search handoff did to the form (#2696). */
 type GoldenHandoff =
   | { readonly kind: 'applied'; readonly offer: QualificationDeployOffer }
@@ -1141,7 +1139,7 @@ export class AlpacaDeployWorkflowComponent {
   private readonly goldenParam = computed(() => this.queryParams().get(GOLDEN_QUALIFICATION_QUERY_PARAM));
   private readonly goldenQualificationId = computed(() => {
     const id = this.goldenParam();
-    return id !== null && QUALIFICATION_ID_RE.test(id) ? id : null;
+    return isQualificationId(id) ? id : null;
   });
 
   /** The approved qualification's deploy offer. The research client is resolved

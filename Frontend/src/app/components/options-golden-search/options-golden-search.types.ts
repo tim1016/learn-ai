@@ -165,5 +165,3 @@ export interface OptionsStudy {
   readonly qualification_id: string | null;
   readonly qualification_status: string | null;
 }
-
-export type StudySummary = Pick<OptionsStudy, 'id' | 'setup_name' | 'underlying' | 'phase' | 'status'> & { readonly updated_at_ms: number };

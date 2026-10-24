@@ -79,42 +79,32 @@ export const researchLabRoutes: Routes = [
   movedStudy('signal-engine', 'signal'),
   movedStudy('cross-sectional', 'cross-sectional'),
 
-  // Sub-nav shell for the page Research Lab still hosts: the Recency Chart
-  // (the slice of the place it belongs to).
+  // The Research Lab shell is gone: its last page, the Recency Chart, moved
+  // under Signal strategies, so every address left here is a redirect.
+  { path: '', redirectTo: redirectKeepingState(['/research']), pathMatch: 'full' },
+
+  // Market: headlines moved under the instrument (ADR 0084). The old
+  // address went straight to them with no symbol in it, so it leads to the
+  // instrument its query names, or to Markets when it names none.
   {
-    path: '',
-    loadComponent: () =>
-      import('./research-lab.component').then((m) => m.ResearchLabComponent),
-    children: [
-      { path: '', redirectTo: redirectKeepingState(['/research']), pathMatch: 'full' },
-
-      // Market: headlines moved under the instrument (ADR 0084). The old
-      // address went straight to them with no symbol in it, so it leads to the
-      // instrument its query names, or to Markets when it names none.
-      {
-        path: 'market/news',
-        pathMatch: 'full',
-        redirectTo: redirectToInstrument('chart', ['news']),
-      },
-
-      // Backtests
-      {
-        path: 'backtests/recency-chart',
-        loadComponent: () =>
-          import(
-            './recency-chart/recency-chart-page.component'
-          ).then((m) => m.RecencyChartPageComponent),
-        data: { title: 'Recency Chart' },
-      },
-
-      // Data divergence and Strategy pre-flight moved to Operations → Data checks.
-      // Each address goes straight there, carrying its query and fragment.
-      { path: 'inspect/data-divergence', redirectTo: redirectKeepingState(dataCheckRoute('divergence')), pathMatch: 'full' },
-      { path: 'inspect/pre-flight', redirectTo: redirectKeepingState(dataCheckRoute('pre-flight')), pathMatch: 'full' },
-
-      // Legacy single-page tab IDs (pre-router)
-      { path: 'data-divergence', redirectTo: redirectKeepingState(dataCheckRoute('divergence')), pathMatch: 'full' },
-      { path: 'strategy-preflight', redirectTo: redirectKeepingState(dataCheckRoute('pre-flight')), pathMatch: 'full' },
-    ],
+    path: 'market/news',
+    pathMatch: 'full',
+    redirectTo: redirectToInstrument('chart', ['news']),
   },
+
+  // The Recency Chart moved under Signal strategies.
+  {
+    path: 'backtests/recency-chart',
+    redirectTo: redirectKeepingState(['/signal-strategies', 'recency']),
+    pathMatch: 'full',
+  },
+
+  // Data divergence and Strategy pre-flight moved to Operations → Data checks.
+  // Each address goes straight there, carrying its query and fragment.
+  { path: 'inspect/data-divergence', redirectTo: redirectKeepingState(dataCheckRoute('divergence')), pathMatch: 'full' },
+  { path: 'inspect/pre-flight', redirectTo: redirectKeepingState(dataCheckRoute('pre-flight')), pathMatch: 'full' },
+
+  // Legacy single-page tab IDs (pre-router)
+  { path: 'data-divergence', redirectTo: redirectKeepingState(dataCheckRoute('divergence')), pathMatch: 'full' },
+  { path: 'strategy-preflight', redirectTo: redirectKeepingState(dataCheckRoute('pre-flight')), pathMatch: 'full' },
 ];

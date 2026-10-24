@@ -264,15 +264,6 @@ class Dispatch(Model):
     stage_token: str
 
 
-class StudySummary(Model):
-    id: str
-    setup_name: str
-    underlying: str
-    phase: str
-    status: str
-    updated_at_ms: int
-
-
 class ApprovalReview(Model):
     failures: list[GateOutcome]
     blocked_reason: str | None

@@ -20,6 +20,9 @@ export type BotHistoryWorld = FleetBotHistoryRow['world'];
 /** Bots per page. */
 export const BOT_HISTORY_PAGE_SIZE = 25;
 
+/** Bots per page when a caller needs every running bot: the most the coordinator will return. */
+export const RUNNING_BOTS_PAGE_SIZE = 100;
+
 const BOT_HISTORY_URL = '/api/broker-clerks/aggregate/bot-history';
 
 /** One filter the owner can set; `page` is the pager's own. */
@@ -104,6 +107,17 @@ export class BotHistoryService {
     if (query.world !== null) params = params.set('world', query.world);
     if (query.symbol !== null) params = params.set('symbol', query.symbol);
     if (query.bot !== null) params = params.set('strategy_instance_id', query.bot);
+    return firstValueFrom(this.http.get<FleetBotHistoryPage>(BOT_HISTORY_URL, { params }));
+  }
+
+  /**
+   * One page of the bots running now, one strategy's or every strategy's, at the
+   * largest page the coordinator returns so a strategy's count rarely needs more
+   * than one read. The strategy filter is the coordinator's, applied before it pages.
+   */
+  readRunning(strategyKey: string | null, page: number): Promise<FleetBotHistoryPage> {
+    let params = new HttpParams().set('page', page).set('page_size', RUNNING_BOTS_PAGE_SIZE).set('status', 'running');
+    if (strategyKey !== null) params = params.set('strategy_key', strategyKey);
     return firstValueFrom(this.http.get<FleetBotHistoryPage>(BOT_HISTORY_URL, { params }));
   }
 }

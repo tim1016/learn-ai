@@ -16,8 +16,10 @@ Two claims, kept apart as PRD #3490 R14 requires.
 
 from __future__ import annotations
 
+import json
 import math
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -32,6 +34,7 @@ from app.research.runner import run_feature_research
 from app.research.study_inputs import StudyInputRefusal, admit_minute_inputs, bars_as_rows, fold_minute_bars
 from app.research.target import compute_forward_log_return
 from app.services.feature_study_service import (
+    SUPPORTED_BAR_MINUTES,
     FeatureStudyParams,
     feature_study,
     feature_study_identity,
@@ -40,6 +43,8 @@ from app.services.feature_study_service import (
 from tests._helpers.fake_lake_catalog import install_fake_catalog, mock_launcher, point_lake_writer_at_tmp
 from tests._helpers.lake_study import ATOL, RTOL, assert_same, cache_key_of, vendor_rows
 from tests._helpers.pinned_vendor import mock_vendor, vendor_history
+
+BAR_MINUTES_CONTRACT = Path(__file__).resolve().parents[3] / "contracts" / "feature-study-bar-minutes.json"
 
 ET = ZoneInfo("America/New_York")
 NOW_MS = 1_735_689_600_000  # 2025-01-01
@@ -199,3 +204,8 @@ def test_every_bar_length_that_divides_the_target_is_accepted(multiplier):
     assert identity.as_dict()["warmup_sessions"] == 0, "the study fetches no warmup"
     assert identity.as_dict()["look_forward_extends_window"] is False
     assert math.isfinite(identity.inputs.as_dict()["window_start_ms"])
+
+
+def test_the_bar_lengths_the_page_offers_are_the_ones_the_study_accepts():
+    """The Feature page offers exactly the lengths in this file (it imports it); the study accepts exactly these."""
+    assert tuple(json.loads(BAR_MINUTES_CONTRACT.read_text())["bar_minutes"]) == SUPPORTED_BAR_MINUTES

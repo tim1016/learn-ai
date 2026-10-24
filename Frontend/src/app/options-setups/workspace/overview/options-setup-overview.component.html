@@ -1,0 +1,102 @@
+@if (state(); as why) {
+  <app-workspace-state-block [state]="why" (actionTriggered)="act($event)" />
+} @else {
+  <div class="overview">
+    <section class="block" aria-labelledby="ov-content">
+      <h2 id="ov-content">Saved content</h2>
+      <p>
+        @if (example()) { A shipped example, which cannot be overwritten or deleted. }
+        @else { Saved <app-timestamp-display [value]="savedAtMs()" mode="local" /> }
+        · Content identity <code>{{ hash() }}</code>
+      </p>
+      <p class="muted">{{ standing().detail }} Everything below was recorded for exactly the content last saved, and is found by that content, not by the name.</p>
+      @if (sharedWith().length > 0) {
+        <p class="relation">
+          The same content is also saved as
+          @for (other of sharedWith(); track other.name; let last = $last) {
+            <a [routerLink]="[ '/options-setups', other.name, 'overview' ]">“{{ other.name }}”</a>{{ last ? '' : ', ' }}
+          }.
+          Those names share the evidence below, and none of them owns it.
+        </p>
+      }
+    </section>
+
+    <section class="block" aria-labelledby="ov-approved">
+      <h2 id="ov-approved">Approved versions of this content</h2>
+      <p class="muted">A tested run is approved, and a golden search is started, in <a [routerLink]="goldenRoute()">Golden</a>.</p>
+      @for (version of approvals(); track version.id; let first = $first) {
+        <article class="row" [attr.data-version]="version.id">
+          <p>
+            @if (first) { <strong>Latest.</strong>&ngsp; }
+            <a [routerLink]="evidenceRoute('golden', version.id)">Open exact version <code>{{ version.id }}</code></a>
+            <span class="chip" [attr.data-status]="version.status">{{ version.status | receiptLabel }}</span>
+          </p>
+          <p>
+            {{ originWords(version) }}. Source:
+            <a [routerLink]="evidenceRoute('run', version.source_run_id)">run {{ version.source_run_id }}</a>
+            @if (version.study_id; as study) { and <a [routerLink]="evidenceRoute('study', study)">search <code>{{ study }}</code></a> }
+            · approved <app-timestamp-display [value]="version.created_at_ms" mode="local" />
+          </p>
+        </article>
+      } @empty {
+        <p>No approved version holds this exact content{{ cut().approvals ? ', among ' + cut().approvals : '' }}.</p>
+      }
+    </section>
+
+    <section class="block" aria-labelledby="ov-backtest">
+      <h2 id="ov-backtest">Last backtest of this content</h2>
+      @for (run of shownRuns(); track run.id; let first = $first) {
+        <p class="line" [attr.data-run]="run.id">
+          @if (first) { <strong>Latest.</strong>&ngsp; }
+          <a [routerLink]="evidenceRoute('run', run.id)">Run {{ run.id }}</a>
+          <span class="chip">{{ run.status | receiptLabel }}</span>
+          <app-timestamp-display [value]="run.first_session_open_ms" mode="date-et" granularity="date" /> to <app-timestamp-display [value]="run.last_session_open_ms" mode="date-et" granularity="date" />
+          @if (run.net_profit_usd; as profit) { · net {{ profit | authoredUsd }} }
+          @if (run.recorded_name; as label) { · recorded as “{{ label }}” }
+        </p>
+      } @empty {
+        <p>No run of this exact content is recorded{{ cut().runs ? ', among ' + cut().runs : '' }}.</p>
+      }
+      @if (runs().length > shownRuns().length) {
+        <p class="muted">{{ runs().length - shownRuns().length }} more runs of this content are in <a routerLink="/options-setups">Options setups</a>.</p>
+      }
+    </section>
+
+    <section class="block" aria-labelledby="ov-searches">
+      <h2 id="ov-searches">Searches that began from this content</h2>
+      @for (study of studies(); track study.id) {
+        <p class="line">
+          <a [routerLink]="evidenceRoute('study', study.id)">Search <code>{{ study.id }}</code></a>
+          <span class="chip">{{ study.status | receiptLabel }}</span> {{ study.phase | receiptLabel }}
+          · started <app-timestamp-display [value]="study.created_at_ms" mode="local" />
+        </p>
+      } @empty {
+        <p>No golden search began from this exact content{{ cut().studies ? ', among ' + cut().studies : '' }}. A search that changed this setup’s settings is linked from the version it produced, not matched by name.</p>
+      }
+    </section>
+
+    <section class="block" aria-labelledby="ov-bots">
+      <h2 id="ov-bots">Bots</h2>
+      @if (botsOfContent(); as read) {
+        @if (read.kind === 'unknown') {
+          <p class="unknown">Unknown. {{ read.reason }}</p>
+        } @else if (read.bots.length === 0) {
+          <p>No bot is running from this exact content.</p>
+        } @else {
+          <ul class="list">
+            @for (bot of read.bots; track bot.sid) {
+              <li>
+                <a [routerLink]="bot.route">{{ bot.label }}</a> · {{ bot.world }} · {{ bot.status }}
+                · version <a [routerLink]="evidenceRoute('golden', bot.goldenSetupId)"><code>{{ bot.goldenSetupId }}</code></a>
+              </li>
+            }
+          </ul>
+        }
+      } @else if (botsFailed()) {
+        <p class="unknown">Unknown. The bots could not be read.</p>
+      } @else {
+        <p class="muted" role="status">Reading the bots…</p>
+      }
+    </section>
+  </div>
+}

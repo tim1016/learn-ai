@@ -211,10 +211,11 @@ class FeatureResearchJobRequest(_CamelCaseTickerRequest):
     refused with a reason (``app.services.feature_study_service``).
 
     **Default override**: ``session="extended"``. ``session`` is the one
-    control for which bars the study computes on: ``extended`` is every bar the
-    provider served, 04:00-20:00 ET, which is what the study has always read;
-    ``rth`` is the scheduled session. The base default (``rth``) would have
-    silently moved every caller that omits it onto a different sample (D02).
+    control for which bars the study computes on, and the page offers both:
+    ``extended`` is every bar the provider served, 04:00-20:00 ET, which is what
+    the study has always read; ``rth`` is the scheduled session. The base
+    default (``rth``) would have silently moved every caller that omits it onto
+    a different sample (#3521).
     """
 
     # Override base default — preserves the session the study has always computed on.
@@ -495,6 +496,7 @@ async def start_lean_engine_run_job(req: LeanEngineRunJobRequest) -> dict:
         starting_cash=payload.starting_cash,
         algorithm_source=payload.algorithm_source,
         template=payload.template,
+        strategy_key=payload.strategy_key,
         data_policy=data_policy,
         parity_group_id=payload.parity_group_id,
         strategy_parameters=(

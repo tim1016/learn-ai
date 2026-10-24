@@ -1,4 +1,5 @@
 import type { InstrumentDataReport } from '../../shared/data-lake';
+import type { TradeBackfillEnd } from '../../shared/data-lake/trade-backfill-runner';
 
 /*
  * What the Data tab does with Python's reading of an instrument's data
@@ -11,9 +12,6 @@ import type { InstrumentDataReport } from '../../shared/data-lake';
 export type InstrumentSession = InstrumentDataReport['sessions'][number];
 export type SessionState = InstrumentSession['state'];
 export type SessionBlocker = NonNullable<InstrumentSession['blocked_by']>;
-
-/** The lake trees a Fill can write and the tab can read. */
-export type AdjustmentTree = 'raw' | 'polygon_split_adjusted';
 
 /** The states that are a gap in what a run can read: everything that is neither ready nor not yet finished. */
 const GAP_STATES: ReadonlySet<SessionState> = new Set<SessionState>(['needs_rebuild', 'missing', 'failed', 'building']);
@@ -75,11 +73,8 @@ export function gapStretches(sessions: readonly InstrumentSession[]): readonly G
   return stretches;
 }
 
-/** How a Fill's job ended; `detached` is a job this place stopped watching, which may still be running. */
-export type FillEnd =
-  | { readonly kind: 'completed' }
-  | { readonly kind: 'failed'; readonly code: string; readonly message: string }
-  | { readonly kind: 'detached' };
+/** How a Fill's job ended. A job this place stopped watching (which may still be running) is not an end, and is never reported. */
+export type FillEnd = { readonly kind: 'completed' } | Extract<TradeBackfillEnd, { readonly kind: 'failed' | 'cancelled' }>;
 
 /** One cause behind sessions that are still not ready after a Fill, with how many. */
 export interface MissingCause extends GapCause {
