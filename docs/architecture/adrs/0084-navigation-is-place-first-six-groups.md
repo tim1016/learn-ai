@@ -56,3 +56,9 @@ Two rules keep these unambiguous without reserving names. A setup or strategy ad
 ## Amendment (#3512): a setup with no saved name
 
 A draft that has no saved name (a new setup, an imported file, the setup of a past run) is addressed `/options-setups/_new/(overview|define)`. A saved name must start with a letter or a digit, so no name can be `_new`, and the draft needs no reserved name. Saving it under a name moves the address to `/options-setups/:name/define`. `/options-setups/:name` with no tab, and a tab no page serves yet, are lost addresses and fail in place.
+
+## Amendment (#3513): Explore's views and an opened run
+
+An options setup's Explore is one address, `/options-setups/:name/explore`, and says what it shows in its query: `?view=` is `backtest` (the default, and left out), `history`, `chain`, `performance`, `lineage` or `comparison`; `run=` names the run the view is about, and `comparator_run_id=` the second run of a comparison. History's open run (`?view=history&run=30`) and two runs side by side (`?view=history&run=30&comparator_run_id=29`) are addressable the same way, so an opened run has a URL. The views are not path segments, so the setup's tab stays the third segment and the window title keeps reading `Name · Explore · Options setups`.
+
+A backtest runs the setup **as last saved** and records the saved name; a draft with no saved name has none to run. A run froze its own setup, so nothing edited in Define changes what it shows. Take to Golden is the link `/options-setups/:name/golden?run=<id>`: it carries the run's id and approves nothing, and is offered only for a run that froze this setup's saved content (read by exact content, never by name).

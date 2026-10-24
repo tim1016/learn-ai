@@ -1641,6 +1641,15 @@ these are the others.
   by strategy model (timed option legs replayed from rules, against a signal
   decision stream), never by the asset traded.
   _Avoid_: options strategy, option signal.
+- **Explore (an options setup's)** — the tab where a saved setup is replayed over
+  past dates (Backtest) and its runs are read: History, Performance, Research
+  lineage and Historical comparison, with the Past chain beside them. A backtest
+  tests the setup **as last saved**, never the draft being edited in Define, and is
+  recorded under the saved name, so an edit that is not saved changes nothing a run
+  tested. A run keeps the setup it froze; an opened run has its own address
+  (`/options-setups/:name/explore?view=&run=`). **Take to Golden** carries the id of
+  a run that froze this setup's saved content to Golden and approves nothing there.
+  _Avoid_: Backtest tab (it is a view of Explore).
 - **Operations** — the group for the machinery under the research: the data lake,
   the option archive, backups, math checks (the golden fixtures) and data checks
   (the TradingView comparison, data divergence and strategy pre-flight). It holds

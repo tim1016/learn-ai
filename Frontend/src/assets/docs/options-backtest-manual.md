@@ -7,15 +7,15 @@ A backtest asks, “What would these rules have done with past prices?” It doe
 ### Follow this first exercise
 
 1. Open **Options setups** and press **New options setup**. Stay on the **Define** tab.
-2. In **Instrument**, choose an underlying, such as SPY. The underlying is the stock or fund the option refers to. In **Duration**, choose a short range of completed trading days. The available range depends on the data plan.
+2. In **Instrument**, choose an underlying, such as SPY. The underlying is the stock or fund the option refers to. The dates come later, in **Explore**: a setup holds instructions, and the run chooses dates.
 3. Keep the initial **Entry time** and **Exit time** while you learn. They begin five minutes after the open and fifteen minutes before the close. Leave **No re-entry after** off for this first exercise.
 4. In **Leg builder**, choose **Buy → Call → 1 contract → Weekly → At the money**, then press **Add leg**. Leave Stop loss, Momentum and Re-entry off. This is a practice configuration, not a trading recommendation.
 5. In **Costs**, review Cash and Slippage. Choose **Estimated** fees if the selected dates have published rates. The page starts with **Not charged**; that choice leaves fees out of the result. If estimated rates are unavailable, choose later dates or deliberately state another fee assumption.
 6. Read the setup's sentences beside the form. Check the instrument, contract choice, times, quantity and costs. Give the setup a name such as **First practice** and save it.
-7. Press **Check data**. Read the session list. **Ready** means the necessary data is stored; **Needs download** means it must be fetched; **Cannot be tested** needs a change or investigation. Nothing downloads during this check.
-8. If every requested session can be tested, start the backtest. Watch downloading and replay progress. If the page offers **Run available dates**, read the replacement range before choosing it, then start the run for that range.
+7. Open the **Explore** tab, which opens on **Backtest**. In **Duration**, choose a short range of completed trading days. The available range depends on the data plan. Read **What this backtest tests**: it is the setup as you last saved it, and anything you changed in Define after saving is not in the backtest. Press **Check data**. Read the session list. **Ready** means the necessary data is stored; **Needs download** means it must be fetched; **Cannot be tested** needs a change or investigation. Nothing downloads during this check.
+8. If every requested session can be tested, press **Start backtest**. Watch downloading and replay progress in the run shown below the buttons. If the page offers **Run available dates**, read the replacement range before choosing it, then start the run for that range.
 9. When the run is **Complete**, read **Total fees**, **Slippage paid**, and **Sessions** before judging Net profit. A run can finish successfully without making a trade.
-10. Open a day in the daily table or trades. Find the selected contract, its entry, its closing fill or remaining mark, and the reason it ended. Explain those events in your own words.
+10. In the run's result, open a day in the daily table or trades. Find the selected contract, its entry, its closing fill or remaining mark, and the reason it ended. Explain those events in your own words.
 
 > **You have finished the exercise when:** you can identify the setup used, the dates actually requested, the cost assumptions, and what happened to one leg. If no trade occurred, finding the recorded reason is a useful result too.
 
@@ -52,7 +52,7 @@ Each day has its own trading window. The setup tries to close its holdings at th
 
 ### Choose the historical range
 
-Use **Duration** to select the requested dates. After **Check data**, the page shows the earliest option prices served by the current plan. A range can fail because it is too old, not final yet, missing required data or missing fee rates. Downloading cannot solve every one of those problems.
+In **Explore**, use **Duration** to select the requested dates. After **Check data**, the page shows the earliest option prices served by the current plan. A range can fail because it is too old, not final yet, missing required data or missing fee rates. Downloading cannot solve every one of those problems.
 
 Holidays are handled by the trading calendar. On a shortened session, the window must still leave room for entry and exit. A session whose window does not fit is skipped with a reason.
 
@@ -156,10 +156,10 @@ The estimate rounds each fee type upward to cents on each fill. The broker's dai
 1. Read the plain-language summary next to the setup. Follow each leg's contract choice and rules.
 2. Resolve any field problems. If the summary cannot load, use its retry action before relying on it.
 3. Enter a recognizable setup name and save. Read the confirmation or problem message.
-4. Use the saved-setups menu to reopen a setup. Confirm the read-back before running it over new dates.
+4. Open a saved setup from **Options setups**. Confirm the read-back before running it over new dates.
 5. Use **Export setup** to download the setup file. **Import setup** reads a compatible JSON setup and reports rejected or invalid content instead of quietly repairing it.
 
-The setup contains trading instructions; the run chooses historical dates. Exporting a setup does not export price data, completed trades or a result. Use the trade export for the ledger of a completed run.
+The setup contains trading instructions; the run, in **Explore**, chooses historical dates and tests the setup as last saved, so save a change before you test it. Exporting a setup does not export price data, completed trades or a result. Use the trade export for the ledger of a completed run.
 
 Deleting a saved setup removes that library item. It is separate from deleting a run in History. A completed run retains the setup it used; later setup edits do not rewrite that recorded result.
 
@@ -180,7 +180,7 @@ If only part of a range can be tested, **Run available dates** offers its longes
 ### Follow the run's state
 
 - **Running:** watch the current phase and progress. Downloading comes before replay.
-- **Complete:** the whole result is saved and can be reopened in History.
+- **Complete:** the whole result is saved and can be reopened in **History**, a view of **Explore**. An opened run has its own address, so it can be bookmarked or shared.
 - **Failed:** read the reason and affected sessions. A partial replay is not presented as a completed result.
 - **Cancelled:** the request ended without a completed result. Captures already in progress may finish before cancellation completes.
 - **Interrupted:** the running job is gone and there is no completed result to read.
@@ -259,8 +259,8 @@ Older runs can say **Not recorded** for newer evidence. That is not zero. The re
 
 **Your goal:** compare a deliberate change without confusing different samples.
 
-1. Open **History** and find the run by setup, date range, start time and status. Use **Show older runs** when offered.
-2. Open a completed run to read its saved result and setup. **Use this setup** brings those instructions back to the form for a new experiment.
+1. In **Explore**, open **History** and find the run by setup, date range, start time and status. Use **Show older runs** when offered.
+2. Open a completed run to read its saved result and setup. **Use this setup** opens those instructions in **Define** as a new draft with no saved name, for a new experiment; the setup you opened Explore for is not changed. **Performance and research lineage** reads the run's retained evidence, and **Take to Golden** carries that run to the setup's Golden tab. Taking a run to Golden approves nothing.
 3. Select two eligible completed runs and press **Compare**. Read any eligibility message if comparison is unavailable.
 4. Start with the settings that differ. Then read the results over **shared sessions**: only days present in both runs contribute to those comparison totals.
 5. If you intended to test one change but several settings differ, make a better-controlled pair before drawing a conclusion.
@@ -273,7 +273,7 @@ Deleting a run removes that saved research result. Export anything you need befo
 
 **Your goal:** see what was listed and what had traded at a historical instant.
 
-1. Open **Past chain**. Choose the underlying, trading day and time.
+1. In **Explore**, open **Past chain**. Choose the underlying, trading day and time.
 2. Read the underlying price and its timestamp, then choose an expiry from those listed.
 3. Adjust the number of strikes shown around the money.
 4. Read calls and puts alongside each strike. Each price is the last stored trade-bar close at or before the chosen instant, with its own timestamp. It is not a bid or ask.
