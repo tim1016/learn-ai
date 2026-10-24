@@ -26,13 +26,19 @@ export type LakeRefusalCode =
   | 'window_not_complete'
   | 'data_unavailable_from_provider'
   | 'data_corrupt'
+  | 'captured_before_final'
   | 'data_building'
   | 'data_missing'
   | 'lake_unavailable'
   | 'warmup_shortened';
 
 /** What admission concluded about a session it could not make ready. */
-export type LakeSessionOutcome = 'missing' | 'building' | 'corrupt' | 'unavailable_from_provider';
+export type LakeSessionOutcome =
+  | 'missing'
+  | 'building'
+  | 'corrupt'
+  | 'captured_before_final'
+  | 'unavailable_from_provider';
 
 export interface LakeCoverageGroupRaw {
   expected_sessions: number;
@@ -42,6 +48,7 @@ export interface LakeCoverageGroupRaw {
   failed: number;
   building: number;
   corrupt: number;
+  captured_before_final: number;
   unavailable_from_provider: number;
 }
 
@@ -114,10 +121,12 @@ export interface LakeCoverageGroup {
   added: number;
   /** Not held, and not captured. */
   missing: number;
-  /** `building + corrupt + unavailableFromProvider`. */
+  /** `building + corrupt + capturedBeforeFinal + unavailableFromProvider`. */
   failed: number;
   building: number;
   corrupt: number;
+  /** Held, but captured before the session's data stopped forming; its tail is missing. */
+  capturedBeforeFinal: number;
   unavailableFromProvider: number;
 }
 
@@ -184,6 +193,7 @@ function mapGroup(raw: LakeCoverageGroupRaw): LakeCoverageGroup {
     failed: raw.failed,
     building: raw.building,
     corrupt: raw.corrupt,
+    capturedBeforeFinal: raw.captured_before_final,
     unavailableFromProvider: raw.unavailable_from_provider,
   };
 }

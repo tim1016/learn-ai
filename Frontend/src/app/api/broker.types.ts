@@ -13000,8 +13000,6 @@ export interface components {
             request_id: string;
             /** Requester */
             requester?: string | null;
-            /** Require Final Capture For */
-            require_final_capture_for?: ("regular" | "extended") | null;
             /**
              * Resolution
              * @default minute

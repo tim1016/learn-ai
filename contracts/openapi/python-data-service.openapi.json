@@ -13194,21 +13194,6 @@
             ],
             "title": "Requester"
           },
-          "require_final_capture_for": {
-            "anyOf": [
-              {
-                "enum": [
-                  "regular",
-                  "extended"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Require Final Capture For"
-          },
           "resolution": {
             "const": "minute",
             "default": "minute",
