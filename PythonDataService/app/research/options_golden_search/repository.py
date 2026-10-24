@@ -297,17 +297,24 @@ async def counters(conn: asyncpg.Connection, study_id: str) -> dict[str, int]:
     return {key: int(row[key]) for key in ("reserved", "completed", "execution_attempts", "evidence_bytes")}
 
 
+# A study opens by its id: `os_` and forty hex digits, as the routes require. A row with any other id could not be
+# opened, so the index neither lists nor counts it, and it cannot take the index's wire model down with it.
+_OPENABLE_ID = "^os_[a-f0-9]{40}$"
+
+
 async def index_rows(conn: asyncpg.Connection, *, limit: int) -> list[dict[str, Any]]:
     """Every study's identity for the Options setups index, newest first: its frozen protocol and nothing else of
     the document, so a long history loads no candidate traces or evidence."""
     rows = await conn.fetch(
         f"""SELECT id, setup_name, underlying, phase, status, created_at_ms, updated_at_ms,
         document->>'protocol_hash' AS protocol_hash, (document->'protocol')::text AS protocol
-        FROM {TABLE} ORDER BY created_at_ms DESC, id LIMIT $1""",
+        FROM {TABLE} WHERE id ~ $2 ORDER BY created_at_ms DESC, id LIMIT $1""",
         limit,
+        _OPENABLE_ID,
     )
     return [dict(row) for row in rows]
 
 
 async def count(conn: asyncpg.Connection) -> int:
-    return await conn.fetchval(f"SELECT count(*) FROM {TABLE}")
+    """How many studies the index can list, so a list cut at its limit can say how many it left out."""
+    return await conn.fetchval(f"SELECT count(*) FROM {TABLE} WHERE id ~ $1", _OPENABLE_ID)
