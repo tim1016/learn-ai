@@ -167,7 +167,7 @@ describe('ResearchHistoryPageComponent', () => {
             type: 'feature-experiment',
             native_id: '5',
             question: 'Does rsi_14 predict the next move of SPY?',
-            headline: 'Mean IC 0.1235, t-stat 2.50; did not pass validation; 48,750 bars',
+            headline: 'Mean IC 0.1235, t-stat 2.50; ADF p 0.0010, KPSS p 0.4000 (stationary); monotonic (ratio 0.80); did not pass validation; 48,750 bars',
             provenance: null,
             completed_at_ms: null,
           }),
@@ -177,8 +177,8 @@ describe('ResearchHistoryPageComponent', () => {
 
     expect(screen.queryByRole('link', { name: /rsi_14/ })).toBeNull();
     expect(screen.getByText('Does rsi_14 predict the next move of SPY?')).toBeTruthy();
-    expect(screen.getByText('Mean IC 0.1235, t-stat 2.50; did not pass validation; 48,750 bars')).toBeTruthy();
-    expect(screen.getByText('Headline only: no more of it was saved.')).toBeTruthy();
+    expect(screen.getByText('Mean IC 0.1235, t-stat 2.50; ADF p 0.0010, KPSS p 0.4000 (stationary); monotonic (ratio 0.80); did not pass validation; 48,750 bars')).toBeTruthy();
+    expect(screen.getByText('No detail page for this study: the figures above come from its saved row.')).toBeTruthy();
   });
 
   it('reads “not recorded” for every fact the store did not record, and invents none', async () => {

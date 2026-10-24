@@ -260,7 +260,10 @@ async def test_an_experiment_reads_as_its_store_holds_it_and_nothing_more(
         "created_at_ms": OLDEST_MS,
         "completed_at_ms": None,
         "provenance": None,
-        "headline": "Mean IC 0.1235, t-stat 2.50; did not pass validation; 48,750 bars",
+        "headline": (
+            "Mean IC 0.1235, t-stat 2.50; ADF p 0.0010, KPSS p 0.4000 (stationary); monotonic (ratio 0.80); "
+            "did not pass validation; 48,750 bars"
+        ),
         "parent": None,
     }
     assert by_type["signal-report"]["native_id"] == str(signal)

@@ -4,8 +4,9 @@
 writes them now. Their rows hold one instant (``"CreatedAt"``), a ticker, two date strings and a headline result, and
 nothing about the bars they ran on, so a row's provenance and completion time are not recorded and read that way.
 
-A feature experiment has no stored detail beyond the headline, so its entry carries the headline and no detail page. A
-signal experiment's full report is served by ``GET /api/research/signal-experiments/{id}/report``.
+A feature experiment's entry carries a headline built from its row's validation columns (mean IC, t-stat, ADF and KPSS
+p-values, stationarity, monotonicity, the pass flag) and has no detail page. A signal experiment's full report is served
+by ``GET /api/research/signal-experiments/{id}/report``.
 
 Ordering is by the instant floored to the millisecond, then by id: the shared order compares milliseconds, so the SQL
 must too, or two rows inside one millisecond would be ordered by their microseconds in the store and by id in the merge.
@@ -125,16 +126,22 @@ class FeatureExperiments(_ExperimentTable):
     type: HistoryType = "feature-experiment"
     label = "saved feature experiments"
     table = "ResearchExperiments"
-    headline_columns = 'e."MeanIC", e."ICTStat", e."PassedValidation"'
+    headline_columns = (
+        'e."MeanIC", e."ICTStat", e."AdfPValue", e."KpssPValue", e."IsStationary", e."MonotonicityRatio", '
+        'e."IsMonotonic", e."PassedValidation"'
+    )
 
     def _question(self, feature: str, symbol: str) -> str:
         return f"Does {feature} predict the next move of {symbol}?"
 
     def _headline(self, row: Mapping[str, Any]) -> str:
         verdict = "passed" if row["PassedValidation"] else "did not pass"
+        stationary = "stationary" if row["IsStationary"] else "not stationary"
+        monotonic = "monotonic" if row["IsMonotonic"] else "not monotonic"
         return (
-            f"Mean IC {float(row['MeanIC']):.4f}, t-stat {float(row['ICTStat']):.2f}; {verdict} validation; "
-            f"{row['BarsUsed']:,} bars"
+            f"Mean IC {float(row['MeanIC']):.4f}, t-stat {float(row['ICTStat']):.2f}; "
+            f"ADF p {float(row['AdfPValue']):.4f}, KPSS p {float(row['KpssPValue']):.4f} ({stationary}); "
+            f"{monotonic} (ratio {float(row['MonotonicityRatio']):.2f}); {verdict} validation; {row['BarsUsed']:,} bars"
         )
 
 
