@@ -1,22 +1,13 @@
-<app-page-header
-  title="Options Surface (3D)"
->
-  <app-page-guide
-    slot="guide"
-    pulls="Live IBKR option-surface SSE stream (one underlying + N×M×2 option lines, using the shared 100-line IBKR allocation). Two echarts-gl bar3D canvases — calls on the left, puts on the right."
-    why="See the entire near-the-money landscape at once: which strikes are bid up, where IV is fat, where delta drops off. The 2D chain ladder buries this; the 3D view surfaces it."
-    [steps]="[
-      'Pick a symbol, days-out window, and strikes-band.',
-      'Click Setup — we intersect qualifiable strikes across every expiry in the window.',
-      'Watch the line-count badge; if it goes red, narrow the band. Other IBKR streams also use this allocation.',
-      'Click Load Surface to open the stream.'
-    ]"
-    [related]="[
-      { label: 'Options Chain (2D ladder)', route: '/broker/options-chain' },
-      { label: 'Pricing Lab', route: '/pricing-lab' }
-    ]"
-  />
-</app-page-header>
+<app-page-guide
+  pulls="Live IBKR option-surface SSE stream (one underlying + N×M×2 option lines, using the shared 100-line IBKR allocation). Two echarts-gl bar3D canvases — calls on the left, puts on the right."
+  why="See the entire near-the-money landscape at once: which strikes are bid up, where IV is fat, where delta drops off. The 2D chain ladder buries this; the 3D view surfaces it."
+  [steps]="[
+    'Pick a days-out window and a strikes band.',
+    'Click Setup — we intersect qualifiable strikes across every expiry in the window.',
+    'Watch the line-count badge; if it goes red, narrow the band. Other IBKR streams also use this allocation.',
+    'Click Load Surface to open the stream.'
+  ]"
+/>
 
 @if (bannerState() === 'disabled') {
   <div class="disabled-banner" role="status">
@@ -31,17 +22,6 @@
   </p>
 } @else {
   <section class="controls" aria-label="Surface configuration">
-    <label class="control">
-      <span class="control-label">Symbol</span>
-      <input
-        class="control-input mono"
-        type="text"
-        [value]="symbol()"
-        (input)="setSymbol($any($event.target).value)"
-        aria-label="Symbol"
-      />
-    </label>
-
     <label class="control">
       <span class="control-label">Days out</span>
       <input

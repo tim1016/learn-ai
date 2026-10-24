@@ -58,11 +58,11 @@ describe('app menu projections', () => {
   });
 
   it('marks the active group and entry, including Edge pages nested within Research', () => {
-    const groups = menuItemsFor('/pricing-lab');
+    const groups = menuItemsFor('/markets/SPY/options/pricing');
     const markets = groups.find((group) => group.label === 'Markets');
 
     expect.soft(markets?.styleClass, 'marks the active group').toBe(ACTIVE_GROUP_CLASS);
-    expect.soft(markets?.items?.find((item) => item.label === 'Pricing Lab')?.styleClass, 'marks the active entry').toBe(ACTIVE_ITEM_CLASS);
+    expect.soft(markets?.items?.find((item) => item.label === 'Markets')?.styleClass, 'marks the active entry').toBe(ACTIVE_ITEM_CLASS);
     expect.soft(markets?.items?.find((item) => item.label === 'Options Lab')?.styleClass, 'leaves the other entries unmarked').toBeUndefined();
     expect.soft(groups.filter((group) => group.styleClass === ACTIVE_GROUP_CLASS), 'marks exactly one group').toHaveLength(1);
 
@@ -111,7 +111,6 @@ describe('app menu projections', () => {
 
   it('titles the window Page · Group, and an account page by its group alone', () => {
     expect.soft(windowTitleFor('/options-backtest'), 'Options Backtest sits in Options setups').toBe('Options Backtest · Options setups');
-    expect.soft(windowTitleFor('/pricing-lab'), 'Pricing Lab sits in Markets').toBe('Pricing Lab · Markets');
     expect.soft(windowTitleFor('/markets'), 'the Markets list is titled by its menu label, once').toBe('Markets');
     expect.soft(windowTitleFor('/brokers/alpaca?deploy='), 'the account list says Accounts once').toBe('Accounts');
     expect.soft(windowTitleFor('/unlisted-page'), 'a page outside every group has no menu title').toBeNull();

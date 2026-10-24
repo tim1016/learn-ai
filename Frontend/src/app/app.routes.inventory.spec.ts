@@ -63,6 +63,9 @@ const ROWS: Readonly<Record<string, Row>> = {
   'markets/:symbol': { group: MARKETS, lands: '/markets/SPY/chart' },
   'markets/:symbol/chart': { group: MARKETS },
   'markets/:symbol/chart/news': { group: MARKETS },
+  'markets/:symbol/options': { group: MARKETS, lands: '/markets/SPY/options/surface' },
+  'markets/:symbol/options/surface': { group: MARKETS },
+  'markets/:symbol/options/pricing': { group: MARKETS },
   // The chart moved under the instrument; with no instrument named, an old address leads to the list.
   'data-lab': { group: MARKETS, lands: '/markets' },
   'data-lab/explore': { group: MARKETS, lands: '/markets' },
@@ -72,8 +75,9 @@ const ROWS: Readonly<Record<string, Row>> = {
   'options-lab/chain': { group: MARKETS },
   'options-lab/strategy-finder': { group: MARKETS },
   'broker/options-chain': { group: MARKETS },
-  'broker/options-surface': { group: MARKETS },
-  'pricing-lab': { group: MARKETS },
+  // Surface and Pricing moved under the instrument; with no instrument named, an old address leads to the list.
+  'broker/options-surface': { group: MARKETS, lands: '/markets?then=options' },
+  'pricing-lab': { group: MARKETS, lands: '/markets?then=options' },
   'research-lab/market/news': { group: MARKETS, lands: '/markets' },
 
   // ── Research ─────────────────────────────────────────────────────────────
@@ -350,6 +354,19 @@ describe('the route inventory (T01)', () => {
       // The workspace's lens guard moves a plain tab URL once, straight to the final address.
       if (url.includes('/activity?')) expect.soft(cancelled).toHaveLength(1);
       else expect.soft(cancelled, 'redirects within the one navigation').toEqual([]);
+    });
+
+    it.each([
+      ['the Surface 3D address', '/broker/options-surface?ticker=spy&expiry=1790000000000#top', '/markets/SPY/options/surface?expiry=1790000000000#top'],
+      ['the Pricing Lab address', '/pricing-lab?symbol=qqq&expiry=1790000000000#top', '/markets/QQQ/options/pricing?expiry=1790000000000#top'],
+      ['the Pricing Lab address with an expiry and no instrument', '/pricing-lab?expiry=1790000000000#top', '/markets?expiry=1790000000000&then=options#top'],
+    ])('takes %s straight to its view under the instrument, or to the list, with the expiry and fragment', async (_name, url, landsOn) => {
+      const { router, ended, cancelled, failed } = await load(url);
+
+      expect.soft(failed).toEqual([]);
+      expect.soft(cancelled, 'redirects within the one navigation').toEqual([]);
+      expect.soft(ended).toEqual([landsOn]);
+      expect(router.url).toBe(landsOn);
     });
 
     it.each([

@@ -1,5 +1,5 @@
-import { AssetIdentityComponent } from '../../shared/asset-identity';
-import { OptionContractComponent, type OptionContract } from '../../shared/option-contract/option-contract.component';
+import { AssetIdentityComponent } from '../../../shared/asset-identity';
+import { OptionContractComponent, type OptionContract } from '../../../shared/option-contract/option-contract.component';
 import { DecimalPipe, TitleCasePipe } from '@angular/common';
 import {
   afterNextRender,
@@ -10,9 +10,11 @@ import {
   inject, Injector,
   OnDestroy,
   signal,
+  untracked,
   viewChild,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { ActivatedRoute } from '@angular/router';
 import {
   CrosshairMode,
   LineSeries, LineStyle,
@@ -32,21 +34,20 @@ import {
   GreekType,
   PricingCompareResult, PricingPoint,
   SnapshotContractResult,
-} from '../../services/market-data.types';
-import { MarketDataService } from '../../services/market-data.service';
-import { etIsoDate } from '../../shared/date/et-midnight';
-import { optionExpiryAnchorMs } from '../../shared/option-contract/option-expiry-date';
-import { formatTimestampDisplay } from '../../shared/timestamp/timestamp-display';
-import { errorMessage } from '../../shared/errors/error-message';
-import { createAppChart } from '../../shared/charts/chart-utils';
+} from '../../../services/market-data.types';
+import { MarketDataService } from '../../../services/market-data.service';
+import { etIsoDate } from '../../../shared/date/et-midnight';
+import { optionExpiryAnchorMs } from '../../../shared/option-contract/option-expiry-date';
+import { formatTimestampDisplay } from '../../../shared/timestamp/timestamp-display';
+import { errorMessage } from '../../../shared/errors/error-message';
+import { createAppChart } from '../../../shared/charts/chart-utils';
 import {
   bsDelta, bsGamma,
   bsPrice,
   bsRho,
   bsTheta, bsVega,
-} from '../../utils/black-scholes';
-import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
-import { SymbolPickerComponent } from '../../shared/symbol-picker/symbol-picker.component';
+} from '../../../utils/black-scholes';
+import { InstrumentContextService } from '../../instrument-context.service';
 
 type ChartMetric = 'price' | GreekType;
 
@@ -139,29 +140,34 @@ export const MODEL_REGISTRY: ModelDef[] = [
   },
 ];
 
+/**
+ * An instrument's Options > Pricing view: one contract of the open
+ * instrument's chain, priced by every model across a range of spot prices.
+ *
+ * The underlying is the instrument the place is open on; its expirations load
+ * when the view opens and when the instrument changes. An `expiry` in the
+ * address (an expiry anchor, `int64 ms UTC`) is the expiration it opens on.
+ * The rate, range, contract and models are this view's own inputs.
+ */
 @Component({
-  selector: 'app-pricing-lab',
-  standalone: true,
-  imports: [AssetIdentityComponent, OptionContractComponent, FormsModule, DecimalPipe, TitleCasePipe, InputText, Button, Select, SelectButton, Skeleton, PageHeaderComponent, SymbolPickerComponent],
-  templateUrl: './pricing-lab.component.html',
-  styleUrls: ['./pricing-lab.component.scss'],
+  selector: 'app-options-pricing',
+  imports: [AssetIdentityComponent, OptionContractComponent, FormsModule, DecimalPipe, TitleCasePipe, InputText, Button, Select, SelectButton, Skeleton],
+  templateUrl: './options-pricing.component.html',
+  styleUrls: ['./options-pricing.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
-export class PricingLabComponent implements OnDestroy {
+export class OptionsPricingComponent implements OnDestroy {
   private readonly marketData = inject(MarketDataService);
   private readonly injector = inject(Injector);
+  private readonly instrument = inject(InstrumentContextService);
+  private readonly route = inject(ActivatedRoute);
 
   // Expose registry to template
   readonly models = MODEL_REGISTRY;
 
   // ── User inputs ──────────────────────────────────────────────
-  readonly ticker = signal('SPY');
-
-  /** A pick is one deliberate act — load its expirations immediately. */
-  onTickerPicked(ticker: string): void {
-    this.ticker.set(ticker);
-    void this.fetchExpirations();
-  }
+  /** The underlying: the open instrument's symbol. */
+  readonly ticker = signal('');
 
   /** Empty sends no rate, so Python prices at its one default (#2764). A chain load fills Python's live rate. */
   readonly riskFreeRate = signal<number | null>(null);
@@ -376,6 +382,15 @@ export class PricingLabComponent implements OnDestroy {
   private diffSeriesMap = new Map<string, ISeriesApi<'Line'>>();
 
   constructor() {
+    // The open instrument is the underlying: its expirations load when the
+    // view opens and again when another instrument opens under it.
+    effect(() => {
+      const symbol = this.instrument.symbol();
+      untracked(() => {
+        this.ticker.set(symbol);
+        void this.fetchExpirations();
+      });
+    });
     afterNextRender(() => {
       this.bootstrapChart();
       this.bootstrapDiffChart();
@@ -410,9 +425,18 @@ export class PricingLabComponent implements OnDestroy {
 
       const todayAnchor = optionExpiryAnchorMs(etIsoDate(Date.now()));
       const nearest = exps.find(e => e >= todayAnchor) ?? exps[exps.length - 1];
-      if (nearest) {
-        this.selectedExpiration.set(nearest);
-        await this.fetchChain(t, nearest);
+      const asked = this.expiryAsked();
+      const opened = asked?.ms != null && exps.includes(asked.ms) ? asked.ms : nearest;
+      if (opened) {
+        this.selectedExpiration.set(opened);
+        await this.fetchChain(t, opened);
+        // The address named an expiry this chain does not list: say so, once the chain's own outcome is known.
+        if (asked !== null && opened !== asked.ms && request === this.expirationsRequest && this.statusMessage() === null) {
+          this.statusMessage.set({
+            type: 'warn',
+            text: `${asked.what} is not an expiration of ${t}; opened on the nearest one instead.`,
+          });
+        }
       }
     } catch (err) {
       if (request === this.expirationsRequest) {
@@ -422,6 +446,17 @@ export class PricingLabComponent implements OnDestroy {
       // Only the latest fetch ends the loading state it started.
       if (request === this.expirationsRequest) this.expirationsLoading.set(false);
     }
+  }
+
+  /** The expiry the address asks to open on: its anchor when it is one, and how to name it to the reader. */
+  private expiryAsked(): { readonly ms: number | null; readonly what: string } | null {
+    const raw = this.route.snapshot.queryParamMap.get('expiry')?.trim();
+    if (raw === undefined || raw === '') return null;
+    const ms = Number(raw);
+    if (!/^\d+$/.test(raw) || Number.isNaN(new Date(ms).getTime())) {
+      return { ms: null, what: `The expiry in the address ("${raw}")` };
+    }
+    return { ms, what: `The expiry in the address (${formatTimestampDisplay(ms, { mode: 'date-et', granularity: 'short-date' })})` };
   }
 
   async fetchChain(ticker: string, expirationMs: number): Promise<void> {
