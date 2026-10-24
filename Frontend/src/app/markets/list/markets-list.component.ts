@@ -11,6 +11,7 @@ import { WorkspaceHeaderComponent } from '../../shared/workspace/workspace-heade
 import { WorkspaceStateBlockComponent } from '../../shared/workspace/workspace-state-block.component';
 import { menuLabelFor } from '../../shell/app-menu';
 import { MARKETS_ROUTE, instrumentCommands, openableTab } from '../instrument-address';
+import { INSTRUMENT_TABS } from '../instrument-tabs';
 
 /** Rows drawn at once; the search reaches every other instrument. */
 const MAX_ROWS = 200;
@@ -52,6 +53,8 @@ export class MarketsListComponent {
 
   protected readonly title = menuLabelFor(MARKETS_ROUTE);
   protected readonly tab = computed(() => openableTab(this.then()));
+  /** The tab a pick opens when it is not Chart: an address that asked for one (an old chain address) says so, as no instrument was named. */
+  protected readonly asked = computed(() => (this.tab() === 'chart' ? null : INSTRUMENT_TABS.label(this.tab())));
 
   /** What the search holds: empty, because the picker is where a symbol is chosen, not a place that remembers one. */
   protected readonly picked = signal('');

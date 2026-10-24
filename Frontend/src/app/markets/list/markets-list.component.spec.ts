@@ -68,16 +68,18 @@ describe('MarketsListComponent', () => {
     expect(screen.getByText(/not a promise that every session between them is held/)).toBeTruthy();
   });
 
-  it('opens the tab it was asked to', async () => {
+  it('opens the tab it was asked to, and says which tab that is, as no instrument was named', async () => {
     await renderMarkets(undefined, { then: 'options' });
 
     expect(screen.getAllByRole('row')[1].querySelector('a')?.getAttribute('href')).toBe('/markets/SPY/options');
+    expect(screen.getByText('Pick an instrument. It opens on its Options tab.')).toBeTruthy();
   });
 
   it('opens Chart when it was asked for a tab this place does not route', async () => {
     await renderMarkets(undefined, { then: 'nonsense' });
 
     expect(screen.getAllByRole('row')[1].querySelector('a')?.getAttribute('href')).toBe('/markets/SPY/chart');
+    expect(screen.queryByText(/It opens on its/)).toBeNull();
   });
 
   describe('a page of instruments (T22)', () => {
