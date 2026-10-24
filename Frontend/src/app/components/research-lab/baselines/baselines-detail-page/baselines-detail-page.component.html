@@ -1,6 +1,6 @@
 <div class="bl-detail">
   <header class="bld-header">
-    <a routerLink="/research-lab/backtests/strategy-runs" class="bld-back">← Strategy runs</a>
+    <a [routerLink]="['/research/history']" [queryParams]="{ type: 'spec-run' }" class="bld-back">← History</a>
     @if (baseline(); as data) {
       <div class="bld-title">
         <h1>Null baseline</h1>

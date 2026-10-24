@@ -69,6 +69,6 @@ describe('spec-run evidence', () => {
     expect.soft(await page.findByText(/404/), 'says what went wrong').toBeTruthy();
     expect.soft(TestBed.inject(Router).url, 'stays at the address it was given').toBe('/research/history/spec-run/missing-run');
     expect.soft(page.getByRole('heading', { level: 1, name: 'Run missing-run' })).toBeTruthy();
-    expect.soft(page.getByRole('link', { name: /Strategy runs/ }).getAttribute('href')).toBe('/research-lab/backtests/strategy-runs');
+    expect.soft(page.getByRole('link', { name: '← History' }).getAttribute('href')).toBe('/research/history?type=spec-run');
   });
 });

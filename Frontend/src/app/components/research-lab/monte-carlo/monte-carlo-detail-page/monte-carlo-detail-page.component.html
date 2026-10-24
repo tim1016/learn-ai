@@ -1,6 +1,6 @@
 <div class="mc-detail">
   <header class="mcd-header">
-    <a routerLink="/research-lab/backtests/strategy-runs" class="mcd-back">← Strategy runs</a>
+    <a [routerLink]="['/research/history']" [queryParams]="{ type: 'spec-run' }" class="mcd-back">← History</a>
     @if (monteCarlo(); as data) {
       <div class="mcd-title">
         <h1>Monte Carlo</h1>

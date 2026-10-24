@@ -1,6 +1,6 @@
 <div class="wf-detail">
   <header class="wfd-header">
-    <a routerLink="/research-lab/backtests/strategy-runs" class="wfd-back">← Strategy runs</a>
+    <a [routerLink]="['/research/history']" [queryParams]="{ type: 'spec-run' }" class="wfd-back">← History</a>
     @if (walkForward(); as data) {
       <div class="wfd-title">
         <h1>Walk-forward</h1>
