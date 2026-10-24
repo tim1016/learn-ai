@@ -189,6 +189,22 @@
     }
 
     <app-lake-study-source [source]="d.dataSource" />
+    <p class="iv-input-note" data-testid="rviv-iv-input">
+      <strong>IV30 input, not from the lake:</strong>
+      @switch (d.ivInput.source) {
+        @case ('recorder') {
+          read from the IV recorder's file store, {{ d.ivInput.snapshots }} snapshot{{ d.ivInput.snapshots === 1 ? '' : 's' }} in the window ·
+          fingerprint <code>{{ d.ivInput.digest.slice(0, 12) }}</code>
+        }
+        @case ('caller_supplied') {
+          supplied with the request, {{ d.ivInput.snapshots }} point{{ d.ivInput.snapshots === 1 ? '' : 's' }} ·
+          fingerprint <code>{{ d.ivInput.digest.slice(0, 12) }}</code>
+        }
+        @case ('absent') {
+          none: nothing recorded for this window and none supplied.
+        }
+      }
+    </p>
 
     <!-- Main chart -->
     <div class="chart-card">

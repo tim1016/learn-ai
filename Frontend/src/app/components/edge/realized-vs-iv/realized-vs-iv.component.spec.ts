@@ -56,6 +56,7 @@ function realData(overrides: Partial<RealizedVsIvData> = {}): RealizedVsIvData {
     coverage: { forwardBlindTail: 2, ivFirstTsMs: Date.UTC(2026, 0, 6, 14) },
     ivConfidence: null,
     ivAlignment: { rule: "snapshot_in_bar_latest", snapshotsRead: N, barsWithIv: N, superseded: 0, outsideBars: 0 },
+    ivInput: { source: "recorder", snapshots: N, digest: "c".repeat(64) },
     run: { barSize: "1D", tenorDays: 30, hfSession: null },
     dataSource: mapLakeStudyDataSource(lakeDataSource()),
     liveIv30: { kind: "unavailable", reason: "Neither live IV30 endpoint answered." },
@@ -224,6 +225,31 @@ describe("RealizedVsIvComponent — where the bars came from", () => {
     expect(summary?.textContent).toContain("Data lake, Polygon");
     expect(summary?.textContent).toContain("daily bars, folded from 1-minute bars");
     expect(screen.getByText("10 added · 30 reused · 0 missing")).toBeTruthy();
+  });
+
+  it("names the IV input as not from the lake, with how many snapshots it read and their fingerprint", async () => {
+    const { world, user, fixture } = await renderPage();
+
+    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await answerCompute(world);
+    fixture.detectChanges();
+
+    const note = screen.getByTestId("rviv-iv-input").textContent?.replace(/\s+/g, " ") ?? "";
+    expect(note).toContain("IV30 input, not from the lake");
+    expect(note).toContain("IV recorder's file store, 35 snapshots in the window");
+    expect(note).toContain("fingerprint cccccccccccc");
+  });
+
+  it("says there is no IV input at all when nothing was recorded or supplied, rather than naming a source", async () => {
+    const { world, user, fixture } = await renderPage();
+
+    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await answerCompute(world, { ivPresent: false });
+    fixture.detectChanges();
+
+    const note = screen.getByTestId("rviv-iv-input").textContent?.replace(/\s+/g, " ") ?? "";
+    expect(note).toContain("none: nothing recorded for this window and none supplied");
+    expect(note).not.toContain("fingerprint");
   });
 
   it("shows a refused run as no result, with the server's reason and the counts, and draws nothing", async () => {

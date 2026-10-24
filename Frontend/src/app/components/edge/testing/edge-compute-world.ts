@@ -69,6 +69,8 @@ export interface ComputeAnswer {
   alignment?: { snapshots_read: number; bars_with_iv: number; superseded: number; outside_bars: number };
   /** Overrides on the lake `data_source` block. */
   dataSource?: Partial<LakeDataSourceRaw>;
+  /** How many IV points the run read, for the data source's IV identity. Default: those the series holds. */
+  ivSnapshots?: number;
 }
 
 /** What the `realized_vs_iv` job parks as its result for a 40-bar window:
@@ -122,7 +124,12 @@ export function resultResponse(answer: ComputeAnswer = {}) {
           : { snapshots_read: 0, bars_with_iv: 0, superseded: 0, outside_bars: 0 })),
       },
     },
-    data_source: lakeDataSource(answer.dataSource),
+    data_source: {
+      ...lakeDataSource(answer.dataSource),
+      iv_source: answer.ivSource ?? (ivPresent ? "recorder" : "absent"),
+      iv_snapshots: answer.ivSnapshots ?? (ivPresent ? BARS - IV_FROM : 0),
+      iv_digest: "c".repeat(64),
+    },
   };
 }
 

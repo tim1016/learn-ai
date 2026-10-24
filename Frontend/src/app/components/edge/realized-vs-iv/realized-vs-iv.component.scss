@@ -162,6 +162,10 @@
 .run-status { font-size: 11px; color: $text-subtle; font-family: $font-mono; }
 .run-settings { font-size: 11px; color: $text-subtle; }
 .lake-refused { margin-bottom: 12px; }
+.iv-input-note {
+  margin: 8px 0 12px; font-size: 11px; color: $text-subtle;
+  code { color: $text-secondary; font-family: $font-mono; }
+}
 
 .compute-error {
   background: rgba(239, 83, 80, 0.10);

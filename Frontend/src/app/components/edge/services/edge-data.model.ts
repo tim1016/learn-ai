@@ -125,6 +125,15 @@ export interface IvAlignment {
   outsideBars: number;
 }
 
+/** The IV the run was given. It is not from the lake: it is read from the IV recorder's file store, or supplied with the
+ *  request, and the fingerprint names exactly the snapshots this run read. */
+export interface IvInputSummary {
+  source: "caller_supplied" | "recorder" | "absent";
+  snapshots: number;
+  /** sha256 of the points read; the identity of this run's IV input. */
+  digest: string;
+}
+
 /** What the Realized vs IV study measured for one symbol. Only fields
  *  the study computes exist here: edge score, regimes, oracle signals and
  *  the trade simulator are not part of this study, so they are absent, never
@@ -158,6 +167,8 @@ export interface RealizedVsIvData {
   run: RunSettings;
   /** Where the bars came from: the lake, the window read, the counts. */
   dataSource: LakeStudyDataSource;
+  /** Where the IV came from, which is not the lake. */
+  ivInput: IvInputSummary;
   /** Live IV30 from /api/edge/iv30/{vix-style,parametric}, or why neither answered. */
   liveIv30: LiveIv30State;
 }

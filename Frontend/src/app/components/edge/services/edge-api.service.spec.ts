@@ -179,6 +179,9 @@ describe("EdgeApiService.computeRealizedVsIv", () => {
     expect.soft(result.dataSource.coverage?.window).toMatchObject({ added: 10, reused: 30, missing: 0 });
     expect.soft(result.dataSource.barMinutes).toBe(1440);
     expect.soft(result.ivAlignment).toEqual({ rule: "snapshot_in_bar_latest", snapshotsRead: 35, barsWithIv: 35, superseded: 0, outsideBars: 0 });
+    expect.soft(result.ivInput, "the IV is named as an input of its own, with the fingerprint of what was read").toEqual({
+      source: "recorder", snapshots: 35, digest: "c".repeat(64),
+    });
   });
 
   it("picks each Yang-Zhang window by key, whatever other estimators the response lists first", async () => {

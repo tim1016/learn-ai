@@ -65,7 +65,12 @@ interface RealizedVsIvResultRaw {
       outside_bars: number;
     };
   };
-  data_source: LakeDataSourceRaw;
+  /** The lake block, with the fields this study adds to its identity: the IV it was given is named here. */
+  data_source: LakeDataSourceRaw & {
+    iv_source: "caller_supplied" | "recorder" | "absent";
+    iv_snapshots: number;
+    iv_digest: string;
+  };
 }
 
 interface Iv30LiveResponse {
@@ -305,6 +310,11 @@ export class EdgeApiService {
       ivAlignment,
       run,
       dataSource: mapLakeStudyDataSource(result.data_source),
+      ivInput: {
+        source: result.data_source.iv_source,
+        snapshots: result.data_source.iv_snapshots,
+        digest: result.data_source.iv_digest,
+      },
     };
   }
 }
