@@ -6,10 +6,11 @@ the result with full provenance so the historical IV pipeline can be built
 forward-only from the day this recorder ships.
 
 The cron that called this module was a Quartz job in the C# backend (ADR 0071
-decision 6); it was retired with that backend (ADR 0081) and nothing schedules
-the recorder today. ``references/csharp-jobs/README.md`` keeps the old job and
-says where a Python clock could plug in. ADR 0071 decision 8 explains why this
-is a JSONL file store today (Postgres after burn-in).
+decision 6); it was retired with that backend (ADR 0081). Its replacement for the
+closing snapshot is ``app/services/iv_recorder_schedule.py`` (#3525); the other
+slots stay unscheduled, and ``POST /api/iv-recorder/snapshot`` still records any
+slot on request. ADR 0071 decision 8 explains why this is a JSONL file store today
+(Postgres after burn-in).
 
 This module exposes:
 
@@ -154,8 +155,8 @@ class JsonlIvSnapshotStore(IvSnapshotStore):
     def __init__(self, base_dir: str | Path) -> None:
         self.base_dir = Path(base_dir)
         self._lock = threading.Lock()
-        # mkdir is deferred to first write — the production default path
-        # (/var/lib/iv-recorder) isn't writable in CI/import contexts where
+        # mkdir is deferred to first write — the default path (under the
+        # artifacts directory) must not be created in CI/import contexts where
         # the module is loaded but no slot is captured. The recorder hot
         # path always calls write(), so the directory is created on first
         # legitimate use.

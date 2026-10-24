@@ -102,7 +102,7 @@ class TestJsonlStore:
         self, tmp_path: Path
     ):
         # Write a JSONL line that pre-dates the health_score field — the
-        # production /var/lib/iv-recorder/SPY.jsonl will have rows like
+        # a deployed store's SPY.jsonl will have rows like
         # this from before this PR landed. RecordedIvSnapshot(**d) must
         # tolerate the missing key via the default.
         legacy_row = {

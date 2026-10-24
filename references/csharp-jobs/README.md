@@ -31,7 +31,7 @@ The cron only called Python; the work never left it. These are live:
 - `PythonDataService/app/routers/iv_recorder.py`: `POST /api/iv-recorder/snapshot` (always 200; failures become an error-tagged row) and the series read route.
 - `PythonDataService/app/services/iv_recorder.py`: `record_iv_snapshot`, `SLOT_CHOICES`, and the JSONL store (`get_iv_store`).
 
-So the data path is intact; only the *clock* that called it is gone. Until a clock exists, nothing records IV snapshots (it was already off).
+So the data path is intact; only the *clock* that called it is gone. A Python clock now records the closing slot (`PythonDataService/app/services/iv_recorder_schedule.py`, #3525); the 09:35, 12:30 and 15:55 slots stay unscheduled.
 
 ## Where a Python clock could plug in
 

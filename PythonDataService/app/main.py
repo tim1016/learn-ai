@@ -1155,9 +1155,21 @@ async def _service_lifespan(
         if option_archive_service.config.ENABLED:
             await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(option_archive_service.start(), background_loop()))
 
+    # The IV30 recorder's clock: one closing snapshot per trading day for IV_RECORDER_SYMBOLS (#3525). Only the
+    # data-plane core runs it, so one process owns each fire.
+    iv_recorder_schedule = None
+    if _ROLE_RUNS_DATA_PLANE_CORE:
+        from app.services.iv_recorder_schedule import IvRecorderSchedule
+
+        iv_recorder_schedule = IvRecorderSchedule.from_settings()
+        if iv_recorder_schedule is not None:
+            iv_recorder_schedule.start()
+
     try:
         yield
     finally:
+        if iv_recorder_schedule is not None:
+            await iv_recorder_schedule.stop()
         if option_archive_service is not None:
             await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(option_archive_service.stop(), background_loop()))
         # The research coordinator authority goes back before anything else:
@@ -1500,8 +1512,9 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     # Router carries its own /api/edge/iv30 prefix.
     app.include_router(iv30.router)
     # IV recorder (POST /api/iv-recorder/snapshot, GET .../series/{ticker}) —
-    # Step D of IV-ownership plan. Nothing schedules it today: the .NET cron that
-    # called it was retired (ADR 0081).
+    # Step D of IV-ownership plan. The .NET cron that called it was retired
+    # (ADR 0081); the data plane's own clock records the closing snapshot
+    # (app.services.iv_recorder_schedule, #3525).
     app.include_router(iv_recorder.router)
     # /research/data-divergence/* — dashboard + matrix endpoints. The router
     # carries its own prefix so we mount it bare.

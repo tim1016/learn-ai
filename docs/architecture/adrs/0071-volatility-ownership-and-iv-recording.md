@@ -65,4 +65,8 @@ superseded and one is reworded.
   puts each snapshot on the bar that contains it; the latest in a bar wins, a bar with none has no IV, and the response
   counts the snapshots read, superseded, and inside no bar. Nothing is carried or interpolated, and that includes the VRP
   z-score: it once forward-filled its IV input, which put a z-score and trade signals on bars with no IV, and no longer does.
-  It exists only where recorded IV covers every bar of its rolling window. **This alignment rule awaits the owner's confirmation (D02 of PRD #3490).**
+  It exists only where recorded IV covers every bar of its rolling window. The owner confirmed this rule (#3525).
+
+## Amendment 2026-10-24 — the closing snapshot has a Python clock (#3525)
+
+The data plane records IV30 once per trading day for `IV_RECORDER_SYMBOLS` (default SPY, QQQ, IWM), a vendor delay after the calendar's close (`app/services/iv_recorder_schedule.py`), so the 2026-10-21 amendment's "records only when something calls" now holds for the other slots alone. The store's default moved under the artifacts directory, which compose mounts.

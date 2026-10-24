@@ -3,9 +3,10 @@
 A scheduler calls this endpoint at each slot time (default 09:35 / 12:30 /
 15:55 / 16:00 ET — 15:55 runs alongside 16:00 for the trial-month
 experiment in ADR 0071 decision 7). The cron that did so was a Quartz job in
-the C# backend; it was retired with that backend (ADR 0081) and nothing
-schedules this endpoint today. ``references/csharp-jobs/README.md`` keeps the
-old job and says where a Python clock could plug in. The endpoint is
+the C# backend; it was retired with that backend (ADR 0081). The data plane's
+own clock records the closing snapshot without calling this endpoint
+(``app/services/iv_recorder_schedule.py``, #3525); the other slots are
+recorded only when something calls it. The endpoint is
 idempotent on ``(ticker, snapshot_ts_ms)``: a duplicate fire writes a
 duplicate row, which is acceptable for the forward-only history use case (the
 read side de-dupes on ``snapshot_ts_ms``).
