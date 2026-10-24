@@ -38,8 +38,7 @@ describe('openableTab', () => {
     expect(openableTab('chart')).toBe('chart');
     expect(openableTab('returns')).toBe('returns');
     expect(openableTab('data')).toBe('data');
-    // Options is in the strip but not routed yet.
-    expect(openableTab('options')).toBe('chart');
+    expect(openableTab('options')).toBe('options');
     expect(openableTab('nonsense')).toBe('chart');
     expect(openableTab(undefined)).toBe('chart');
   });
@@ -51,6 +50,7 @@ describe('an instrument address', () => {
     ['/markets/SPY/chart/news?from=2026-01-02', 'chart'],
     ['/markets/SPY/returns', 'returns'],
     ['/markets/SPY/data?adjustment=raw', 'data'],
+    ['/markets/SPY/options/surface?expiry=1790000000000', 'options'],
     ['/markets/SPY', null],
     ['/markets', null],
     ['/options-lab/chain', null],
@@ -64,6 +64,7 @@ describe('an instrument address', () => {
     ['/markets/SPY/options', 'SPY · Options · Markets'],
     ['/markets/SPY/returns?from=2026-01-02', 'SPY · Returns · Markets'],
     ['/markets/SPY/data', 'SPY · Data · Markets'],
+    ['/markets/SPY/options/pricing', 'SPY · Options · Markets'],
     ['/markets/SPY', 'SPY · Markets'],
     ['/markets', null],
     ['/data-lab/export', null],

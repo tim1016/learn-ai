@@ -48007,6 +48007,17 @@
             ],
             "title": "Open Interest"
           },
+          "standard": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Standard"
+          },
           "strike_price": {
             "anyOf": [
               {

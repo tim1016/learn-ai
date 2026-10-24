@@ -4,7 +4,7 @@ import { TestBed } from '@angular/core/testing';
 import { By } from '@angular/platform-browser';
 import { Router, provideRouter, withComponentInputBinding, withRouterConfig } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
-import { fireEvent, screen, waitFor, within } from '@testing-library/angular';
+import { fireEvent, screen, waitFor } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -224,7 +224,7 @@ describe('an instrument\'s place', () => {
       await chartRequests(opened.http, 1);
     });
 
-    it('declares Chart, Returns, Data and Options once; only Options is not routed yet, so it stays in the strip, inert, and says why', async () => {
+    it('declares Chart, Returns, Data and Options once, each a link that keeps the window', async () => {
       const opened = await open(`/markets/SPY/chart?${WINDOW_QUERY}`);
       await chartRequests(opened.http, 1);
 
@@ -235,12 +235,10 @@ describe('an instrument\'s place', () => {
         'Data',
         'Options',
       ]);
-      for (const name of ['Chart', 'Returns', 'Data']) {
+      for (const name of ['Chart', 'Returns', 'Data', 'Options']) {
         const tab = name.toLowerCase();
         expect(screen.getByRole('link', { name }).getAttribute('href'), `${name} keeps the window`).toBe(`/markets/SPY/${tab}?${WINDOW_QUERY}`);
       }
-      expect(screen.queryByRole('link', { name: 'Options' }), 'Options is not a link').toBeNull();
-      expect(within(strip).getByText(/^Options/).getAttribute('title'), 'Options says why').toContain('Not in this place yet');
     });
   });
 

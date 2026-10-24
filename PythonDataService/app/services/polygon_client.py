@@ -864,6 +864,8 @@ class PolygonClientService:
                     "ticker": getattr(details, "ticker", None) if details else None,
                     "contract_type": getattr(details, "contract_type", None) if details else None,
                     "strike_price": getattr(details, "strike_price", None) if details else None,
+                    "exercise_style": getattr(details, "exercise_style", None) if details else None,
+                    "shares_per_contract": getattr(details, "shares_per_contract", None) if details else None,
                     # The vendor's YYYY-MM-DD becomes the anchor instant once,
                     # here at the vendor boundary (ADR 0022 (i), #2934).
                     "expiration_ms": (

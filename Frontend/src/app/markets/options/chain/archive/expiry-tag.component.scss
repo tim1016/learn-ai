@@ -1,0 +1,5 @@
+// A pill always carries its word. An unknown series is drawn dashed, so the difference is not colour alone.
+.pill { display: inline-block; border: 1px solid var(--border-strong); border-radius: var(--radius-pill); padding: 0 var(--space-2); font-size: var(--fs-xs); }
+.pill[data-series='unknown'] { border-style: dashed; color: var(--text-secondary); }
+.badge { display: inline-block; border: 1px solid var(--warn); color: var(--warn); border-radius: var(--radius-pill); padding: 0 var(--space-2); font-size: var(--fs-xs); margin-inline-start: var(--space-1); }
+.evidence { display: block; color: var(--text-secondary); font-size: var(--fs-xxs); }

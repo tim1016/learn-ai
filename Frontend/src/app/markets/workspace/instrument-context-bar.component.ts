@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, inject, linkedSignal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject, input, linkedSignal } from '@angular/core';
 
 import { BAR_TIMEFRAMES } from '../../components/data-lab/data-lab-scope';
 import { DateRangePickerComponent, ProviderBoundsService, type QuickRangeKey } from '../../shared/date-picker';
@@ -25,6 +25,13 @@ import { InstrumentContextService } from '../instrument-context.service';
 })
 export class InstrumentContextBarComponent {
   protected readonly context = inject(InstrumentContextService);
+
+  /**
+   * Whether the window, timeframe and session are offered. The Options tab has its own context
+   * (PRD #3490 R09), so over it only the instrument is: controls that do not move what is on
+   * screen would say a change there reaches it.
+   */
+  readonly windowControls = input(true);
 
   protected readonly barTimeframes = BAR_TIMEFRAMES;
   /**

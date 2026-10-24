@@ -1,0 +1,15 @@
+@let check = crossCheck();
+<section class="cross-check" aria-labelledby="cross-check-title">
+  <h3 id="cross-check-title">{{ check.title }}</h3>
+  <dl>
+    @for (statement of check.statements; track statement.label) {
+      <div>
+        <dt>{{ statement.label }}</dt>
+        <dd>{{ statement.text }}</dd>
+      </div>
+    }
+  </dl>
+  @if (check.outcome; as outcome) {
+    <p class="outcome" role="status">{{ outcome }}</p>
+  }
+</section>

@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@a
 import { RouterOutlet } from '@angular/router';
 
 import { DataLabWorkspaceStore, createDataLabWorkspaceStore, seedDefaultIndicators } from '../../components/data-lab/data-lab-workspace-store';
+import type { HelpDocumentRoute } from '../../shared/help/help-documents';
 import { HowThisWorksLinkComponent } from '../../shared/help/how-this-works-link.component';
 import { formatReceiptLabel } from '../../shared/pipes/receipt-label.pipe';
 import { HealthNoticeComponent } from '../../shared/scoped-health/health-notice.component';
@@ -23,7 +24,7 @@ import { InstrumentDataStore } from '../data/instrument-data.store';
 import { ReturnsStudyHold } from '../returns/returns-study-hold';
 import { DEFAULT_ADJUSTMENT, unreadQueryKeys } from '../instrument-context';
 import { InstrumentContextService } from '../instrument-context.service';
-import { INSTRUMENT_TABS, UNAVAILABLE_INSTRUMENT_TABS } from '../instrument-tabs';
+import { INSTRUMENT_TABS } from '../instrument-tabs';
 import { SavedSetupsComponent } from '../saved-setups/saved-setups.component';
 import { SavedSetupsService } from '../saved-setups/saved-setups.service';
 import { InstrumentContextBarComponent } from './instrument-context-bar.component';
@@ -151,16 +152,18 @@ export class InstrumentWorkspaceComponent {
   /** What stands in place of the tabs while a saved setup is being opened. */
   protected readonly openingState: WorkspaceStateContent = { kind: 'checking', happened: 'Opening the saved setup.' };
 
-  /** Every declared tab; one this place does not route yet stays in the strip, greyed, with its reason. */
+  /** The document that explains the tab open: the Options tab's chain is explained where its Past · Archive mode is. */
+  protected readonly help = computed<{ readonly route: HelpDocumentRoute; readonly anchor: string | undefined }>(() =>
+    this.activeTab() === 'options'
+      ? { route: '/docs/options-backtest-manual', anchor: 'past-chain' }
+      : { route: '/data-lab-docs', anchor: undefined },
+  );
+
+  /** Every declared tab, each carrying the context. */
   protected readonly tabs = computed<readonly WorkspaceTabItem[]>(() => {
     const symbol = this.symbol();
     const carried = this.context.carriedQuery();
-    return INSTRUMENT_TABS.tabs.map((tab) => {
-      const reason = UNAVAILABLE_INSTRUMENT_TABS[tab.id];
-      return reason === undefined
-        ? { ...tab, route: instrumentCommands(symbol, tab.id), queryParams: carried }
-        : { ...tab, route: null, unavailableReason: reason };
-    });
+    return INSTRUMENT_TABS.tabs.map((tab) => ({ ...tab, route: instrumentCommands(symbol, tab.id), queryParams: carried }));
   });
 
   /** What stands in place of the tabs while the instrument cannot open. */
@@ -168,8 +171,12 @@ export class InstrumentWorkspaceComponent {
     admissionState(this.symbol(), this.admitted()),
   );
 
+  /** Whether the tab open reads the committed window. The Options tab has its own context (R09), so a window it cannot use stops nothing there. */
+  protected readonly usesWindow = computed(() => this.activeTab() !== 'options');
+
   /** The window the address names but cannot use, said before any tab is asked for data. */
   protected readonly contextState = computed<WorkspaceStateContent | null>(() => {
+    if (!this.usesWindow()) return null;
     const problems = this.contextProblems();
     if (problems.length > 0) {
       return {

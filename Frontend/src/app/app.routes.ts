@@ -7,6 +7,7 @@ import { brokerClerkRedirectGuard } from "./fleet/broker-clerk-redirect.guard";
 import { dataCheckRoute } from "./operations/data-checks/data-checks";
 import { operationsTabRoute } from "./operations/operations-tabs";
 import { redirectKeepingState } from "./shell/route-redirects";
+import { redirectToOptionsView } from "./markets/options/options-address";
 
 const loadBrokerLaneUnavailable = () =>
   import('./fleet/broker-lane-unavailable.component').then(
@@ -117,14 +118,9 @@ export const routes: Routes = [
         (m) => m.OptionsLabComponent
       ),
     children: [
-      { path: "", redirectTo: "chain", pathMatch: "full" },
-      {
-        path: "chain",
-        loadComponent: () =>
-          import(
-            "./components/options-lab/chain/options-lab-chain.component"
-          ).then((m) => m.OptionsLabChainComponent),
-      },
+      // The chain moved into an instrument's Options tab; the symbol and the expiry go with it.
+      { path: "", redirectTo: redirectToOptionsView("chain"), pathMatch: "full" },
+      { path: "chain", redirectTo: redirectToOptionsView("chain"), pathMatch: "full" },
       {
         path: "strategy-builder",
         loadComponent: () =>
@@ -149,11 +145,10 @@ export const routes: Routes = [
       ).then((m) => m.SpecStrategyRunnerComponent),
   },
   {
+    // Moved into an instrument's Options tab; the symbol and the expiry go with it.
     path: "pricing-lab",
-    loadComponent: () =>
-      import("./components/pricing-lab/pricing-lab.component").then(
-        (m) => m.PricingLabComponent
-      ),
+    redirectTo: redirectToOptionsView("pricing"),
+    pathMatch: "full",
   },
   {
     path: "indicator-docs",
@@ -563,18 +558,17 @@ export const routes: Routes = [
     loadComponent: loadBrokerLaneUnavailable,
   },
   {
+    // Moved into an instrument's Options tab; the symbol and the expiry go with it. This page was
+    // the IBKR feed, so it opens the chain on Now · Live IBKR unless its address names a source.
     path: "broker/options-chain",
-    loadComponent: () =>
-      import(
-        "./components/broker/broker-options-chain/broker-options-chain.component"
-      ).then((m) => m.BrokerOptionsChainComponent),
+    redirectTo: redirectToOptionsView("chain", { source: "live" }),
+    pathMatch: "full",
   },
   {
+    // Moved into an instrument's Options tab; the symbol and the expiry go with it.
     path: "broker/options-surface",
-    loadComponent: () =>
-      import(
-        "./components/broker/broker-options-surface/broker-options-surface.component"
-      ).then((m) => m.BrokerOptionsSurfaceComponent),
+    redirectTo: redirectToOptionsView("surface"),
+    pathMatch: "full",
   },
   ...RETIRED_IBKR_NAVIGATION_ROUTES,
   {

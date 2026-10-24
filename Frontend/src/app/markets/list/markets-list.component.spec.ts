@@ -49,17 +49,20 @@ function asked(http: HttpTestingController) {
 const symbolsOf = (request: { request: { params: { get: (name: string) => string | null } } }) =>
   (request.request.params.get('symbols') ?? '').split(',');
 
+/** `query` is the address's own query: what an old chain address leaves on `/markets` (`then=options&view=pricing&expiry=…`). */
 async function renderMarkets(
   world = fakePickerWorld([held('SPY'), held('QQQ')], [vendor('SPY'), vendor('QQQ'), vendor('NVDA'), vendor('AMD')]),
-  inputs: { then?: string } = {},
+  query = '',
   overrides: Provider[] = [],
 ) {
   const result = await render(MarketsListComponent, {
-    inputs,
-    providers: [provideRouter([]), provideHttpClient(), provideHttpClientTesting(), ...world.providers, ...overrides],
+    providers: [provideRouter([{ path: '**', children: [] }]), provideHttpClient(), provideHttpClientTesting(), ...world.providers, ...overrides],
   });
+  const router = TestBed.inject(Router);
+  await router.navigateByUrl(query === '' ? '/' : `/?${query}`);
+  result.fixture.detectChanges();
   const http = TestBed.inject(HttpTestingController);
-  const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+  const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);
   return { ...result, world, http, navigate };
 }
 
@@ -87,10 +90,41 @@ describe('MarketsListComponent', () => {
     expect(screen.getByText(/not a promise that every session between them is held/)).toBeTruthy();
   });
 
-  it('opens the tab it was asked to, and Chart when this place does not route that tab yet', async () => {
-    await renderMarkets(undefined, { then: 'options' });
+  it('opens the tab it was asked to, and says which tab that is, as no instrument was named', async () => {
+    await renderMarkets(undefined, 'then=options');
+
+    expect(screen.getAllByRole('row')[1].querySelector('a')?.getAttribute('href')).toBe('/markets/SPY/options');
+    expect(screen.getByText('Pick an instrument. It opens on its Options tab.')).toBeTruthy();
+  });
+
+  it('opens the view an old address asked for and hands the pick every key it carried, from a row and from a search', async () => {
+    const { fixture, world, navigate } = await renderMarkets(undefined, 'then=options&view=pricing&expiry=4070984400000&source=archive&date=2026-10-09');
+
+    expect(screen.getByText('Pick an instrument. It opens on its Options tab, Pricing view.')).toBeTruthy();
+    expect(screen.getAllByRole('row')[1].querySelector('a')?.getAttribute('href')).toBe(
+      '/markets/SPY/options/pricing?expiry=4070984400000&source=archive&date=2026-10-09',
+    );
+
+    pick(fixture, { symbol: 'QQQ', name: 'QQQ Inc.', firstHeld: '2024-01-02', lastHeld: '2026-09-18' });
+
+    expect(world.coverage.ensureCalls).toEqual([]);
+    expect(navigate).toHaveBeenCalledExactlyOnceWith(['/markets', 'QQQ', 'options', 'pricing'], {
+      queryParams: { expiry: '4070984400000', source: 'archive', date: '2026-10-09' },
+    });
+  });
+
+  it('opens the Options tab on its own when the view asked for is one it does not route, and still keeps the other keys', async () => {
+    await renderMarkets(undefined, 'then=options&view=nonsense&expiry=4070984400000');
+
+    expect(screen.getByText('Pick an instrument. It opens on its Options tab.')).toBeTruthy();
+    expect(screen.getAllByRole('row')[1].querySelector('a')?.getAttribute('href')).toBe('/markets/SPY/options?expiry=4070984400000');
+  });
+
+  it('opens Chart when it was asked for a tab this place does not route', async () => {
+    await renderMarkets(undefined, 'then=nonsense');
 
     expect(screen.getAllByRole('row')[1].querySelector('a')?.getAttribute('href')).toBe('/markets/SPY/chart');
+    expect(screen.queryByText(/It opens on its/)).toBeNull();
   });
 
   describe('a page of instruments (T22)', () => {
@@ -201,7 +235,7 @@ describe('MarketsListComponent', () => {
       expect(navigate).not.toHaveBeenCalled();
 
       world.coverage.held[0].resolve(true);
-      await vi.waitFor(() => expect(navigate).toHaveBeenCalledExactlyOnceWith(['/markets', 'NVDA', 'chart']));
+      await vi.waitFor(() => expect(navigate).toHaveBeenCalledExactlyOnceWith(['/markets', 'NVDA', 'chart'], { queryParams: {} }));
     });
 
     it('never opens the first symbol when a second was picked while it filled, and opens the second when it is confirmed', async () => {
@@ -218,7 +252,7 @@ describe('MarketsListComponent', () => {
       expect(navigate).not.toHaveBeenCalled();
 
       amd.resolve(true);
-      await vi.waitFor(() => expect(navigate).toHaveBeenCalledExactlyOnceWith(['/markets', 'AMD', 'chart']));
+      await vi.waitFor(() => expect(navigate).toHaveBeenCalledExactlyOnceWith(['/markets', 'AMD', 'chart'], { queryParams: {} }));
     });
 
     it('opens a held symbol at once, without a fill', async () => {
@@ -227,7 +261,7 @@ describe('MarketsListComponent', () => {
       pick(fixture, { symbol: 'QQQ', name: 'QQQ Inc.', firstHeld: '2024-01-02', lastHeld: '2026-09-18' });
 
       expect(world.coverage.ensureCalls).toEqual([]);
-      expect(navigate).toHaveBeenCalledExactlyOnceWith(['/markets', 'QQQ', 'chart']);
+      expect(navigate).toHaveBeenCalledExactlyOnceWith(['/markets', 'QQQ', 'chart'], { queryParams: {} });
     });
 
     it('does not open a symbol whose fill failed', async () => {
@@ -257,7 +291,7 @@ describe('MarketsListComponent', () => {
     it('does not claim the lake holds nothing when the lake could not be read, and offers to read it again', async () => {
       const catalog = fakeTickerCatalog([]);
       catalog.view.unavailable.set('The lake could not be read.');
-      await renderMarkets(fakePickerWorld([], []), {}, [provideFakeTickerCatalog(catalog)]);
+      await renderMarkets(fakePickerWorld([], []), '', [provideFakeTickerCatalog(catalog)]);
 
       expect(screen.getByText('The instruments the lake holds could not be listed.')).toBeTruthy();
       expect(screen.getByText('The lake could not be read.')).toBeTruthy();

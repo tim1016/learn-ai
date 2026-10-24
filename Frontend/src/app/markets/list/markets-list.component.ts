@@ -1,5 +1,6 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
-import { Router, RouterLink } from '@angular/router';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, signal, untracked } from '@angular/core';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 
 import { AssetIdentityComponent } from '../../shared/asset-identity';
 import { SymbolCatalogService } from '../../shared/symbol-catalog/symbol-catalog.service';
@@ -14,7 +15,10 @@ import { ArchiveFactComponent } from '../facts/archive-fact.component';
 import { FactsBoard } from '../facts/facts-board';
 import { InstrumentFactsService } from '../facts/instrument-facts.service';
 import { QuoteFactComponent } from '../facts/quote-fact.component';
-import { MARKETS_ROUTE, instrumentCommands, openableTab } from '../instrument-address';
+import { MARKETS_ROUTE, PICK_TAB_KEY, PICK_VIEW_KEY, instrumentCommands, keysForPick, openableTab } from '../instrument-address';
+import { INSTRUMENT_TABS } from '../instrument-tabs';
+import { namedOptionsView, optionsViewCommands } from '../options/options-address';
+import { OPTIONS_VIEWS } from '../options/options-views';
 
 /** Rows drawn at first, and added by each "Show more"; a row's facts are asked for only once it is drawn. */
 export const PAGE_SIZE = 20;
@@ -34,6 +38,10 @@ export const PAGE_SIZE = 20;
  * of rows is read in one request for the rows drawn, never one per row; more
  * rows are drawn a page at a time, each page one more request. A price that
  * cannot be read says "unavailable" in its own row and leaves the row listed.
+ *
+ * An address that named no instrument (an old chain page) lands here with `?then=` the tab, `view=` the
+ * view of it, and every key it carried (the expiry, the source, the window). A pick opens that tab and
+ * view and hands the pick those keys, so the instrument opens on what the old address asked for.
  *
  * Search is the shared symbol picker, so it carries the catalog's degraded
  * notice and the one coverage gate (ADR 0066): picking a symbol the lake does
@@ -59,11 +67,23 @@ export class MarketsListComponent {
   private readonly router = inject(Router);
   private readonly view = untracked(() => inject(SymbolCatalogService).viewFor(DEFAULT_ADJUSTMENT_MODE));
 
-  /** The tab a pick opens (`?then=options` and the like); anything this place does not route opens Chart. */
-  readonly then = input<string | undefined>(undefined);
+  private readonly route = inject(ActivatedRoute);
+  private readonly query = toSignal(this.route.queryParamMap, { initialValue: this.route.snapshot.queryParamMap });
 
   protected readonly title = menuLabelFor(MARKETS_ROUTE);
-  protected readonly tab = computed(() => openableTab(this.then()));
+  /** The tab a pick opens (`?then=options` and the like); anything this place does not route opens Chart. */
+  protected readonly tab = computed(() => openableTab(this.query().get(PICK_TAB_KEY)));
+  /** The Options view a pick opens (`?view=pricing`); none, or one the tab does not route, opens the tab's default. */
+  private readonly optionsView = computed(() => (this.tab() === 'options' ? namedOptionsView(this.query().get(PICK_VIEW_KEY)) : null));
+  /** The keys the address carried for the instrument, which a pick keeps. */
+  protected readonly carried = computed(() => keysForPick(this.query()));
+  /** Where a pick opens when it is not Chart: an address that asked for one (an old chain address) says so, as no instrument was named. */
+  protected readonly asked = computed(() => {
+    const tab = this.tab();
+    if (tab === 'chart') return null;
+    const view = this.optionsView();
+    return view === null ? `${INSTRUMENT_TABS.label(tab)} tab` : `${INSTRUMENT_TABS.label(tab)} tab, ${OPTIONS_VIEWS.label(view)} view`;
+  });
 
   /** What the search holds: empty, because the picker is where a symbol is chosen, not a place that remembers one. */
   protected readonly picked = signal('');
@@ -128,13 +148,13 @@ export class MarketsListComponent {
   }
 
   protected commandsFor(symbol: string): string[] {
-    return instrumentCommands(symbol, this.tab());
+    return this.tab() === 'options' ? optionsViewCommands(symbol, this.query().get(PICK_VIEW_KEY)) : instrumentCommands(symbol, this.tab());
   }
 
   /** A pick, which the picker emits only once the lake holds the instrument. */
   protected onPicked(symbol: string): void {
     this.picked.set(symbol);
-    if (symbol !== '') void this.router.navigate(this.commandsFor(symbol));
+    if (symbol !== '') void this.router.navigate(this.commandsFor(symbol), { queryParams: this.carried() });
   }
 
   protected onAction(id: string): void {

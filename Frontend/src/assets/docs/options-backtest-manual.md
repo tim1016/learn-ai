@@ -273,11 +273,13 @@ Deleting a run removes that saved research result. Export anything you need befo
 
 **Your goal:** see what was listed and what had traded at a historical instant.
 
-1. Open **Past chain**. Choose the underlying, trading day and time.
-2. Read the underlying price and its timestamp, then choose an expiry from those listed.
+1. Open the instrument from **Markets**, choose its **Options** tab, and in the chain choose **Past · Archive**. The instrument is the underlying. Choose the trading date and, if you want one, the time. Nothing is read until a date is chosen.
+2. Read the underlying price and its timestamp, then choose an expiry from those listed. None is opened for you.
 3. Adjust the number of strikes shown around the money.
-4. Read calls and puts alongside each strike. Each price is the last stored trade-bar close at or before the chosen instant, with its own timestamp. It is not a bid or ask.
+4. Read calls and puts alongside each strike. Each price is the last stored trade-bar close at or before the chosen instant, with its own timestamp. It is not a bid or ask. The archive holds no quotes, Greeks, open interest or volume, so none is shown for a past date, and no current value stands in for one.
 5. If a download is offered, read its scope and start it. Inspect its progress and resulting data states; downloading cannot create a trade that never happened.
+
+**Now · Snapshot** is the same chain over the provider's current snapshot, with the time it arrived and whether the provider labels it delayed. **Live IBKR** is not available for a past date, and a past date never shows today's chain.
 
 | Price state | What it tells you |
 |---|---|

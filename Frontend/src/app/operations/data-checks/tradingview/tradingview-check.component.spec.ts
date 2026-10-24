@@ -52,10 +52,10 @@ describe('TradingviewCheckComponent', () => {
     http.verify();
   });
 
-  it('leads to Build dataset for the instrument the picker holds', async () => {
+  it('leads to the Past · Archive chain of the instrument the picker holds', async () => {
     await renderCheck({ ticker: 'aapl' });
 
-    expect(screen.getByText('Build dataset').getAttribute('href')).toBe('/markets/AAPL/data/build');
+    expect(screen.getByText("Open AAPL's Options tab").getAttribute('href')).toBe('/markets/AAPL/options/chain?source=archive');
   });
 
   it('surfaces a failed validation response as an alert', async () => {
