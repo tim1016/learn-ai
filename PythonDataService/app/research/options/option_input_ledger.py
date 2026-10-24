@@ -13,7 +13,9 @@ missing bar. This ledger is that record, one per ticker:
   answered with. It identifies what *this run* saw. The provider does not archive its answers, so the digest
   cannot reproduce them (``reproducible: false``); a later run that sees different answers shows a different
   digest. That is the retained identity R25 asks for where the input itself cannot be retained.
-* **The risk-free rate's source** per trading day: FRED, or the one default when FRED could not answer.
+* **The risk-free rate's source** per trading day: FRED, or the one default when FRED could not answer. A default
+  taken while a FRED key is configured is a FRED outage and is counted apart from a deployment that has no key: only
+  the outage could answer differently on a second attempt.
 
 The ledger records; it judges nothing. The runner decides what a failure means for a ticker.
 
@@ -30,6 +32,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from app.research.runs.hashing import hash_payload
+from app.services.fred_service import RATE_SOURCE_DEFAULT, RATE_SOURCE_FRED
 
 Stage = Literal["option_expiries", "option_contracts", "option_bars"]
 
@@ -62,10 +65,6 @@ PROVIDER_INPUTS: Mapping[Stage, Mapping[str, str]] = {
 
 _API_KEY = re.compile(r"(?i)(api[_-]?key=)[^&\s'\"]+")
 
-#: Source of a risk-free rate, as ``fred_service.get_risk_free_rate_and_source`` names it.
-RATE_FRED = "FRED"
-RATE_DEFAULT = "default"
-
 
 def _scrub(text: str) -> str:
     """A vendor error's text with any API key in a URL blanked: a failure reason is shown to people and stored."""
@@ -93,6 +92,7 @@ class OptionInputLedger:
         self._failures: list[OptionInputFailure] = []
         self._answers: dict[str, dict[str, str]] = {stage: {} for stage in STAGES}
         self._rate_days: Counter[str] = Counter()
+        self._rate_fetch_failed_days = 0
 
     def answered(self, stage: Stage, key: str, used: Any) -> None:
         """The provider answered ``key``; ``used`` is the part of the answer the study reads (JSON-serializable)."""
@@ -104,9 +104,19 @@ class OptionInputLedger:
         self._attempts[stage] += 1
         self._failures.append(OptionInputFailure(stage, key, type(error).__name__, _scrub(str(error))))
 
-    def risk_free_rate(self, source: str) -> None:
-        """One trading day's rate was resolved from ``source`` (:data:`RATE_FRED` or :data:`RATE_DEFAULT`)."""
+    def risk_free_rate(self, source: str, *, fetch_failed: bool = False) -> None:
+        """One trading day's rate was resolved from ``source`` (``RATE_SOURCE_FRED`` or ``RATE_SOURCE_DEFAULT``).
+
+        ``fetch_failed`` marks a default taken because FRED, with a key configured, gave no rate.
+        """
         self._rate_days[source] += 1
+        if fetch_failed:
+            self._rate_fetch_failed_days += 1
+
+    @property
+    def degraded(self) -> bool:
+        """True when a provider request went unanswered or a rate fell back because FRED did not answer."""
+        return bool(self._failures) or self._rate_fetch_failed_days > 0
 
     @property
     def failures(self) -> tuple[OptionInputFailure, ...]:
@@ -124,6 +134,11 @@ class OptionInputLedger:
 
     def rate_days(self, source: str) -> int:
         return self._rate_days[source]
+
+    @property
+    def rate_fetch_failed_days(self) -> int:
+        """Days whose rate is the default only because FRED did not answer; asking again could give FRED's rate."""
+        return self._rate_fetch_failed_days
 
     def observation_digest(self, stage: Stage) -> str | None:
         """sha256 over what the provider answered for ``stage``; ``None`` when it answered nothing."""
@@ -146,12 +161,14 @@ class OptionInputLedger:
             "risk_free_rate": {
                 "kind": "provider",
                 "provider": "fred",
-                "days_from_fred": self.rate_days(RATE_FRED),
-                "days_from_default": self.rate_days(RATE_DEFAULT),
+                "days_from_fred": self.rate_days(RATE_SOURCE_FRED),
+                "days_from_default": self.rate_days(RATE_SOURCE_DEFAULT),
+                "days_fetch_failed": self.rate_fetch_failed_days,
                 "reproducible": False,
             },
             "failures": [failure.as_dict() for failure in self._failures[:MAX_LISTED_FAILURES]],
             "failures_total": len(self._failures),
+            "degraded": self.degraded,
         }
 
 
@@ -179,10 +196,12 @@ def combine(ledgers: Mapping[str, OptionInputLedger]) -> dict[str, Any]:
         "risk_free_rate": {
             "kind": "provider",
             "provider": "fred",
-            "days_from_fred": sum(ledger.rate_days(RATE_FRED) for _, ledger in ordered),
-            "days_from_default": sum(ledger.rate_days(RATE_DEFAULT) for _, ledger in ordered),
+            "days_from_fred": sum(ledger.rate_days(RATE_SOURCE_FRED) for _, ledger in ordered),
+            "days_from_default": sum(ledger.rate_days(RATE_SOURCE_DEFAULT) for _, ledger in ordered),
+            "days_fetch_failed": sum(ledger.rate_fetch_failed_days for _, ledger in ordered),
             "reproducible": False,
         },
         "failures": failures[:MAX_LISTED_FAILURES],
         "failures_total": len(failures),
+        "degraded": any(ledger.degraded for _, ledger in ordered),
     }

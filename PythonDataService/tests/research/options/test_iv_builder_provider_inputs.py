@@ -22,7 +22,9 @@ import pytest
 from app.config import settings
 from app.research.options import iv_builder
 from app.research.options.iv_builder import build_iv_history
-from app.research.options.option_input_ledger import RATE_DEFAULT, RATE_FRED, OptionInputLedger, combine
+from app.research.options.option_input_ledger import OptionInputLedger, combine
+from app.services import fred_service
+from app.services.fred_service import RATE_SOURCE_DEFAULT, RATE_SOURCE_FRED, RateResolution
 from app.services.polygon_client import PolygonClientService
 from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 from tests._helpers.option_chain import OptionChain, option_ticker, parse_option_ticker
@@ -210,9 +212,10 @@ def test_the_ledger_names_each_provider_input_and_fingerprints_what_it_answered(
     assert block["inputs"]["option_expiries"]["attempted"] == 1, "one lookup for the month"
     assert block["inputs"]["option_contracts"]["attempted"] == 2, "one per bracketing expiry"
     assert block["risk_free_rate"] == {
-        "kind": "provider", "provider": "fred", "days_from_fred": 0, "days_from_default": len(WINDOW), "reproducible": False,
+        "kind": "provider", "provider": "fred", "days_from_fred": 0, "days_from_default": len(WINDOW), "days_fetch_failed": 0,
+        "reproducible": False,
     }
-    assert block["failures"] == [] and block["failures_total"] == 0
+    assert block["failures"] == [] and block["failures_total"] == 0 and block["degraded"] is False
 
 
 def test_a_changed_provider_answer_is_a_changed_observation_digest():
@@ -231,12 +234,34 @@ def test_a_changed_provider_answer_is_a_changed_observation_digest():
 
 def test_the_risk_free_rate_source_is_counted_per_day(monkeypatch):
     rows = stock_rows(WINDOW)
-    monkeypatch.setattr(iv_builder, "get_risk_free_rate_and_source", lambda **kwargs: (DEFAULT_RISK_FREE_RATE, RATE_FRED))
+    monkeypatch.setattr(iv_builder, "resolve_risk_free_rate", lambda **kwargs: RateResolution(DEFAULT_RISK_FREE_RATE, RATE_SOURCE_FRED))
     ledger = OptionInputLedger()
 
     build(chain_for(rows), rows, ledger)
 
-    assert (ledger.rate_days(RATE_FRED), ledger.rate_days(RATE_DEFAULT)) == (len(WINDOW), 0)
+    assert (ledger.rate_days(RATE_SOURCE_FRED), ledger.rate_days(RATE_SOURCE_DEFAULT)) == (len(WINDOW), 0)
+    assert ledger.degraded is False
+
+
+def test_a_default_rate_with_no_fred_key_is_not_an_outage_but_one_with_a_key_is(monkeypatch):
+    """#3524 review m1. No key is the same answer on every attempt; a configured key that gets nothing could answer next time."""
+    rows = stock_rows(WINDOW)
+    monkeypatch.setattr(fred_service, "_fetch_series", lambda *args, **kwargs: [])
+    fred_service.clear_cache()
+    no_key, key_but_down = OptionInputLedger(), OptionInputLedger()
+
+    build(chain_for(rows), rows, no_key)  # the autouse fixture configures no key
+    monkeypatch.setattr(settings, "FRED_API_KEY", "a-configured-key", raising=False)
+    build(chain_for(rows), rows, key_but_down)
+
+    assert no_key.rate_days(RATE_SOURCE_DEFAULT) == len(WINDOW) and no_key.rate_fetch_failed_days == 0
+    assert no_key.degraded is False and no_key.as_dict()["degraded"] is False
+    assert key_but_down.rate_days(RATE_SOURCE_DEFAULT) == len(WINDOW) and key_but_down.rate_fetch_failed_days == len(WINDOW)
+    assert key_but_down.degraded is True
+    block = key_but_down.as_dict()
+    assert block["risk_free_rate"]["days_fetch_failed"] == len(WINDOW) and block["failures_total"] == 0, "no provider request failed"
+    assert block["degraded"] is True
+    assert combine({"SPY": no_key, "QQQ": key_but_down})["risk_free_rate"]["days_fetch_failed"] == len(WINDOW)
 
 
 def test_combine_sums_the_tickers_and_carries_each_failure_with_its_ticker():

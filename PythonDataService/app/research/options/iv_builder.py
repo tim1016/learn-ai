@@ -17,7 +17,7 @@ import pandas as pd
 from app.engine.edge.features_realtime.iv30_constructor import variance_interpolated_iv
 from app.research.options.contract_finder import find_bracket_contracts
 from app.research.options.option_input_ledger import OptionInputLedger
-from app.services.fred_service import get_risk_free_rate_and_source
+from app.services.fred_service import resolve_risk_free_rate
 from app.services.polygon_client import PolygonClientService
 from app.volatility.solver import implied_volatility
 
@@ -296,8 +296,9 @@ def build_iv_history(
             logger.info(f"[IV BUILDER] Deriving IV for date {idx + 1}/{len(bracket_df)}: {date_str}")
 
         # Dynamic risk-free rate for this trading day (cached per date)
-        rfr, rate_source = get_risk_free_rate_and_source(dte_days=TARGET_DTE, observation_date=date_str)
-        ledger.risk_free_rate(rate_source)
+        rate = resolve_risk_free_rate(dte_days=TARGET_DTE, observation_date=date_str)
+        rfr = rate.rate
+        ledger.risk_free_rate(rate.source, fetch_failed=rate.fetch_failed)
 
         result: dict[str, Any] = {
             "date": date_str,
