@@ -15,7 +15,7 @@ place that knows both, so the wire model can be built without leaking
 ownership across the abstraction boundary.
 
 Used by ``GET /api/broker/health`` and ``POST /connect|/reconnect``
-endpoints in ``routers.broker``.
+endpoints in ``routers.broker``, and by the scoped-health projection.
 """
 
 from __future__ import annotations
@@ -90,6 +90,25 @@ def build_broker_health(
         ),
         operator_disconnected=operator_disconnected,
     )
+
+
+def current_broker_health() -> IbkrConnectionHealth:
+    """This process's IBKR session as ``GET /api/broker/health`` reports it. Never raises on disconnect."""
+    # Function-local: the client and the monitor import this module's models.
+    from app.broker.ibkr.auto_reconnect_monitor import get_monitor
+    from app.broker.ibkr.client import NotConnectedError, get_client
+
+    if not get_settings().broker_enabled:
+        return synthetic_disconnected_health(
+            state="disabled",
+            disabled=True,
+            reason="IBKR_BROKER_ENABLED=false — the data-plane IBKR client is switched off",
+        )
+    try:
+        client = get_client()
+    except NotConnectedError:
+        return synthetic_disconnected_health()
+    return build_broker_health(client, get_monitor())
 
 
 def synthetic_disconnected_health(

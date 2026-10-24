@@ -68,8 +68,8 @@ export class StrategyRunsService {
    * Convenience: GET the canonical SPY EMA fixture spec from the
    * spec-strategy fixtures endpoint and submit a run against it.
    *
-   * The list page exposes a "Run SPY EMA fixture" button so the
-   * workbench is usable without curl — the fixture is the same
+   * Operations → Math checks exposes a "Run SPY EMA fixture" button so
+   * the workbench is usable without curl — the fixture is the same
    * `StrategySpec` JSON the Phase A acceptance gate runs against, so
    * a click here exercises the full reproducibility contract end-to-end.
    *

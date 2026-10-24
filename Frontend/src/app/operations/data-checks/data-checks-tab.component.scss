@@ -1,0 +1,13 @@
+:host {
+  display: block;
+}
+
+// The Operations body insets its content; the strip runs to the body's edges
+// like the Operations strip above it, so the two line up.
+app-workspace-tab-list {
+  margin-inline: calc(-1 * var(--space-4));
+}
+
+.data-checks-body {
+  padding-top: var(--space-4);
+}

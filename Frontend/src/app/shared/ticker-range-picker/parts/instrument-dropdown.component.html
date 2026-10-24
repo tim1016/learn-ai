@@ -66,7 +66,7 @@
         No instrument matches that.
       } @else if (model.query === "") {
         No listed symbol matches that, and the lake holds nothing yet.
-        <a routerLink="/data-lake" (click)="dismiss.emit()"
+        <a routerLink="/operations/lake" (click)="dismiss.emit()"
           >Backfill a symbol</a
         >
         to get started.
