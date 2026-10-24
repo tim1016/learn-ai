@@ -374,19 +374,31 @@ def test_a_split_announced_after_capture_is_not_in_a_held_window_until_the_lake_
     lake_rows(held)  # the lake captures the first six sessions before the split exists
     respx.mock.reset()
     mock_launcher()
-    adjusted = {day: (scaled({day: bars}, 0.1)[day] if day < split_day else bars) for day, bars in raw.items()}
+    # Four decimals: a 10-for-1 split of two-decimal prices lands exactly on the lake's grid, so the only difference
+    # between the paths is the split basis, not a rounding of the synthetic adjusted tape.
+    adjusted = {day: (scaled({day: bars}, 0.1, decimals=4)[day] if day < split_day else bars) for day, bars in raw.items()}
     split = {"ticker": "SPY", "execution_date": split_day.isoformat(), "split_from": 1, "split_to": 10}
     calls = VendorCalls()
     mock_vendor("SPY", raw, adjusted=adjusted, splits=[split], calls=calls)
     provider_after_split = provider_rows(raw, held, adjusted=adjusted)
 
-    stale = compare(provider_after_split, lake_rows(held), held, derived=False)
+    stale = compare(provider_after_split, lake_rows(held), held)
     lake_rows(later)  # any later capture of the symbol rebuilds its stale adjusted days
-    refreshed = compare(provider_after_split, lake_rows(held), held, derived=False)
+    refreshed = compare(provider_after_split, lake_rows(held), held)
 
     assert stale.causes == ["data-quality"] and stale.prices_changed == stale.provider_bars
     assert stale.max_price_diff > 100, "the held days still carry the pre-split basis"
+    assert stale.errors == (None, None)
+    # The derived outputs the owner decides D02 on: a split rescales the price level, not the shape of the series.
+    # Ratios, momentum and volatility are unit-free and do not move; MACD's signal line is in price units and does.
+    for unit_free in ("momentum_5m", "rsi_14", "realized_vol_30", "volume_zscore"):
+        assert stale.feature_max_diff[unit_free] <= 1e-9, unit_free
+    assert stale.feature_max_diff["macd_signal"] > 1.0, "a price-level output moves by the split factor (measured 3.5 here)"
+    # The IC is scale-free too, but a rank correlation breaks ties on float noise: values equal to 1e-13 on the two
+    # bases can order differently. That is ``precision`` (float accumulation), measured at 2.1e-7 on this tape.
+    np.testing.assert_allclose(stale.mean_ic[1], stale.mean_ic[0], atol=2.1e-7 * MEASURED_MARGIN, rtol=0)
     assert refreshed.prices_changed == 0 and refreshed.timestamps_changed == 0
+    assert max(refreshed.feature_max_diff.values()) <= 1e-9
     assert calls.count > 0
 
 
@@ -422,6 +434,24 @@ def test_a_day_captured_before_its_after_hours_tape_finished_is_a_shorter_sample
     assert after_admission.timestamps_changed == 0 and after_admission.prices_changed == 0
     assert max(after_admission.feature_max_diff.values()) <= 1e-9
     assert after_admission.mean_ic[1] == pytest.approx(after_admission.mean_ic[0], abs=1e-9, rel=0)
+
+
+def test_a_window_that_starts_before_the_symbol_traded_was_computed_on_fewer_bars_and_is_refused_now(world):
+    """Cause: ``data-quality`` (a session the vendor has no bars for). The provider path computed on the sessions it
+    got; the lake path refuses a window with a session the vendor answers empty, because "the symbol had not listed
+    yet" and "the vendor failed to serve it" look the same to admission (no "not applicable" outcome, ``known-gaps``)."""
+    tape = tape_for(DST_WINDOW)
+    listed = {day: bars for day, bars in tape.items() if day >= DST_WINDOW[2]}
+    mock_vendor("SPY", listed, adjusted=listed)
+
+    before = _report(provider_rows(listed, DST_WINDOW), DST_WINDOW)
+    with pytest.raises(StudyInputRefusal) as raised:
+        lake_rows(DST_WINDOW)
+
+    assert before.error is None, "before: the study ran on the eight sessions the vendor served"
+    assert raised.value.code == "data_unavailable_from_provider"
+    assert [i.trading_date for i in raised.value.coverage.issues] == list(DST_WINDOW[:2])
+    assert raised.value.coverage.window.added == len(DST_WINDOW) - 2
 
 
 def test_duplicate_or_out_of_order_vendor_bars_were_tolerated_or_crashed_before_and_are_refused_now(world):

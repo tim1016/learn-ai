@@ -672,6 +672,10 @@ def fold_minute_bars(bars: Iterable[TradeBar], bar_minutes: int) -> list[TradeBa
     bucket holding no minute yields no bar — nothing is filled, and a bucket
     holding only some of its minutes still yields one (as a vendor aggregate
     does), so the trailing bucket is flushed.
+    Not ``engine_bars_service.consolidate_bars``: that is the engine's end-of-data
+      flush, ``scan(last.end_ms)``, which leaves a partial trailing bucket
+      unemitted; a study folds to what a vendor aggregate holds, so it flushes
+      past the trailing bucket's end instead.
     Reference: LEAN Common/Data/Consolidators/TradeBarConsolidator.cs, vendored
       at references/lean/7986ed0aade3ae5de06121682409f05984e32ff7 and ported
       in the engine's consolidator.
