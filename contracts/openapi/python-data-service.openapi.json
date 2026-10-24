@@ -56957,7 +56957,7 @@
       },
       "ReliabilitySpanRequest": {
         "additionalProperties": false,
-        "description": "The part of a reliability request that decides which sessions a run asks the lake for.",
+        "description": "The part of a reliability request that decides which sessions a run asks the lake for.\n\nIt carries no ``session``: the sessions a run asks the lake for are the same for ``rth`` and ``extended``, and a\nfield that cannot change the answer would be accepted and ignored. A body that sends one is refused (422).",
         "properties": {
           "from_date": {
             "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
@@ -56989,15 +56989,6 @@
             "minimum": 1.0,
             "title": "Multiplier",
             "type": "integer"
-          },
-          "session": {
-            "default": "rth",
-            "enum": [
-              "rth",
-              "extended"
-            ],
-            "title": "Session",
-            "type": "string"
           },
           "symbol": {
             "maxLength": 20,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import ClassVar, Literal
 
 from pydantic import BaseModel, Field
 
@@ -323,7 +323,13 @@ class ReliabilityRefusedResult(LakeRefusedResult):
 
 
 class ReliabilitySpanRequest(TickerRequest):
-    """The part of a reliability request that decides which sessions a run asks the lake for."""
+    """The part of a reliability request that decides which sessions a run asks the lake for.
+
+    It carries no ``session``: the sessions a run asks the lake for are the same for ``rth`` and ``extended``, and a
+    field that cannot change the answer would be accepted and ignored. A body that sends one is refused (422).
+    """
+
+    session: ClassVar[None] = None  # drops the inherited field from the model, its schema and the accepted body
 
     indicator_name: str = Field(..., description="pandas-ta indicator name (e.g., 'rsi', 'ema')")
     indicator_params: dict[str, int | float] = Field(

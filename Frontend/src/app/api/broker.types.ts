@@ -29958,6 +29958,9 @@ export interface components {
         /**
          * ReliabilitySpanRequest
          * @description The part of a reliability request that decides which sessions a run asks the lake for.
+         *
+         *     It carries no ``session``: the sessions a run asks the lake for are the same for ``rth`` and ``extended``, and a
+         *     field that cannot change the answer would be accepted and ignored. A body that sends one is refused (422).
          */
         ReliabilitySpanRequest: {
             /** From Date */
@@ -29979,12 +29982,6 @@ export interface components {
              * @default 1
              */
             multiplier?: number;
-            /**
-             * Session
-             * @default rth
-             * @enum {string}
-             */
-            session?: "rth" | "extended";
             /** Symbol */
             symbol: string;
             /**

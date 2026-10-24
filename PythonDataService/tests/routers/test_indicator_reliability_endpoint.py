@@ -249,7 +249,7 @@ async def read_span(api: FastAPI, **overrides: Any) -> httpx.Response:
     payload = {
         key: value
         for key, value in body(**overrides).items()
-        if key in {"symbol", "from_date", "to_date", "timespan", "multiplier", "session", "indicator_name", "indicator_params"}
+        if key in {"symbol", "from_date", "to_date", "timespan", "multiplier", "indicator_name", "indicator_params"}
     }
     async with httpx.AsyncClient(transport=ASGITransport(app=api), base_url="http://test", timeout=120) as client:
         return await client.post("/api/research/indicator-reliability/span", json=payload)
@@ -277,6 +277,20 @@ async def test_the_span_read_names_the_lead_in_the_run_then_admits_with_the_wind
     assert (et_midnight_ms(min(held)), et_midnight_ms(max(held))) == (span.json()["start_ms"], span.json()["end_ms"]), (
         "the lake holds the span's sessions, the first of them in the lead-in, once the run has admitted them"
     )
+
+
+@pytest.mark.asyncio
+async def test_the_span_request_has_no_session_for_the_span_is_the_same_in_either(api, world):
+    """A session cannot change which sessions the run asks the lake for, so the request refuses to carry one."""
+    payload = {key: body()[key] for key in ("symbol", "from_date", "to_date", "indicator_name", "indicator_params")}
+    async with httpx.AsyncClient(transport=ASGITransport(app=api), base_url="http://test", timeout=120) as client:
+        accepted = await client.post("/api/research/indicator-reliability/span", json=payload)
+        refused = await client.post("/api/research/indicator-reliability/span", json={**payload, "session": "extended"})
+
+    assert accepted.status_code == 200, accepted.text
+    assert refused.status_code == 422
+    assert [error["type"] for error in refused.json()["detail"]] == ["extra_forbidden"]
+    assert refused.json()["detail"][0]["loc"] == ["body", "session"]
 
 
 @pytest.mark.asyncio
