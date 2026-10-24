@@ -6,65 +6,30 @@
 >
   @if (store.qualifiedVersions(); as state) {
     @if (state.kind === 'ready') {
-      @for (group of state.value.bySymbol; track group.symbol) {
-        <div class="group">
-          <h3 class="group__heading">
-            <app-asset-identity [symbol]="group.symbol" size="sm" />
-            <span class="group__summary">
-              @for (count of group.statusCounts; track count.status; let last = $last) {
-                {{ count.count }} {{ count.status | receiptLabel | lowercase }}@if (!last) { · }
-              }
-            </span>
-          </h3>
-          <table class="rows">
-            <thead>
-              <tr><th>Version</th><th>Status</th><th>Configuration</th><th>Evidence</th><th>Actions</th></tr>
-            </thead>
-            <tbody>
-              @for (version of group.versions; track version.id) {
-                <tr>
-                  <td class="mono">
-                    {{ version.id }}
-                    @if (version.is_default) { <app-signal-strategy-chip tone="ready">default for {{ group.symbol }}</app-signal-strategy-chip> }
-                    <div class="muted">program {{ version.program_version }} · <app-timestamp-display [value]="version.created_at_ms" mode="local" /></div>
-                  </td>
-                  <td>
-                    <div class="status-cell">
-                      <app-signal-strategy-chip [tone]="tones[version.status]">{{ version.status | receiptLabel }}</app-signal-strategy-chip>
-                      <span class="muted">{{ version.status_explanation }}</span>
-                    </div>
-                  </td>
-                  <td class="mono">{{ parameters(version) }}</td>
-                  <td>
-                    <a [routerLink]="studyRoute(version)">Study {{ version.study_id.slice(0, 8) }}</a>
-                    · <a [routerLink]="configurationRoute()" [queryParams]="caseQuery(version)">selected baseline run #{{ version.golden_run_id }}</a>
-                    @if (exposure(version); as words) { <div class="muted">Final test: {{ words }}</div> }
-                    @if (version.research.research_override) { <div class="muted">Approved despite weak research evidence; the warning is recorded.</div> }
-                  </td>
-                  <td>
-                    @if (version.status === 'ready') {
-                      <a [routerLink]="deployRoute" [queryParams]="deployQuery(version)">Use in Deploy</a>
-                    } @else if (version.status === 'stale') {
-                      <button type="button" [disabled]="reproofs().get(version.id)?.kind === 'running'" (click)="reprove(version)">Re-prove from retained evidence</button>
-                      <div class="muted">Replays its saved evidence against the current program; the recorded results must match.</div>
-                    } @else {
-                      <span class="muted">{{ version.status === 'revoked' ? 'Revoked: it cannot be deployed or restored.' : 'Its status could not be read, so it is not offered.' }}</span>
-                    }
-                    @let proof = reproofs().get(version.id);
-                    @if (proof?.kind === 'running') { <div class="muted" role="status">Replaying the saved evidence…</div> }
-                    @if (proof?.kind === 'failed') { <div class="refusal" role="alert">{{ proof?.message }}</div> }
-                  </td>
-                </tr>
-              }
-            </tbody>
-          </table>
-        </div>
-      } @empty {
-        <p class="note">{{ goldenRefusal() ?? 'No symbol has a qualified version of this strategy yet. A study ends in one when its final decision is approved.' }}</p>
-      }
-      @if (state.value.mayBeCut) {
-        <p class="note">The read returns at most {{ listLimit }} versions, so some may not be listed here.</p>
-      }
+      <app-symbol-version-groups [versions]="state.value">
+        <ng-template appVersionColumns><th>Evidence</th><th>Actions</th></ng-template>
+        <ng-template appVersionCells let-version>
+          <td>
+            <a [routerLink]="studyRoute(version)">Study {{ version.study_id.slice(0, 8) }}</a>
+            · <a [routerLink]="configurationRoute()" [queryParams]="caseQuery(version)">selected baseline run #{{ version.golden_run_id }}</a>
+            @if (exposure(version); as words) { <div class="muted">Final test: {{ words }}</div> }
+            @if (version.research.research_override) { <div class="muted">Approved despite weak research evidence; the warning is recorded.</div> }
+          </td>
+          <td>
+            @if (version.status === 'ready') {
+              <a [routerLink]="deployRoute" [queryParams]="deployQuery(version)">Use in Deploy</a>
+            } @else if (version.status === 'stale') {
+              <button type="button" [disabled]="reproofs().get(version.id)?.kind === 'running'" (click)="reprove(version)">Re-prove from retained evidence</button>
+              <div class="muted">Replays its saved evidence against the current program; the recorded results must match.</div>
+            } @else {
+              <span class="muted">{{ version.status === 'revoked' ? 'Revoked: it cannot be deployed or restored.' : 'Its status could not be read, so it is not offered.' }}</span>
+            }
+            @let proof = reproofs().get(version.id);
+            @if (proof?.kind === 'running') { <div class="muted" role="status">Replaying the saved evidence…</div> }
+            @if (proof?.kind === 'failed') { <div class="refusal" role="alert">{{ proof?.message }}</div> }
+          </td>
+        </ng-template>
+      </app-symbol-version-groups>
     }
   }
 </app-signal-strategy-section>

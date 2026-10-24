@@ -122,6 +122,12 @@ export class SignalStrategyWorkspaceStore {
     return entry === undefined ? { kind: 'unknown', registered: state.value.length } : { kind: 'found', entry };
   });
 
+  /** Why Golden Search is ruled out for this strategy, when the registry says so. */
+  readonly goldenRefusal = computed(() => {
+    const state = this.entry();
+    return state.kind === 'found' && !state.entry.capabilities.golden.supported ? state.entry.capabilities.golden.reason : null;
+  });
+
   /** Every key the registry lists, once the registry has been read. */
   readonly registeredKeys = computed<ReadonlySet<string> | null>(() => {
     const state = readStateOf(this.registryRead);

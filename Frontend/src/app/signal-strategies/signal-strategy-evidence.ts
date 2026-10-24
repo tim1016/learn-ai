@@ -225,3 +225,8 @@ export function parameterPairs(parameters: Readonly<Record<string, unknown>> | n
   const entries = Object.entries(parameters ?? {}).sort(([left], [right]) => left.localeCompare(right));
   return entries.length === 0 ? null : entries.map(([name, value]) => `${name} = ${valueText(value)}`);
 }
+
+/** A qualified version's settings on one line, as every page names them, or that none were recorded. */
+export function versionSettingsText(parameters: Readonly<Record<string, unknown>> | null | undefined): string {
+  return parameterPairs(parameters)?.join(' · ') ?? 'no settings recorded';
+}

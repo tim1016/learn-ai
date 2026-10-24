@@ -1,18 +1,13 @@
-import { LowerCasePipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
-import { QUALIFICATION_LIST_LIMIT, GoldenSearchService } from '../../components/golden-search/golden-search.service';
+import { GoldenSearchService } from '../../components/golden-search/golden-search.service';
 import type { GoldenQualificationSummary } from '../../components/golden-search/golden-search.types';
 import { extractServerMessage } from '../../components/broker/operation-error';
 import { GOLDEN_DEPLOY_HANDOFF_ROUTE } from '../../fleet/account-workspace';
-import { AssetIdentityComponent } from '../../shared/asset-identity/asset-identity.component';
-import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
-import { TimestampDisplayComponent } from '../../shared/timestamp/timestamp-display.component';
-import { QUALIFICATION_TONES, parameterPairs } from '../signal-strategy-evidence';
-import { SignalStrategyChipComponent } from '../signal-strategy-chip.component';
 import { SignalStrategySectionComponent } from '../signal-strategy-section.component';
 import { SignalStrategyWorkspaceStore } from '../signal-strategy-workspace.store';
+import { SymbolVersionGroupsComponent, VersionCellsDirective, VersionColumnsDirective } from '../symbol-version-groups.component';
 import { GOLDEN_CASE_PARAM, deployHandoffQuery, goldenStudyRoute, goldenTabRoute } from './golden-tabs';
 
 /** Where one version's re-proof stands, kept beside that version and no other. */
@@ -38,13 +33,11 @@ type Reproof =
   selector: 'app-golden-versions',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    AssetIdentityComponent,
-    LowerCasePipe,
-    ReceiptLabelPipe,
     RouterLink,
-    SignalStrategyChipComponent,
     SignalStrategySectionComponent,
-    TimestampDisplayComponent,
+    SymbolVersionGroupsComponent,
+    VersionCellsDirective,
+    VersionColumnsDirective,
   ],
   templateUrl: './golden-versions.component.html',
   styleUrls: ['../section-content.scss', './golden-versions.component.scss'],
@@ -53,16 +46,8 @@ export class GoldenVersionsComponent {
   protected readonly store = inject(SignalStrategyWorkspaceStore);
   private readonly service = inject(GoldenSearchService);
 
-  protected readonly tones = QUALIFICATION_TONES;
-  protected readonly listLimit = QUALIFICATION_LIST_LIMIT;
   protected readonly deployRoute = GOLDEN_DEPLOY_HANDOFF_ROUTE;
   protected readonly reproofs = signal<ReadonlyMap<string, Reproof>>(new Map());
-
-  /** Why no version can exist, when the registry rules Golden Search out. */
-  protected readonly goldenRefusal = computed(() => {
-    const state = this.store.entry();
-    return state.kind === 'found' && !state.entry.capabilities.golden.supported ? state.entry.capabilities.golden.reason : null;
-  });
 
   protected readonly configurationRoute = computed(() => goldenTabRoute(this.store.key(), 'configuration'));
 
@@ -81,10 +66,6 @@ export class GoldenVersionsComponent {
   /** The selected baseline run's review the version was approved with. */
   protected caseQuery(version: GoldenQualificationSummary): Record<string, string> {
     return { [GOLDEN_CASE_PARAM]: String(version.golden_run_id) };
-  }
-
-  protected parameters(version: GoldenQualificationSummary): string {
-    return parameterPairs(version.parameters)?.join(' · ') ?? 'no settings recorded';
   }
 
   /** The final test's exposure the version was approved under, in the study's own words, or `null` when the record has none. */

@@ -36,40 +36,6 @@
   font-weight: var(--fw-semi);
 }
 
-.group__heading {
-  margin: 0 0 var(--space-1);
-}
-
-.versions {
-  display: flex;
-  flex-direction: column;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  font-size: var(--fs-sm);
-}
-
-.version {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-1) var(--space-3);
-  padding: var(--space-1) 0;
-  border-top: 1px solid var(--border-light);
-  overflow-wrap: anywhere;
-}
-
-.version__what {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--space-1) var(--space-2);
-  min-width: 0;
-}
-
-.version__what .muted { flex-basis: 100%; }
-
 a { color: var(--accent-text); }
 
 button {

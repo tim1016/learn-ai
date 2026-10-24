@@ -85,7 +85,7 @@ describe('Overview', () => {
     const proof = await sectionOf('Program proof');
     expect(await within(proof).findByText(/holds no record for this strategy/)).toBeTruthy();
     const versions = await sectionOf('Qualified versions');
-    expect(await within(versions).findByText('No symbol has a qualified version of this strategy.')).toBeTruthy();
+    expect(await within(versions).findByText(/^No symbol has a qualified version of this strategy yet\./)).toBeTruthy();
     expect(screen.queryByText(/Program proof: /)).toBeNull();
   });
 

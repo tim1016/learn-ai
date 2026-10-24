@@ -8,7 +8,7 @@ import type { WorkspaceStateContent } from '../../../shared/workspace/workspace-
 import { WorkspaceStateBlockComponent } from '../../../shared/workspace/workspace-state-block.component';
 import { goldenTabRoute } from '../../../signal-strategies/golden/golden-tabs';
 import { SIGNAL_STRATEGIES_ROUTE } from '../../../signal-strategies/signal-strategy-tabs';
-import { parameterPairs } from '../../../signal-strategies/signal-strategy-evidence';
+import { versionSettingsText } from '../../../signal-strategies/signal-strategy-evidence';
 import { extractServerMessage } from '../../broker/operation-error';
 import { GoldenSearchService } from '../../golden-search/golden-search.service';
 import type { QualificationDeployOffer } from '../../golden-search/golden-search.types';
@@ -118,7 +118,7 @@ export class AlpacaDeployIntentComponent {
 
   protected readonly settings = computed(() => {
     const state = this.state();
-    return state.kind === 'ready' ? (parameterPairs(state.offer.parameters)?.join(' · ') ?? 'no settings recorded') : null;
+    return state.kind === 'ready' ? versionSettingsText(state.offer.parameters) : null;
   });
 
   constructor() {

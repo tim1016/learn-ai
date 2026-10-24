@@ -1,18 +1,13 @@
-import { LowerCasePipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, inject, output } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
-import { QUALIFICATION_LIST_LIMIT } from '../../components/golden-search/golden-search.service';
 import type { GoldenQualificationSummary } from '../../components/golden-search/golden-search.types';
 import { GOLDEN_DEPLOY_HANDOFF_ROUTE } from '../../fleet/account-workspace';
-import { AssetIdentityComponent } from '../../shared/asset-identity/asset-identity.component';
-import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import type { WorkspaceStateContent } from '../../shared/workspace/workspace-state';
 import { WorkspaceStateBlockComponent } from '../../shared/workspace/workspace-state-block.component';
 import { deployHandoffQuery } from '../golden/golden-tabs';
-import { SignalStrategyChipComponent } from '../signal-strategy-chip.component';
-import { QUALIFICATION_TONES, parameterPairs } from '../signal-strategy-evidence';
 import { SignalStrategyWorkspaceStore } from '../signal-strategy-workspace.store';
+import { SymbolVersionGroupsComponent, VersionCellsDirective, VersionColumnsDirective } from '../symbol-version-groups.component';
 
 /**
  * What the header's "Deploy a bot" opens (PRD #3490 R19, I02): the choice of what
@@ -36,11 +31,10 @@ import { SignalStrategyWorkspaceStore } from '../signal-strategy-workspace.store
   selector: 'app-signal-strategy-deploy',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    AssetIdentityComponent,
-    LowerCasePipe,
-    ReceiptLabelPipe,
     RouterLink,
-    SignalStrategyChipComponent,
+    SymbolVersionGroupsComponent,
+    VersionCellsDirective,
+    VersionColumnsDirective,
     WorkspaceStateBlockComponent,
   ],
   templateUrl: './signal-strategy-deploy.component.html',
@@ -52,16 +46,8 @@ export class SignalStrategyDeployComponent {
   readonly closed = output();
 
   protected readonly accountListRoute = GOLDEN_DEPLOY_HANDOFF_ROUTE;
-  protected readonly tones = QUALIFICATION_TONES;
-  protected readonly listLimit = QUALIFICATION_LIST_LIMIT;
 
   protected readonly strategyOnlyQuery = computed(() => deployHandoffQuery(this.store.key(), null));
-
-  /** Why Golden Search is ruled out for this strategy, when the registry says so. */
-  protected readonly goldenRefusal = computed(() => {
-    const state = this.store.entry();
-    return state.kind === 'found' && !state.entry.capabilities.golden.supported ? state.entry.capabilities.golden.reason : null;
-  });
 
   protected readonly gate = computed<WorkspaceStateContent | null>(() => {
     const state = this.store.qualifiedVersions();
@@ -82,10 +68,6 @@ export class SignalStrategyDeployComponent {
 
   protected versionQuery(version: GoldenQualificationSummary): Record<string, string> {
     return deployHandoffQuery(version.program_key, version.id);
-  }
-
-  protected parameters(version: GoldenQualificationSummary): string {
-    return parameterPairs(version.parameters)?.join(' · ') ?? 'no settings recorded';
   }
 
   protected retry(): void {

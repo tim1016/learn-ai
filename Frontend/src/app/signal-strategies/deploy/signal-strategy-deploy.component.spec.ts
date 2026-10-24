@@ -53,7 +53,7 @@ describe('Deploy a bot, from a strategy’s header', () => {
     // The default is marked where it is displayed, and taken by the id shown there.
     const takeDefault = within(chooser).getByRole('link', { name: 'Use the current default spy-default for SPY' });
     expect(takeDefault.getAttribute('href')).toBe(`/brokers/alpaca?strategy=${EMA}&golden_qualification=spy-default`);
-    expect(within(chooser).getAllByText('current default for SPY')).toHaveLength(1);
+    expect(within(chooser).getAllByText('default for SPY')).toHaveLength(1);
     // Another ready version of the same symbol is the owner's own pick, by its own id.
     const pickEarlier = within(chooser).getByRole('link', { name: 'Deploy version spy-earlier for SPY' });
     expect(pickEarlier.getAttribute('href')).toBe(`/brokers/alpaca?strategy=${EMA}&golden_qualification=spy-earlier`);

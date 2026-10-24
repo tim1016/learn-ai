@@ -17,7 +17,6 @@
 
   <app-signal-strategy-qualified-versions
     [versions]="store.qualifiedVersions()"
-    [goldenRefusal]="strategy.capabilities.golden.reason"
     (retry)="store.retry('approvals')"
   />
 
