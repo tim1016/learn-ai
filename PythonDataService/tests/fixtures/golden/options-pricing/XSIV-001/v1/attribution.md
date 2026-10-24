@@ -30,8 +30,9 @@ exactly), a missing value as `null`, plus the as-of date of each expiry lookup a
 rate is the one default (`DEFAULT_RISK_FREE_RATE`, 0.043): no FRED key is configured, so no FRED request is made. Dates:
 2026-10-24. Both `payload` and `freeze` execute the historical provider path: `payload` calls it to discover the contracts whose
 prices it records. That path and the generator's SDK surface were deleted when option inputs moved to the lake, so neither
-command runs on later commits. Use fixture commit `a200d770`, or `8c9bba4a` with this fixture folder copied into its
-worktree, as the script describes.
+command runs on later commits. Run both commands in a separate worktree at exact fixture commit `a200d770`: it includes
+the required `listed_on` support in `OptionChain`, while its application code remains the Part A code from `8c9bba4a`.
+Copying only this fixture folder into the earlier Part A checkout does not supply that helper support.
 
 ## What it is held to
 

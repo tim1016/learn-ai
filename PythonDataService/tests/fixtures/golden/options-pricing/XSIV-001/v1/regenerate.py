@@ -15,10 +15,11 @@ daily option price of every contract the provider path asked for on every day it
 study used before the option inputs moved to the lake: ``PolygonClientService`` over the Polygon SDK client's
 ``list_options_contracts`` and ``list_aggs``, the contract finder that asked it for expiries and contracts, and the IV
 builder that fetched daily option bars. That code, and the generator's SDK surface, were deleted in the commit that
-moved the study's option inputs to the lake. Both commands require commit ``8c9bba4a`` (the tip of #3540 Part A,
-before Part B) with this fixture folder copied in, or fixture commit ``a200d770``. Create a separate worktree at that
-revision and run both commands there; neither can run against the later lake implementation. The output on file was
-written on the fixture's own commit, with no other change to the provider path.
+moved the study's option inputs to the lake. Run both commands in a separate worktree at exact fixture commit
+``a200d770``. Its application code is the Part A implementation from ``8c9bba4a``, and its ``OptionChain`` helper adds
+the ``listed_on`` support required here. Copying this fixture folder alone into the earlier Part A checkout is
+insufficient; neither command runs against the later lake implementation. The output on file was written on
+``a200d770``, with no other change to the provider path.
 """
 
 from __future__ import annotations
