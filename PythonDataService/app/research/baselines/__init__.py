@@ -33,8 +33,8 @@ random?" empirically.
 
 Each baseline run is a normal Phase A ``RunLedger`` persisted under
 ``artifacts/runs/<baseline_run_id>/`` with ``parent_run_id`` set to
-the baselines run id, so ``list_runs(parent_run_id=baseline_id)``
-enumerates them. The aggregated baseline result lives at a sibling
+the baselines run id, so ``list_ids(parent_run_id=baseline_id)`` on the runs
+store enumerates them. The aggregated baseline result lives at a sibling
 layout ``artifacts/baselines/<baseline_id>/{config,result}.json``.
 """
 
