@@ -611,7 +611,8 @@ def test_the_series_never_reads_a_live_iv_a_current_marker_has_no_way_into_past_
     """The live IV30 marker is a separate browser call to ``/api/edge/iv30/*``. The study neither calls it nor accepts it."""
     with respx.mock(assert_all_called=False) as vendor_only:
         ours = result_of(params("1d"))
-        assert not [call for call in vendor_only.calls if "snapshot" in str(call.request.url) or "iv30" in str(call.request.url)]
+        live_iv_paths = {"snapshot", "iv30"}
+        assert not [call for call in vendor_only.calls if live_iv_paths & set(call.request.url.path.split("/"))]
 
     assert all(v is None for v in ours["iv30"] + ours["iv30_trd252"] + ours["vrp_forward"]), "no recorded IV, so no IV on any date"
     assert ours["iv_source"] == "absent"

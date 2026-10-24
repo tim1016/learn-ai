@@ -22,7 +22,9 @@ The two that matter most are in the first half:
 * The lake's 1/10,000 price grid. Cause: ``data-quality`` (input quantization). ``precision`` is floating-point
   accumulation, and nothing here accumulates: a lake price is the exact decimal the writer encoded, converted to the
   nearest float once. A float tolerance cannot cover it, so each output it moves is pinned at its *measured*
-  magnitude, with a stated margin, at three price levels.
+  magnitude, to full precision, at three price levels. The pin is two-sided and its tolerance is the floating-point
+  error of the estimator (``float_atol``), the only thing that can differ between two platforms running the same
+  arithmetic: it comes from each log return's rounding, not from a sum's length.
 
 Not provable offline: that Polygon's own 15-minute and day aggregates equal a fold of its minute aggregates, and that
 a day bar is the regular session with the first and last minute for the official open and close. The vendor side is an
@@ -32,6 +34,7 @@ measures how much the second assumption could matter. All of it is unverified ag
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -72,6 +75,45 @@ DENSE = {"regular_keep": 0.995, "extended_keep": 0.92}
 
 #: The outputs a person reads off the page, by the name this module gives them.
 OUTPUTS = ("yz_5", "yz_10", "yz_30", "hf_trailing", "hf_forward", "vrp_forward")
+
+EPS = float(np.finfo(np.float64).eps)
+#: Every term of an estimator is a log of two prices near 1 (or a product of two such logs): the ratio rounds once, to
+#: within ``eps / 2``, and the log adds at most as much, so a log return carries an absolute error of about ``2 * eps``
+#: whatever its size, and a term built from two logs about ``4 * eps``. It does not shrink with the return, which is a
+#: fraction of a percent: that cancellation, not a sum's length, is the estimators' float error.
+RETURN_ABS_ERR = 4 * EPS
+#: Bars a year behind each output, as it is annualized: the trailing Yang-Zhang lines use the bar size's own count
+#: (``realized_vs_iv_series.BARS_PER_YEAR``, 26 bars a day for 15 minutes); the HF estimator counts the extended day's 64
+#: bars (the default session) and falls back to Yang-Zhang at 252 on daily bars.
+YZ_BARS_PER_YEAR = {"15m": 252 * 26, "1d": 252}
+HF_BARS_PER_YEAR = {"15m": 252 * 64, "1d": 252}
+
+
+def float_atol(comparison: Comparison, bar_size: str, name: str) -> float:
+    """The floating-point error of a pinned movement, class ``precision``: the difference of two paths' values.
+
+    An annualized vol is ``sigma = sqrt(K * sum(r_i^2))`` over its terms (``K`` times the terms is the bars a year), so
+    ``|d sigma| <= |d r| * sqrt(bars a year)`` whatever the data. A path's error is that bound at ``RETURN_ABS_ERR`` and the
+    movement is the difference of two paths, hence the ``2 *``. The premium is ``iv^2 - rv^2`` with the same IV on both
+    paths, so its error is ``2 * rv`` times the HF vol's. Measured by re-rounding the same tape (every price times 16
+    factors that are not powers of two, both paths alike): every pinned movement stayed within 2e-14 of its pinned value,
+    at least 7 times inside this bound.
+    """
+    hf = 2 * RETURN_ABS_ERR * math.sqrt(HF_BARS_PER_YEAR[bar_size])
+    if name == "vrp_forward":
+        return 2 * comparison.output_scale["hf_forward"] * hf
+    if name.startswith("hf_"):
+        return hf
+    return 2 * RETURN_ABS_ERR * math.sqrt(YZ_BARS_PER_YEAR[bar_size])
+
+
+def assert_moved_by(comparison: Comparison, bar_size: str, measured: Mapping[str, float]) -> None:
+    """Each output moved by its measured amount, within its float error; and it did move, so the divergence is real."""
+    for name, movement in measured.items():
+        assert comparison.output_max_diff[name] > 0, f"{name}: the divergence is real, so the output does move"
+        np.testing.assert_allclose(
+            comparison.output_max_diff[name], movement, atol=float_atol(comparison, bar_size, name), rtol=0, err_msg=name
+        )
 
 
 def window_of(bar_size: str) -> list[date]:
@@ -181,6 +223,8 @@ class Comparison:
     volume_precision_diff: float = 0.0
     #: The largest absolute difference between the two paths' value of an output at a shared bar, both finite.
     output_max_diff: dict[str, float] = field(default_factory=dict)
+    #: The largest absolute value of an output on either path at a shared bar: what its float error is relative to.
+    output_scale: dict[str, float] = field(default_factory=dict)
     #: Shared bars where exactly one path has a value (a warmup or forward-tail region that moved).
     output_nan_moved: dict[str, int] = field(default_factory=dict)
 
@@ -227,14 +271,16 @@ def compare(provider: list[dict], lake: list[dict], bar_size: str, *, derived: b
     index_provider = {ts: i for i, ts in enumerate(sorted(by_provider))}
     index_lake = {ts: i for i, ts in enumerate(sorted(by_lake))}
     for name in OUTPUTS:
-        diffs, moved = [], 0
+        diffs, moved, scale = [], 0, 0.0
         for ts in shared:
             x, y = a[name][index_provider[ts]], b[name][index_lake[ts]]
             if np.isnan(x) != np.isnan(y):
                 moved += 1
             elif not np.isnan(x):
                 diffs.append(abs(x - y))
+                scale = max(scale, abs(x), abs(y))
         result.output_max_diff[name] = float(max(diffs)) if diffs else 0.0
+        result.output_scale[name] = scale
         result.output_nan_moved[name] = moved
     return result
 
@@ -279,22 +325,24 @@ def test_the_lake_adds_nothing_to_the_bars_the_provider_sends_across_a_dst_chang
 
 #: What the sanitizer moves, measured on this pinned payload (seed 11, 27 sessions of 15-minute bars and 66 daily bars,
 #: both ``tape_for`` defaults) as the largest absolute difference between the two paths' value of an output at a shared
-#: bar. Re-measure (print ``compare(...)``) only when the pinned tape or the sanitizer intentionally changes; never to
-#: make a failing test pass.
+#: bar, to full precision. Re-measure (print ``compare(...)``) only when the pinned tape or the sanitizer intentionally
+#: changes; never to make a failing test pass.
 SANITIZER_MEASURED = {
     "15m": {
         "bars_with_a_price_changed": 58, "bars_with_a_volume_changed": 38, "max_price_diff": 0.6055,
-        "outputs": {"yz_5": 3.810e-2, "yz_10": 1.966e-2, "yz_30": 1.026e-2, "hf_trailing": 2.066e-3, "hf_forward": 2.066e-3, "vrp_forward": 1.169e-3},
+        "outputs": {
+            "yz_5": 0.03809597839626627, "yz_10": 0.019657046609122875, "yz_30": 0.01025750415640081,
+            "hf_trailing": 0.0020655496868912104, "hf_forward": 0.0020655496868912104, "vrp_forward": 0.0011693426890660996,
+        },
     },
     "1d": {
         "bars_with_a_price_changed": 3, "bars_with_a_volume_changed": 2, "max_price_diff": 0.832,
-        "outputs": {"yz_5": 2.075e-2, "yz_10": 1.013e-2, "yz_30": 4.450e-3, "hf_trailing": 4.424e-3, "hf_forward": 4.424e-3, "vrp_forward": 2.193e-3},
+        "outputs": {
+            "yz_5": 0.02074984432648702, "yz_10": 0.010130287159042128, "yz_30": 0.004449835518127998,
+            "hf_trailing": 0.0044240697281069385, "hf_forward": 0.0044240697281069385, "vrp_forward": 0.002192518384758202,
+        },
     },
 }
-#: The headroom over a measured movement. The tape is seeded and the arithmetic deterministic, so this only absorbs
-#: platform differences in float summation order inside pandas and numpy; a change in the sanitizer, the lake's
-#: encoding or an estimator moves these by far more.
-MEASURED_MARGIN = 1.5
 
 
 @pytest.mark.parametrize("bar_size", ["15m", "1d"])
@@ -332,9 +380,7 @@ def test_the_sanitizer_clips_each_column_to_its_percentile_band_so_the_provider_
         "the rewritten bars are the window's price extremes: the lowest and highest 1% of closes"
     )
     assert set(comparison.output_nan_moved.values()) == {0}, "no warmup region moves"
-    for name, movement in measured["outputs"].items():
-        # atol is the measured movement with its margin; rtol is 0 because the quantity compared is itself a difference.
-        assert 0 < comparison.output_max_diff[name] <= movement * MEASURED_MARGIN, name
+    assert_moved_by(comparison, bar_size, measured["outputs"])
 
 
 #: What the lake's price grid moves, measured on this pinned payload at three price levels, as the largest absolute
@@ -342,12 +388,30 @@ def test_the_sanitizer_clips_each_column_to_its_percentile_band_so_the_provider_
 #: grid from the clip). Prices carry five or six decimals, finer than the grid. The movement grows as the price falls: a
 #: rounding of at most 5e-5 is a larger share of a bar's range on a $2 name than on a $150 one.
 QUANTIZATION_MEASURED = {
-    ("15m", 150.0, 5): {"yz_5": 2.676e-5, "yz_10": 1.767e-5, "yz_30": 1.231e-5, "hf_trailing": 5.478e-7, "hf_forward": 5.478e-7, "vrp_forward": 3.112e-7},
-    ("15m", 12.0, 5): {"yz_5": 3.113e-4, "yz_10": 2.658e-4, "yz_30": 1.274e-4, "hf_trailing": 7.452e-6, "hf_forward": 7.452e-6, "vrp_forward": 4.234e-6},
-    ("15m", 2.0, 6): {"yz_5": 1.913e-3, "yz_10": 1.475e-3, "yz_30": 6.042e-4, "hf_trailing": 1.30e-4, "hf_forward": 1.30e-4, "vrp_forward": 7.393e-5},
-    ("1d", 150.0, 5): {"yz_5": 5.899e-6, "yz_10": 2.473e-6, "yz_30": 8.95e-7, "hf_trailing": 1.004e-6, "hf_forward": 1.004e-6, "vrp_forward": 4.459e-7},
-    ("1d", 12.0, 5): {"yz_5": 5.885e-5, "yz_10": 4.195e-5, "yz_30": 2.04e-5, "hf_trailing": 2.175e-5, "hf_forward": 2.175e-5, "vrp_forward": 9.975e-6},
-    ("1d", 2.0, 6): {"yz_5": 4.077e-4, "yz_10": 2.405e-4, "yz_30": 6.167e-5, "hf_trailing": 1.007e-4, "hf_forward": 1.007e-4, "vrp_forward": 4.444e-5},
+    ("15m", 150.0, 5): {
+        "yz_5": 2.675568631019254e-05, "yz_10": 1.767336710128964e-05, "yz_30": 1.2308259477622485e-05,
+        "hf_trailing": 5.477703459710881e-07, "hf_forward": 5.477703459710881e-07, "vrp_forward": 3.112094703189294e-07,
+    },
+    ("15m", 12.0, 5): {
+        "yz_5": 0.0003113280498101001, "yz_10": 0.00026583772603372413, "yz_30": 0.0001273954275767264,
+        "hf_trailing": 7.451893096033224e-06, "hf_forward": 7.451893096033224e-06, "vrp_forward": 4.234245391518399e-06,
+    },
+    ("15m", 2.0, 6): {
+        "yz_5": 0.0019130295892502425, "yz_10": 0.0014749512778684248, "yz_30": 0.0006041641547841481,
+        "hf_trailing": 0.00012998884399584298, "hf_forward": 0.00012998884399584298, "vrp_forward": 7.393305292863195e-05,
+    },
+    ("1d", 150.0, 5): {
+        "yz_5": 5.899162470734964e-06, "yz_10": 2.472955001220356e-06, "yz_30": 8.950119154138569e-07,
+        "hf_trailing": 1.004017472827634e-06, "hf_forward": 1.004017472827634e-06, "vrp_forward": 4.4589885160595255e-07,
+    },
+    ("1d", 12.0, 5): {
+        "yz_5": 5.885118736925765e-05, "yz_10": 4.195252218180956e-05, "yz_30": 2.0395518014026948e-05,
+        "hf_trailing": 2.1750267032938364e-05, "hf_forward": 2.1750267032938364e-05, "vrp_forward": 9.974646197119519e-06,
+    },
+    ("1d", 2.0, 6): {
+        "yz_5": 0.00040770540567014457, "yz_10": 0.00024052443149064073, "yz_30": 6.166580706634672e-05,
+        "hf_trailing": 0.00010066478411932533, "hf_forward": 0.00010066478411932533, "vrp_forward": 4.444032622971661e-05,
+    },
 }
 
 
@@ -369,8 +433,7 @@ def test_prices_finer_than_the_lake_grid_move_each_output_by_its_measured_amount
     assert comparison.quantization_only, "every price that moved moved by at most half a ten-thousandth"
     assert comparison.causes == ["data-quality"]
     assert set(comparison.output_nan_moved.values()) == {0}
-    for name, movement in measured.items():
-        assert 0 < comparison.output_max_diff[name] <= movement * MEASURED_MARGIN, name
+    assert_moved_by(comparison, bar_size, measured)
 
 
 @pytest.mark.parametrize("bar_size", ["15m", "1d"])
@@ -399,7 +462,10 @@ def test_an_early_close_week_matches_exactly(world, bar_size):
 
 #: What folding the day from extended-hours minutes moves, against the regular-session day bar the vendor stand-in
 #: serves, measured on this payload (66 daily bars): the largest difference between the two paths' value of an output.
-EXTENDED_DAILY_MEASURED = {"yz_5": 0.1183, "yz_10": 0.09034, "yz_30": 0.04354, "hf_trailing": 0.06005, "hf_forward": 0.06005, "vrp_forward": 0.02899}
+EXTENDED_DAILY_MEASURED = {
+    "yz_5": 0.11830266381630392, "yz_10": 0.09034128900076785, "yz_30": 0.04354406275929365,
+    "hf_trailing": 0.06005211713854555, "hf_forward": 0.06005211713854555, "vrp_forward": 0.028991485557229274,
+}
 
 
 def test_the_daily_session_is_regular_by_default_and_folding_it_from_extended_hours_is_a_different_sample(world):
@@ -418,8 +484,7 @@ def test_the_daily_session_is_regular_by_default_and_folding_it_from_extended_ho
     assert extended.causes == ["data-quality"] and extended.timestamps_changed == 0
     assert extended.prices_changed == extended.lake_bars, "every day's open, high or low is different"
     assert extended.max_price_diff > 1.0
-    for name, movement in EXTENDED_DAILY_MEASURED.items():
-        assert 0 < extended.output_max_diff[name] <= movement * MEASURED_MARGIN, name
+    assert_moved_by(extended, "1d", EXTENDED_DAILY_MEASURED)
 
 
 def test_a_day_bar_whose_official_open_and_close_differ_from_the_first_and_last_minute_moves_the_series_by_a_measured_sensitivity(world):
@@ -442,9 +507,13 @@ def test_a_day_bar_whose_official_open_and_close_differ_from_the_first_and_last_
     comparison = compare(nudged, lake_rows(window, bar_size="1d"), "1d")
 
     assert comparison.causes == ["data-quality"] and comparison.timestamps_changed == 0 and not comparison.quantization_only
-    measured = {"yz_5": 1.797e-3, "yz_10": 1.091e-3, "yz_30": 4.356e-4, "hf_trailing": 6.347e-4, "hf_forward": 6.347e-4, "vrp_forward": 3.188e-4}
-    for name, movement in measured.items():
-        assert 0 < comparison.output_max_diff[name] <= movement * MEASURED_MARGIN, name
+    assert_moved_by(
+        comparison, "1d",
+        {
+            "yz_5": 0.0017972585108634864, "yz_10": 0.0010905451008981215, "yz_30": 0.0004356277041706602,
+            "hf_trailing": 0.0006346588756136473, "hf_forward": 0.0006346588756136473, "vrp_forward": 0.0003188054522958589,
+        },
+    )
 
 
 @pytest.mark.parametrize("bar_size", ["15m", "1d"])
