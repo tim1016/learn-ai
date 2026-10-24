@@ -180,8 +180,16 @@ export class DataLabComponent {
   private readonly sessionService = inject(DataLabSessionService);
   private readonly rangePresetsService = inject(DataLabRangePresetsService);
   readonly store = inject(DataLabWorkspaceStore);
-  /** The committed symbol's stock bars: a lake gap in another symbol is none of this page's business. */
   protected readonly healthNeeds = HEALTH_NEEDS.stockHistory;
+  /**
+   * The symbol the lake notice speaks for: the committed one (a lake gap in another symbol is none of this
+   * page's business), and only while the committed chart reads the split-adjusted view, the one view the
+   * health projection covers. A raw chart gets no notice rather than another tree's finding.
+   */
+  protected readonly healthInstrument = computed(() => {
+    const scope = this.store.committedScope();
+    return scope?.adjusted ? scope.ticker : null;
+  });
 
   /** The page is titled by the menu entry that leads to it (PRD #3490 R01):
    *  Stocks, or Return Distribution on its own study. */

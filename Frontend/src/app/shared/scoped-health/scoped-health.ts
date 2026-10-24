@@ -41,6 +41,11 @@ export const HEALTH_NEEDS = {
   archivedOptions: ['options_history', 'recovery'],
   /** The live option chain and surface, streamed from the IBKR feed. */
   liveChain: ['live_chain'],
-  /** Studies, charts and exports that read a symbol's stock bars from the lake. */
+  /**
+   * Studies, charts and exports that read a symbol's stock bars from the lake.
+   * The data plane speaks for the split-adjusted trade bars over the symbol's whole held
+   * span, not for one date window or another price-adjustment view: a page that reads
+   * a different view shows no notice, and the Lake tab's filters show the rest.
+   */
   stockHistory: ['stock_history'],
 } as const satisfies Readonly<Record<string, readonly AffectedOperation[]>>;

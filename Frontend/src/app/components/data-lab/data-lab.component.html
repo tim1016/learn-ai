@@ -10,8 +10,8 @@
   />
 </header>
 
-@if (store.committedTicker(); as committed) {
-  <app-health-notice [needs]="healthNeeds" [instrument]="committed" />
+@if (healthInstrument(); as symbol) {
+  <app-health-notice [needs]="healthNeeds" [instrument]="symbol" />
 }
 
 @if (ingressWarnings().length > 0) {

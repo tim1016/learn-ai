@@ -632,4 +632,24 @@ describe('DataLabComponent lake health notice', () => {
       '/operations/lake?symbol=SPY&price_adjustment_mode=polygon_split_adjusted&data_type=trade',
     );
   });
+
+  it('says nothing about the lake for a raw chart, which the split-adjusted health does not speak for', async () => {
+    const health = fakeScopedHealth(lakeGap);
+    TestBed.overrideProvider(ScopedHealthService, { useValue: { read: health.read } });
+    const { store, fixture } = await renderRoutedShell();
+    store.patchDraft({
+      ticker: 'SPY',
+      adjusted: false,
+      window: { startMsUtc: preset6M.start_ms_utc, endMsUtc: preset6M.end_ms_utc },
+    });
+    fixture.detectChanges();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Apply scope' }));
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    expect(store.committedTicker()).toBe('SPY');
+    expect(health.read).not.toHaveBeenCalled();
+    expect(screen.queryByText(/not in the lake/)).toBeNull();
+  });
 });
