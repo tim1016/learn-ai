@@ -7,6 +7,8 @@ const HELD_STUDIES = 6;
 
 interface Held {
   readonly symbol: string;
+  readonly fromMsUtc: number;
+  readonly toMsUtc: number;
   readonly study: ReturnDistributionStudy;
 }
 
@@ -17,7 +19,8 @@ interface Held {
  * Provided by the place, so the Returns tab can come back to a request it
  * already answered without asking Python again (PRD #3490 R05): a tab change
  * remounts the study, and a remount alone is no reason to run a 12-second read
- * twice. A different request replaces nothing it does not push out, and a
+ * twice. Only a study the person ran is held, so holding one is also what lets
+ * the tab show it again without being asked. A different request replaces nothing it does not push out, and a
  * study whose lake capture did not finish is never held, so reopening the tab
  * asks again rather than showing a failed capture as the settled answer.
  * `invalidate` drops an instrument's studies when its lake changed under them
@@ -43,11 +46,22 @@ export class ReturnsStudyHold {
     }
     const key = keyOf(query);
     this.held.delete(key);
-    this.held.set(key, { symbol: query.symbol, study });
+    this.held.set(key, { symbol: query.symbol, fromMsUtc: query.fromMsUtc, toMsUtc: query.toMsUtc, study });
     for (const oldest of this.held.keys()) {
       if (this.held.size <= HELD_STUDIES) break;
       this.held.delete(oldest);
     }
+  }
+
+  /**
+   * Whether the place already holds a study of this instrument and window, at any bin width. A held study was run
+   * by the person once, so showing it again, or re-binning it, asks nothing the lake has not already been asked.
+   */
+  holdsScope(symbol: string, fromMsUtc: number, toMsUtc: number): boolean {
+    for (const entry of this.held.values()) {
+      if (entry.symbol === symbol && entry.fromMsUtc === fromMsUtc && entry.toMsUtc === toMsUtc) return true;
+    }
+    return false;
   }
 
   /** Forgets every study of one instrument. */

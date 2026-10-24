@@ -107,6 +107,11 @@ async function openChart(providers: ReturnType<typeof world>['providers']): Prom
   return opened;
 }
 
+/** The person's Run on the Returns tab: the study fetches missing sessions into the lake, so opening the tab runs nothing. */
+async function runStudy(): Promise<void> {
+  await userEvent.click(await screen.findByRole('button', { name: 'Run the study' }));
+}
+
 async function goTo(opened: OpenedPlace, tab: 'Chart' | 'Returns' | 'Data'): Promise<void> {
   await userEvent.click(screen.getByRole('link', { name: tab }));
   await waitFor(() => expect(opened.router.url).toContain(`/${tab.toLowerCase()}`));
@@ -126,6 +131,10 @@ describe('changing tabs in an instrument\'s place (T03)', () => {
     const opened = await openChart(providers);
 
     await goTo(opened, 'Returns');
+    // Opening the tab runs nothing; the study runs when the person presses Run.
+    expect(await screen.findByRole('button', { name: 'Run the study' })).toBeTruthy();
+    expect(returns.distribution).not.toHaveBeenCalled();
+    await runStudy();
     expect(await screen.findByText('Days studied')).toBeTruthy();
     expect(returns.distribution).toHaveBeenCalledTimes(1);
     expect(returns.distribution).toHaveBeenCalledWith({
@@ -164,6 +173,7 @@ describe('changing tabs in an instrument\'s place (T03)', () => {
     const { returns, backfill, providers } = world();
     const opened = await openChart(providers);
     await goTo(opened, 'Returns');
+    await runStudy();
     expect(await screen.findByText('Days studied')).toBeTruthy();
     await goTo(opened, 'Data');
     (await waitFor(() => opened.http.expectOne((request) => request.url === INSTRUMENT_DATA_URL))).flush(
@@ -176,7 +186,11 @@ describe('changing tabs in an instrument\'s place (T03)', () => {
     expect(reread.request.params.get('start_trading_date_ms')).toBe(String(Date.UTC(2026, 3, 20, 12)));
     reread.flush(dataReport([dataSession(0, 'ready')]));
 
+    // The window the study was run for has moved on: the tab waits for its own Run.
     await goTo(opened, 'Returns');
+    expect(await screen.findByRole('button', { name: 'Run the study' })).toBeTruthy();
+    expect(returns.distribution).toHaveBeenCalledTimes(1);
+    await runStudy();
     await waitFor(() => expect(returns.distribution).toHaveBeenCalledTimes(2));
     expect(returns.distribution).toHaveBeenLastCalledWith(
       expect.objectContaining({ fromMsUtc: Date.UTC(2026, 3, 20), toMsUtc: Date.UTC(2026, 4, 20) + 86_400_000 - 1 }),
@@ -194,6 +208,7 @@ describe('changing tabs in an instrument\'s place (T03)', () => {
     const { returns, providers } = world();
     const opened = await openChart(providers);
     await goTo(opened, 'Returns');
+    await runStudy();
     await screen.findByText('Days studied');
 
     // Half a date is never committed: the address and the study stay as they were.
@@ -217,6 +232,7 @@ describe('changing tabs in an instrument\'s place (T03)', () => {
     const first = await waitFor(() => opened.http.expectOne((request) => request.url === INSTRUMENT_DATA_URL));
 
     await goTo(opened, 'Returns');
+    await runStudy();
     await screen.findByText('Days studied');
     await goTo(opened, 'Data');
     // The first read is still open; the second visit asks nothing more for the same request.

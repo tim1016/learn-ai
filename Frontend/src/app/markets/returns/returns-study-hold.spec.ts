@@ -56,6 +56,17 @@ describe('ReturnsStudyHold', () => {
     expect(hold.get(query())).toBeDefined();
   });
 
+  it('says an instrument and window is held at any bin width, and not for another window or instrument', () => {
+    const hold = new ReturnsStudyHold();
+    hold.put(query({ binWidthPct: 1 }), study(null));
+
+    expect(hold.holdsScope('SPY', 1, 2)).toBe(true);
+    expect(hold.holdsScope('SPY', 1, 3)).toBe(false);
+    expect(hold.holdsScope('QQQ', 1, 2)).toBe(false);
+    hold.invalidate('SPY');
+    expect(hold.holdsScope('SPY', 1, 2)).toBe(false);
+  });
+
   it('forgets one instrument\'s studies when its lake changed, and keeps the others', () => {
     const hold = new ReturnsStudyHold();
     const settled = study(null);

@@ -39,6 +39,13 @@ const span = (symbol: string): SymbolCoverageSpan => ({
 });
 
 function configure(startingSymbol: string) {
+  const catalog = fakeTickerCatalog([{ symbol: 'SPY', name: 'SPDR', firstHeld: '2024-05-20', lastHeld: '2026-09-04' }]);
+  // Like the real resource, a re-read is `loading` until the lake answers it; the lake's answer is `answerCatalog`.
+  const view = catalog.view;
+  view.reload = () => {
+    view.reloadCount++;
+    view.loading.set(true);
+  };
   const handlers = new Map<string, (event: JobStreamEvent) => void>();
   const started: { payload: Record<string, unknown> }[] = [];
   const cancelled: string[] = [];
@@ -46,7 +53,7 @@ function configure(startingSymbol: string) {
   const symbol = signal(startingSymbol);
   TestBed.configureTestingModule({
     providers: [
-      provideFakeTickerCatalog(fakeTickerCatalog([{ symbol: 'SPY', name: 'SPDR', firstHeld: '2024-05-20', lastHeld: '2026-09-04' }])),
+      provideFakeTickerCatalog(catalog),
       provideFakeVendorCatalog(fakeVendorCatalog([vendor('SPY'), vendor('NVDA'), vendor('AMD')])),
       {
         provide: JobsService,
@@ -83,9 +90,19 @@ function configure(startingSymbol: string) {
     symbol,
     started,
     cancelled,
+    view,
     complete: async (job: string, covered: readonly string[]) => {
       lake.symbols = [span('SPY'), ...covered.map(span)];
       handlers.get(job)?.({ type: 'job.completed' });
+      await settle();
+    },
+    /** The lake answers the catalog's re-read with what it holds now. */
+    answerCatalog: async (held: readonly string[]) => {
+      view.pool.set([
+        { symbol: 'SPY', name: 'SPDR', firstHeld: '2024-05-20', lastHeld: '2026-09-04' },
+        ...held.map((symbol) => ({ symbol, name: symbol, firstHeld: '2024-08-06', lastHeld: '2026-09-04' })),
+      ]);
+      view.loading.set(false);
       await settle();
     },
   };
@@ -106,10 +123,16 @@ describe('InstrumentAdmissionService', () => {
     expect(started).toEqual([]);
   });
 
-  it('fills a listed instrument the lake does not hold, and opens it when the lake confirms the bars', async () => {
+  it('lands on a listed instrument the lake does not hold without starting a fill, and fills it when asked', async () => {
     const { admission, started, complete } = configure('NVDA');
     await settle();
 
+    // Opening the address is not the request: nothing was submitted.
+    expect(admission.state()).toMatchObject({ kind: 'unheld' });
+    expect(started).toEqual([]);
+
+    admission.fill();
+    await settle();
     expect(admission.state()).toMatchObject({ kind: 'filling', gate: { symbol: 'NVDA', phase: 'backfilling' } });
     expect(started).toHaveLength(1);
     expect(started[0].payload['spec']).toMatchObject({ symbols: ['NVDA'], price_adjustment_mode: MODE });
@@ -119,6 +142,69 @@ describe('InstrumentAdmissionService', () => {
     expect(admission.state()).toMatchObject({ kind: 'ready', row: { symbol: 'NVDA' } });
     // The catalog's own read has not caught up yet: it must not start a second fill.
     expect(started).toHaveLength(1);
+  });
+
+  it('asks for one fill however many times Fill is pressed while it runs', async () => {
+    const { admission, started } = configure('NVDA');
+    await settle();
+
+    admission.fill();
+    admission.fill();
+    await settle();
+    admission.fill();
+
+    expect(started).toHaveLength(1);
+  });
+
+  describe('while the lake catalog re-reads (A1)', () => {
+    it('keeps its own fill when the gate re-reads the catalog at the end of a job, so a fill that lands no bars says it failed, once', async () => {
+      const { admission, started, complete, answerCatalog, view } = configure('NVDA');
+      await settle();
+      admission.fill();
+      await settle();
+
+      // The job ends with the lake still holding nothing of NVDA. The gate re-reads the catalog to judge it.
+      await complete('job-1', []);
+      expect(view.reloadCount, 'the gate re-read the catalog').toBeGreaterThan(0);
+      expect(view.loading(), 'and that read has not answered').toBe(true);
+      expect(admission.state()).toMatchObject({ kind: 'fill-failed', gate: { symbol: 'NVDA', reason: 'backfill_empty' } });
+
+      await answerCatalog([]);
+
+      expect(admission.state()).toMatchObject({ kind: 'fill-failed', gate: { symbol: 'NVDA', reason: 'backfill_empty' } });
+      expect(started, 'a failed fill is not asked for again').toHaveLength(1);
+    });
+
+    it('opens the instrument when the fill lands bars, whether or not the catalog has answered its re-read', async () => {
+      const { admission, started, complete, answerCatalog } = configure('NVDA');
+      await settle();
+      admission.fill();
+      await settle();
+
+      await complete('job-1', ['NVDA']);
+      expect(admission.state()).toMatchObject({ kind: 'ready', row: { symbol: 'NVDA' } });
+
+      await answerCatalog(['NVDA']);
+      expect(admission.state()).toMatchObject({ kind: 'ready', row: { symbol: 'NVDA' } });
+      expect(started).toHaveLength(1);
+    });
+
+    it('does not restart a fill the person dismissed when the catalog re-reads', async () => {
+      const { admission, started, view, answerCatalog } = configure('NVDA');
+      await settle();
+      admission.fill();
+      await settle();
+      admission.dismiss();
+      await settle();
+      expect(admission.state()).toMatchObject({ kind: 'unheld' });
+
+      view.reload();
+      await settle();
+      await answerCatalog([]);
+
+      expect(admission.state()).toMatchObject({ kind: 'unheld' });
+      expect(started).toHaveLength(1);
+    });
   });
 
   it('is not an instrument at all when nothing lists it, and fills nothing', async () => {
@@ -132,6 +218,8 @@ describe('InstrumentAdmissionService', () => {
   describe('with another caller waiting on the same fill (T04)', () => {
     it('leaving does not cancel the other caller\'s fill, which still completes for it', async () => {
       const { admission, symbol, started, cancelled, complete } = configure('NVDA');
+      await settle();
+      admission.fill();
       await settle();
       const other = TestBed.runInInjectionContext(() => new CoverageGateController(() => MODE));
       const committed = vi.fn();
@@ -154,7 +242,9 @@ describe('InstrumentAdmissionService', () => {
     });
 
     it('stops the fill when it was the last caller waiting', async () => {
-      const { symbol, cancelled } = configure('NVDA');
+      const { admission, symbol, cancelled } = configure('NVDA');
+      await settle();
+      admission.fill();
       await settle();
 
       symbol.set('SPY');
@@ -165,15 +255,23 @@ describe('InstrumentAdmissionService', () => {
   });
 
   describe('when the place moves on while a fill runs', () => {
-    it('lets a completion for the old instrument open nothing, and opens the new one when it is confirmed', async () => {
+    it('lets a completion for the old instrument open nothing, and opens the new one only after it is asked for and confirmed', async () => {
       const { admission, symbol, started, cancelled, complete } = configure('NVDA');
+      await settle();
+      admission.fill();
       await settle();
 
       symbol.set('AMD');
       await settle();
+      // The new address is not a request: it lands unheld, and the old fill was let go.
+      expect(admission.state()).toMatchObject({ kind: 'unheld' });
+      expect(started).toHaveLength(1);
+      expect(cancelled).toEqual(['job-1']);
+
+      admission.fill();
+      await settle();
       expect(admission.state()).toMatchObject({ kind: 'filling', gate: { symbol: 'AMD' } });
       expect(started).toHaveLength(2);
-      expect(cancelled).toEqual(['job-1']);
 
       // NVDA's fill reports done after the place is on AMD.
       await complete('job-1', ['NVDA']);
@@ -183,8 +281,10 @@ describe('InstrumentAdmissionService', () => {
       expect(admission.state()).toMatchObject({ kind: 'ready', row: { symbol: 'AMD' } });
     });
 
-    it('asks for the fill again when the place comes back to an instrument whose fill it had let go', async () => {
+    it('does not ask for the fill again when the place comes back to an instrument whose fill it had let go', async () => {
       const { admission, symbol, started } = configure('NVDA');
+      await settle();
+      admission.fill();
       await settle();
       symbol.set('AMD');
       await settle();
@@ -192,8 +292,8 @@ describe('InstrumentAdmissionService', () => {
       symbol.set('NVDA');
       await settle();
 
-      expect(admission.state()).toMatchObject({ kind: 'filling', gate: { symbol: 'NVDA' } });
-      expect(started).toHaveLength(3);
+      expect(admission.state()).toMatchObject({ kind: 'unheld' });
+      expect(started).toHaveLength(1);
     });
   });
 });

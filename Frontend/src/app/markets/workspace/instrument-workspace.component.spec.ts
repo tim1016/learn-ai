@@ -588,11 +588,18 @@ describe('an instrument\'s place', () => {
   });
 
   describe('an instrument the lake does not hold yet (T04)', () => {
-    it('fills it through the shared gate, says so, and opens it when the lake confirms the bars', async () => {
+    it('lands on it without fetching anything, says so, and fills only when Fill is pressed, opening it when the lake confirms the bars', async () => {
       const pickers = world();
       pickers.coverage.holdNext = true;
       const opened = await open(`/markets/NVDA/chart?${WINDOW_QUERY}`, pickers);
 
+      // An address is not a request: nothing is submitted, and the page says what a click would do.
+      expect(await screen.findByText(/The lake holds no bars for NVDA/)).toBeTruthy();
+      expect(screen.getByText(/Nothing is fetched until you ask/)).toBeTruthy();
+      expect(pickers.coverage.ensureCalls).toEqual([]);
+      await expectNoChartRequest(opened);
+
+      await userEvent.click(screen.getByRole('button', { name: 'Fill history, then open' }));
       expect(await screen.findByText(/NVDA is not in the lake\. Its trade bars are being filled/)).toBeTruthy();
       expect(pickers.coverage.ensureCalls).toEqual([{ symbol: 'NVDA', mode: 'polygon_split_adjusted' }]);
       await expectNoChartRequest(opened);
@@ -602,26 +609,45 @@ describe('an instrument\'s place', () => {
       expect(request.request.body['ticker']).toBe('NVDA');
     });
 
+    it('starts no fill when a reload, Back or an old link lands on it again', async () => {
+      const pickers = world();
+      const opened = await open(`/markets/NVDA/chart?${WINDOW_QUERY}`, pickers);
+      await screen.findByText(/The lake holds no bars for NVDA/);
+
+      // Another address, then Back to it: the same landing, the same silence.
+      await opened.router.navigateByUrl(`/markets/QQQ/chart?${WINDOW_QUERY}`);
+      await chartRequests(opened.http, 1).then(([request]) => request.flush(chartResponse(400)));
+      await opened.router.navigateByUrl(`/markets/NVDA/chart?${WINDOW_QUERY}`);
+      expect(await screen.findByText(/The lake holds no bars for NVDA/)).toBeTruthy();
+
+      expect(pickers.coverage.ensureCalls).toEqual([]);
+    });
+
     it('lets go of the old fill when the address moves on, so its late completion opens nothing', async () => {
       const pickers = world();
       pickers.coverage.holdNext = true;
       const opened = await open(`/markets/NVDA/chart?${WINDOW_QUERY}`, pickers);
+      await userEvent.click(await screen.findByRole('button', { name: 'Fill history, then open' }));
       await screen.findByText(/NVDA is not in the lake/);
-      pickers.coverage.holdNext = true;
 
       opened.context().switchSymbol('AMD');
-      await screen.findByText(/AMD is not in the lake/);
-      const [nvda, amd] = pickers.coverage.held;
+      // The new address lands unheld: the move asked for nothing.
+      await screen.findByText(/The lake holds no bars for AMD/);
+      const [nvda] = pickers.coverage.held;
       expect(nvda.cancelCalls).toBe(1);
+      expect(pickers.coverage.ensureCalls.map((call) => call.symbol)).toEqual(['NVDA']);
 
       // NVDA's fill completes after the place moved to AMD.
       nvda.resolve(true);
       await new Promise((resolve) => setTimeout(resolve));
       opened.harness.fixture.detectChanges();
-      expect(screen.getByText(/AMD is not in the lake/)).toBeTruthy();
+      expect(screen.getByText(/The lake holds no bars for AMD/)).toBeTruthy();
       await expectNoChartRequest(opened);
 
-      amd.resolve(true);
+      pickers.coverage.holdNext = true;
+      await userEvent.click(screen.getByRole('button', { name: 'Fill history, then open' }));
+      await screen.findByText(/AMD is not in the lake/);
+      pickers.coverage.held[1].resolve(true);
       const [request] = await chartRequests(opened.http, 1);
       expect(request.request.body['ticker']).toBe('AMD');
     });
@@ -630,6 +656,7 @@ describe('an instrument\'s place', () => {
       const pickers = world();
       pickers.coverage.ensureResults.push(false);
       await open(`/markets/NVDA/chart?${WINDOW_QUERY}`, pickers);
+      await userEvent.click(await screen.findByRole('button', { name: 'Fill history, then open' }));
 
       expect(await screen.findByText(/NVDA could not be filled/)).toBeTruthy();
       expect(screen.getByText(/Backfill Failed: The backfill job failed\./)).toBeTruthy();

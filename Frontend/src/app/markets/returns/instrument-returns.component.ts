@@ -18,7 +18,9 @@ const DAILY_TIMEFRAME = '1d';
  * runs, with the committed window and the choice left as they are; moving to
  * the daily timeframe is the reader's own explicit action. It never runs on
  * the timeframe it was not asked for, and the session setting does not change
- * it either, which the tab says.
+ * it either, which the tab says. The study fetches the sessions the lake lacks
+ * before it measures them, so opening this tab runs nothing: it runs when the
+ * person presses Run for the committed window.
  */
 @Component({
   selector: 'app-instrument-returns',

@@ -248,7 +248,7 @@ function admissionState(symbol: string, admission: InstrumentAdmission): Workspa
       return {
         kind: 'idle',
         happened: `The lake holds no bars for ${symbol}.`,
-        next: 'Fill its history, and it opens here when the lake confirms the bars.',
+        next: 'Nothing is fetched until you ask. Fill its history, and it opens here when the lake confirms the bars.',
         actions: [{ id: 'fill', label: 'Fill history, then open' }, BACK_TO_MARKETS],
       };
     case 'filling':

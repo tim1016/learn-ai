@@ -9,6 +9,23 @@
   margin: 0;
 }
 
+.rd__idle {
+  display: grid;
+  gap: 0.5rem;
+  justify-items: start;
+}
+
+.rd__run {
+  background: rgba(66, 165, 245, 0.25);
+  border: 1px solid rgba(66, 165, 245, 0.6);
+  border-radius: 0.5rem;
+  padding: 0.4rem 0.9rem;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  font-size: 0.875rem;
+}
+
 .rd__error {
   border: 1px solid rgba(239, 68, 68, 0.4);
   border-radius: 0.5rem;
