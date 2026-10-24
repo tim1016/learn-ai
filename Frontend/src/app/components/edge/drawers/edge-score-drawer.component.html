@@ -4,12 +4,14 @@
     <header class="esd-header">
       <div>
         <h2 class="esd-eyebrow">EDGE SCORE INSPECTOR</h2>
-        <div class="esd-title">{{ dateLabel() }} · SPY · {{ action() }}</div>
+        <div class="esd-title">{{ dateMs() | timestampDisplay:'date-et' }} · SPY · {{ action() }}</div>
       </div>
       <button class="esd-close" (click)="closed.emit()" aria-label="Close inspector">✕</button>
     </header>
 
     <div class="esd-body">
+      <app-sample-data-banner [provenance]="data().provenance" />
+
       <section class="esd-composite" [style.borderLeftColor]="actionColor()">
         <div class="esd-row-between">
           <span class="esd-eyebrow">COMPOSITE EDGE SCORE</span>

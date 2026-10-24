@@ -20,6 +20,8 @@ import { SymbolPickerComponent } from '../../shared/symbol-picker/symbol-picker.
 import { DEFAULT_ADJUSTMENT_MODE } from '../../shared/ticker-catalog';
 import type { PriceAdjustmentMode } from '../../shared/data-lake';
 import { RunDockComponent } from '../../shared/run-dock/run-dock.component';
+import { menuLabelFor } from '../../shell/app-menu';
+import { CurrentUrlService } from '../../shell/current-url.service';
 import {
   RUN_DOCK_SOURCE,
   RUN_DOCK_STORAGE_KEY,
@@ -178,6 +180,13 @@ export class DataLabComponent {
   private readonly rangePresetsService = inject(DataLabRangePresetsService);
   readonly store = inject(DataLabWorkspaceStore);
 
+  /** The page is titled by the menu entry that leads to it (PRD #3490 R01):
+   *  Stocks, or Return Distribution on its own study. */
+  private readonly menuNode = inject(CurrentUrlService).menuNode;
+  protected readonly pageTitle = computed(
+    () => this.menuNode()?.item.title ?? menuLabelFor('/data-lab'),
+  );
+
   readonly barTimeframes = BAR_TIMEFRAMES;
 
   // ── Legacy URL ingress ─────────────────────────────────────
@@ -214,17 +223,18 @@ export class DataLabComponent {
    *  NavigationEnd re-check would re-navigate to the same URL forever. */
   private ingressApplied = false;
 
-  /** If the current URL carries legacy Data Lab query state, resolve it and
-   *  replaceState-navigate to the canonical child route. URL state populates
-   *  and commits the workspace; the fetch decision belongs to Explore's
-   *  mount auto-load, not to the ingress itself.
+  /** If the current URL carries legacy Data Lab query state, resolve it,
+   *  populate and commit the workspace from it, and name what it ignored in
+   *  the migration banner. The fetch decision belongs to Explore's mount
+   *  auto-load, not to the ingress itself.
    *
-   *  A child-route redirect rewrites `/data-lab?mode=build` to
-   *  `/data-lab/explore?mode=build` before this shell activates, so the
-   *  trigger keys on the legacy `mode` marker, the legacy parent path, or a
-   *  canonical child URL carrying legacy scope keys — that last shape is
-   *  what a `/data-quality?ticker=…` bookmark looks like AFTER Angular's
-   *  redirect preserves its query string onto `/data-lab/validate`.
+   *  The router owns the path: the legacy addresses (`/data-lab`,
+   *  `/data-quality`) redirect straight to the child their `mode` names, query
+   *  intact (`redirectLegacyDataLab`), and on a canonical child the path wins.
+   *  This never navigates. The trigger keys on a `mode` marker, the legacy
+   *  parent path, or a canonical child URL carrying legacy scope keys — that
+   *  last shape is what a `/data-quality?ticker=…` bookmark looks like once
+   *  redirected.
    *
    *  Public so the ingress spec can drive it against a stubbed
    *  `router.url`. */
@@ -250,10 +260,6 @@ export class DataLabComponent {
     // Set unconditionally: a valid legacy URL must clear warnings left by an
     // earlier invalid one, not layer over them.
     this.ingressWarnings.set(resolution.warnings);
-    this.router.navigate([resolution.route], {
-      queryParams: resolution.params,
-      replaceUrl: true,
-    });
   }
 
   /** Apply surviving legacy scope params to the workspace draft and commit.

@@ -117,10 +117,11 @@ describe('AlpacaAccountListPageComponent', () => {
     await renderList();
 
     // #2183: the "Broker desk" eyebrow line above the page heading is
-    // retired — the single "Alpaca" heading carries the eyebrow look itself.
-    // #2187: the list's own second heading is retired with it, so "Alpaca"
+    // retired — the single heading carries the eyebrow look itself, and
+    // names the page as the menu does (PRD #3490 R01).
+    // #2187: the list's own second heading is retired with it, so "Accounts"
     // is the only heading the page renders.
-    expect(screen.getByRole('heading', { name: 'Alpaca' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Accounts' })).toBeTruthy();
     expect(screen.queryByText('Broker desk')).toBeNull();
     expect(screen.getAllByRole('heading')).toHaveLength(1);
     expect(screen.queryByRole('heading', { name: /Choose an account/ })).toBeNull();

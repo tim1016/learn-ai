@@ -44,6 +44,11 @@
   flex: 1 1 auto;
 }
 
+// The trail back to the page's group (PRD #3490 R01).
+app-breadcrumb {
+  margin-bottom: var(--space-1);
+}
+
 .page-title {
   @include eyebrow-heading;
   margin: 0;

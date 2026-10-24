@@ -28,12 +28,13 @@ import respx
 from app.lean_sidecar.trading_calendar import expected_sessions
 from app.research.config import ResearchConfig
 from app.research.features.ta_features import TechnicalFeatures
+from app.research.lake_study import cache_key
 from app.research.runner import run_feature_research
 from app.research.study_inputs import StudyInputRefusal, admit_minute_inputs, bars_as_rows, fold_minute_bars
 from app.research.target import compute_forward_log_return
 from app.services.feature_study_service import (
     FeatureStudyParams,
-    cache_params,
+    feature_study,
     feature_study_identity,
     serialize_feature_report,
 )
@@ -70,6 +71,12 @@ def lake_rows(params: FeatureStudyParams) -> tuple[list[dict], Any]:
     identity = feature_study_identity(params)
     admitted = admit_minute_inputs(identity.inputs, requester="test", now_ms=NOW_MS)
     return bars_as_rows(fold_minute_bars(admitted.window_bars, identity.bar_minutes)), admitted
+
+
+def cache_key_of(params: FeatureStudyParams, identity: Any, admitted: Any) -> dict[str, Any]:
+    """The key the study's result is cached under, as the shared run builds it."""
+    run = feature_study(params)
+    return cache_key(identity, admitted, calculation_version=run.calculation_version, extra=run.cache_extra)
 
 
 def vendor_rows(tape: dict, *, bar_minutes: int = 1) -> list[dict]:
@@ -212,7 +219,9 @@ def test_regular_hours_is_a_different_sample_and_a_different_cache_identity(lake
 
     assert len(regular_rows) < len(extended_rows), "extended hours add pre-market and after-hours bars"
     assert extended_identity.digest() != regular_identity.digest()
-    assert cache_params(extended_identity, extended, "rsi_14") != cache_params(regular_identity, regular, "rsi_14")
+    assert cache_key_of(study(session="extended"), extended_identity, extended) != cache_key_of(
+        study(session="regular"), regular_identity, regular
+    )
     assert extended_identity.inputs.session_policy == "extended", "the default is the session the study has always computed on"
 
 

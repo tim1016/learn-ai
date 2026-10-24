@@ -69,6 +69,7 @@ from app.research.runs.hashing import hash_payload
 from app.research.signal.config import SignalConfig
 from app.research.signal.engine import run_signal_engine
 from app.research.study_inputs import (
+    FOLD_RULE,
     AdjustmentMode,
     AdmittedMinuteInputs,
     MinuteWindowIdentity,
@@ -80,7 +81,6 @@ from app.research.study_inputs import (
     fold_minute_bars,
 )
 from app.research.target import DEFAULT_NON_NAN_RATIO_THRESHOLD
-from app.services.feature_study_service import FOLD_RULE
 
 logger = logging.getLogger(__name__)
 

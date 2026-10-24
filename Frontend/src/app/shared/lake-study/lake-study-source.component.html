@@ -1,0 +1,32 @@
+@if (refusedState(); as state) {
+  <app-workspace-state-block [state]="state" />
+
+  <div class="lake-refusal">
+    @for (line of countLines(); track line.label) {
+      <p class="lake-refusal__counts"><strong>{{ line.label }}</strong> {{ line.text }}</p>
+    }
+    @if (refusal(); as refused) {
+      @if (refused.sessions.length > 0) {
+        <ul class="lake-refusal__sessions">
+          @for (session of refused.sessions; track session.tradingDateMs + session.group) {
+            <li>
+              <app-timestamp-display [value]="session.tradingDateMs" mode="date-et" granularity="date" />
+              <span>{{ session.group }}</span>
+              <span>{{ outcomeLabel(session.outcome) }}</span>
+              <span class="lake-refusal__why">{{ session.reason }}</span>
+            </li>
+          }
+        </ul>
+        @if (omitted() > 0) {
+          <p class="lake-refusal__more">and {{ omitted() }} more.</p>
+        }
+      }
+    }
+  </div>
+}
+
+@if (provenance(); as line) {
+  <app-workspace-data-source [provenance]="line" windowMode="date-et" />
+} @else if (refusedState() === null) {
+  <app-workspace-data-source [provenance]="null" />
+}

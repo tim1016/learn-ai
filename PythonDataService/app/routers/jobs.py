@@ -41,9 +41,11 @@ from app.research.batch_runner import (
     CrossSectionalReport,
     run_cross_sectional_study,
 )
+from app.research.lake_study import SESSION_POLICY_FOR_REQUEST
 from app.schemas.engine_backtest import EngineBacktestRequest
 from app.schemas.ticker_request import (
     MultiTickerRequest,
+    Session,
     TickerRequest,
 )
 from app.services.dataset_service import RunCancelledError
@@ -204,17 +206,19 @@ class FeatureResearchJobRequest(_CamelCaseTickerRequest):
     the study's 15-minute target are accepted (1, 3, 5, 15); other sizes are
     refused with a reason (``app.services.feature_study_service``).
 
-    ``session`` is the base request's legacy label (the browser sends
-    ``"rth"``) and has never been read; it stays inert so no caller's sample
-    changes silently. ``session_policy`` is the real control and defaults to
-    the session the study has always computed on: ``extended``, 04:00-20:00
-    ET. ``regular`` is opt-in.
+    **Default override**: ``session="extended"``. ``session`` is the one
+    control for which bars the study computes on: ``extended`` is every bar the
+    provider served, 04:00-20:00 ET, which is what the study has always read;
+    ``rth`` is the scheduled session. The base default (``rth``) would have
+    silently moved every caller that omits it onto a different sample (D02).
     """
+
+    # Override base default — preserves the session the study has always computed on.
+    session: Session = "extended"
 
     job_id: str = Field(..., min_length=1)
     feature_name: str = Field(..., min_length=1)
     force: bool = False
-    session_policy: Literal["extended", "regular"] = "extended"
 
 
 class SignalEngineJobRequest(_CamelCaseTickerRequest):
@@ -740,7 +744,7 @@ async def start_feature_research_job(req: FeatureResearchJobRequest) -> dict:
         to_date=date.fromisoformat(req.to_date),
         timespan=req.timespan,
         multiplier=req.multiplier,
-        session_policy=req.session_policy,
+        session_policy=SESSION_POLICY_FOR_REQUEST[req.session],
     )
 
     def work(emit: ProgressEmitter, cancel) -> dict | None:

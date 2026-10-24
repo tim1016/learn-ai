@@ -13005,6 +13005,8 @@ export interface components {
             request_id: string;
             /** Requester */
             requester?: string | null;
+            /** Require Final Capture For */
+            require_final_capture_for?: ("regular" | "extended") | null;
             /**
              * Resolution
              * @default minute
@@ -14927,11 +14929,11 @@ export interface components {
          *     the study's 15-minute target are accepted (1, 3, 5, 15); other sizes are
          *     refused with a reason (``app.services.feature_study_service``).
          *
-         *     ``session`` is the base request's legacy label (the browser sends
-         *     ``"rth"``) and has never been read; it stays inert so no caller's sample
-         *     changes silently. ``session_policy`` is the real control and defaults to
-         *     the session the study has always computed on: ``extended``, 04:00-20:00
-         *     ET. ``regular`` is opt-in.
+         *     **Default override**: ``session="extended"``. ``session`` is the one
+         *     control for which bars the study computes on: ``extended`` is every bar the
+         *     provider served, 04:00-20:00 ET, which is what the study has always read;
+         *     ``rth`` is the scheduled session. The base default (``rth``) would have
+         *     silently moved every caller that omits it onto a different sample (D02).
          */
         FeatureResearchJobRequest: {
             /** Featurename */
@@ -14952,16 +14954,10 @@ export interface components {
             multiplier?: number;
             /**
              * Session
-             * @default rth
-             * @enum {string}
-             */
-            session?: "rth" | "extended";
-            /**
-             * Sessionpolicy
              * @default extended
              * @enum {string}
              */
-            sessionPolicy?: "extended" | "regular";
+            session?: "rth" | "extended";
             /** Symbol */
             symbol: string;
             /**

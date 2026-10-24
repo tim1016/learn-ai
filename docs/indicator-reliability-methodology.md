@@ -675,11 +675,11 @@ below still renders.
 
 ### 8.1 Explicit non-goals (not implemented by design)
 
-- **Strategy Pre-flight backend.** The "Send to Pre-flight" CTA is rendered
-  disabled. A companion backend (route + page + persistence) is a prerequisite
-  before wiring this up.
-- **Save-verdict persistence.** The "Save to tested indicators" CTA is
-  rendered disabled. Requires a database table, a route to save it, and a
+- **Strategy Pre-flight backend.** The page offers no "Send to Pre-flight"
+  action. A companion backend (route + page + persistence) is a prerequisite
+  before adding one.
+- **Save-verdict persistence.** The page offers no "Save to tested
+  indicators" action. Requires a database table, a route to save it, and a
   tested-indicators index page to land together.
 
 ### 8.2 Known design compromises / minor bugs

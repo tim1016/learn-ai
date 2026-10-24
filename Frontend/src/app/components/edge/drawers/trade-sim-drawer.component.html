@@ -12,6 +12,8 @@
     </header>
 
     <div class="tsd-body">
+      <app-sample-data-banner [provenance]="data().provenance" />
+
       <section class="tsd-section">
         <div class="tsd-row-between tsd-mb6">
           <h3 class="tsd-eyebrow">EQUITY · NET OF COSTS</h3>
@@ -62,7 +64,7 @@
             @let net = netOf(t);
             <div class="tsd-ledger-row" role="row">
               <span class="muted">{{ t.n }}</span>
-              <span>{{ t.ts }}</span>
+              <span>{{ t.ts | timestampDisplay:'date-et' }}</span>
               <span class="side" [style.color]="sideColor(t.side)">{{ t.side }}</span>
               <span class="r">{{ t.entry.toFixed(2) }}</span>
               <span class="r">{{ t.exit.toFixed(2) }}</span>

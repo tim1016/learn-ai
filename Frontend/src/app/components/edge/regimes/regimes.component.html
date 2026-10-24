@@ -1,4 +1,6 @@
 <section class="route">
+  <app-sample-data-banner [provenance]="data.provenance" />
+
   <header class="route-toolbar">
     <div class="toolbar-spacer"></div>
     <button class="score-pill" type="button" (click)="scoreOpen.set(true)">
@@ -12,19 +14,9 @@
   <!-- Form -->
   <div class="form-card">
     <div>
-      <div class="eyebrow mb4">SYMBOL · STATES · ALGO</div>
+      <div class="eyebrow mb4">STATES</div>
       <div class="form-row">
-        <select class="sel mono">
-          <option>3 states</option><option>2 states</option>
-          <option>4 states</option><option>5 states</option>
-        </select>
-        <div class="seg">
-          @for (a of ['hmm','kmeans','compare']; track a) {
-            <button type="button" class="seg-btn algo"
-                    [class.on]="algo() === a"
-                    (click)="setAlgo($any(a))">{{ a }}</button>
-          }
-        </div>
+        <span class="states-fixed">3 states</span>
       </div>
     </div>
 
@@ -55,13 +47,8 @@
 
   <!-- Price chart -->
   <div class="chart-card">
-    @if (algo() === 'compare') {
-      <div class="compare-meta">
-        <span>HMM (sticky) ↑</span><span>·</span><span>K-means (flickering) ↓</span>
-      </div>
-    }
     <app-edge-regime-price-chart
-      [width]="1340" [height]="priceChartHeight()"
+      [width]="1340" [height]="260"
       [data]="data" [viewMode]="viewMode()"
       [hoverIdx]="hoverIdx()"
       (hover)="hoverIdx.set($event)" />
@@ -75,7 +62,7 @@
 
     <div class="bottom-card">
       <div class="eyebrow mb4">CENTROID FEATURE RADAR</div>
-      <app-edge-regime-radar [size]="260" [axes]="radarAxes" [regimeData]="radarData" />
+      <app-edge-regime-radar [size]="260" [axes]="radarAxes" [regimeData]="data.regimeCentroids" />
     </div>
 
     <div class="bottom-card">

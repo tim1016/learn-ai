@@ -404,4 +404,12 @@ describe('DataLakeObservatoryComponent', () => {
 
     expect(results.violations).toEqual([]);
   });
+
+  it('opens the pipeline documentation from its header in a new tab, so the lake view stays as it is', async () => {
+    await renderObservatory();
+
+    const link = screen.getByRole('link', { name: 'How this works' });
+    expect(link.getAttribute('href')).toBe('/data-quality-docs');
+    expect(link.getAttribute('target')).toBe('_blank');
+  });
 });

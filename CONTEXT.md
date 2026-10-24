@@ -1219,22 +1219,32 @@ for the account pills it hosts.
   the window title, and any user-facing reference to the application itself.
   _Avoid_: Market Scope (the earlier name), quant lab, quant/lab.
 - **App menu** — the single canonical statement of the application's information
-  architecture: ordered groups, each with ordered items, the first of which is
-  the group's default. Every navigation surface projects from it; there is no
-  second navigation structure. It names places, never individual accounts: an
-  account is reached through the **account list** or an **account pill**.
-  _Avoid_: nav config, route list, sitemap.
+  architecture: six ordered groups (Markets, Research, Signal strategies,
+  Options setups, Accounts, Operations), each with ordered items, the first of
+  which is the group's default. Every navigation surface projects from it; there
+  is no second navigation structure. It names places, never individual accounts:
+  an account is reached through the **account list** or an **account pill**.
+  Documents are not in it: the **help index** lists them.
+  _Avoid_: nav config, route list, sitemap, Documentation menu (retired 2026-10-23).
 - **Menubar** — the top-bar navigation row projected from the app menu. Group
   labels open their items and never navigate themselves. It replaced the left
   **rail** (retired), and is distinct from the **transaction rail**, the
   per-transaction station pipeline in a bot page's order records.
 - **Active menu node** — the single app-menu node one URL resolves to, by longest
   match. It is the sole resolver behind menubar highlighting and, outside an
-  account workspace, the window title, which is why those two can never
-  disagree. Inside a workspace the menubar highlights Accounts and the title is
-  the workspace tab — or the bot's name on a bot's page — followed by the
-  account name ("Activity · Paper"), so two windows on different accounts are
-  told apart.
+  account workspace, the window title (`Page · Group`, such as "Options Backtest ·
+  Options setups"), which is why those two can never disagree. A page the menu
+  does not list still has a node when its group owns it (an options evidence
+  page). A served document has none, and neither has an address no page answers.
+  Inside a workspace the menubar highlights Accounts and the title is the
+  workspace tab — or the bot's name on a bot's page — followed by the account
+  name ("Activity · Paper"), so two windows on different accounts are told apart.
+- **Help index** — the top bar's "?": every served document, opening in a new
+  browser tab. It is the only way to a document from the shell; a page's
+  "How this works" link opens the one that explains it.
+- **Not-found page** — where an address no page answers ends, at that address,
+  saying no page is there and leading back to Markets. It never opens a default
+  page in place of the one asked for.
 - **Account pill** — one per account, in the top bar on every route: its
   server-authored mode word (Live, Paper, Shadow), outlined in its **lane
   colour**, with its name in the accessible name and tooltip. It is the
@@ -1597,6 +1607,39 @@ How an operator moves around one broker account's pages. The account, not the pa
   Clerk receipt, led by that receipt's custody timeline. It reads a receipt; it
   never re-derives one.
   _Avoid_: evidence modal, receipt viewer.
+
+## Places (resolved 2026-10-23)
+
+**Lineage: neutral.**
+
+Decision record: ADR 0084, which extends ADR 0064. A **place** is where the owner
+works: it is addressed by its URL alone, keeps its identity across the tabs inside
+it, highlights its menu group on every page of it, and fails in place when the
+thing named does not exist. The account (see Account workspace) was the first;
+these are the others.
+
+- **Instrument place** — one symbol, opened from Markets, with its tabs: Chart,
+  Returns, Options and Data. Its identity is the symbol, not a page that happens to
+  show it. Build dataset is an action on it, not a tab.
+  _Avoid_: stock page, ticker page, symbol workspace.
+- **Signal strategy** — one registry-selected Signal Program as a place, with its
+  tabs: Overview, Define, Explore, Golden and Proof. Its identity is the registry
+  key; the exact program version, symbol and parameters identify evidence inside
+  it. A registered program that trades options is still a signal strategy.
+  _Avoid_: strategy (alone, when an options setup could be meant), algo, bot (a bot
+  is a deployed run).
+- **Options setup** — one saved setup (see Options Backtest) as a place, with its
+  tabs: Overview, Define, Explore and Golden. The saved name addresses the current
+  draft; an approved version is addressed by its Golden Options ID and exact
+  setup hash, and a run by its run ID. Setups and signal strategies are told apart
+  by strategy model (timed option legs replayed from rules, against a signal
+  decision stream), never by the asset traded.
+  _Avoid_: options strategy, option signal.
+- **Operations** — the group for the machinery under the research: the data lake,
+  the option archive, backups, math checks (the golden fixtures) and data checks
+  (the TradingView comparison, data divergence and strategy pre-flight). It holds
+  inspections and explicit jobs; opening it starts none.
+  _Avoid_: Admin, Tools, Settings (an account's Settings is its own tab).
 
 ## Account money map (resolved 2026-09-28)
 

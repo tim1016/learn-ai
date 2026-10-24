@@ -7,6 +7,7 @@ import {
 } from '@angular/core';
 import { SlicePipe } from '@angular/common';
 import { GoldenFixturesService } from '../../services/golden-fixtures.service';
+import { BreadcrumbComponent } from '../../shared/breadcrumb/breadcrumb.component';
 import type { FixtureSummary } from '../../services/golden-fixtures.types';
 import {
   CATEGORY_LABELS,
@@ -48,7 +49,7 @@ function badgeFor(f: FixtureSummary): BadgeLevel {
   templateUrl: './golden-fixtures-catalog.component.html',
   styleUrl: './golden-fixtures-catalog.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [SlicePipe],
+  imports: [BreadcrumbComponent, SlicePipe],
 })
 export class GoldenFixturesCatalogComponent {
   private readonly svc = inject(GoldenFixturesService);

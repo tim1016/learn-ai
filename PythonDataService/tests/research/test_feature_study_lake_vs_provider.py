@@ -8,10 +8,15 @@ module is the receipt for what that move changes, case by case. Both paths read 
 * the **lake path** is the real admission — vendor HTTP, ``ensure_data``, the lake writer, committed-byte admission,
   the reader — and the study's fold.
 
-Each case records changed timestamps, prices, precision, counts and derived outputs (every feature's values, the
-mean IC, the forward-target validity), and names the cause in the reconcile taxonomy (``timestamp``, ``warmup``,
-``precision``, ``off-by-one``, ``data-quality``). A case that moves nothing says so by asserting zero. Unexplained drift
-fails here; an *intentional* divergence is the owner's decision (D02) and is listed in the PR.
+Each case records changed timestamps, prices, counts and derived outputs (every feature's values, the mean IC, the
+forward-target validity), and names the cause in the reconcile taxonomy (``timestamp``, ``warmup``, ``precision``,
+``off-by-one``, ``data-quality``). A case that moves nothing says so by asserting zero. Unexplained drift fails here; an
+*intentional* divergence is the owner's decision (D02) and is listed in the PR.
+
+The lake's 1/10,000 price grid is ``data-quality``, never ``precision``: it changes the input data, and ``precision``
+is floating-point accumulation. A tolerance may loosen only for the latter, so each output this divergence moves is
+pinned at its *measured* magnitude (``test_prices_finer_than_the_lake_grid...``), with a stated margin, at three price
+levels, because the movement of an indicator such as RSI depends on the price it is computed at.
 
 Not provable offline: that Polygon's own N-minute aggregates equal a fold of its minute aggregates. Cases that fold use
 an independent reference for the vendor side (``vendor_fold``); the equivalence with the live API is an assumption of
@@ -23,24 +28,33 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date
+from pathlib import Path
 
 import numpy as np
 import pytest
 import respx
 from polygon.rest.models import Agg
 
-from app.lean_sidecar.trading_calendar import expected_sessions
+from app.data_lake.admission import read_committed_bytes
+from app.data_lake.capture_finality import VENDOR_DELAY_MS, capture_final_ms
+from app.engine.data.lean_format import LeanMinuteDataReader
+from app.engine.data.policy_store import resolve_data_roots
+from app.lean_sidecar.trading_calendar import expected_sessions, session_close_ms_utc
 from app.research.config import ResearchConfig
 from app.research.features.ta_features import TechnicalFeatures
 from app.research.runner import run_feature_research
 from app.research.study_inputs import StudyInputRefusal, admit_minute_inputs, bars_as_rows, fold_minute_bars
 from app.services.feature_study_service import FeatureStudyParams, feature_study_identity
 from app.services.polygon_client import PolygonClientService
-from tests._helpers.fake_lake_catalog import install_fake_catalog, mock_launcher, point_lake_writer_at_tmp
+from tests._helpers.fake_lake_catalog import FakeCatalog, install_fake_catalog, mock_launcher, point_lake_writer_at_tmp
+from tests._helpers.lake_study import commit_bars, corrected_day, lake_file
 from tests._helpers.pinned_vendor import VendorBar, VendorCalls, mock_vendor, scaled, vendor_history
 
 FEATURES = ["momentum_5m", "rsi_14", "realized_vol_30", "volume_zscore", "macd_signal"]
 NOW_MS = 1_735_689_600_000  # 2025-01-01
+
+#: The lake writer rounds half-up to 1/10,000 (``lean_writer.to_deci_cent``): a price moves by at most half of it.
+HALF_GRID = 5e-5
 
 #: 2024-03-10 is the spring-forward Sunday.
 DST_WINDOW = expected_sessions(date(2024, 3, 4), date(2024, 3, 15))
@@ -51,8 +65,8 @@ HALF_DAY_WINDOW = expected_sessions(date(2024, 7, 1), date(2024, 7, 12))
 DENSE = {"regular_keep": 0.995, "extended_keep": 0.92}
 
 
-def tape_for(window: list[date], **options: object) -> dict[date, list[VendorBar]]:
-    return vendor_history(window, seed=11, start_price=150.0, **{**DENSE, **options})  # type: ignore[arg-type]
+def tape_for(window: list[date], *, start_price: float = 150.0, **options: object) -> dict[date, list[VendorBar]]:
+    return vendor_history(window, seed=11, start_price=start_price, **{**DENSE, **options})  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +123,19 @@ def lake_rows(window: list[date], *, bar_minutes: int = 1, session: str = "exten
     return bars_as_rows(fold_minute_bars(admitted.window_bars, identity.bar_minutes))
 
 
+def held_rows(world: World, window: list[date]) -> list[dict]:
+    """What the lake holds for ``window`` as committed, read with no admission pass and no refresh in front of it."""
+    reader = LeanMinuteDataReader(resolve_data_roots(source="polygon", adjusted=True), session="extended")
+    bars = [
+        bar
+        for day in window
+        for bar in reader.parse_day_zip(
+            read_committed_bytes(lake_file(world.lake, "polygon_split_adjusted", day)), "SPY", day
+        )
+    ]
+    return bars_as_rows(fold_minute_bars(bars, 1))
+
+
 # ---------------------------------------------------------------------------
 # The comparison
 # ---------------------------------------------------------------------------
@@ -136,17 +163,18 @@ class Comparison:
 
     @property
     def causes(self) -> list[str]:
-        """The reconcile taxonomy's reading of what moved. Rules, not judgement: a count or a magnitude decides."""
-        found: list[str] = []
-        if self.timestamps_changed:
-            found.append("data-quality")  # bars present on one side only: the input itself differs
-        if self.prices_changed and self.max_price_diff <= 5e-5 + 1e-9:
-            found.append("precision")  # at most half of the lake's 1/10,000 grid
-        elif self.prices_changed:
-            found.append("data-quality")
-        if self.volume_changed:
-            found.append("data-quality")
-        return list(dict.fromkeys(found))
+        """The reconcile taxonomy's reading of what moved. Rules, not judgement: a count decides.
+
+        Every input that differs between the paths is ``data-quality``: a bar on one side only, a price, a volume.
+        ``precision`` is floating-point accumulation, and nothing here accumulates: a lake price is the exact decimal
+        the writer encoded, converted to the nearest float once.
+        """
+        return ["data-quality"] if self.timestamps_changed or self.prices_changed or self.volume_changed else []
+
+    @property
+    def quantization_only(self) -> bool:
+        """Every price that moved moved by at most half of the lake's 1/10,000 grid: input quantization, not a new tape."""
+        return self.prices_changed > 0 and self.max_price_diff <= HALF_GRID + 1e-9
 
 
 def _report(rows: list[dict], window: list[date]):
@@ -187,13 +215,21 @@ def compare(provider: list[dict], lake: list[dict], window: list[date], *, deriv
     return result
 
 
+@dataclass
+class World:
+    """The in-memory catalog and the temporary lake the lake path runs against."""
+
+    catalog: FakeCatalog
+    lake: Path
+
+
 @pytest.fixture
 def world(monkeypatch: pytest.MonkeyPatch, tmp_path):
     catalog = install_fake_catalog(monkeypatch)
-    point_lake_writer_at_tmp(tmp_path, monkeypatch)
+    lake = point_lake_writer_at_tmp(tmp_path, monkeypatch)
     with respx.mock:
         mock_launcher()
-        yield catalog
+        yield World(catalog, lake)
 
 
 # ---------------------------------------------------------------------------
@@ -234,22 +270,51 @@ def test_coarser_bars_fold_to_the_same_bars_as_the_vendor_side_aggregate(world, 
     assert max(comparison.feature_max_diff.values()) <= 1e-9
 
 
-def test_prices_finer_than_the_lake_grid_move_by_at_most_half_a_ten_thousandth(world):
-    """Cause: ``precision``. The lake rounds half-up to 1/10,000 (``lean_writer.to_deci_cent``); the provider path does not."""
-    tape = tape_for(DST_WINDOW, decimals=5)
+#: What the lake's price grid moves, measured on this pinned payload (seed 11, the DST window, 9,130 bars) at three
+#: price levels, as the largest absolute difference between the two paths' values at a shared bar, and the window's
+#: mean IC. Prices carry five or six decimals, finer than the grid. The movement of RSI and momentum grows as the price
+#: falls: a rounding of at most 5e-5 is a larger share of a bar-to-bar change on a $2 name than on a $150 one.
+#: Re-measure (print ``feature_max_diff`` and ``mean_ic`` per case) only when the pinned tape or the lake's encoding
+#: intentionally changes; never to make a failing test pass.
+QUANTIZATION_MEASURED = {
+    "price_150": (150.0, 5, {"mean_ic": 4.64e-6, "momentum_5m": 6.02e-7, "rsi_14": 1.109e-2, "realized_vol_30": 2.04e-7, "macd_signal": 8.52e-6}),
+    "price_12": (12.0, 5, {"mean_ic": 3.99e-4, "momentum_5m": 7.50e-6, "rsi_14": 1.118e-1, "realized_vol_30": 2.21e-6, "macd_signal": 8.49e-6}),
+    "price_2": (2.0, 6, {"mean_ic": 4.17e-4, "momentum_5m": 4.77e-5, "rsi_14": 6.354e-1, "realized_vol_30": 1.61e-5, "macd_signal": 8.98e-6}),
+}
+#: The headroom over a measured movement. The tape is seeded and the arithmetic deterministic, so this only absorbs
+#: platform differences in float summation order inside pandas and numpy; a real change in the lake's encoding, or in
+#: a feature's math, moves these by orders of magnitude more.
+MEASURED_MARGIN = 1.5
+
+
+@pytest.mark.parametrize(("start_price", "decimals", "measured"), QUANTIZATION_MEASURED.values(), ids=QUANTIZATION_MEASURED)
+def test_prices_finer_than_the_lake_grid_move_each_output_by_its_measured_amount_which_depends_on_the_price(
+    world, start_price, decimals, measured
+):
+    """Cause: ``data-quality`` (input quantization). The lake rounds half-up to 1/10,000 (``lean_writer.to_deci_cent``);
+    the provider path does not. That changes the input data, so it is not ``precision`` and no float tolerance covers it.
+
+    Each recorded output is pinned at its measured movement times ``MEASURED_MARGIN``, so a lake encoding change that
+    moved the mean IC by 1e-3 would fail here. The table above is what D02 is decided on: RSI moves by about 0.01 point
+    on a $150 name, 0.1 on a $12 name and 0.6 on a $2 name; the mean IC by 5e-6, 4e-4 and 4e-4.
+    """
+    tape = tape_for(DST_WINDOW, start_price=start_price, decimals=decimals)
     mock_vendor("SPY", tape, adjusted=tape)
 
     comparison = compare(provider_rows(tape, DST_WINDOW), lake_rows(DST_WINDOW), DST_WINDOW)
 
     assert comparison.errors == (None, None)
     assert comparison.timestamps_changed == 0
-    assert comparison.prices_changed > 0
-    assert comparison.max_price_diff <= 5e-5 + 1e-9
-    assert comparison.causes == ["precision"]
-    # Prices that differ by 5e-5 on a $150 name move the unit-free features and the IC by far less than their own
-    # sampling error; the bound below is measured, not assumed, and is the size of the divergence the owner is shown.
-    assert comparison.feature_max_diff["momentum_5m"] < 1e-3
-    assert comparison.mean_ic[1] == pytest.approx(comparison.mean_ic[0], abs=5e-3)
+    assert comparison.quantization_only, "every price that moved moved by at most half a ten-thousandth"
+    assert comparison.causes == ["data-quality"]
+    assert comparison.feature_valid_moved == 0 and comparison.target_valid[0] == comparison.target_valid[1]
+    assert comparison.feature_max_diff["volume_zscore"] == 0.0, "volume is not a price"
+    for name in ("momentum_5m", "rsi_14", "realized_vol_30", "macd_signal"):
+        # atol is the measured movement with its margin; rtol is 0 because the quantity compared is itself a difference.
+        assert 0 < comparison.feature_max_diff[name] <= measured[name] * MEASURED_MARGIN, name
+    ic_provider, ic_lake = comparison.mean_ic
+    np.testing.assert_allclose(ic_lake, ic_provider, atol=measured["mean_ic"] * MEASURED_MARGIN, rtol=0)
+    assert abs(ic_lake - ic_provider) > 0, "the divergence is real: the IC does move"
 
 
 def test_fractional_share_volume_is_kept_exactly_by_both_paths(world):
@@ -309,20 +374,84 @@ def test_a_split_announced_after_capture_is_not_in_a_held_window_until_the_lake_
     lake_rows(held)  # the lake captures the first six sessions before the split exists
     respx.mock.reset()
     mock_launcher()
-    adjusted = {day: (scaled({day: bars}, 0.1)[day] if day < split_day else bars) for day, bars in raw.items()}
+    # Four decimals: a 10-for-1 split of two-decimal prices lands exactly on the lake's grid, so the only difference
+    # between the paths is the split basis, not a rounding of the synthetic adjusted tape.
+    adjusted = {day: (scaled({day: bars}, 0.1, decimals=4)[day] if day < split_day else bars) for day, bars in raw.items()}
     split = {"ticker": "SPY", "execution_date": split_day.isoformat(), "split_from": 1, "split_to": 10}
     calls = VendorCalls()
     mock_vendor("SPY", raw, adjusted=adjusted, splits=[split], calls=calls)
     provider_after_split = provider_rows(raw, held, adjusted=adjusted)
 
-    stale = compare(provider_after_split, lake_rows(held), held, derived=False)
+    stale = compare(provider_after_split, lake_rows(held), held)
     lake_rows(later)  # any later capture of the symbol rebuilds its stale adjusted days
-    refreshed = compare(provider_after_split, lake_rows(held), held, derived=False)
+    refreshed = compare(provider_after_split, lake_rows(held), held)
 
     assert stale.causes == ["data-quality"] and stale.prices_changed == stale.provider_bars
     assert stale.max_price_diff > 100, "the held days still carry the pre-split basis"
+    assert stale.errors == (None, None)
+    # The derived outputs the owner decides D02 on: a split rescales the price level, not the shape of the series.
+    # Ratios, momentum and volatility are unit-free and do not move; MACD's signal line is in price units and does.
+    for unit_free in ("momentum_5m", "rsi_14", "realized_vol_30", "volume_zscore"):
+        assert stale.feature_max_diff[unit_free] <= 1e-9, unit_free
+    assert stale.feature_max_diff["macd_signal"] > 1.0, "a price-level output moves by the split factor (measured 3.5 here)"
+    # The IC is scale-free too, but a rank correlation breaks ties on float noise: values equal to 1e-13 on the two
+    # bases can order differently. That is ``precision`` (float accumulation), measured at 2.1e-7 on this tape.
+    np.testing.assert_allclose(stale.mean_ic[1], stale.mean_ic[0], atol=2.1e-7 * MEASURED_MARGIN, rtol=0)
     assert refreshed.prices_changed == 0 and refreshed.timestamps_changed == 0
+    assert max(refreshed.feature_max_diff.values()) <= 1e-9
     assert calls.count > 0
+
+
+def test_a_day_captured_before_its_after_hours_tape_finished_is_a_shorter_sample_until_it_is_captured_again(world):
+    """Cause: ``data-quality`` (capture time). A regular-hours chart opened at 16:30 ET leaves the day with its
+    after-hours tape cut at 16:15, and the lake reads it as complete. The provider path re-fetched the whole day on
+    every run. Admission now sees when the day was captured and captures it again, so the difference exists only in
+    what the lake holds, not in what a study computes on. A day with no recorded capture time cannot be judged: that
+    is the residual (``docs/known-gaps.md``).
+    """
+    tape = tape_for(DST_WINDOW)
+    mock_vendor("SPY", tape, adjusted=tape)
+    lake_rows(DST_WINDOW)  # every session captured once, after it had finished forming
+    day = DST_WINDOW[3]
+    cut = session_close_ms_utc(day) + VENDOR_DELAY_MS
+    commit_bars(
+        world.catalog, world.lake, day,
+        corrected_day(day, [b for b in tape[day] if b["t"] < cut], bump="0"), mode="polygon_split_adjusted",
+    )
+    row = next(r for r in world.catalog.rows.values() if r["trading_date"] == day and r["price_adjustment_mode"] == "polygon_split_adjusted")
+    row["completed_at_ms"] = capture_final_ms(day, "regular") + 1
+    provider = provider_rows(tape, DST_WINDOW)
+
+    held = compare(provider, held_rows(world, DST_WINDOW), DST_WINDOW)
+    after_admission = compare(provider, lake_rows(DST_WINDOW), DST_WINDOW)
+
+    assert held.errors == (None, None)
+    assert held.causes == ["data-quality"] and held.only_lake == 0
+    assert held.only_provider == sum(1 for b in tape[day] if b["t"] >= cut), "exactly the bars after 16:15 are gone"
+    assert held.prices_changed == 0, "what remains is the vendor's own"
+    assert held.feature_max_diff["rsi_14"] > 1e-9 or held.feature_valid_moved > 0, "a feature remembers the shorter sample"
+    assert held.target_valid[1] < held.target_valid[0], "and the last bars of that day lose their forward label"
+    assert after_admission.timestamps_changed == 0 and after_admission.prices_changed == 0
+    assert max(after_admission.feature_max_diff.values()) <= 1e-9
+    assert after_admission.mean_ic[1] == pytest.approx(after_admission.mean_ic[0], abs=1e-9, rel=0)
+
+
+def test_a_window_that_starts_before_the_symbol_traded_was_computed_on_fewer_bars_and_is_refused_now(world):
+    """Cause: ``data-quality`` (a session the vendor has no bars for). The provider path computed on the sessions it
+    got; the lake path refuses a window with a session the vendor answers empty, because "the symbol had not listed
+    yet" and "the vendor failed to serve it" look the same to admission (no "not applicable" outcome, ``known-gaps``)."""
+    tape = tape_for(DST_WINDOW)
+    listed = {day: bars for day, bars in tape.items() if day >= DST_WINDOW[2]}
+    mock_vendor("SPY", listed, adjusted=listed)
+
+    before = _report(provider_rows(listed, DST_WINDOW), DST_WINDOW)
+    with pytest.raises(StudyInputRefusal) as raised:
+        lake_rows(DST_WINDOW)
+
+    assert before.error is None, "before: the study ran on the eight sessions the vendor served"
+    assert raised.value.code == "data_unavailable_from_provider"
+    assert [i.trading_date for i in raised.value.coverage.issues] == list(DST_WINDOW[:2])
+    assert raised.value.coverage.window.added == len(DST_WINDOW) - 2
 
 
 def test_duplicate_or_out_of_order_vendor_bars_were_tolerated_or_crashed_before_and_are_refused_now(world):

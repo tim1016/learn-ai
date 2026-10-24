@@ -1,5 +1,6 @@
 import { Routes } from '@angular/router';
 
+import { redirectLegacyDataLab } from './data-lab-ingress';
 import {
   createDataLabWorkspaceStore,
   DataLabWorkspaceStore,
@@ -10,8 +11,10 @@ import {
  * One shell component with three lazy child routes. The workspace store is
  * provided on the parent route's injector so the shell and every child
  * (explore / export / validate) share one instance — state survives child
- * route navigation and dies with the shell. `/data-lab` redirects
- * to `/data-lab/explore` after the shell normalizes legacy query state. */
+ * route navigation and dies with the shell. `/data-lab` redirects straight to
+ * the child its legacy `mode` names, `/data-lab/explore` by default, with its
+ * query and fragment intact; the shell then applies that query to the
+ * workspace. */
 
 export const DATA_LAB_ROUTES: Routes = [
   {
@@ -24,7 +27,7 @@ export const DATA_LAB_ROUTES: Routes = [
     loadComponent: () =>
       import('./data-lab.component').then((m) => m.DataLabComponent),
     children: [
-      { path: '', pathMatch: 'full', redirectTo: 'explore' },
+      { path: '', pathMatch: 'full', redirectTo: redirectLegacyDataLab('/data-lab/explore') },
       {
         path: 'explore',
         loadComponent: () =>
