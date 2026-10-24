@@ -64,6 +64,7 @@ from app.routers import (
     golden_validation,
     grid_search,
     indicator_reliability,
+    instrument_facts,
     iv30,
     iv_recorder,
     jobs,
@@ -1346,6 +1347,7 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
 
     app.include_router(option_archive.router)
     app.include_router(snapshot.router, prefix="/api/snapshot", tags=["snapshot"])
+    app.include_router(instrument_facts.router, prefix="/api/markets", tags=["markets"])
     app.include_router(tickers.router, prefix="/api/tickers", tags=["tickers"])
     app.include_router(trading_calendar.router, prefix="/api/calendar", tags=["calendar"])
     app.include_router(news.router, prefix="/api/news", tags=["news"])

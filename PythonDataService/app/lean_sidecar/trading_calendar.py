@@ -383,6 +383,25 @@ def previous_completed_session_close_ms(session_start_ms: int) -> int:
     return earlier[-1].close_ms_utc
 
 
+def latest_completed_sessions(now_ms: int, count: int) -> list[SessionWindow]:
+    """The ``count`` most recent sessions whose scheduled close is at or before ``now_ms``, oldest first.
+
+    A session is completed when the calendar's own close for that date has
+    passed, so an early-close half-day completes at its real close and the
+    session in progress is never one of them.
+    """
+    if now_ms < 0:
+        raise ValueError("now_ms must be non-negative int64 ms UTC")
+    if count < 1:
+        raise ValueError("count must be at least 1")
+    now_ts = pd.Timestamp(now_ms, unit="ms", tz="UTC")
+    start = (now_ts - pd.Timedelta(days=_LOOKBACK_DAYS)).normalize()
+    completed = [window for window in session_windows_ms_utc(start, now_ts.normalize()) if window.close_ms_utc <= now_ms]
+    if len(completed) < count:
+        raise NoSessionError(f"fewer than {count} completed NYSE sessions in the {_LOOKBACK_DAYS}-day lookback ending at {now_ts}")
+    return completed[-count:]
+
+
 def blocked_dates_in_range(
     start: date,
     end: date,

@@ -3082,6 +3082,72 @@
         "title": "AttestationFindingsResponse",
         "type": "object"
       },
+      "AvailableQuote": {
+        "properties": {
+          "as_of_ms": {
+            "description": "When the price was observed, not when it was read.",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "As Of Ms",
+            "type": "integer"
+          },
+          "basis": {
+            "enum": [
+              "live_quote",
+              "delayed_snapshot",
+              "last_close"
+            ],
+            "title": "Basis",
+            "type": "string"
+          },
+          "move": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DayMove"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "move_unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why there is no move; set exactly when ``move`` is absent.",
+            "title": "Move Unavailable Reason"
+          },
+          "not_used": {
+            "description": "Fresher sources that did not answer, freshest first.",
+            "items": {
+              "$ref": "#/components/schemas/BasisNotUsed"
+            },
+            "title": "Not Used",
+            "type": "array"
+          },
+          "price": {
+            "title": "Price",
+            "type": "number"
+          },
+          "status": {
+            "const": "available",
+            "default": "available",
+            "title": "Status"
+          }
+        },
+        "required": [
+          "price",
+          "basis",
+          "as_of_ms"
+        ],
+        "title": "AvailableQuote",
+        "type": "object"
+      },
       "BackfillDefaults": {
         "description": "The parts of a ``DataRunSpec`` only the data plane knows (#1838).\n\n``lean_image_digest`` is required by ``DataRunSpec`` and has no default;\na browser has no way to derive the pinned LEAN image, and hand-typing a\ncontainer digest into a form is not a receipt anybody could audit. The\ncaps come from ``app.data_lake.types`` so the Observatory rejects an\nover-wide window in the form rather than by round-tripping a 422.\n\n``lean_image_digest`` is ``None`` when the data plane has no pin\nconfigured \u2014 reported honestly rather than as an empty string, so the\nUI can say backfill is unavailable instead of submitting a spec that\nwould fail deep inside Phase 0.\n\n``provider_history_start_ms`` is the oldest day the configured provider\nplan will actually serve. ``max_trading_range_days`` is *not* a stand-in\nfor it: that cap is a request-validation ceiling padded to ``5 * 366``\nfor leap years, so a window composed against it starts a few days\noutside a 5-year entitlement and dies on a globally-fatal\n``provider_entitlement_error`` before one bar is written (#2241). Only\nthe data plane holds the provider credential, so only the data plane can\nstate this; a browser composing its own floor is guessing at a vendor\nplan.",
         "properties": {
@@ -4448,6 +4514,30 @@
           "test_trade_count"
         ],
         "title": "BaselineRunRecord",
+        "type": "object"
+      },
+      "BasisNotUsed": {
+        "description": "A source that was asked first and did not supply the price, with why.",
+        "properties": {
+          "basis": {
+            "enum": [
+              "live_quote",
+              "delayed_snapshot",
+              "last_close"
+            ],
+            "title": "Basis",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "basis",
+          "reason"
+        ],
+        "title": "BasisNotUsed",
         "type": "object"
       },
       "BenchmarkPreflightRequest": {
@@ -11606,6 +11696,28 @@
         "title": "CommandResponse",
         "type": "object"
       },
+      "ComparisonClose": {
+        "description": "The close a day move is measured from: one completed session's regular-hours close.",
+        "properties": {
+          "price": {
+            "title": "Price",
+            "type": "number"
+          },
+          "session_close_ms": {
+            "description": "That session's scheduled close, from the canonical calendar.",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Session Close Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "price",
+          "session_close_ms"
+        ],
+        "title": "ComparisonClose",
+        "type": "object"
+      },
       "ConcentrationView": {
         "additionalProperties": false,
         "description": "Where the collateral is: each underlying and expiry alone, and the account's own figure beside them.",
@@ -13710,6 +13822,29 @@
           "bars"
         ],
         "title": "DayCandlesResponse",
+        "type": "object"
+      },
+      "DayMove": {
+        "description": "``change = price - comparison close``; ``change_percent = 100 * change / comparison close``.",
+        "properties": {
+          "change": {
+            "title": "Change",
+            "type": "number"
+          },
+          "change_percent": {
+            "title": "Change Percent",
+            "type": "number"
+          },
+          "comparison_close": {
+            "$ref": "#/components/schemas/ComparisonClose"
+          }
+        },
+        "required": [
+          "change",
+          "change_percent",
+          "comparison_close"
+        ],
+        "title": "DayMove",
         "type": "object"
       },
       "DayNotCapturedDetail": {
@@ -33450,6 +33585,83 @@
         "title": "IndicatorReliabilityResponse",
         "type": "object"
       },
+      "InstrumentFacts": {
+        "properties": {
+          "options_archive": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionsArchiveFact"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Absent for an underlying the archive does not track."
+          },
+          "quote": {
+            "discriminator": {
+              "mapping": {
+                "available": "#/components/schemas/AvailableQuote",
+                "unavailable": "#/components/schemas/UnavailableQuote"
+              },
+              "propertyName": "status"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AvailableQuote"
+              },
+              {
+                "$ref": "#/components/schemas/UnavailableQuote"
+              }
+            ],
+            "title": "Quote"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "quote"
+        ],
+        "title": "InstrumentFacts",
+        "type": "object"
+      },
+      "InstrumentFactsResponse": {
+        "properties": {
+          "closes_adjustment": {
+            "description": "The lake tree every close (last close, comparison close) is read from.",
+            "enum": [
+              "raw",
+              "polygon_split_adjusted",
+              "lean_adjusted"
+            ],
+            "title": "Closes Adjustment",
+            "type": "string"
+          },
+          "facts": {
+            "items": {
+              "$ref": "#/components/schemas/InstrumentFacts"
+            },
+            "title": "Facts",
+            "type": "array"
+          },
+          "generated_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Generated Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "generated_ms",
+          "closes_adjustment",
+          "facts"
+        ],
+        "title": "InstrumentFactsResponse",
+        "type": "object"
+      },
       "InsufficientCoverageDetail": {
         "description": "The typed 400 body's ``detail`` for a too-thin usable sample.",
         "properties": {
@@ -42510,6 +42722,100 @@
           "range_reason"
         ],
         "title": "OptionWholeNumberTerm",
+        "type": "object"
+      },
+      "OptionsArchiveFact": {
+        "properties": {
+          "capturing": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether nightly capture is switched on.",
+            "title": "Capturing"
+          },
+          "complete_through_session_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Complete Through Session Ms"
+          },
+          "earliest_required_session_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Earliest Required Session Ms"
+          },
+          "kind": {
+            "enum": [
+              "none_stored",
+              "some_days",
+              "complete",
+              "unavailable"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "last_archived_session_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Archived Session Ms"
+          },
+          "missing_sessions": {
+            "anyOf": [
+              {
+                "maximum": 1000000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Missing Sessions"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "OptionsArchiveFact",
         "type": "object"
       },
       "OptionsBacktestCapitalEvidenceResponse": {
@@ -66215,6 +66521,31 @@
         "title": "TrustedTemplate",
         "type": "string"
       },
+      "UnavailableQuote": {
+        "properties": {
+          "not_used": {
+            "items": {
+              "$ref": "#/components/schemas/BasisNotUsed"
+            },
+            "title": "Not Used",
+            "type": "array"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "status": {
+            "const": "unavailable",
+            "default": "unavailable",
+            "title": "Status"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "UnavailableQuote",
+        "type": "object"
+      },
       "UnderlyingArchiveHealth": {
         "properties": {
           "complete_through_session_ms": {
@@ -89193,6 +89524,53 @@
         "summary": "Run the trusted buy-and-hold sample through the LEAN sidecar.",
         "tags": [
           "lean-sidecar"
+        ]
+      }
+    },
+    "/api/markets/instrument-facts": {
+      "get": {
+        "description": "Each symbol's latest price with its basis and as-of time, its day move and its options-archive status.\n\nA price is the freshest source that answers (live, delayed snapshot, last completed close) and names which. A\nsource that failed leaves only its own fields ``unavailable``; the response is still 200 and every other\ninstrument and fact in it stands.",
+        "operationId": "get_instrument_facts_api_markets_instrument_facts_get",
+        "parameters": [
+          {
+            "description": "Comma-separated distinct US-equity symbols, at most 25.",
+            "in": "query",
+            "name": "symbols",
+            "required": true,
+            "schema": {
+              "description": "Comma-separated distinct US-equity symbols, at most 25.",
+              "maxLength": 250,
+              "minLength": 1,
+              "title": "Symbols",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstrumentFactsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Instrument Facts",
+        "tags": [
+          "markets"
         ]
       }
     },
