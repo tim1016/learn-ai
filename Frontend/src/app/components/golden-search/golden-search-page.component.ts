@@ -4,7 +4,6 @@ import { Tab, TabList, TabPanel, TabPanels, Tabs } from 'primeng/tabs';
 
 import { HowThisWorksLinkComponent } from '../../shared/help/how-this-works-link.component';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
-import { OPTIONS_CHOOSE_GOLDEN, OPTIONS_CHOOSE_KEY, OPTIONS_SETUPS_ROOT } from '../../options-setups/options-setups.address';
 import { extractServerMessage } from '../broker/operation-error';
 import { GoldenSearchHistoryComponent } from './golden-search-history.component';
 import { GoldenSearchPlanFormComponent } from './golden-search-plan-form.component';
@@ -31,10 +30,6 @@ export type GoldenSearchTab = 'new' | 'history';
 export class GoldenSearchPageComponent {
   private readonly service = inject(GoldenSearchService);
   private readonly router = inject(Router);
-
-  /** The Options setups list, asking which setup to continue with on its Golden tab. */
-  protected readonly optionsGoldenRoute = OPTIONS_SETUPS_ROOT;
-  protected readonly optionsGoldenQuery = { [OPTIONS_CHOOSE_KEY]: OPTIONS_CHOOSE_GOLDEN };
 
   /** Route parameter: the study to open. */
   readonly studyId = input<string | undefined>(undefined);
