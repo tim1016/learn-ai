@@ -261,16 +261,19 @@ export class SignalRunnerComponent {
   /** The bar lengths the chosen session offers, from the server's contract. */
   readonly availableMultipliers = computed<readonly number[]>(() => BAR_MINUTES[this.shownRange().session]);
 
-  /** Why the bar lengths are what they are under regular hours, and which length the run uses when the one entered is not offered. */
+  /**
+   * Which length the run uses when the one entered is not offered for the session, whichever session that is; and, under
+   * regular hours, why the offered lengths are few.
+   */
   readonly barNote = computed<string | null>(() => {
     const { session, multiplier } = this.shownRange();
-    if (session !== 'rth') return null;
     const entered = this.range().multiplier ?? 1;
-    const changed = entered === multiplier ? '' : `${entered}-minute bars are not offered for regular hours, so this run uses ${multiplier}-minute bars. `;
-    return (
-      `${changed}Regular hours offer bars of ${this.availableMultipliers().join(', ')} minutes only: the study looks 15 bars ahead ` +
-      'inside the same day and needs 70% of its bars to have a target, which a regular session holds too few longer bars to reach.'
-    );
+    const changed = entered === multiplier ? '' : `${entered}-minute bars are not offered for this session, so this run uses ${multiplier}-minute bars.`;
+    if (session !== 'rth') return changed === '' ? null : changed;
+    const why =
+      `Regular hours offer bars of ${this.availableMultipliers().join(', ')} minutes only: the study looks 15 bars ahead ` +
+      'inside the same day and needs 70% of its bars to have a target, which a regular session holds too few longer bars to reach.';
+    return changed === '' ? why : `${changed} ${why}`;
   });
 
   /** The inputs the shown result answers; a result is "previous" once these change. */

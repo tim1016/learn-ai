@@ -35,6 +35,7 @@ import { TradeBackfillRunner, type TradeBackfillEnd } from '../../../shared/data
 import type { TradeBackfillWindow } from '../../../shared/data-lake/trade-backfill-spec';
 import { heldReport } from '../../../shared/data-lake/testing/instrument-data-report';
 import { SignalRunnerComponent } from './signal-runner.component';
+import signalBarMinutes from '@repo-contracts/signal-study-bar-minutes.json';
 
 /** The sessions in the page's default window, as the lake's count of them reports. */
 const SESSIONS = 124;
@@ -265,7 +266,7 @@ describe('SignalRunnerComponent indicator catalog load', () => {
 
       expect.soft(barLengths()).toEqual(['1×', '2×', '3×', '4×', '5×', '6×']);
       expect.soft(barSelect()?.value, '15 minutes is not offered here, so the nearest length is shown').toBe('6');
-      expect.soft(barNote()).toContain('15-minute bars are not offered for regular hours, so this run uses 6-minute bars.');
+      expect.soft(barNote()).toContain('15-minute bars are not offered for this session, so this run uses 6-minute bars.');
       expect.soft(barNote()).toContain('Regular hours offer bars of 1, 2, 3, 4, 5, 6 minutes only');
       expect.soft(barNote()).toContain('needs 70% of its bars to have a target');
 
@@ -276,6 +277,22 @@ describe('SignalRunnerComponent indicator catalog load', () => {
       expect.soft(barNote()).toBeUndefined();
     });
 
+    it('says which length the run uses under extended hours too, when the server stops offering the one entered', () => {
+      const component = fixture.componentInstance;
+      const offered = signalBarMinutes.extended;
+      signalBarMinutes.extended = [1, 2, 3, 4, 5, 6, 10, 12];
+      try {
+        component.range.update((r) => ({ ...r, multiplier: 15 }));
+        fixture.detectChanges();
+
+        expect.soft(component.shownRange().multiplier).toBe(12);
+        expect.soft(barNote()).toBe('15-minute bars are not offered for this session, so this run uses 12-minute bars.');
+        expect.soft(barNote(), 'the regular-hours reason is for regular hours only').not.toContain('Regular hours offer');
+      } finally {
+        signalBarMinutes.extended = offered;
+      }
+    });
+
     it('keeps a length the chosen session offers, and says only why the list is short', async () => {
       const component = fixture.componentInstance;
       component.range.update((r) => ({ ...r, multiplier: 3 }));
@@ -284,7 +301,7 @@ describe('SignalRunnerComponent indicator catalog load', () => {
       await press('RTH');
 
       expect(component.shownRange().multiplier).toBe(3);
-      expect(barNote()).not.toContain('are not offered for regular hours, so this run uses');
+      expect(barNote()).not.toContain('are not offered for this session');
       expect(barNote()).toContain('Regular hours offer bars of 1, 2, 3, 4, 5, 6 minutes only');
       await press('Run study');
       expect(startJob.mock.calls[0][1]).toMatchObject({ session: 'rth', multiplier: 3 });
@@ -565,7 +582,7 @@ describe('SignalRunnerComponent job wiring', () => {
     bar_minutes: 15,
     aggregation: 'minute_fold_et_wall_clock_no_fill',
     identity_digest: 'def',
-    calculation_version: 'signal-study/1',
+    calculation_version: 'signal-study/2',
     snapshot_digest: 'abc',
     look_forward_bars: 15,
     coverage,
