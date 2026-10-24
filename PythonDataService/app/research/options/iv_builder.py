@@ -1,6 +1,6 @@
 """IV term-structure builder for research options pipeline.
 
-Formula: 30-day constant-maturity IV via variance-time interpolation between the two expiries bracketing 30 calendar days (T1 ≤ 30 < T2, chosen for each date by ``contract_finder.pick_bracket_expiries``): σ²_30·30 = w·σ²_T1·T1 + (1-w)·σ²_T2·T2, with w = (T2 - 30)/(T2 - T1) and T in calendar days. Equal-maturity inputs retain the internal arithmetic-mean fallback.
+Formula: 30-day constant-maturity IV via variance-time interpolation between the two expiries bracketing 30 calendar days (T1 ≤ 30 ≤ T2 with T1 < T2, chosen for each date by ``contract_finder.pick_bracket_expiries``): σ²_30·30 = w·σ²_T1·T1 + (1-w)·σ²_T2·T2, with w = (T2 - 30)/(T2 - T1) and T in calendar days. Equal-maturity inputs retain the internal arithmetic-mean fallback.
 Reference: Cboe VIX Methodology (2019), constant-maturity total-variance interpolation step only; this module uses selected-contract BSM IVs and does not replicate the model-free VIX calculation.
 Canonical implementation: app/research/options/iv_builder.py
 Validated against: NONE — pending fixture; the per-date pair and the end-to-end recovery are pinned by tests/research/options/test_iv_builder_bracket_window.py
@@ -414,12 +414,14 @@ def build_iv_history(
 
     df["iv_quality"] = df.apply(_quality_flag, axis=1)
 
-    # Forward-fill gaps <= 2 days (weekends/holidays)
+    # Forward-fill gaps <= 2 days (weekends/holidays). A date with a typed missing_reason is a real gap, not a holiday:
+    # it gets no number, and nothing is filled across it.
     df["date"] = pd.to_datetime(df["date"], utc=True)
     df = df.set_index("date").asfreq("B")  # Business day frequency
+    segment = df["missing_reason"].notna().cumsum()  # each typed gap starts a segment, so no fill reaches into or past it
     for col in ["iv_30d_atm", "iv_30d_put", "iv_30d_call", "stock_close"]:
         if col in df.columns:
-            df[col] = df[col].ffill(limit=MAX_FFILL_DAYS)
+            df[col] = df[col].groupby(segment).ffill(limit=MAX_FFILL_DAYS)
     df = df.reset_index().rename(columns={"index": "date"})
 
     # Convert date back to string

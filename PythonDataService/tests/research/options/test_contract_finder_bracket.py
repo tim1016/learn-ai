@@ -2,15 +2,14 @@
 
 ``find_bracket_contracts`` lists the expiries once per month and picks the pair around 30 days for each session from
 that list. These tests pin the pick itself: 30 days is inside the pair on every date, the edges where an expiry
-enters or leaves the usable range, the typed reason when no pair exists, and agreement with the old month-long pair
-on every date where that pair still produced an IV.
+enters or leaves the usable range, and the typed reason when no pair exists. The month-long carry of a pair and the
+re-list are pinned end to end in ``test_iv_builder_bracket_window.py``.
 """
 
 from __future__ import annotations
 
 from datetime import date, timedelta
 
-import numpy as np
 import pytest
 
 from app.research.options.contract_finder import (
@@ -20,7 +19,6 @@ from app.research.options.contract_finder import (
     BracketGap,
     pick_bracket_expiries,
 )
-from app.research.options.iv_builder import _interpolate_iv
 
 FRIDAY = 4
 
@@ -84,54 +82,7 @@ def test_the_pair_goes_when_the_far_expiry_is_out_of_range_and_when_the_near_one
 
 
 def test_a_date_no_listed_pair_brackets_says_why():
-    assert pick_bracket_expiries(None, "2024-05-01") == BracketGap.LOOKUP_FAILED
     assert pick_bracket_expiries([], "2024-05-01") == BracketGap.NO_EXPIRIES
     assert pick_bracket_expiries(["2024-05-24", "2024-05-31"], "2024-05-02") == BracketGap.NO_FAR_EXPIRY
     assert pick_bracket_expiries(["2024-06-07", "2024-06-14"], "2024-05-01") == BracketGap.NO_NEAR_EXPIRY
     assert BracketGap.NO_FAR_EXPIRY.value == "no_far_expiry", "the value is what the frame carries"
-
-
-def first_of_month_pair(listed: list[str], first: date) -> tuple[str, str]:
-    """The pair ``find_bracket_contracts`` used for the whole month before #3528: picked once, on the first session."""
-    window = [e for e in listed if first + timedelta(days=20) <= date.fromisoformat(e) <= first + timedelta(days=45)]
-    target = (first + timedelta(days=30)).isoformat()
-    return max(e for e in window if e <= target), min(e for e in window if e > target)
-
-
-def term_structure(days_to_expiry: int) -> float:
-    return 0.18 + 0.004 * days_to_expiry**0.5 + 0.0003 * days_to_expiry
-
-
-def vol_30d(low: str, high: str, day: date) -> float:
-    return _interpolate_iv(term_structure(dte(low, day)), dte(low, day), term_structure(dte(high, day)), dte(high, day))
-
-
-@pytest.mark.parametrize(
-    ("listed", "first", "days", "computed"),
-    [
-        (WEEKLY, date(2024, 5, 1), MAY, 8),
-        (["2024-03-29", "2024-04-15"], date(2024, 3, 1), [date(2024, 3, 1) + timedelta(days=n) for n in range(31)], 16),
-    ],
-    ids=["weekly-friday-chain", "two-expiry-chain"],
-)
-def test_the_per_date_pair_gives_the_old_vol_on_every_date_the_old_pair_still_produced_one(listed, first, days, computed):
-    """Where the month-long pair had not yet gone stale the old code returned a number; the new pair returns that number.
-
-    The old pair produced an IV while it still bracketed 30 days and both its expiries were 7 or more days out.
-    The new pair is the same pair on those dates, except where the old far expiry sat exactly 30 days out (the
-    old code interpolated to it with weight 0, the new pair may name a different neighbour): the vol is the same.
-    """
-    old_low, old_high = first_of_month_pair(listed, first)
-    produced = 0
-
-    for day in days:
-        old_low_dte, old_high_dte = dte(old_low, day), dte(old_high, day)
-        if not (MIN_DTE_DAYS <= old_low_dte <= TARGET_DTE <= old_high_dte):
-            continue
-        produced += 1
-        low, high = pick_bracket_expiries(listed, day.isoformat())
-        np.testing.assert_allclose(
-            vol_30d(low, high, day), vol_30d(old_low, old_high, day), atol=1e-9, rtol=0, err_msg=day.isoformat()
-        )
-
-    assert produced == computed
