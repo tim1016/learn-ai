@@ -38,13 +38,15 @@ export class WalkRecorder {
   private readonly path: string[] = [];
   private readonly chosen = new Map<string, string>();
   private lastPath = '';
+  /** After an address load the app may redirect once, on its own; that is the same visit, so path changes wait for the next action. */
+  private afterLoad = false;
 
   constructor(
     private readonly page: Page,
     readonly name: string,
   ) {
     page.on('framenavigated', (frame) => {
-      if (frame !== page.mainFrame()) return;
+      if (frame !== page.mainFrame() || this.afterLoad) return;
       const url = new URL(frame.url());
       if (url.protocol === 'about:') return;
       if (url.pathname === this.lastPath) return;
@@ -56,28 +58,29 @@ export class WalkRecorder {
 
   /** An address-bar load: a visit even when the path is the one already open. */
   async open(url: string): Promise<void> {
-    const before = this.visits;
+    this.settle();
+    this.visits += 1;
+    this.afterLoad = true;
     await this.page.goto(url);
-    if (this.visits === before) {
-      this.visits += 1;
-      this.path.push(new URL(this.page.url()).pathname);
-    }
   }
 
   /** A browser Back: a click, and a visit when it changes the path. */
   async back(): Promise<void> {
+    this.settle();
     this.clicks += 1;
     await this.page.goBack();
   }
 
   /** A browser reload of the open address: a visit of the same path. */
   async reload(): Promise<void> {
+    this.settle();
     this.visits += 1;
-    this.path.push(new URL(this.page.url()).pathname);
+    this.afterLoad = true;
     await this.page.reload();
   }
 
   async click(target: Locator): Promise<void> {
+    this.settle();
     this.clicks += 1;
     await target.click();
   }
@@ -89,6 +92,7 @@ export class WalkRecorder {
   }
 
   async type(target: Locator, text: string): Promise<void> {
+    this.settle();
     this.typed += 1;
     await target.fill(text);
   }
@@ -104,7 +108,16 @@ export class WalkRecorder {
     this.stopAt = stop;
   }
 
+  /** Takes the address an address load ended on, redirects included, as that load's one visit. */
+  private settle(): void {
+    if (!this.afterLoad) return;
+    this.afterLoad = false;
+    this.lastPath = new URL(this.page.url()).pathname;
+    this.path.push(this.lastPath);
+  }
+
   counts(): WalkCounts {
+    this.settle();
     return {
       walk: this.name,
       pageVisits: this.visits,
