@@ -15,5 +15,10 @@
 <div class="previous-result__body" [class.is-previous]="previous()"><ng-content /></div>
 
 @if (!previous()) {
-  <div class="previous-result__actions"><ng-content select="[resultActions]" /></div>
+  <div class="previous-result__actions">
+    <ng-content select="[resultActions]" />
+    @if (actionsTemplate(); as template) {
+      <ng-container [ngTemplateOutlet]="template" />
+    }
+  </div>
 }

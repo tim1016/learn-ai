@@ -1,6 +1,6 @@
 import type { RedirectFunction } from '@angular/router';
 
-import { redirectKeepingState } from '../shell/route-redirects';
+import { redirectKeepingState, type RedirectStateOptions } from '../shell/route-redirects';
 import { HOME_VIEW_QUERY_PARAM, HOME_WALL_VIEW, accountWorkspaceHomeRoute } from './account-workspace';
 import { RETIRED_LENS_QUERY_PARAM } from './retired-lens.guard';
 
@@ -25,9 +25,18 @@ export function homeRedirect(view: 'list' | 'wall'): RedirectFunction {
         clerkId: String(params['clerkId'] ?? ''),
         accountId: params['accountId'] === undefined ? null : String(params['accountId']),
       }),
-    {
-      drop: [RETIRED_LENS_QUERY_PARAM],
-      set: view === 'wall' ? () => ({ [HOME_VIEW_QUERY_PARAM]: HOME_WALL_VIEW }) : undefined,
-    },
+    homeRedirectState(view),
   );
+}
+
+/**
+ * The query a retired Bots or Gallery address hands to Home, whichever way it
+ * gets there (a route redirect, or the guard that resolves a lane first).
+ * Gallery asks for the Wall. Bots means the list, so a stray `?view=` on a
+ * Bots bookmark does not open the Wall.
+ */
+export function homeRedirectState(view: 'list' | 'wall'): RedirectStateOptions {
+  return view === 'wall'
+    ? { drop: [RETIRED_LENS_QUERY_PARAM], set: () => ({ [HOME_VIEW_QUERY_PARAM]: HOME_WALL_VIEW }) }
+    : { drop: [RETIRED_LENS_QUERY_PARAM, HOME_VIEW_QUERY_PARAM] };
 }

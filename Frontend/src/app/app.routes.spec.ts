@@ -117,13 +117,12 @@ describe('routes', () => {
     ['account-list hop chain', '/brokers/alpaca?surface=gallery', '/brokers/alpaca'],
     ['account-list hop chain', '/brokers/alpaca/bots', '/brokers/alpaca'],
     ['account-list hop chain', '/brokers/alpaca/gallery', '/brokers/alpaca'],
-    // Angular's router does not chain a redirect target that is itself a
-    // redirect route within one navigation (it re-matches the redirected URL
-    // with redirects disallowed), so engine/runs/:id must redirect straight
-    // to the final /strategy-lab?run=N destination rather than hopping
-    // through strategy-lab/runs/:id. This is a full-router assertion, not a
-    // route-config shape check, because that is exactly the distinction that
-    // would otherwise hide the gap.
+    // A redirect lands in one hop (PRD #3490 R32): engine/runs/:id goes
+    // straight to the final /strategy-lab?run=N rather than through
+    // strategy-lab/runs/:id. Angular follows an absolute redirect into another
+    // redirect by restarting from the root, but not a relative one (it is
+    // re-matched with redirects off), so this is a full-router assertion, not
+    // a route-config shape check.
     ['legacy engine/runs/:id bookmark', '/engine/runs/204', '/strategy-lab?run=204'],
   ])('%s: %s lands on %s', async (_kind, path, expectedUrl) => {
     TestBed.configureTestingModule({ providers: [provideRouter(routes)] });

@@ -79,6 +79,19 @@ export interface EdgeSampleData {
   sparklines: { vrp: number[]; equity: number[]; stability: number[]; };
 }
 
+/** Trailing windows (bars) the study asks the endpoint for; it returns one
+ *  series per estimator per window, keyed `<estimator>_<window>`. */
+export const RV_WINDOWS: readonly number[] = [5, 10, 30];
+/** The window the readout reports as `rv_yz_30_daily`. */
+export const RV_READOUT_WINDOW = 30;
+
+/** One trailing Yang-Zhang RV series the endpoint returned (`yz_<window>`). */
+export interface RvWindowSeries {
+  /** The trailing window, in bars. */
+  window: number;
+  values: number[];
+}
+
 /** What `/api/edge/realized-vs-iv/series` measured for one symbol. Only fields
  *  the endpoint computes exist here: edge score, regimes, oracle signals and
  *  the trade simulator are not part of this study, so they are absent, never
@@ -92,7 +105,10 @@ export interface RealizedVsIvData {
   iv30: number[];
   /** IV30 in TRD/252 basis (post Step 1 conversion). Aligned for headline VRP. */
   iv30Trd252: number[];
+  /** The trailing 30-bar Yang-Zhang series (`yz_30`), which the readout reports. */
   rvYZ: number[];
+  /** Every trailing Yang-Zhang series the endpoint returned, shortest window first. */
+  rvYzByWindow: RvWindowSeries[];
   /** RV used for VRP — HF two-component on 15m bars, falls back to YZ-21 on daily. TRD/252 basis. */
   rvHf21d: number[];
   vrpForward: number[];

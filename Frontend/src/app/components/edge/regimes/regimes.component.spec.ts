@@ -10,14 +10,21 @@ describe("RegimesComponent — sample labeling", () => {
     expect(screen.getByTestId("sample-data-banner").textContent).toContain("Sample data — not real");
   });
 
-  it("keeps the label while the algorithm and decoding views change what is drawn", async () => {
+  it("keeps the label while the decoding view changes what is drawn", async () => {
     const user = userEvent.setup();
     await render(RegimesComponent);
 
-    await user.click(screen.getByRole("button", { name: "kmeans" }));
     await user.click(screen.getByRole("button", { name: "posterior" }));
 
     expect(screen.getAllByTestId("sample-data-banner")).toHaveLength(1);
+  });
+
+  it("offers no algorithm switch, since the sample draws one fixed three-state path", async () => {
+    await render(RegimesComponent);
+
+    for (const name of ["hmm", "kmeans", "compare"]) {
+      expect(screen.queryByRole("button", { name }), name).toBeNull();
+    }
   });
 
   it("labels the Edge score drawer it opens as sample data too", async () => {

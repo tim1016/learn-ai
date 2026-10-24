@@ -3,11 +3,8 @@ import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/c
 import { WorkspaceHeaderComponent } from '../shared/workspace/workspace-header.component';
 import { WorkspaceStateBlockComponent } from '../shared/workspace/workspace-state-block.component';
 import type { WorkspaceStateContent } from '../shared/workspace/workspace-state';
-import { APP_MENU, HOME_ROUTE } from './app-menu';
+import { APP_MENU, HOME_ROUTE, NOT_FOUND_TITLE } from './app-menu';
 import { CurrentUrlService } from './current-url.service';
-
-/** The window title of the page an unknown address opens. */
-export const NOT_FOUND_TITLE = 'Page not found';
 
 /**
  * Where an unknown address ends (PRD #3490 R01): in place, at the address that

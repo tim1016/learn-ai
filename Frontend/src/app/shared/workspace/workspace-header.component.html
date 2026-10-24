@@ -1,19 +1,5 @@
 <header class="workspace-header">
-  @if (breadcrumb().length > 0) {
-    <nav class="workspace-header__breadcrumb" aria-label="Breadcrumb">
-      <ol>
-        @for (crumb of breadcrumb(); track $index) {
-          <li>
-            @if (crumb.route; as route) {
-              <a [routerLink]="route" [queryParams]="crumb.queryParams">{{ crumb.label }}</a>
-            } @else {
-              <span>{{ crumb.label }}</span>
-            }
-          </li>
-        }
-      </ol>
-    </nav>
-  }
+  <app-breadcrumb [heading]="title()" [items]="breadcrumb()" />
 
   <div class="workspace-header__row">
     <div class="workspace-header__heading">

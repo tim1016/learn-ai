@@ -64,12 +64,6 @@
   color: $text-subtle;
   font-size: 11px; font-family: $font-mono; cursor: pointer;
 
-  &.algo.on {
-    background: var(--ind-cat-momentum-soft);
-    border-color: var(--ind-cat-momentum);
-    color: var(--ind-cat-momentum);
-    text-transform: uppercase; letter-spacing: 0.04em;
-  }
   &.view.on {
     background: $bg-elevated; border-color: $border-strong; color: $text-primary;
   }
@@ -89,10 +83,6 @@
   border-radius: $radius-md; padding: 12px;
   margin-bottom: 12px;
   overflow-x: auto;
-}
-.compare-meta {
-  display: flex; gap: 12px; margin-bottom: 8px;
-  font-size: 10px; color: $text-muted; font-family: $font-mono;
 }
 
 /* Bottom grid */

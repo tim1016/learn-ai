@@ -13,9 +13,16 @@ import { testLane } from './fleet-directory-testing';
 import { FleetDirectoryService } from './fleet-directory.service';
 import { brokerClerkRedirectGuard } from './broker-clerk-redirect.guard';
 
-function routeFor(params: Record<string, string>): ActivatedRouteSnapshot {
+function routeFor(
+  params: Record<string, string>,
+  query: Record<string, string> = {},
+  fragment: string | null = null,
+): ActivatedRouteSnapshot {
   const route = new ActivatedRouteSnapshot();
   Object.defineProperty(route, 'paramMap', { value: convertToParamMap(params) });
+  route.params = params;
+  route.queryParams = query;
+  route.fragment = fragment;
   return route;
 }
 
@@ -24,6 +31,7 @@ describe('brokerClerkRedirectGuard', () => {
     params: Record<string, string>,
     fleet: Pick<FleetDirectoryService, 'ensureLoaded' | 'laneForAccount'>,
     suffix: '/bots' | '/gallery' = '/bots',
+    old: { query?: Record<string, string>; fragment?: string } = {},
   ) {
     TestBed.configureTestingModule({
       providers: [
@@ -31,7 +39,7 @@ describe('brokerClerkRedirectGuard', () => {
         { provide: FleetDirectoryService, useValue: fleet },
       ],
     });
-    const route = routeFor(params);
+    const route = routeFor(params, old.query, old.fragment ?? null);
     const guard = brokerClerkRedirectGuard(suffix);
     const state = TestBed.inject(Router).routerState.snapshot;
     return runInInjectionContext(TestBed.inject(Injector), () =>
@@ -67,6 +75,25 @@ describe('brokerClerkRedirectGuard', () => {
     if (!(result instanceof UrlTree)) throw new Error('Exact lane did not redirect.');
     expect(TestBed.inject(Router).serializeUrl(result)).toBe(
       `/brokers/alpaca/clerks/${lane.clerk_id}/accounts/${lane.provider_summary?.confirmed_account_id}?view=wall`,
+    );
+  });
+
+  // Home's list drops a stray ?view= and the retired ?lens=; the Wall sets its own view.
+  it.each([
+    ['Bots', '/bots' as const, '?probe=1'],
+    ['Gallery', '/gallery' as const, '?probe=1&view=wall'],
+  ])('carries an old %s bookmark\'s query and fragment to the account Home', async (_name, suffix, landsWith) => {
+    const lane = testLane();
+    const result = await runGuard(
+      { broker: 'alpaca', accountId: lane.provider_summary?.confirmed_account_id ?? '' },
+      { ensureLoaded: vi.fn(() => Promise.resolve({ observed_at_ms: 1, clerks: [lane] })), laneForAccount: vi.fn(() => lane) },
+      suffix,
+      { query: { probe: '1', view: 'list', lens: 'operator' }, fragment: 'go' },
+    );
+
+    if (!(result instanceof UrlTree)) throw new Error('Exact lane did not redirect.');
+    expect(TestBed.inject(Router).serializeUrl(result)).toBe(
+      `/brokers/alpaca/clerks/${lane.clerk_id}/accounts/${lane.provider_summary?.confirmed_account_id}${landsWith}#go`,
     );
   });
 

@@ -6,7 +6,6 @@ import {
   activeMenuNodeFor,
   groupLanding,
   menuItemsFor,
-  menuTrailFor,
   windowTitleFor,
 } from './app-menu';
 import { HELP_DOCUMENTS } from '../shared/help/help-documents';
@@ -119,53 +118,27 @@ describe('app menu projections', () => {
     expect.soft(activeMenuNodeFor('/unlisted-page'), 'highlights nothing for a route outside the menu').toBeNull();
   });
 
+  // Which group a route ends in is the route inventory's to pin (every
+  // declared route, direct-loaded). These rows pin the entry the menu lights,
+  // where it is not simply the route's own listed name.
   it.each([
-    ['/markets', 'Markets', 'Markets'],
-    // An instrument's place, on any tab or sub-page, lights its owning entry.
+    // A shell's children light the shell's entry; an instrument's place, on
+    // any tab or sub-page, lights Markets.
     ['/markets/SPY/chart', 'Markets', 'Markets'],
     ['/markets/SPY/chart/news', 'Markets', 'Markets'],
     ['/data-lab/export', 'Markets', 'Build dataset'],
-    ['/data-lab/returns', 'Markets', 'Return Distribution'],
     ['/options-lab/chain', 'Markets', 'Options Lab'],
-    ['/options-lab/strategy-builder', 'Markets', 'Options Lab'],
     ['/options-lab/strategy-finder', 'Markets', 'Options Lab'],
-    ['/broker/options-chain', 'Markets', 'Options Chain (Live)'],
-    ['/broker/options-surface', 'Markets', 'Options Surface (3D)'],
-    ['/pricing-lab', 'Markets', 'Pricing Lab'],
-    ['/research-lab', 'Research', 'Research Lab'],
-    ['/research-lab/features/validate', 'Research', 'Research Lab'],
-    ['/research-lab/features/cross-sectional', 'Research', 'Research Lab'],
-    ['/research-lab/features/experiments', 'Research', 'Research Lab'],
-    ['/research-lab/signals/engine', 'Research', 'Research Lab'],
-    ['/research-lab/signals/history', 'Research', 'Research Lab'],
-    ['/research-lab/backtests/reliability', 'Research', 'Research Lab'],
-    ['/research-lab/backtests/strategy-runs', 'Research', 'Research Lab'],
     ['/research-lab/strategy-runs/run-42', 'Research', 'Research Lab'],
-    ['/research-lab/walk-forward/wf-42', 'Research', 'Research Lab'],
-    ['/research-lab/monte-carlo/mc-42', 'Research', 'Research Lab'],
-    ['/research-lab/baselines/baseline-42', 'Research', 'Research Lab'],
-    ['/research-lab/signal-report/42', 'Research', 'Research Lab'],
-    ['/edge', 'Research', 'Edge Analysis'],
-    ['/edge/realized-vs-iv', 'Research', 'Realized vs IV'],
-    ['/edge/cross-asset', 'Research', 'Cross-Asset'],
     ['/edge/regimes', 'Research', 'Regimes'],
-    ['/spec-strategy', 'Research', 'Strategy Spec'],
-    ['/strategy-lab', 'Signal strategies', 'Strategy Lab'],
-    ['/grid-search', 'Signal strategies', 'Grid Search'],
-    ['/walk-forward', 'Signal strategies', 'Walk-Forward'],
-    ['/golden-search', 'Signal strategies', 'Golden Search'],
     ['/golden-search/study-9', 'Signal strategies', 'Golden Search'],
-    ['/strategy-validation', 'Signal strategies', 'Strategy Validation'],
-    // The multi-strategy comparison belongs to Signal strategies, though the Research Lab shell still hosts it.
-    ['/research-lab/backtests/recency-chart', 'Signal strategies', 'Recency Chart'],
-    ['/options-backtest', 'Options setups', 'Options Backtest'],
-    ['/options-golden-search', 'Options setups', 'Options Golden Search'],
     ['/options-golden-search/study-9', 'Options setups', 'Options Golden Search'],
+    // Pages the menu does not list, though another place's shell still hosts them:
+    // the multi-strategy comparison is Signal strategies'.
+    ['/research-lab/backtests/recency-chart', 'Signal strategies', 'Recency Chart'],
+    // The analytical builder is an Options Lab tab, filed under Options setups (R32).
+    ['/options-lab/strategy-builder', 'Options setups', 'Strategy Builder'],
     ['/options-evidence/run/run-7', 'Options setups', 'Options evidence'],
-    ['/options-evidence/study/study-9', 'Options setups', 'Options evidence'],
-    ['/options-evidence/golden/golden-3', 'Options setups', 'Options evidence'],
-    ['/data-lake', 'Operations', 'Data Lake Observatory'],
-    ['/golden-fixtures', 'Operations', 'Golden Fixtures'],
     // Data checks: tabs other shells still host.
     ['/data-lab/validate', 'Operations', 'Validate'],
     ['/research-lab/inspect/data-divergence', 'Operations', 'Data Divergence'],
@@ -173,21 +146,12 @@ describe('app menu projections', () => {
     // ADR 0064: every tab of one account is that account's place, so the
     // menubar names the account list rather than moving between Bots and
     // Gallery entries while the workspace's own tabs already say which page
-    // is open.
-    ['/brokers/alpaca', 'Accounts', 'Accounts'],
-    ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9', 'Accounts', 'Accounts'],
-    ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots', 'Accounts', 'Accounts'],
+    // is open. A bot's own page and the lane-scoped tabs are inside it too (#2186).
     ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery', 'Accounts', 'Accounts'],
-    // A bot's own page and the lane-scoped tabs are inside the workspace too
-    // (#2186), so the menubar names the account list for them as well.
     ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid-1', 'Accounts', 'Accounts'],
-    ['/brokers/alpaca/clerks/clrk_spec/settings', 'Accounts', 'Accounts'],
     ['/brokers/alpaca/clerks/clrk_spec/history', 'Accounts', 'Accounts'],
-    ['/brokers/alpaca/clerks/clrk_spec/bots', 'Accounts', 'Accounts'],
-    ['/brokers/alpaca/clerks/clrk_spec/gallery', 'Accounts', 'Accounts'],
     // A lane the address cannot prove fails in place under Accounts, not nowhere.
     ['/brokers/ibkr/clerks/clrk_other/settings', 'Accounts', 'Broker lane unavailable'],
-    ['/brokers/ibkr/bots', 'Accounts', 'Broker lane unavailable'],
   ])('resolves %s to its owning group and page: %s > %s', (url, groupTitle, itemTitle) => {
     const node = activeMenuNodeFor(url);
 
@@ -240,40 +204,5 @@ describe('app menu projections', () => {
     // Alpaca destination the menu names.
     expect(activeMenuNodeFor(url)?.item.title).toBe('Accounts');
     expect(windowTitleFor(url)).toBe('Accounts');
-  });
-
-  describe('the trail back to the group', () => {
-    it('leads a page back to its group, landing on the group\'s first item', () => {
-      expect(menuTrailFor('/options-backtest', 'Options Backtest')).toEqual([
-        { label: 'Options setups', route: '/options-backtest' },
-      ]);
-      expect(menuTrailFor('/data-lake', 'Data Lake Observatory')).toEqual([
-        { label: 'Operations', route: '/data-lake' },
-      ]);
-    });
-
-    it('adds the listed page a deeper heading sits inside', () => {
-      expect(menuTrailFor('/golden-search/study-9', 'Study 9')).toEqual([
-        { label: 'Signal strategies', route: '/strategy-lab' },
-        { label: 'Golden Search', route: '/golden-search' },
-      ]);
-    });
-
-    it('adds no second link to the place the group already lands on', () => {
-      expect(menuTrailFor('/research-lab/features/validate', 'Feature Validation')).toEqual([
-        { label: 'Research', route: '/research-lab' },
-      ]);
-    });
-
-    it('does not repeat the heading the page already has', () => {
-      expect(menuTrailFor('/golden-search/study-9', 'Golden Search')).toEqual([
-        { label: 'Signal strategies', route: '/strategy-lab' },
-      ]);
-    });
-
-    it('is empty for a page outside every group', () => {
-      expect(menuTrailFor('/docs/broker-manual', 'Broker Costs & Timing')).toEqual([]);
-      expect(menuTrailFor('/unlisted-page', 'Anything')).toEqual([]);
-    });
   });
 });

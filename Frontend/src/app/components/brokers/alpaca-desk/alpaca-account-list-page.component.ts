@@ -3,6 +3,7 @@ import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute } from '@angular/router';
 
 import { GOLDEN_QUALIFICATION_QUERY_PARAM } from '../../../fleet/account-workspace';
+import { BreadcrumbComponent } from '../../../shared/breadcrumb/breadcrumb.component';
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import { AlpacaLaneCardComponent } from './alpaca-lane-card.component';
 
@@ -37,7 +38,7 @@ export const DIRECTORY_RUNBOOK_URL = `${RUNBOOKS}/fleet-directory-unavailable.md
 @Component({
   selector: 'app-alpaca-account-list-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AlpacaLaneCardComponent],
+  imports: [AlpacaLaneCardComponent, BreadcrumbComponent],
   templateUrl: './alpaca-account-list-page.component.html',
   styleUrl: './alpaca-account-list-page.component.scss',
 })

@@ -1,8 +1,10 @@
 import { HttpClient } from "@angular/common/http";
 import { inject, Injectable } from "@angular/core";
 import { firstValueFrom } from "rxjs";
-import type {
-  Candle, IvConfidenceSummary, LiveIv30Marker, RealizedVsIvData, SignalMark, VrpBin,
+import {
+  RV_READOUT_WINDOW, RV_WINDOWS,
+  type Candle, type IvConfidenceSummary, type LiveIv30Marker, type RealizedVsIvData,
+  type RvWindowSeries, type SignalMark, type VrpBin,
 } from "./edge-data.model";
 
 interface BarPayload {
@@ -117,6 +119,7 @@ export class EdgeApiService {
       throw new Error(`no bars returned for ${req.symbol}`);
     }
     const tenorDays = this.tenorToDays(req.tenor);
+    const windows = req.windows ?? RV_WINDOWS;
     const seriesP = firstValueFrom(this.http.post<RealizedVsIvSeriesResponse>(
       "/api/edge/realized-vs-iv/series",
       {
@@ -125,13 +128,13 @@ export class EdgeApiService {
         tenor_days: tenorDays,
         session: req.session ?? "ETH",
         estimators: req.estimators,
-        windows: req.windows ?? [5, 10, 30],
+        windows,
         bars,
       }
     ));
     const liveIvP = this.getLiveIv30(req.symbol, tenorDays);
     const series = await seriesP;
-    return { ...this.projectSeries(req.symbol, bars, series), liveIv30: await liveIvP };
+    return { ...this.projectSeries(req.symbol, bars, series, windows), liveIv30: await liveIvP };
   }
 
   /** Fetch the live IV30 value for `symbol`. Tries `vix-style` first
@@ -215,7 +218,7 @@ export class EdgeApiService {
    *  Only what the endpoint returns is projected; nothing is defaulted for the
    *  edge score, regimes or oracle signals it does not compute. */
   private projectSeries(
-    symbol: string, bars: BarPayload[], series: RealizedVsIvSeriesResponse,
+    symbol: string, bars: BarPayload[], series: RealizedVsIvSeriesResponse, windows: readonly number[],
   ): Omit<RealizedVsIvData, "liveIv30"> {
     const N = bars.length;
     const candles: Candle[] = bars.map((b) => ({
@@ -224,8 +227,11 @@ export class EdgeApiService {
     const dates = bars.map((b) => new Date(b.ts));
     const iv30 = nullsToNaN(series.iv30);
     const iv30Trd252 = nullsToNaN(series.iv30_trd252 ?? []);
-    const rvTrailingKey = Object.keys(series.rv_trailing)[0] ?? "yz_30";
-    const rvYZ = nullsToNaN(series.rv_trailing[rvTrailingKey] ?? []);
+    const rvYzByWindow = yangZhangTrailing(series, windows);
+    const rvYZ = rvYzByWindow.find((s) => s.window === RV_READOUT_WINDOW)?.values;
+    if (!rvYZ) {
+      throw new Error(`the series response has no ${yzKey(RV_READOUT_WINDOW)} trailing RV for the readout`);
+    }
     const rvHf21d = nullsToNaN(series.rv_hf_forward ?? []);
     const vrpForward = nullsToNaN(series.vrp_forward);
     const vrpZ = nullsToNaN(series.vrp_z);
@@ -252,6 +258,7 @@ export class EdgeApiService {
       iv30,
       iv30Trd252,
       rvYZ,
+      rvYzByWindow,
       rvHf21d,
       vrpForward,
       vrpZ,
@@ -264,6 +271,22 @@ export class EdgeApiService {
       ivConfidence: extractIvConfidence(series),
     };
   }
+}
+
+const yzKey = (window: number): string => `yz_${window}`;
+
+/** The Yang-Zhang series for the requested windows, picked by key: the
+ *  response holds one series per estimator per window, so position says
+ *  nothing about which estimator or window a series is. */
+function yangZhangTrailing(
+  series: RealizedVsIvSeriesResponse, windows: readonly number[],
+): RvWindowSeries[] {
+  return [...windows]
+    .sort((a, b) => a - b)
+    .flatMap((window) => {
+      const values = series.rv_trailing[yzKey(window)];
+      return values ? [{ window, values: nullsToNaN(values) }] : [];
+    });
 }
 
 function liveResponseToMarker(

@@ -67,6 +67,8 @@ describe('PageHeaderComponent slots', () => {
 
 describe('PageHeaderComponent trail', () => {
   const routes = [
+    { path: 'golden-search', component: RouteStub },
+    { path: 'research-lab/features/validate', component: RouteStub },
     { path: 'golden-search/:studyId', component: RouteStub },
     { path: 'docs/broker-manual', component: RouteStub },
     { path: '**', component: RouteStub, data: { notFound: true } },
@@ -78,7 +80,7 @@ describe('PageHeaderComponent trail', () => {
     const fixture = TestBed.createComponent(TitledHost);
     fixture.componentInstance.title = title;
     fixture.detectChanges();
-    return Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('.page-breadcrumb a')).map(
+    return Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('nav[aria-label="Breadcrumb"] a')).map(
       (link) => `${link.textContent?.trim()} -> ${link.getAttribute('href')}`,
     );
   }
@@ -92,6 +94,14 @@ describe('PageHeaderComponent trail', () => {
       'Signal strategies -> /strategy-lab',
       'Golden Search -> /golden-search',
     ]);
+  });
+
+  it('adds no second link to the place the group already lands on', async () => {
+    expect(await trailAt('/research-lab/features/validate', 'Feature Validation')).toEqual(['Research -> /research-lab']);
+  });
+
+  it('adds no link from a page to itself, though its heading differs from the menu label', async () => {
+    expect(await trailAt('/golden-search', 'Find a golden study')).toEqual(['Signal strategies -> /strategy-lab']);
   });
 
   it.each([

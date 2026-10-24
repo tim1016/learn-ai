@@ -1,5 +1,6 @@
 import { Component } from '@angular/core';
-import { provideRouter } from '@angular/router';
+import { TestBed } from '@angular/core/testing';
+import { Router, provideRouter } from '@angular/router';
 import { render, screen, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
@@ -107,5 +108,30 @@ describe('WorkspaceHeaderComponent', () => {
 
     expect(screen.queryByRole('navigation', { name: 'Breadcrumb' })).toBeNull();
     expect(view.container.querySelector('.workspace-header__purpose')).toBeNull();
+  });
+});
+
+@Component({
+  imports: [WorkspaceHeaderComponent],
+  template: `<app-workspace-header title="Golden Search" />`,
+})
+class MenuTrailHost {}
+
+@Component({ template: '' })
+class RouteStub {}
+
+describe('WorkspaceHeaderComponent — trail from the menu', () => {
+  it('leads back to the page\'s menu group when the host passes no breadcrumb', async () => {
+    TestBed.configureTestingModule({
+      providers: [provideRouter([{ path: 'golden-search/:studyId', component: RouteStub }])],
+    });
+    await TestBed.inject(Router).navigateByUrl('/golden-search/study-9');
+    const fixture = TestBed.createComponent(MenuTrailHost);
+    fixture.detectChanges();
+
+    const links = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('nav[aria-label="Breadcrumb"] a')).map(
+      (link) => `${link.textContent?.trim()} -> ${link.getAttribute('href')}`,
+    );
+    expect(links).toEqual(['Signal strategies -> /strategy-lab']);
   });
 });

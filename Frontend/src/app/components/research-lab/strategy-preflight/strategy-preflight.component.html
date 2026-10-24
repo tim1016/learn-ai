@@ -137,13 +137,6 @@
             @if (check.fix_hint) {
               <div class="check-fix"><b>Fix:</b> {{ check.fix_hint }}</div>
             }
-            @if (check.docs_link) {
-              <a class="check-docs"
-                 [href]="'/' + check.docs_link"
-                 target="_blank" rel="noopener">
-                Open gotchas doc →
-              </a>
-            }
           </div>
         </article>
       }

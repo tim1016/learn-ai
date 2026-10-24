@@ -1,5 +1,5 @@
 import { inject } from '@angular/core';
-import { Router, type Params, type RedirectFunction } from '@angular/router';
+import { Router, type Params, type RedirectFunction, type UrlCreationOptions } from '@angular/router';
 
 /** Where a redirect leads: fixed commands, or commands built from the matched route's own params. */
 export type RedirectCommands = readonly string[] | ((params: Params) => readonly string[]);
@@ -9,6 +9,27 @@ export interface RedirectStateOptions {
   readonly drop?: readonly string[];
   /** Query the destination adds, from the matched route's params. It wins over a key of the same name in the URL. */
   readonly set?: (params: Params) => Params;
+}
+
+/** What a redirect reads off the URL it is leaving: a route snapshot has all three. */
+export interface RedirectSource {
+  readonly params: Params;
+  readonly queryParams: Params;
+  readonly fragment: string | null;
+}
+
+/**
+ * The query and fragment a redirect carries to its destination: the old URL's,
+ * minus `drop`, plus `set`. For a guard that redirects with its own `UrlTree`
+ * and must carry state the same way a `redirectKeepingState` route does.
+ */
+export function redirectState(
+  options: RedirectStateOptions,
+  { params, queryParams, fragment }: RedirectSource,
+): Pick<UrlCreationOptions, 'queryParams' | 'fragment'> {
+  const dropped = new Set(options.drop ?? []);
+  const kept = Object.fromEntries(Object.entries(queryParams).filter(([key]) => !dropped.has(key)));
+  return { queryParams: { ...kept, ...options.set?.(params) }, fragment: fragment ?? undefined };
 }
 
 /**
@@ -26,12 +47,9 @@ export function redirectKeepingState(
   commands: RedirectCommands,
   options: RedirectStateOptions = {},
 ): RedirectFunction {
-  const dropped = new Set(options.drop ?? []);
-  return ({ params, queryParams, fragment }) => {
-    const kept = Object.fromEntries(Object.entries(queryParams).filter(([key]) => !dropped.has(key)));
-    return inject(Router).createUrlTree([...(typeof commands === 'function' ? commands(params) : commands)], {
-      queryParams: { ...kept, ...options.set?.(params) },
-      fragment: fragment ?? undefined,
-    });
-  };
+  return (source) =>
+    inject(Router).createUrlTree(
+      [...(typeof commands === 'function' ? commands(source.params) : commands)],
+      redirectState(options, source),
+    );
 }

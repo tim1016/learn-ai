@@ -3,18 +3,22 @@ import { Router, type RedirectFunction } from '@angular/router';
 
 import { legacyInstrumentTarget } from '../../markets/instrument-address';
 
-/* Legacy Data Lab URL ingress adapter.
+/* Legacy Data Lab URL ingress.
  *
- * Pure resolver for pre-redesign /data-lab and /data-quality URLs. It maps a
- * legacy URL to one of the canonical child routes (or to the instrument place
- * the chart moved to) plus a validated, string-only param bag. Unknown keys are dropped with a warning; invalid
- * values (bad mode, non-UUID sessionId, malformed recipe entries) are dropped
- * or ignored with warnings rather than failing the redirect. Resolved state
- * may populate the workspace but never auto-fetches — that decision lives in
- * the shell, not here.
+ * The router owns which page a legacy address opens: `redirectLegacyDataLab`
+ * sends `/data-lab` and `/data-quality` straight to the child their `mode`
+ * names (a chart goes to the instrument place it moved to), and on a canonical
+ * child the path wins. What is left for the shell is the workspace state the
+ * bookmark carried, which `resolveLegacyDataLabUrl` validates into a
+ * string-only param bag, and the notes on what it ignored: unknown keys, a
+ * `mode` the path already answers, invalid values (bad mode, non-UUID
+ * sessionId, empty scope). Ignored keys stay in the URL, which is why they are
+ * reported as ignored rather than dropped. Resolved state may populate the
+ * workspace but never auto-fetches — that decision lives in the shell, not
+ * here.
  *
  * Indicator recipe params are treated opaquely for now (Phase 1): known keys
- * are kept verbatim, everything else is dropped with a warning. */
+ * are kept verbatim, everything else is ignored with a note. */
 
 export type DataLabRoute =
   | '/data-lab/export'
@@ -25,10 +29,9 @@ export type DataLabRoute =
 export type LegacyDataLabTarget = DataLabRoute | 'instrument';
 
 export interface LegacyDataLabResolution {
-  route: LegacyDataLabTarget;
   /** Surviving, validated query params (string values only). */
   params: Record<string, string>;
-  /** Human-readable notes about dropped keys / invalid values. */
+  /** Human-readable notes about ignored keys / invalid values. */
   warnings: string[];
 }
 
@@ -93,63 +96,50 @@ function isUuid(v: string): boolean {
   return UUID_RE.test(v);
 }
 
-/** Resolve a legacy /data-lab or /data-quality URL to its canonical child
- *  route, surviving params, and migration warnings. Pure. */
+/** Resolve a legacy /data-lab or /data-quality URL to the workspace params it
+ *  carries and the notes on what it ignored. Pure. */
 export function resolveLegacyDataLabUrl(url: string): LegacyDataLabResolution {
   const warnings: string[] = [];
   const params: Record<string, string> = {};
 
   // The legacy URL may arrive scheme-less (e.g. "/data-lab?mode=build");
   // give the parser a synthetic origin when needed.
-  const parsed = new URL(url, 'https://data-lab.invalid');
-  const path = parsed.pathname.replace(/\/+$/, '') || '/';
-  const query = parsed.searchParams;
+  const query = new URL(url, 'https://data-lab.invalid').searchParams;
 
-  // /data-quality redirects to Validate.
-  const isQualityPath = path === '/data-quality';
-
-  // Mode selection — invalid values fall back with a warning. The default
-  // destination is the instrument's chart; `sessionId` alone never leaves it.
-  let route: LegacyDataLabTarget = 'instrument';
-  // A canonical child path keeps its own destination. The /data-quality →
-  // /data-lab/validate redirect preserves the query string, so the shell
-  // first sees the REDIRECTED URL — keying only on the original legacy
-  // paths would drop the bookmark's ticker/range before this runs.
-  const canonical = /^\/data-lab\/(export|validate|returns)$/.exec(path);
-  if (canonical) route = canonical[0] as DataLabRoute;
+  // The redirect spends a `mode` that names a child. One that reaches the
+  // shell is either not a mode, or sits on a child whose path already decided.
   const mode = query.get('mode');
   if (mode !== null) {
-    const mapped = routeForMode(mode);
-    if (mapped) route = mapped;
-    else warnings.push(`Dropped invalid mode "${mode}"`);
-  } else if (isQualityPath) {
-    route = '/data-lab/validate';
+    warnings.push(
+      routeForMode(mode)
+        ? `Ignored mode "${mode}": the address already names the page`
+        : `Ignored invalid mode "${mode}"`,
+    );
   }
 
-  // sessionId: the chart unless the legacy mode explicitly selects Export or
-  // Validate. Non-UUID values are dropped with a warning.
+  // Non-UUID sessionId values are ignored with a note.
   const sessionId = query.get('sessionId');
   if (sessionId !== null) {
     if (isUuid(sessionId)) params['sessionId'] = sessionId;
-    else warnings.push(`Dropped invalid sessionId "${sessionId}" (not a UUID)`);
+    else warnings.push(`Ignored invalid sessionId "${sessionId}" (not a UUID)`);
   }
 
   // Known scope keys pass through verbatim (values validated later at the
   // boundary); everything else — including indicator recipe/param keys — is
-  // dropped with a warning until the bounded recipe schema lands.
+  // ignored with a note until the bounded recipe schema lands.
   for (const key of new Set(query.keys())) {
     if (key === 'mode' || key === 'sessionId') continue;
     if (!KNOWN_KEYS.has(key)) {
-      warnings.push(`Dropped unknown query key "${key}"`);
+      warnings.push(`Ignored unknown query key "${key}"`);
       continue;
     }
     const value = query.get(key);
     if (value === null || value === '') {
-      warnings.push(`Dropped empty query key "${key}"`);
+      warnings.push(`Ignored empty query key "${key}"`);
       continue;
     }
     params[key] = value;
   }
 
-  return { route, params, warnings };
+  return { params, warnings };
 }

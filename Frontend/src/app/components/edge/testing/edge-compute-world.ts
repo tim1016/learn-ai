@@ -25,18 +25,32 @@ function aggregatesResponse() {
   };
 }
 
+/** The trailing RV each Yang-Zhang window measures, distinct per window so a
+ *  page that reads the wrong series shows the wrong number. */
+export const YZ_RV_BY_WINDOW: Readonly<Record<number, number>> = { 5: 0.31, 10: 0.22, 30: 0.14 };
+const OTHER_ESTIMATOR_RV = 0.5;
+const WINDOWS = [5, 10, 30];
+
 /** What `/api/edge/realized-vs-iv/series` returns for a 40-bar daily window:
- *  IV30 from bar 5 on (or none at all), the last three forward RVs blind. */
-function seriesResponse(ivPresent: boolean) {
+ *  IV30 from bar 5 on (or none at all), the last three forward RVs blind, and
+ *  one RV series per estimator per window, estimator-major as the server
+ *  orders them (`yz_5`, `yz_10`, `yz_30`). */
+function seriesResponse(ivPresent: boolean, estimators: readonly string[]) {
   const ts = barTimestamps();
   const upTo = (from: number, to: number, value: (i: number) => number) =>
     ts.map((_, i) => (i >= from && i < to ? value(i) : null));
+  const rvByKey = (from: number, to: number) => Object.fromEntries(
+    estimators.flatMap((est) => WINDOWS.map((w) => [
+      `${est}_${w}`,
+      upTo(from, to, () => (est === "yz" ? YZ_RV_BY_WINDOW[w] : OTHER_ESTIMATOR_RV)),
+    ])),
+  );
   const iv30 = ivPresent ? upTo(IV_FROM, BARS, () => 0.21) : ts.map(() => null);
   return {
     symbol: "SPY",
     ts,
-    rv_trailing: { yz_30: upTo(3, BARS, () => 0.14) },
-    rv_forward: { yz_30: upTo(0, BARS - BLIND_TAIL, () => 0.15) },
+    rv_trailing: rvByKey(3, BARS),
+    rv_forward: rvByKey(0, BARS - BLIND_TAIL),
     iv30,
     iv30_trd252: iv30,
     rv_hf_trailing: upTo(3, BARS, () => 0.14),
@@ -56,6 +70,9 @@ function seriesResponse(ivPresent: boolean) {
 export interface ComputeAnswer {
   /** False answers with a series that carries no IV30 at all. */
   ivPresent?: boolean;
+  /** The estimators the request named, in request order; the response holds a
+   *  series for each. Defaults to Yang-Zhang alone. */
+  estimators?: readonly string[];
 }
 
 /** Answers the requests one Compute click makes, in order, with a small
@@ -64,7 +81,7 @@ export interface ComputeAnswer {
 export async function answerCompute(http: HttpTestingController, answer: ComputeAnswer = {}): Promise<void> {
   http.expectOne("/api/aggregates/fetch").flush(aggregatesResponse());
   await tick();
-  http.expectOne("/api/edge/realized-vs-iv/series").flush(seriesResponse(answer.ivPresent ?? true));
+  http.expectOne("/api/edge/realized-vs-iv/series").flush(seriesResponse(answer.ivPresent ?? true, answer.estimators ?? ["yz"]));
   http.expectOne("/api/edge/iv30/vix-style").flush({ detail: "dark" }, { status: 503, statusText: "Unavailable" });
   await tick();
   http.expectOne("/api/edge/iv30/parametric").flush({ detail: "dark" }, { status: 503, statusText: "Unavailable" });

@@ -249,28 +249,14 @@ describe('DataLabComponent (shell)', () => {
     expect(fixture.componentInstance.store.committedTicker()).toBe('SPY');
   });
 
-  it('moves a canonical child whose legacy mode names another child, dropping the spent mode', async () => {
+  it('leaves a canonical child whose legacy mode names another where it is, and says the mode is ignored', async () => {
     const { navSpy, fixture } = await renderDirectShell('/data-lab/validate?mode=build&ticker=AAPL');
     fixture.componentInstance.runLegacyIngress();
+    fixture.detectChanges();
 
-    expect(navSpy).toHaveBeenCalledWith(['/data-lab/export'], {
-      queryParams: { ticker: 'AAPL' },
-      replaceUrl: true,
-    });
-  });
-
-  it('sends a child whose legacy mode names the chart to the instrument it names, with its window and session', async () => {
-    const { navSpy, fixture } = await renderDirectShell(
-      '/data-lab/export?mode=explore&ticker=AAPL&from=2026-04-15&to=2026-05-15&trading-session=extended',
-    );
-    fixture.componentInstance.runLegacyIngress();
-
-    expect(navSpy).toHaveBeenCalledWith(['/markets', 'AAPL', 'chart'], {
-      queryParams: { from: '2026-04-15', to: '2026-05-15', session: 'extended' },
-      replaceUrl: true,
-    });
-    // It left for the instrument's place: nothing was applied to this workspace.
-    expect(fixture.componentInstance.store.committedTicker()).toBe('');
+    expect(navSpy, 'the router owns the path; the shell never moves it').not.toHaveBeenCalled();
+    expect(fixture.componentInstance.store.draft().ticker, 'the bookmark still populates the workspace').toBe('AAPL');
+    expect(screen.getByText(/Ignored mode "build"/)).toBeTruthy();
   });
 
   it('points Chart at the committed instrument with its window, timeframe and session', async () => {
@@ -289,13 +275,13 @@ describe('DataLabComponent (shell)', () => {
     fixture.componentInstance.runLegacyIngress();
     fixture.detectChanges();
 
-    expect(screen.getByText(/Dropped invalid mode "bogus"/)).toBeTruthy();
-    expect(screen.getByText(/Dropped unknown query key "frobnicate"/)).toBeTruthy();
+    expect(screen.getByText(/Ignored invalid mode "bogus"/)).toBeTruthy();
+    expect(screen.getByText(/Ignored unknown query key "frobnicate"/)).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     // Zoneless: raw user-event dispatch does not schedule change detection,
     // so flush manually before asserting the banner is gone.
     fixture.detectChanges();
-    expect(screen.queryByText(/Dropped invalid mode/)).toBeNull();
+    expect(screen.queryByText(/Ignored invalid mode/)).toBeNull();
   });
 
   it('hosts the shell-owned run dock and opens the saved-setups drawer', async () => {

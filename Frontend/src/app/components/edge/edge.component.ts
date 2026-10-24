@@ -9,6 +9,8 @@ import {
 } from "@angular/router";
 import { filter, map, startWith } from "rxjs";
 import { PageHeaderComponent } from "../../shared/page-header/page-header.component";
+import { menuLabelFor } from "../../shell/app-menu";
+import { CurrentUrlService } from "../../shell/current-url.service";
 import { SampleDataBannerComponent } from "../../shared/sample-data/sample-data-banner.component";
 import { EdgeMiniLineComponent } from "./charts/edge-charts";
 import { EdgeMockDataService } from "./services/edge-mock-data.service";
@@ -49,6 +51,10 @@ interface CapabilityRow {
 export class EdgeComponent {
   private readonly router = inject(Router);
   private readonly mockData = inject(EdgeMockDataService);
+
+  /** Titled by the menu entry that leads to the view (PRD #3490 R01), as Data Lab is. */
+  private readonly menuNode = inject(CurrentUrlService).menuNode;
+  protected readonly pageTitle = computed(() => this.menuNode()?.item.title ?? menuLabelFor("/edge"));
 
   readonly scoreOpen = signal(false);
   readonly tradeSimOpen = signal(false);

@@ -34,7 +34,7 @@ import {
   ChartRangePreset,
   DataLabRangePresetsService,
 } from '../../services/data-lab-range-presets.service';
-import { instrumentCommands, legacyInstrumentTarget, MARKETS_ROUTE } from '../../markets/instrument-address';
+import { instrumentCommands, MARKETS_ROUTE } from '../../markets/instrument-address';
 import { resolveLegacyDataLabUrl } from './data-lab-ingress';
 import {
   BAR_TIMEFRAMES,
@@ -134,14 +134,13 @@ export class DataLabComponent {
    *  populate and commit the workspace from it, and name what it ignored in
    *  the migration banner.
    *
-   *  The legacy addresses (`/data-lab`, `/data-quality`) redirect straight to
-   *  the child their `mode` names, query intact (`redirectLegacyDataLab`), so
-   *  this normally runs on a URL that is already canonical and navigates
-   *  nowhere. Only a canonical child whose `mode` names another child is moved,
-   *  and one whose `mode` names the chart goes to the instrument it names.
-   *  The trigger keys on the legacy `mode` marker, the legacy parent path, or
-   *  a canonical child URL carrying legacy scope keys — that last shape is
-   *  what a `/data-quality?ticker=…` bookmark looks like once redirected.
+   *  The router owns the path: the legacy addresses (`/data-lab`,
+   *  `/data-quality`) redirect straight to the child their `mode` names, query
+   *  intact (`redirectLegacyDataLab`; a chart goes to the instrument place),
+   *  and on a canonical child the path wins. This never navigates. The
+   *  trigger keys on a `mode` marker, the legacy parent path, or a canonical
+   *  child URL carrying legacy scope keys — that last shape is what a
+   *  `/data-quality?ticker=…` bookmark looks like once redirected.
    *
    *  Public so the ingress spec can drive it against a stubbed
    *  `router.url`. */
@@ -163,21 +162,10 @@ export class DataLabComponent {
     this.ingressApplied = true;
 
     const resolution = resolveLegacyDataLabUrl(url);
-    if (resolution.route === 'instrument') {
-      const target = legacyInstrumentTarget(resolution.params, 'chart');
-      void this.router.navigate(target.commands, { queryParams: target.queryParams, replaceUrl: true });
-      return;
-    }
     this.applyLegacyScope(resolution.params);
     // Set unconditionally: a valid legacy URL must clear warnings left by an
     // earlier invalid one, not layer over them.
     this.ingressWarnings.set(resolution.warnings);
-    if (resolution.route !== path) {
-      this.router.navigate([resolution.route], {
-        queryParams: resolution.params,
-        replaceUrl: true,
-      });
-    }
   }
 
   /** Apply surviving legacy scope params to the workspace draft and commit.

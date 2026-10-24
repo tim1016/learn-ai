@@ -14,10 +14,9 @@ import { FleetDirectoryService } from './fleet/fleet-directory.service';
 import { AppMenubarComponent } from './shell/app-menubar.component';
 import { TopBarComponent, type ShellAccountMode } from './shell/top-bar.component';
 import { PageBodyComponent } from './shell/page-body.component';
-import { windowTitleFor } from './shell/app-menu';
+import { NOT_FOUND_TITLE, windowTitleFor } from './shell/app-menu';
 import { instrumentWindowTitle } from './markets/instrument-address';
 import { CurrentUrlService, routeTreeHasData } from './shell/current-url.service';
-import { NOT_FOUND_TITLE } from './shell/not-found.component';
 import { WorkspaceTitleContextService } from './shell/workspace-title-context.service';
 import {
   accountWorkspaceLocation,
