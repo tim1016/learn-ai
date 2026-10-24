@@ -228,7 +228,7 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
 
     await page.goto('/brokers/alpaca');
 
-    await expect(page.getByRole('heading', { name: 'Alpaca' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Accounts', level: 1 })).toBeVisible();
     const accounts = page.getByRole('list', { name: 'Alpaca accounts' });
     const paperLane = accounts.getByRole('listitem').filter({ hasText: 'Paper lane' });
     const liveLane = accounts.getByRole('listitem').filter({ hasText: 'Live lane' });
@@ -303,7 +303,7 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
     // to an account, so reaching one starts by choosing the account.
     await page.goto('/brokers/alpaca?surface=bots');
     await expect(page).toHaveURL('/brokers/alpaca');
-    await expect(page.getByRole('heading', { name: 'Alpaca' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Accounts', level: 1 })).toBeVisible();
 
     await page.getByRole('list', { name: 'Alpaca accounts' })
       .getByRole('listitem').filter({ hasText: 'Paper lane' }).getByRole('link').click();
