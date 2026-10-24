@@ -1,4 +1,5 @@
 import { CommonModule } from '@angular/common';
+import { HttpErrorResponse } from '@angular/common/http';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -595,8 +596,9 @@ export class BatchRunnerComponent {
 
   /**
    * A run that ended without a result parks why as the job's result: the lake's refusal, or the universe when no
-   * member could be evaluated. A job that failed for any other reason parks nothing, and the fetch finds none: the
-   * failure message already shown is all there is.
+   * member could be evaluated. A job that failed for any other reason parks nothing, and the result route answers
+   * 404: the failure message already shown is all there is. Any other failure to read the result is shown beside
+   * that message, never swallowed.
    */
   private async loadFailure(id: string): Promise<void> {
     try {
@@ -608,8 +610,18 @@ export class BatchRunnerComponent {
         universe: raw.universe ? this.toUniverse(raw.universe) : null,
         dataSource: raw.data_source ? this.toDataSource(raw.data_source) : null,
       });
-    } catch {
-      // No parked result: the job failed on something other than the stock bars or an empty universe.
+    } catch (err: unknown) {
+      if (err instanceof HttpErrorResponse && err.status === 404) return;
+      if (this.jobId() !== id) return;
+      const detail =
+        err instanceof HttpErrorResponse
+          ? `HTTP ${err.status}`
+          : err instanceof Error
+            ? err.message
+            : 'unknown error';
+      this.error.update(
+        (shown) => `${shown ?? 'Cross-sectional run failed'}. The lake's reason could not be loaded: ${detail}`,
+      );
     }
   }
 

@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { computed, signal, type Signal } from '@angular/core';
 import { render, screen, waitFor } from '@testing-library/angular';
 import { userEvent } from '@testing-library/user-event';
@@ -356,7 +357,7 @@ describe('BatchRunnerComponent', () => {
 
     it('shows only the failure message when the job parked nothing', async () => {
       const { jobs, user, finish } = await renderPage();
-      jobs.fetchResult.mockRejectedValue(new Error('no result for this job'));
+      jobs.fetchResult.mockRejectedValue(new HttpErrorResponse({ status: 404, statusText: 'Not Found' }));
       await user.click(runButton());
 
       finish('failed', { errorMessage: 'the worker crashed' });
@@ -365,6 +366,30 @@ describe('BatchRunnerComponent', () => {
       await waitFor(() => expect(jobs.fetchResult).toHaveBeenCalled());
       expect(screen.queryByTestId('failed-universe')).toBeNull();
       expect(screen.queryByText('Data source')).toBeNull();
+      expect(screen.queryByText(/could not be loaded/), 'a missing result is the expected answer, not a second failure').toBeNull();
+    });
+
+    it('says so when the failed job\'s result could not be read for any reason other than there being none', async () => {
+      const { jobs, user, finish } = await renderPage();
+      jobs.fetchResult.mockRejectedValue(
+        new HttpErrorResponse({ status: 500, statusText: 'Internal Server Error', url: '/api/jobs/job-1/result' }),
+      );
+      await user.click(runButton());
+
+      finish('failed', { errorMessage: 'the worker crashed' });
+
+      expect(
+        await screen.findByText("the worker crashed. The lake's reason could not be loaded: HTTP 500"),
+      ).not.toBeNull();
+    });
+
+    it('says so when the parked result is not the shape the page reads, rather than showing nothing', async () => {
+      const { user, finish } = await renderPage({ success: false, status: 'refused', refusal: { code: 'data_corrupt' } });
+      await user.click(runButton());
+
+      finish('failed', { errorMessage: 'the worker crashed' });
+
+      expect(await screen.findByText(/the worker crashed\. The lake's reason could not be loaded: /)).not.toBeNull();
     });
   });
 });
