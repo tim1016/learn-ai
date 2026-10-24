@@ -605,12 +605,8 @@ re-arms the server-authored timeframe auto-correct, and numeric
 
 ## Lake-sourced research studies: divergences from the provider path (#3521, 2026-10-24)
 
-The Feature study reads admitted lake bars instead of one provider call per run. The differences below are measured
-in `tests/research/test_feature_study_lake_vs_provider.py`. The owner decided these on 2026-10-24 (D02 of
-PRD #3490): the session is the person's choice and defaults to `extended` (04:00 to 20:00 ET), what the provider call
-always returned, so no number moves for a caller who sends none; `regular` is the other choice, and it is a different
-sample with a different cache identity (the comparison test measures the RSI and IC movement). Bars are 1, 3, 5 or 15
-minutes. A window that ends on a forming session, and a vendor payload with duplicate or out-of-order bars, are refused.
+The Feature study reads admitted lake bars instead of one provider call per run. The open differences below are
+measured in `tests/research/test_feature_study_lake_vs_provider.py`.
 
 - **P2: a held day with no recorded capture time cannot be judged early.** `captured_early` treats a missing
   `CompletedAtMs` as final, and an imported day carries its import time, which is later than its capture. Such a day
@@ -636,14 +632,18 @@ minutes. A window that ends on a forming session, and a vendor payload with dupl
   regular-hours study one that completed before 16:20 ET (13:20). Those are the final instants (20:15, 16:15) plus the
   five-minute claim lease. Any writer, such as a chart or a backfill, whose capture completes in the five minutes after
   the final instant leaves a day that is refused for good although it may be whole; that is the price of the conservative bound. A
-  study also does not start on a session until the final instant plus that lease has passed (`window_not_complete`
-  before), so a day it captures itself is never one of those.
+  study that has to capture a day does not start on it until the extended final instant plus that lease has passed
+  (`window_not_complete` before), whichever session it reads, because the lake keeps one copy of a day for every reader; a
+  study that finds the day held waits only for its own session's final instant plus the lease. So a day a study captures
+  itself is never one of those.
 - **P2: a split announced after a day was captured stays invisible to that held day until a later capture of the
   symbol refreshes its adjusted history (accepted by the owner, 2026-10-24).** The provider path adjusted to the moment of the request. Price-level
   outputs (MACD signal, quantile-bin bounds) move by the split factor, not only the prices.
 - **P3: the pre-run count of sessions the lake lacks does not see a held early day.** The Feature page counts
   missing sessions from the catalog, as the Data tab does, and there a day captured early is `ready`; the run still
-  refuses it (`captured_before_final`, naming the day) after the count warned of nothing.
+  refuses it (`captured_before_final`, naming the day) after the count warned of nothing. The count also treats today
+  as forming until the New York date rolls, while a run admits it once the extended final instant plus the lease has
+  passed (20:20 ET), so between 20:20 ET and midnight the notice says nothing and the run fetches one session.
 - **P2: a window that starts before the symbol listed refuses.** Admission has no "not applicable" outcome for a
   session before the first trade; the provider path computed on the shorter series. The refusal is
   `data_unavailable_from_provider` for the sessions the vendor answers empty.

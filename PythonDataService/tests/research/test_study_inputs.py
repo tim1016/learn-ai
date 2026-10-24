@@ -634,13 +634,14 @@ def test_a_study_started_within_a_claim_lease_of_the_final_instant_captures_noth
 ):
     """A capture is judged by its completion less the claim lease, so a study that asks the vendor just after the
     final instant publishes a day that rule calls early. The study waits out the lease instead: every day it
-    captures is one its next run admits again."""
+    captures is one its next run admits again. The lake keeps one copy of a day for every reader, so the instant
+    is the extended session's even for a regular-hours study (see the regular study at 16:30 ET below)."""
     mock_launcher()
     calls = VendorCalls()
     mock_vendor("SPY", vendor_history(MARCH), calls=calls)
     ident = identity(MARCH, session=policy)
     last = MARCH[-1]
-    final = capture_final_ms(last, policy)
+    final = capture_final_ms(last, "extended")
     clock = _catalog_clock(monkeypatch, final + 60_000)
 
     refusal = refusal_of(ident, now_ms=clock[0])
@@ -660,6 +661,57 @@ def test_a_study_started_within_a_claim_lease_of_the_final_instant_captures_noth
     assert counts(later.coverage.window) == (len(MARCH), 0, 0, 0), "what the study captured it admits again"
     assert later.snapshot_digest == first.snapshot_digest
     assert calls.days() == MARCH, "each session was bought once"
+
+
+@respx.mock
+def test_a_regular_study_that_would_capture_today_at_16_30_et_refuses_and_writes_nothing_so_the_day_stays_whole_for_an_extended_study(
+    catalog, lake
+):
+    """Regular hours finish forming at 16:15 ET and the claim lease passes at 16:20, so at 16:30 a regular-hours
+    study could ask the vendor for a day with hours of after-hours tape still to come. The lake keeps that capture
+    as the day for every reader, and the next extended-hours study would refuse it for good. The regular study
+    waits for the extended instant too, and the day is then captured whole."""
+    mock_launcher()
+    calls = VendorCalls()
+    tape = vendor_history(MARCH)
+    mock_vendor("SPY", tape, calls=calls)
+    today = MARCH[-1]
+    admit(identity(MARCH[:-1], session="regular"))  # every earlier day is held; today is not
+    calls.requests.clear()
+    rows_before = [dict(r) for r in catalog.rows.values()]
+    now = int(datetime(today.year, today.month, today.day, 16, 30, tzinfo=ET).timestamp() * 1000)
+    assert now >= capture_final_ms(today, "regular") + CLAIM_LEASE_MS, "a regular-hours reader would call today final"
+
+    refusal = refusal_of(identity(MARCH, session="regular"), now_ms=now)
+
+    assert refusal.code == "window_not_complete" and today.isoformat() in refusal.reason
+    assert calls.count == 0, "the vendor is not asked for a day that is still forming for an extended-hours reader"
+    assert not lake_file(lake, "raw", today).exists()
+    assert [dict(r) for r in catalog.rows.values()] == rows_before, "nothing was claimed or written"
+
+    extended = admit(identity(MARCH, session="extended"), now_ms=capture_final_ms(today, "extended") + CLAIM_LEASE_MS)
+
+    assert counts(extended.coverage.window) == (len(MARCH) - 1, 1, 0, 0), "today is captured once, whole, for the extended study"
+    assert calls.days() == [today]
+    assert [bar.start_ms for bar in extended.window_bars] == [b["t"] for day in MARCH for b in tape[day]]
+
+
+@respx.mock
+def test_a_regular_study_still_reads_a_day_the_lake_already_holds_at_16_30_et(catalog, lake):
+    """The extended instant gates a capture, not a read: a held, final day is read by a regular-hours study as soon
+    as its own session is final."""
+    mock_launcher()
+    calls = VendorCalls()
+    mock_vendor("SPY", vendor_history(MARCH), calls=calls)
+    today = MARCH[-1]
+    admit(identity(MARCH, session="regular"))  # held by an earlier run, long after the extended tape was final
+    calls.requests.clear()
+    now = int(datetime(today.year, today.month, today.day, 16, 30, tzinfo=ET).timestamp() * 1000)
+
+    admitted = admit(identity(MARCH, session="regular"), now_ms=now)
+
+    assert counts(admitted.coverage.window) == (len(MARCH), 0, 0, 0)
+    assert calls.count == 0
 
 
 @respx.mock

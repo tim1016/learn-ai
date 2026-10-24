@@ -42,9 +42,7 @@ in [the Spec reference note](../references/strategy-spec-layer.md#lake-input-aut
 the admission of a study's minute-bar input from the lake (the materializer
 fills what is missing; the UI is never a writer), and
 `app/research/lake_study.py` owns the run around a study's math: cache identity,
-the data-source block and the typed refusal. No calculation ownership changes;
-a study's request names the session it reads (`regular` or `extended`; the Feature study defaults to `extended`, the
-session it always computed on, owner decision 2026-10-24, D02 of PRD #3490).
+the data-source block and the typed refusal. No calculation ownership changes.
 
 Committed lake-file admission (#2456) is owned by
 `PythonDataService/app/data_lake/admission.py`, backed by committed catalog

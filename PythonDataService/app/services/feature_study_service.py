@@ -30,6 +30,8 @@ and what it reads now, field by field:
   day captured before that is refused (``captured_before_final``) rather than
   read as complete or captured again (``app.data_lake.capture_finality``). A
   refused day stays refused: there is no re-capture path (``docs/known-gaps.md``).
+  The lake keeps one copy of a day for every reader, so a ``rth`` run that would
+  have to capture a day waits for the extended tape too (``window_not_complete``).
 * **Warmup.** None. Features use only bars inside the window (RSI-14, MACD
   12/26/9, rolling 30, ``pct_change(5)``), over one continuous series straight
   across overnight gaps; their first values in the window are NaN.
