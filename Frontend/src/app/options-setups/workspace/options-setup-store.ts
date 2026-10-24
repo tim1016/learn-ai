@@ -15,6 +15,7 @@ import { describeDetail, FIELD, NO_PROBLEMS, type FieldProblems } from '../../co
 import { SetupSummaryChecker } from '../../components/options-backtest/setup-summary-checker';
 import type { SaveStatus } from '../../components/options-backtest/cards/bottom-bar.component';
 import { FileDownloadService } from '../../shared/file/file-download.service';
+import { OptionsSetupLibrary } from '../index/options-setup-library';
 import type { OptionsSetupTab } from '../options-setups.address';
 
 /** How long the setup rests, in milliseconds, before the server reads it back. A spec that is not about the wait sets 0. */
@@ -22,8 +23,6 @@ export const SETUP_DESCRIBE_DEBOUNCE_MS = new InjectionToken<number>('SETUP_DESC
   providedIn: 'root',
   factory: () => 300,
 });
-
-export type LibraryStatus = 'loading' | 'ready' | 'error';
 
 /** What an import said: it was loaded, or the reasons it was not. Nothing changes when it was not. */
 export interface ImportNotice {
@@ -73,6 +72,7 @@ export class OptionsSetupWorkspaceStore {
   private readonly service = inject(OptionsBacktestService);
   private readonly download = inject(FileDownloadService);
   private readonly describeDebounceMs = inject(SETUP_DESCRIBE_DEBOUNCE_MS);
+  private readonly library = inject(OptionsSetupLibrary);
 
   /** The saved name the address carries, or `null` for the unsaved draft. The workspace sets it from the URL. */
   readonly address = signal<string | null>(null);
@@ -162,17 +162,10 @@ export class OptionsSetupWorkspaceStore {
   readonly underlyingProblem = computed(() => this.fieldProblems().get(FIELD.underlying) ?? null);
   readonly squareOffProblem = computed(() => this.fieldProblems().get(FIELD.squareOff) ?? null);
 
-  // The saved setups.
-  private readonly library = resource({ loader: () => this.service.list() });
-  readonly setups = computed<readonly SavedSetup[]>(() => (this.library.hasValue() ? this.library.value() : []));
-  readonly libraryStatus = computed<LibraryStatus>(() => {
-    if (this.library.error() !== undefined) return 'error';
-    return this.library.hasValue() ? 'ready' : 'loading';
-  });
-  readonly libraryProblem = computed(() => {
-    const error: unknown = this.library.error();
-    return error === undefined ? null : extractServerMessage(error, 'The saved setups could not be read.');
-  });
+  // The saved setups, read once for the place (`OptionsSetupLibrary`) and reloaded here after a save.
+  readonly setups = this.library.setups;
+  readonly libraryStatus = this.library.status;
+  readonly libraryProblem = this.library.problem;
   /** The name of the setup that was opened or last saved, and whether the draft is still that setup. */
   private readonly names = new RunNameTracker();
   readonly loadedName = this.names.name;
@@ -188,6 +181,16 @@ export class OptionsSetupWorkspaceStore {
     const item = this.setups().find((setup) => setup.name === name);
     if (item === undefined) return { kind: 'unknown' };
     return item.setup == null ? { kind: 'cannot-open', reason: item.cannot_open_reason ?? 'The setup cannot be read.' } : { kind: 'open', item };
+  });
+
+  /**
+   * The hash of the content the saved setup at the address holds, as the library lists it: what the evidence recorded
+   * for this setup is found by, never its name. Null for a draft, a name the library has not read yet, or a setup
+   * that cannot be opened.
+   */
+  readonly savedHash = computed(() => {
+    const entry = this.entry();
+    return entry.kind === 'open' ? (entry.item?.setup_sha256 ?? null) : null;
   });
 
   /** Whether the draft still matches the content last saved or opened under its name. */

@@ -1,15 +1,17 @@
-import type { IndexedApproval, IndexedRun, IndexedSetup, IndexedStudy, OptionsSetupIndex } from '../index/options-setup-index.service';
+import type { SavedSetup } from '../../components/options-backtest/options-backtest.types';
+import { asServed, exampleBody } from '../../components/options-backtest/testing/fixtures';
+import type { IndexedApproval, IndexedRun, IndexedStudy, OptionsSetupIndex } from '../index/options-setup-index.service';
 
 /** A content hash as the server writes one: 64 lowercase hex digits. A spec names a content by one repeated digit. */
 export function sha(digit: string): string {
   return digit.repeat(64);
 }
 
-/** One saved name, holding the content `digit` names. */
-export function savedName(name: string, digit: string | null, changes: Partial<IndexedSetup> = {}): IndexedSetup {
+/** One saved name as the library lists it, holding the content `digit` names (`null`: it can no longer be opened). */
+export function savedName(name: string, digit: string | null, changes: Partial<SavedSetup> = {}): SavedSetup {
   return digit === null
-    ? { name, example: false, saved_at_ms: 1_760_000_000_000, underlying: null, setup_sha256: null, cannot_open_reason: 'legs.0.contracts: Input should be at most 1000', ...changes }
-    : { name, example: false, saved_at_ms: 1_760_000_000_000, underlying: 'SPY', setup_sha256: sha(digit), cannot_open_reason: null, ...changes };
+    ? { name, example: false, saved_at_ms: 1_760_000_000_000, setup: null, setup_sha256: null, cannot_open_reason: 'legs.0.contracts: Input should be at most 1000', ...changes }
+    : { name, example: false, saved_at_ms: 1_760_000_000_000, setup: asServed(exampleBody()), setup_sha256: sha(digit), cannot_open_reason: null, ...changes };
 }
 
 export function runOf(id: number, digit: string | null, changes: Partial<IndexedRun> = {}): IndexedRun {
@@ -64,16 +66,14 @@ export function approvalOf(digit: string, changes: Partial<IndexedApproval> = {}
 }
 
 export function indexOf(parts: {
-  setups?: IndexedSetup[];
   runs?: IndexedRun[];
   studies?: IndexedStudy[];
   approvals?: IndexedApproval[];
   totals?: Partial<Pick<OptionsSetupIndex, 'runs_total' | 'studies_total' | 'approvals_total'>>;
 }): OptionsSetupIndex {
-  const { setups = [], runs = [], studies = [], approvals = [] } = parts;
+  const { runs = [], studies = [], approvals = [] } = parts;
   return {
     read_at_ms: 1_792_000_000_000,
-    setups,
     runs,
     runs_total: runs.length,
     studies,

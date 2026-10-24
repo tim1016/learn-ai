@@ -17,7 +17,8 @@ test('opens source-76 performance, exact Golden lineage and frozen PUT search wi
     else if (path.includes('/workspace/study/')) await route.fulfill({ json: STUDY_WORKSPACE });
     else if (path.endsWith('/runs/76')) await route.fulfill({ json: run76 });
     else if (path.endsWith('/setups/describe')) await route.fulfill({ json: route.request().postDataJSON().legs.length === 1 ? studyDescription : description76 });
-    else if (path.endsWith('/setup-index')) await route.fulfill({ json: { read_at_ms: 1_792_000_000_000, setups: [], runs: [], runs_total: 0, studies: [], studies_total: 0, approvals: [], approvals_total: 0 } });
+    else if (path.endsWith('/setup-index')) await route.fulfill({ json: { read_at_ms: 1_792_000_000_000, runs: [], runs_total: 0, studies: [], studies_total: 0, approvals: [], approvals_total: 0 } });
+    else if (path.endsWith('/options-backtest/setups')) await route.fulfill({ json: [] });
     else if (path === '/api/jobs') await route.fulfill({ json: [] });
     else await route.fulfill({ status: 503, json: { detail: 'Outside this retained evidence fixture.' } });
   });

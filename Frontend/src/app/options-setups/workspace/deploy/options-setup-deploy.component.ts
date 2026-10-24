@@ -1,18 +1,17 @@
-import { ChangeDetectionStrategy, Component, computed, inject, output, resource } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, output } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
-import { extractServerMessage } from '../../../components/broker/operation-error';
-import { GoldenOptionSetupsService, type GoldenOptionSetup } from '../../../components/options-backtest/golden-option-setups.service';
 import { GOLDEN_DEPLOY_HANDOFF_ROUTE } from '../../../fleet/account-workspace';
 import { optionsDeployHandoffQuery } from '../../../fleet/options-setup-handoff';
 import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import type { WorkspaceStateContent } from '../../../shared/workspace/workspace-state';
 import { WorkspaceStateBlockComponent } from '../../../shared/workspace/workspace-state-block.component';
-import { OptionsSetupIndexService } from '../../index/options-setup-index.service';
+import { OptionsSetupEvidenceStore } from '../../index/options-setup-evidence-store';
 import { optionsEvidenceRoute, optionsSetupRoute } from '../../options-setups.address';
 import { OptionsSetupWorkspaceStore } from '../options-setup-store';
-import { PATH_TITLE, readVersionDetails, versionsOfSetup, type ListedVersion } from '../golden/golden-versions';
+import { OptionsSetupVersions } from '../options-setup-versions';
+import { PATH_TITLE, type ListedVersion } from '../golden/golden-versions';
 
 /**
  * What the setup header's "Deploy an options bot" opens (PRD #3490 R23, I02): the choice of
@@ -30,7 +29,9 @@ import { PATH_TITLE, readVersionDetails, versionsOfSetup, type ListedVersion } f
  * - **A registered signal program that trades options is not here.** It deploys from its own
  *   workflow: the split is the strategy model, never the asset traded.
  *
- * Deploy re-checks the version, the account and its gates at its own boundary.
+ * Deploy re-checks the version, the account and its gates at its own boundary. The versions are the ones Golden
+ * lists, read once for the workspace; opening the choice reads what each says now again, because a link is offered
+ * only for a version that is ready at this moment.
  */
 @Component({
   selector: 'app-options-setup-deploy',
@@ -41,8 +42,8 @@ import { PATH_TITLE, readVersionDetails, versionsOfSetup, type ListedVersion } f
 })
 export class OptionsSetupDeployComponent {
   private readonly store = inject(OptionsSetupWorkspaceStore);
-  private readonly indexService = inject(OptionsSetupIndexService);
-  private readonly goldenService = inject(GoldenOptionSetupsService);
+  private readonly evidence = inject(OptionsSetupEvidenceStore);
+  private readonly versionStore = inject(OptionsSetupVersions);
 
   readonly closed = output();
 
@@ -53,70 +54,48 @@ export class OptionsSetupDeployComponent {
   /** Versions are of the content as last saved: an edit in Define that is not saved changes none of them. */
   protected readonly draftChanged = computed(() => this.store.standing().kind === 'changed');
 
-  private readonly index = resource({ loader: () => this.indexService.read() });
-
-  private readonly saved = computed(() => {
-    const name = this.store.address();
-    if (name === null || !this.index.hasValue()) return null;
-    return this.index.value().setups.find((setup) => setup.name === name) ?? null;
-  });
-
   /** The approved versions of the saved content, then those a search that began from it made with changed settings. */
   protected readonly rows = computed<readonly ListedVersion[]>(() => {
-    if (!this.index.hasValue()) return [];
-    const found = versionsOfSetup(this.index.value(), this.saved()?.setup_sha256);
-    return [...found.exact, ...found.throughStudy];
-  });
-  private readonly ids = computed(() => this.rows().map((version) => version.approval.id));
-
-  /** Each version read by its own id: its status now, and why when it is not ready. */
-  private readonly details = resource({
-    params: () => (this.ids().length === 0 ? undefined : { ids: this.ids() }),
-    loader: ({ params }) => readVersionDetails(this.goldenService, params.ids),
+    const found = this.versionStore.found();
+    return found === null ? [] : [...found.exact, ...found.throughStudy];
   });
 
-  /** The detail of one version: `undefined` while it is read, `null` if it could not be. */
-  protected detailOf(id: string): GoldenOptionSetup | null | undefined {
-    if (this.details.hasValue()) return this.details.value().get(id) ?? null;
-    return this.details.error() === undefined ? undefined : null;
+  /** The detail of one version: `undefined` while it is read (a link is never offered on an older answer), `null` if it could not be. */
+  protected detailOf(id: string): ReturnType<OptionsSetupVersions['detailOf']> {
+    return this.versionStore.reading() ? undefined : this.versionStore.detailOf(id);
   }
 
   /** Said when the list was cut at its limit: "none" would then mean "none in the newest N". */
-  protected readonly cut = computed(() => {
-    if (!this.index.hasValue()) return null;
-    const index = this.index.value();
-    return index.approvals_total > index.approvals.length ? `the newest ${index.approvals.length} of ${index.approvals_total}` : null;
-  });
+  protected readonly cut = computed(() => this.evidence.cuts().approvals);
 
   protected readonly gate = computed<WorkspaceStateContent | null>(() => {
-    if (this.index.error() !== undefined) {
+    const read = this.evidence.state();
+    if (read.kind === 'failed') {
       return {
         kind: 'failed',
         happened: 'The approved versions of this setup could not be read.',
-        why: extractServerMessage(this.index.error(), 'The research store did not answer.'),
+        why: read.reason,
         next: 'No version can be chosen until they are read.',
         actions: [{ id: 'retry', label: 'Read them again' }],
       };
     }
-    if (this.index.isLoading() && !this.index.hasValue()) return { kind: 'checking', happened: 'Reading the approved versions of this setup.' };
-    if (this.saved() === null) {
-      return {
-        kind: 'unavailable',
-        happened: 'The saved setup was not in the evidence read.',
-        why: 'It may have been saved or removed a moment ago.',
-        next: 'Read it again. No version is chosen in its place.',
-        actions: [{ id: 'retry', label: 'Read it again' }],
-      };
-    }
+    if (read.kind === 'loading') return { kind: 'checking', happened: 'Reading the approved versions of this setup.' };
+    // The workspace opens only a setup the library holds; its content is not in hand for the moment after a save.
+    if (this.store.savedHash() === null) return { kind: 'checking', happened: 'Reading the saved setup.' };
     return null;
   });
+
+  constructor() {
+    // Opening the choice reads what each version says now: a link is offered only for one that is ready at this moment.
+    this.versionStore.reloadDetails();
+  }
 
   protected versionQuery(id: string): Record<string, string> {
     return optionsDeployHandoffQuery(id);
   }
 
   protected retry(): void {
-    this.index.reload();
-    this.details.reload();
+    this.evidence.reload();
+    this.versionStore.reloadDetails();
   }
 }

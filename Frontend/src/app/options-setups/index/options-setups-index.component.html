@@ -21,12 +21,12 @@
           @for (row of setups(); track row.setup.name) {
             <tr>
               <th scope="row">
-                @if (row.setup.setup_sha256 !== null) { <a [routerLink]="setupRoute(row.setup.name, landing())" [queryParams]="landingQuery()">{{ row.setup.name }}</a> }
+                @if (row.openable) { <a [routerLink]="setupRoute(row.setup.name, landing())" [queryParams]="landingQuery()">{{ row.setup.name }}</a> }
                 @else { {{ row.setup.name }} }
                 @if (row.setup.example) { <span class="chip">Example</span> }
                 @if (row.sharedWith.length > 0) { <span class="note">Same content as @for (other of row.sharedWith; track other; let last = $last) {“{{ other }}”{{ last ? '' : ', ' }}}</span> }
               </th>
-              <td>@if (row.setup.underlying; as symbol) { <app-asset-identity [symbol]="symbol" size="xs" [logo]="false" /> } @else { — }</td>
+              <td>@if (row.underlying; as symbol) { <app-asset-identity [symbol]="symbol" size="xs" [logo]="false" /> } @else { — }</td>
               <td>@if (row.setup.saved_at_ms; as savedAt) { <app-timestamp-display [value]="savedAt" mode="local" granularity="short-date" /> } @else { — }</td>
               <td>
                 @if (row.setup.cannot_open_reason; as reason) {

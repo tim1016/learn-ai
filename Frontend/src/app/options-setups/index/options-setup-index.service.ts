@@ -7,15 +7,15 @@ import type { components } from '../../api/broker.types';
 type Schemas = components['schemas'];
 
 export type OptionsSetupIndex = Schemas['OptionsSetupIndexResponse'];
-export type IndexedSetup = Schemas['IndexedSetup'];
 export type IndexedRun = Schemas['IndexedRun'];
 export type IndexedStudy = Schemas['IndexedStudy'];
 export type IndexedApproval = Schemas['IndexedApproval'];
 
 /**
- * The one read behind the Options setups index and each setup's Overview: the
- * saved setups beside every run, study and approved version, each with the
- * hash of the content it froze (#3512).
+ * The one read of Options evidence: every run, study and approved version, each
+ * with the hash of the content it froze (#3512). The saved setups are a
+ * different read (`OptionsBacktestService.list`), each with the hash of its own
+ * content; the two meet by equal hash and never by name.
  */
 @Injectable({ providedIn: 'root' })
 export class OptionsSetupIndexService {

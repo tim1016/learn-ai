@@ -29,13 +29,16 @@ function world(changes: { list?: ReturnType<typeof vi.fn>; approve?: ReturnType<
     reprove: vi.fn(),
   };
   const evidence = { read: changes.read ?? vi.fn(async (_kind: string, id: string) => runEvidence(Number(id), id === '8' ? '2' : '1')) };
-  const index = async () =>
-    indexOf({ setups: [savedName('Mine', saved.hash)], runs: [runOf(7, '1'), runOf(8, '2'), runOf(9, '1'), runOf(10, '1', { status: 'failed' })] });
-  return { ...library, saved, golden, evidence, index };
+  let reads = 0;
+  const index = async () => {
+    reads += 1;
+    return indexOf({ runs: [runOf(7, '1'), runOf(8, '2'), runOf(9, '1'), runOf(10, '1', { status: 'failed' })] });
+  };
+  return { ...library, saved, savedNames: () => [savedName('Mine', saved.hash)], golden, evidence, index, reads: () => reads };
 }
 
 async function review(w: ReturnType<typeof world>, query = '?run=7') {
-  await renderTab(w.service, 'Mine', 'golden', { query, index: w.index, golden: w.golden, evidence: w.evidence });
+  await renderTab(w.service, 'Mine', 'golden', { query, saved: w.savedNames, index: w.index, golden: w.golden, evidence: w.evidence });
 }
 
 const approveButton = () => screen.getByRole<HTMLButtonElement>('button', { name: 'Approve golden setup' });
@@ -64,14 +67,28 @@ describe('approving a tested run reviews that run, never the setup in Define (T1
     expect(w.evidence.read).toHaveBeenCalledWith('run', '7');
   });
 
+  it('reads the evidence again once a run is approved, so the version is listed, and not before', async () => {
+    const w = world();
+    await review(w);
+    await typeNote('Reviewed run 7.');
+    await waitFor(() => expect(approveButton().disabled).toBe(false));
+    expect(w.reads()).toBe(1);
+
+    fireEvent.click(approveButton());
+
+    await screen.findByText(/Choose this version in an account/);
+    await waitFor(() => expect(w.reads()).toBe(2));
+  });
+
   it('still approves what run 7 froze when the setup was saved as something else, and says that it is not what is saved now', async () => {
     const w = world();
     await review(w);
     await screen.findByRole('heading', { name: 'Reviewing run 7' });
     await goToDefine();
     editSlippage('0.4');
-    await saveInDefine('Mine');
+    // The save lands, and the library read after it lists "Mine" as the edited content.
     w.saved.hash = '2';
+    await saveInDefine('Mine');
     await go(`${setupUrl('Mine', 'golden')}?run=7`);
 
     expect(await screen.findByText(/This run froze other content than this setup’s saved content now/)).toBeTruthy();
@@ -164,7 +181,7 @@ describe('choosing a run to review', () => {
 
   it('says there is no run to review for a setup that has never been backtested, and offers none', async () => {
     const w = world();
-    w.index = async () => indexOf({ setups: [savedName('Mine', '1')] });
+    w.index = async () => indexOf({});
     await review(w, '');
 
     expect(await screen.findByText(/No completed run of this exact content is recorded/)).toBeTruthy();
@@ -173,7 +190,7 @@ describe('choosing a run to review', () => {
 
   it('has nothing to review for a draft with no saved name, and leads to Define', async () => {
     const w = world();
-    await renderTab(w.service, null, 'golden', { index: w.index, golden: w.golden, evidence: w.evidence });
+    await renderTab(w.service, null, 'golden', { saved: w.savedNames, index: w.index, golden: w.golden, evidence: w.evidence });
 
     expect(await screen.findByText('This draft has no saved name, so no saved content is here to approve a run of or to search from.')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Go to Define' }).getAttribute('href')).toBe('/options-setups/_new/define');

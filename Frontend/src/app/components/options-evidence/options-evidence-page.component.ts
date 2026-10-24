@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
+import { OptionsSetupLibrary } from '../../options-setups/index/options-setup-library';
 import { BreadcrumbComponent } from '../../shared/breadcrumb/breadcrumb.component';
 import { botReturnPath } from './bot-return';
 import { OptionsEvidenceViewComponent } from './options-evidence-view.component';
@@ -13,6 +14,8 @@ import { OptionsEvidenceViewComponent } from './options-evidence-view.component'
 @Component({
   selector: 'app-options-evidence-page',
   imports: [BreadcrumbComponent, RouterLink, OptionsEvidenceViewComponent],
+  // The saved setups, read once for the page, to say which of them hold the evidence's content.
+  providers: [OptionsSetupLibrary],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './options-evidence-page.component.html',
   styleUrl: './options-evidence-page.component.scss',

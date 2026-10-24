@@ -119,8 +119,8 @@ async function start(url = 'overview'): Promise<Walk> {
   const library = libraryWorld(vi);
   library.library.set('Mine', exampleBody());
   await renderTab(library.service, 'Mine', url as 'overview', {
+    saved: [savedName('Mine', '1')],
     index: async () => indexOf({
-      setups: [savedName('Mine', '1')],
       approvals: [
         approvalOf('1', { id: OLDER, source_run_id: 7, created_at_ms: 1_791_900_000_000 }),
         approvalOf('1', { id: NEWER, source_run_id: 9, created_at_ms: 1_791_900_100_000 }),

@@ -1,4 +1,4 @@
-import { screen, within } from '@testing-library/angular';
+import { fireEvent, screen, within } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { GoldenOptionSetup } from '../../../components/options-backtest/golden-option-setups.service';
@@ -21,7 +21,7 @@ async function golden(versions: GoldenOptionSetup[], index = indexOf({}), failin
     if (found === undefined) throw new Error('unknown version');
     return found;
   });
-  await renderTab(library.service, 'Mine', 'golden', { index: async () => index, golden: { get, list: async () => [] }, evidence: { read: vi.fn() } });
+  await renderTab(library.service, 'Mine', 'golden', { saved: [savedName('Mine', '1')], index: async () => index, golden: { get, list: async () => [] }, evidence: { read: vi.fn() } });
   return { get };
 }
 
@@ -31,11 +31,31 @@ const article = (versionId: string) => {
   return within(found);
 };
 
+describe('the versions are read once for the workspace', () => {
+  it('reads neither the evidence nor any version again when the owner leaves Golden and comes back', async () => {
+    const library = libraryWorld(vi);
+    library.library.set('Mine', exampleBody());
+    const read = vi.fn(async () => indexOf({ approvals: [approvalOf('1', { id: id('a') })] }));
+    const get = vi.fn(async (versionId: string) => versionOf(versionId, '1'));
+    await renderTab(library.service, 'Mine', 'golden', { saved: [savedName('Mine', '1')], index: read, golden: { get, list: async () => [] }, evidence: { read: vi.fn() } });
+    await screen.findByText('Single-run approval');
+
+    const tab = (name: string) => within(screen.getByRole('navigation', { name: 'Options setup tabs' })).getByRole('link', { name });
+    fireEvent.click(tab('Define'));
+    await screen.findByRole('heading', { name: 'Entry settings' });
+    fireEvent.click(tab('Golden'));
+    await screen.findByText('Single-run approval');
+
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('each approved version says which path made it and what it came from', () => {
   it('words a single-run approval as one run’s approval, never as a qualified search', async () => {
     await golden(
       [versionOf(id('a'), '1', { source_run_id: 7, note: 'Looked right.' })],
-      indexOf({ setups: [savedName('Mine', '1')], approvals: [approvalOf('1', { id: id('a'), source_run_id: 7, origin: 'backtest' })] }),
+      indexOf({ approvals: [approvalOf('1', { id: id('a'), source_run_id: 7, origin: 'backtest' })] }),
     );
 
     const version = article(id('a'));
@@ -50,7 +70,6 @@ describe('each approved version says which path made it and what it came from', 
     await golden(
       [versionOf(id('b'), '1', { source_run_id: 9, evidence: searchEvidence(STUDY_ID) })],
       indexOf({
-        setups: [savedName('Mine', '1')],
         studies: [studyOf('1')],
         approvals: [approvalOf('1', { id: id('b'), source_run_id: 9, study_id: STUDY_ID, origin: 'search' })],
       }),
@@ -68,7 +87,6 @@ describe('each approved version says which path made it and what it came from', 
     await golden(
       [versionOf(id('b'), '1', { evidence: searchEvidence(STUDY_ID, 'owner_exception') })],
       indexOf({
-        setups: [savedName('Mine', '1')],
         studies: [studyOf('1')],
         approvals: [approvalOf('1', { id: id('b'), study_id: STUDY_ID, origin: 'search' })],
       }),
@@ -87,7 +105,6 @@ describe('each approved version says which path made it and what it came from', 
     await golden(
       [versionOf(id('d'), '1', { evidence: { ...searchEvidence(STUDY_ID), study_manifest_sha256: null } })],
       indexOf({
-        setups: [savedName('Mine', '1')],
         approvals: [approvalOf('1', { id: id('d'), study_id: STUDY_ID, origin: 'not_recorded' })],
       }),
     );
@@ -104,7 +121,6 @@ describe('the versions of a setup are found by exact content, and through the st
     await golden(
       [versionOf(id('a'), '1'), versionOf(id('e'), '5', { evidence: searchEvidence(STUDY_ID) })],
       indexOf({
-        setups: [savedName('Mine', '1')],
         studies: [studyOf('1')],
         approvals: [
           approvalOf('1', { id: id('a') }),
@@ -129,7 +145,6 @@ describe('the versions of a setup are found by exact content, and through the st
     await golden(
       [versionOf(id('f'), '6')],
       indexOf({
-        setups: [savedName('Mine', '1')],
         studies: [studyOf('1')],
         approvals: [
           approvalOf('6', { id: id('f'), recorded_name: 'Mine' }),
@@ -144,13 +159,13 @@ describe('the versions of a setup are found by exact content, and through the st
   });
 
   it('says a list was cut at its limit, so none is not taken for none at all', async () => {
-    await golden([], indexOf({ setups: [savedName('Mine', '1')], totals: { approvals_total: 1500 } }));
+    await golden([], indexOf({ totals: { approvals_total: 1500 } }));
 
     expect(await screen.findByText('No approved version holds this exact content, among the newest 0 of 1500.')).toBeTruthy();
   });
 
   it('lists the searches that began from exactly this content, each at its own address', async () => {
-    await golden([], indexOf({ setups: [savedName('Mine', '1')], studies: [studyOf('1'), studyOf('9', { id: OTHER_STUDY })] }));
+    await golden([], indexOf({ studies: [studyOf('1'), studyOf('9', { id: OTHER_STUDY })] }));
 
     const searches = await screen.findByRole('region', { name: 'Start a golden search' });
     expect(within(searches).getAllByRole('listitem').map((item) => item.getAttribute('data-study'))).toEqual([STUDY_ID]);
@@ -162,7 +177,7 @@ describe('what happened to a version since it was approved', () => {
   it('lists a revocation with its reason, and offers no review to revoke or re-prove what is revoked', async () => {
     await golden(
       [versionOf(id('a'), '1', { status: 'revoked', status_explanation: 'The owner revoked this Golden setup.', events: [{ id: 3, kind: 'revoked', rules_digest: null, reason: 'Stop using this evidence', actor: 'owner', created_at_ms: 1_791_900_100_000 }] })],
-      indexOf({ setups: [savedName('Mine', '1')], approvals: [approvalOf('1', { id: id('a'), status: 'revoked' })] }),
+      indexOf({ approvals: [approvalOf('1', { id: id('a'), status: 'revoked' })] }),
     );
 
     const version = article(id('a'));
@@ -176,7 +191,7 @@ describe('what happened to a version since it was approved', () => {
   it('says a re-proof replayed execution and recertified nothing, and leads to the run whose review re-proves or revokes', async () => {
     await golden(
       [versionOf(id('a'), '1', { source_run_id: 7, events: [{ id: 4, kind: 'reproved', rules_digest: 'f'.repeat(64), reason: null, actor: 'owner', created_at_ms: 1_791_900_200_000 }] })],
-      indexOf({ setups: [savedName('Mine', '1')], approvals: [approvalOf('1', { id: id('a'), source_run_id: 7 })] }),
+      indexOf({ approvals: [approvalOf('1', { id: id('a'), source_run_id: 7 })] }),
     );
 
     const version = article(id('a'));
@@ -189,7 +204,7 @@ describe('what happened to a version since it was approved', () => {
   it('says a version could not be read by its own id, and still lists what the index knows of it', async () => {
     await golden(
       [],
-      indexOf({ setups: [savedName('Mine', '1')], approvals: [approvalOf('1', { id: id('a'), source_run_id: 7 })] }),
+      indexOf({ approvals: [approvalOf('1', { id: id('a'), source_run_id: 7 })] }),
       [id('a')],
     );
 
@@ -202,7 +217,7 @@ describe('what happened to a version since it was approved', () => {
 
 describe('the runs and searches the tab lists', () => {
   it('offers only the completed runs of the saved content to review', async () => {
-    await golden([], indexOf({ setups: [savedName('Mine', '1')], runs: [runOf(7, '1'), runOf(8, '2'), runOf(9, '1', { status: 'failed' })] }));
+    await golden([], indexOf({ runs: [runOf(7, '1'), runOf(8, '2'), runOf(9, '1', { status: 'failed' })] }));
 
     const region = await screen.findByRole('region', { name: 'Approve a tested run' });
     expect(within(region).getAllByRole('link', { name: /^Review run/ }).map((link) => link.textContent)).toEqual(['Review run 7']);

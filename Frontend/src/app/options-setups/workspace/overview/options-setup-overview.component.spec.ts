@@ -21,14 +21,15 @@ const BOT: OptionsBotOfFleet = {
 
 /** The library the page's own read finds: the shipped examples and a few saved names. The evidence read is the spec's. */
 const library = () => fakeService(vi, { list: vi.fn(async () => [...servedExamples(), ...['Alpha', 'Beta', 'Gamma'].map((name) => servedSaved(name, exampleBody()))]) });
-const overview = (name: string, options: Parameters<typeof renderTab>[3]) => renderTab(library(), name, 'overview', options);
+/** "Alpha" and "Beta" hold the content `1`, unless a spec says what they hold. */
+const overview = (name: string, options: Parameters<typeof renderTab>[3]) =>
+  renderTab(library(), name, 'overview', { saved: [savedName('Alpha', '1'), savedName('Beta', '1')], ...options });
 const block = (name: string) => screen.getByRole('region', { name });
 const text = (element: HTMLElement) => element.textContent?.replace(/\s+/g, ' ') ?? '';
 
 describe('Overview: what is recorded for the content this setup is saved as', () => {
   const index = () =>
     indexOf({
-      setups: [savedName('Alpha', '1'), savedName('Beta', '1')],
       runs: [runOf(5, '1', { recorded_name: 'Alpha', created_at_ms: 1_791_800_000_005 }), runOf(9, '1', { net_profit_usd: '-80.00', created_at_ms: 1_791_800_000_009 }), runOf(6, '2')],
       studies: [studyOf('1')],
       approvals: [approvalOf('1', { study_id: STUDY_ID, origin: 'search', source_run_id: 7 }), approvalOf('2', { id: `ogs_${'c'.repeat(32)}` })],
@@ -84,7 +85,7 @@ describe('Overview: what is recorded for the content this setup is saved as', ()
 
   it('says there is none, rather than showing evidence of another content, for a name whose content was edited since', async () => {
     // Alpha was edited: its saved content is now 9, and everything below froze content 1.
-    await overview('Alpha', { index: indexOf({ setups: [savedName('Alpha', '9')], runs: [runOf(5, '1', { recorded_name: 'Alpha' })], approvals: [approvalOf('1', { recorded_name: 'Alpha' })] }), bots: { kind: 'known', bots: [] } });
+    await overview('Alpha', { saved: [savedName('Alpha', '9')], index: indexOf({ runs: [runOf(5, '1', { recorded_name: 'Alpha' })], approvals: [approvalOf('1', { recorded_name: 'Alpha' })] }), bots: { kind: 'known', bots: [] } });
 
     await screen.findByRole('region', { name: 'Saved content' });
 
@@ -94,7 +95,7 @@ describe('Overview: what is recorded for the content this setup is saved as', ()
   });
 
   it('says a list was cut, so that "none" is never read as "none anywhere"', async () => {
-    const cut = indexOf({ setups: [savedName('Alpha', '1')], runs: [runOf(5, '2')], totals: { runs_total: 1500 } });
+    const cut = indexOf({ runs: [runOf(5, '2')], totals: { runs_total: 1500 } });
     await overview('Alpha', { index: cut, bots: { kind: 'known', bots: [] } });
 
     await screen.findByRole('region', { name: 'Saved content' });
@@ -103,7 +104,7 @@ describe('Overview: what is recorded for the content this setup is saved as', ()
   });
 
   it('says a shipped example cannot be overwritten, and that what is listed was recorded for the content last saved', async () => {
-    await overview(EXAMPLE_NO_REENTRY, { index: indexOf({ setups: [savedName(EXAMPLE_NO_REENTRY, '1', { example: true, saved_at_ms: null })] }), bots: { kind: 'known', bots: [] } });
+    await overview(EXAMPLE_NO_REENTRY, { saved: [savedName(EXAMPLE_NO_REENTRY, '1', { example: true, saved_at_ms: null })], index: indexOf({}), bots: { kind: 'known', bots: [] } });
     await screen.findByRole('region', { name: 'Saved content' });
 
     expect(text(block('Saved content'))).toContain('A shipped example, which cannot be overwritten or deleted.');
@@ -111,8 +112,32 @@ describe('Overview: what is recorded for the content this setup is saved as', ()
   });
 });
 
+describe('Overview: reads once for the workspace', () => {
+  it('asks the server for the evidence, the saved setups and the bots once, however the owner moves between the tabs', async () => {
+    const read = vi.fn(async () => indexOf({ approvals: [approvalOf('1')] }));
+    const bots = vi.fn(async () => ({ kind: 'known' as const, bots: [] }));
+    const service = library();
+    await renderTab(service, 'Alpha', 'overview', { saved: [savedName('Alpha', '1')], index: read, bots });
+    await screen.findByRole('region', { name: 'Saved content' });
+
+    const tab = (name: string) => within(screen.getByRole('navigation', { name: 'Options setup tabs' })).getByRole('link', { name });
+    fireEvent.click(tab('Define'));
+    await screen.findByRole('heading', { name: 'Entry settings' });
+    fireEvent.click(tab('Overview'));
+    await screen.findByRole('region', { name: 'Saved content' });
+    fireEvent.click(tab('Golden'));
+    await screen.findByRole('region', { name: 'Approved versions' });
+    fireEvent.click(tab('Overview'));
+    await screen.findByRole('region', { name: 'Saved content' });
+
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(bots).toHaveBeenCalledTimes(1);
+    expect(service.list).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('Overview: bots', () => {
-  const alpha = () => indexOf({ setups: [savedName('Alpha', '1')], approvals: [approvalOf('1')] });
+  const alpha = () => indexOf({ approvals: [approvalOf('1')] });
 
   it('lists the bots started from exactly this content, each with the version it pinned', async () => {
     await overview('Alpha', { index: alpha(), bots: { kind: 'known', bots: [BOT, { ...BOT, sid: 'sid-2', setupSha256: '2'.repeat(64), label: 'Another content' }] } });
@@ -157,7 +182,7 @@ describe('Overview: when it cannot show what it is for', () => {
     let fail = true;
     const read = vi.fn(async () => {
       if (fail) throw new Error('research store down');
-      return indexOf({ setups: [savedName('Alpha', '1')] });
+      return indexOf({});
     });
     await overview('Alpha', { index: read, bots: { kind: 'known', bots: [] } });
 
@@ -177,7 +202,7 @@ describe('Overview: when it cannot show what it is for', () => {
   });
 
   it('leads to Golden, where a tested run is approved and a golden search is started', async () => {
-    await overview('Alpha', { index: indexOf({ setups: [savedName('Alpha', '1')] }), bots: { kind: 'known', bots: [] } });
+    await overview('Alpha', { index: indexOf({}), bots: { kind: 'known', bots: [] } });
 
     const approved = await screen.findByRole('region', { name: 'Approved versions of this content' });
 
@@ -189,7 +214,8 @@ describe('Overview and the draft', () => {
   it('keeps the draft across tabs, lists the evidence of the saved content while the draft is edited, and says the draft has changed', async () => {
     await renderDefine(library(), undefined, {
       setupName: 'Alpha',
-      index: indexOf({ setups: [savedName('Alpha', '1')], approvals: [approvalOf('1')] }),
+      saved: [savedName('Alpha', '1')],
+      index: indexOf({ approvals: [approvalOf('1')] }),
       bots: { kind: 'known', bots: [] },
     });
     await waitFor(() => expect((screen.getByLabelText('Setup name') as HTMLInputElement).value).toBe('Alpha'));

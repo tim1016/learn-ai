@@ -137,9 +137,11 @@ describe('editing Define after a run', () => {
 });
 
 describe('Take to Golden', () => {
-  const index = (runHash: string) => indexOf({ setups: [savedName('Mine', '1')], runs: [runOf(7, runHash)] });
+  const index = (runHash: string) => indexOf({ runs: [runOf(7, runHash)] });
 
   async function afterARun(options: Parameters<typeof renderExplore>[2]) {
+    // "Mine" holds the content `1`, the content the run below froze unless a spec says it froze another.
+    options = { saved: [savedName('Mine', '1')], ...options };
     const setup = savedWorld();
     setup.service.run.mockResolvedValueOnce(runDetail({ status: 'running', finished_at_ms: null, figures: null, slippage: [], slippage_tolerance: null, headline: null })).mockResolvedValue(runDetail());
     await readyToStart(setup, options);
@@ -177,13 +179,29 @@ describe('Take to Golden', () => {
     expect(screen.queryByRole('link', { name: 'Take to Golden' })).toBeNull();
   });
 
+  it('stops being offered for a run once the setup is saved as other content: the offer follows the saved setups, not what Explore read when it opened', async () => {
+    const holds = { digit: '1' };
+    await afterARun({ index: index('1'), saved: () => [savedName('Mine', holds.digit)] });
+    expect(await screen.findByRole('link', { name: 'Take to Golden' })).toBeTruthy();
+
+    await goToDefine();
+    editSlippage('0.4');
+    // The save lands, and the saved setups read after it list "Mine" as the edited content.
+    holds.digit = '2';
+    await saveInDefine('Mine');
+    await goToExplore();
+
+    expect(await screen.findByText(/froze other content than this setup’s saved content/)).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Take to Golden' })).toBeNull();
+  });
+
   it('is offered again once what the run froze is read: the evidence is read again when a run ends', async () => {
     let reads = 0;
     const setup = await afterARun({
       index: async () => {
         reads += 1;
         // Read at the start, before the run existed, then again when it ended.
-        return indexOf({ setups: [savedName('Mine', '1')], runs: reads === 1 ? [] : [runOf(7, '1')] });
+        return indexOf({ runs: reads === 1 ? [] : [runOf(7, '1')] });
       },
     });
 
@@ -257,10 +275,51 @@ describe('an opened run has an address', () => {
 describe('the views about one run', () => {
   const evidence = () => ({ read: vi.fn(async () => RUN_WORKSPACE) });
 
+  it('does not offer Take to Golden for a run of the saved content that did not complete, and says why', async () => {
+    const service = fakeService(vi, { ...mine(), run: vi.fn(async () => runDetail({ id: 76 })) });
+    await renderExplore(service, 'Mine', {
+      evidence: evidence(),
+      saved: [savedName('Mine', '1')],
+      index: indexOf({ runs: [runOf(76, '1', { status: 'failed' })] }),
+      query: '?view=performance&run=76',
+    });
+
+    expect(await screen.findByText(/Run 76 is failed, not complete, so it is not taken to Golden/)).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Take to Golden' })).toBeNull();
+  });
+
+  it('offers Take to Golden for a completed run of the saved content, carrying only the run', async () => {
+    const service = fakeService(vi, { ...mine(), run: vi.fn(async () => runDetail({ id: 76 })) });
+    await renderExplore(service, 'Mine', {
+      evidence: evidence(),
+      saved: [savedName('Mine', '1')],
+      index: indexOf({ runs: [runOf(76, '1')] }),
+      query: '?view=performance&run=76',
+    });
+
+    const link = await screen.findByRole('link', { name: 'Take to Golden' });
+
+    expect(link.getAttribute('href')).toBe('/options-setups/Mine/golden?run=76');
+  });
+
+  it('reads the evidence index once for the setup, and says which saved setups hold the run’s content from the saved setups read', async () => {
+    const service = fakeService(vi, { ...mine(), run: vi.fn(async () => runDetail({ id: 76 })) });
+    const read = vi.fn(async () => indexOf({ runs: [runOf(76, '1')] }));
+    await renderExplore(service, 'Mine', {
+      evidence: evidence(),
+      saved: [savedName('Mine', '0', { setup_sha256: RUN_WORKSPACE.setup_sha256 })],
+      index: read,
+      query: '?view=lineage&run=76',
+    });
+
+    expect(await screen.findByText(/Saved setups that hold this exact content today/)).toBeTruthy();
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
   it('read that run’s retained evidence by its id, each at its own address, with one way between the views', async () => {
     const service = fakeService(vi, { ...mine(), run: vi.fn(async () => runDetail({ id: 76 })) });
     const reader = evidence();
-    await renderExplore(service, 'Mine', { evidence: reader, index: indexOf({ setups: [savedName('Mine', '1')] }), query: '?view=lineage&run=76' });
+    await renderExplore(service, 'Mine', { evidence: reader, saved: [savedName('Mine', '1')], index: indexOf({}), query: '?view=lineage&run=76' });
 
     expect(await screen.findByRole('heading', { name: RUN_WORKSPACE.headline })).toBeTruthy();
     expect(reader.read).toHaveBeenCalledWith('run', '76', undefined);
@@ -275,7 +334,7 @@ describe('the views about one run', () => {
 
   it('shows the run’s performance from its address, and keeps the run in view when another view is left for', async () => {
     const service = fakeService(vi, { ...mine(), run: vi.fn(async () => runDetail({ id: 76 })) });
-    await renderExplore(service, 'Mine', { evidence: evidence(), index: indexOf({ setups: [savedName('Mine', '1')] }), query: '?view=performance&run=76' });
+    await renderExplore(service, 'Mine', { evidence: evidence(), saved: [savedName('Mine', '1')], index: indexOf({}), query: '?view=performance&run=76' });
     await screen.findByRole('region', { name: 'Headline figures' });
 
     fireEvent.click(viewLink('Backtest'));
@@ -330,7 +389,7 @@ describe('the tab', () => {
   });
 
   it('keeps the dates and the answer of Check data when the owner leaves for Overview and comes back', async () => {
-    const setup = await readyToStart(savedWorld(), { index: indexOf({ setups: [savedName('Mine', '1')] }), bots: { kind: 'known', bots: [] } });
+    const setup = await readyToStart(savedWorld(), { saved: [savedName('Mine', '1')], index: indexOf({}), bots: { kind: 'known', bots: [] } });
     fireEvent.click(screen.getByRole('button', { name: 'Check data' }));
     await screen.findByRole('region', { name: 'Check data' });
 

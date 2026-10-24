@@ -10,9 +10,10 @@ import { RunLaunch } from '../../../components/options-backtest/run-launch';
 import { RUN_POLL_MS } from '../../../components/options-backtest/run-poll';
 import { describeDetail } from '../../../components/options-backtest/setup-problems';
 import type { DateRange } from '../../../shared/date-picker';
-import { OptionsSetupIndexService } from '../../index/options-setup-index.service';
+import { OptionsSetupEvidenceStore } from '../../index/options-setup-evidence-store';
 import { optionsSetupRoute } from '../../options-setups.address';
 import { OptionsSetupWorkspaceStore } from '../options-setup-store';
+import { reviewableRuns } from '../golden/golden-versions';
 
 /** Said where a run cannot be offered to Golden for want of knowing what it froze. */
 const GOLDEN_NEEDS_CONTENT = 'Taking a run to Golden needs to know which content the run froze, so it is not offered until that is read.';
@@ -33,7 +34,7 @@ const GOLDEN_NEEDS_CONTENT = 'Taking a run to Golden needs to know which content
 export class OptionsSetupExploreStore {
   private readonly setup = inject(OptionsSetupWorkspaceStore);
   private readonly service = inject(OptionsBacktestService);
-  private readonly indexService = inject(OptionsSetupIndexService);
+  private readonly evidence = inject(OptionsSetupEvidenceStore);
   private readonly destroyRef = inject(DestroyRef);
 
   /** The saved name this Explore is for, or `null` for a draft with no name. */
@@ -127,8 +128,6 @@ export class OptionsSetupExploreStore {
     return this.launch.busy() ? 'A backtest is already running.' : null;
   });
 
-  // Which content each run froze, to say whether it is this setup's.
-  private readonly index = resource({ loader: () => this.indexService.read() });
   /** Why a setup cannot be taken into the form yet: its times need the session clock. Null once the clock is read. */
   readonly setupBlockedWhy = computed(() =>
     this.setup.clock() === null ? 'A setup cannot be taken until the session times have been read. Define says where that stands.' : null,
@@ -179,9 +178,9 @@ export class OptionsSetupExploreStore {
     this.chainDownloads.update((count) => count + 1);
   }
 
-  /** A run's record said something new (it ended): what the saved setups' runs froze is read again, so the run can be taken to Golden. */
+  /** A run's record said something new (it ended), or a run was deleted: the evidence is read again, so a run can be taken to Golden, or no longer is. */
   runChanged(): void {
-    this.index.reload();
+    this.evidence.reloadIndex();
   }
 
   retryReadBack(): void {
@@ -189,17 +188,19 @@ export class OptionsSetupExploreStore {
   }
 
   /**
-   * What the run may be taken to Golden as. Golden reviews what the run froze, so the run must have frozen this setup's
-   * saved content: that is read from the evidence index by exact content, never by name. Where it cannot be said, or it
-   * is another content, the run is not offered, and why is said.
+   * What the run may be taken to Golden as. Golden reviews what the run froze, and lists only a completed run of the
+   * saved content, so this offers exactly those: the run must be complete and have frozen this setup's saved content,
+   * which is read from the evidence by exact content, never by name. Where it cannot be said, or it is another
+   * content, or the run did not complete, the run is not offered, and why is said.
    */
   goldenOfferFor(runId: number): GoldenOffer {
     const name = this.name();
     if (name === null) return { kind: 'withheld', why: 'This draft has no saved name, so a run is not taken to Golden for it.' };
-    if (this.index.error() !== undefined) return { kind: 'withheld', why: `${GOLDEN_NEEDS_CONTENT} It could not be read.` };
-    if (!this.index.hasValue()) return { kind: 'withheld', why: `${GOLDEN_NEEDS_CONTENT} It is being read.` };
-    const index = this.index.value();
-    const hash = index.setups.find((setup) => setup.name === name)?.setup_sha256 ?? null;
+    const read = this.evidence.state();
+    if (read.kind === 'failed') return { kind: 'withheld', why: `${GOLDEN_NEEDS_CONTENT} It could not be read.` };
+    if (read.kind === 'loading') return { kind: 'withheld', why: `${GOLDEN_NEEDS_CONTENT} It is being read.` };
+    const index = read.index;
+    const hash = this.setup.savedHash();
     if (hash === null) return { kind: 'withheld', why: `${GOLDEN_NEEDS_CONTENT} The saved content of this setup is not in what was read.` };
     const run = index.runs.find((row) => row.id === runId);
     if (run === undefined) {
@@ -213,6 +214,9 @@ export class OptionsSetupExploreStore {
     if (run.setup_sha256 === null) return { kind: 'withheld', why: `The setup of run ${runId} cannot be read, so it is not taken to Golden.` };
     if (run.setup_sha256 !== hash) {
       return { kind: 'withheld', why: `Run ${runId} froze other content than this setup’s saved content, so it is not taken to this setup’s Golden.` };
+    }
+    if (!reviewableRuns(index, hash).some((row) => row.id === runId)) {
+      return { kind: 'withheld', why: `Run ${runId} is ${run.status}, not complete, so it is not taken to Golden: only a completed run can be approved.` };
     }
     return { kind: 'link', route: optionsSetupRoute(name, 'golden') };
   }

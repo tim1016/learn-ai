@@ -50,7 +50,7 @@
   } @else if (activeView() === 'history') {
     <app-options-backtest-history
       [active]="true" [setupBlockedWhy]="explore.setupBlockedWhy()" [openRun]="historyRun()" [compareRuns]="comparison()" [exploreRoute]="address()" [goldenOffer]="offerFor"
-      (runShown)="runShown($event)" (comparisonShown)="comparisonShown($event)" (useSetup)="explore.useRunSetup($event)" (deleted)="explore.launch.forget($event)" />
+      (runShown)="runShown($event)" (comparisonShown)="comparisonShown($event)" (useSetup)="explore.useRunSetup($event)" (deleted)="runDeleted($event)" />
   } @else if (onRunView()) {
     @if (runId(); as id) {
       <app-options-evidence-view

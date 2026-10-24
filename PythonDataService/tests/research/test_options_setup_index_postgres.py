@@ -14,16 +14,22 @@ from pathlib import Path
 import asyncpg
 
 from app.options_backtest.saved_runs import NewRun, complete_run, create_run
-from app.options_backtest.saved_setups import delete_setup, save_setup
+from app.options_backtest.saved_setups import delete_setup, list_setups, save_setup
 from app.options_bots import golden_repository as repository
 from app.options_bots.golden_proof import proof_sha256, setup_sha256
 from app.options_bots.golden_repository import GoldenRecord
 from app.research.options_setup_index import read_index
+from app.routers.options_backtest import listed_setup
 from tests.options_backtest._a_run import a_busy_run
 from tests.research.conftest import conn as conn
 from tests.research.conftest import unique as unique
 
 STUDY = json.loads((Path(__file__).parent.parent / "fixtures" / "options_evidence" / "study-record.json").read_text())
+
+
+async def _hashes(conn: asyncpg.Connection) -> dict[str, str | None]:
+    """The content hash of every saved name, as GET /setups lists them."""
+    return {entry.name: entry.setup_sha256 for entry in map(listed_setup, await list_setups(conn))}
 
 
 async def _insert_study(conn: asyncpg.Connection, study_id: str, name: str) -> None:
@@ -66,9 +72,8 @@ async def test_the_index_reads_every_kind_with_its_exact_content_and_keeps_all_o
 
         index = await read_index()
 
-        saved = {entry.name: entry for entry in index.setups}
-        assert saved[alpha].setup_sha256 == saved[beta].setup_sha256 == frozen
-        assert saved[alpha].underlying == result.setup.underlying and saved[alpha].example is False
+        saved = await _hashes(conn)
+        assert saved[alpha] == saved[beta] == frozen
         run = next(row for row in index.runs if row.id == run_id)
         assert (run.setup_sha256, run.recorded_name, run.status) == (frozen, alpha, "complete")
         assert run.net_profit_usd is not None
@@ -85,9 +90,9 @@ async def test_the_index_reads_every_kind_with_its_exact_content_and_keeps_all_o
 
         after = await read_index()
 
-        names = {entry.name: entry for entry in after.setups}
-        assert frozen not in {names[alpha].setup_sha256, names[beta].setup_sha256}
-        assert names[alpha].setup_sha256 != names[beta].setup_sha256
+        names = await _hashes(conn)
+        assert frozen not in {names[alpha], names[beta]}
+        assert names[alpha] != names[beta]
         assert next(row for row in after.runs if row.id == run_id).setup_sha256 == frozen
         kept = next(row for row in after.approvals if row.id == record.id)
         assert (kept.setup_sha256, kept.recorded_name) == (frozen, alpha)
@@ -124,7 +129,7 @@ async def test_a_record_that_cannot_be_read_stays_listed_and_takes_no_other_with
 
         index = await read_index()
 
-        entry = next(row for row in index.setups if row.name == name)
+        entry = next(row for row in map(listed_setup, await list_setups(conn)) if row.name == name)
         assert entry.setup_sha256 is None and entry.cannot_open_reason
         run = next(row for row in index.runs if row.id == run_id)
         assert run.setup_sha256 is None and run.unreadable_reason and run.recorded_name is None

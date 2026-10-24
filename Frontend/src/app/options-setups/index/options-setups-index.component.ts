@@ -1,8 +1,9 @@
-import { ChangeDetectionStrategy, Component, computed, inject, input, resource, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
 import { extractServerMessage } from '../../components/broker/operation-error';
 import { OptionsBacktestService, SetupRefusedError } from '../../components/options-backtest/options-backtest.service';
+import type { SavedSetup } from '../../components/options-backtest/options-backtest.types';
 import { AssetIdentityComponent } from '../../shared/asset-identity';
 import { HowThisWorksLinkComponent } from '../../shared/help/how-this-works-link.component';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
@@ -13,8 +14,10 @@ import { WorkspaceHeaderComponent } from '../../shared/workspace/workspace-heade
 import type { WorkspaceStateContent } from '../../shared/workspace/workspace-state';
 import { WorkspaceStateBlockComponent } from '../../shared/workspace/workspace-state-block.component';
 import { GOLDEN_PARENT_STUDY_KEY, OPTIONS_CHOOSE_GOLDEN, optionsAnalysisRoute, optionsEvidenceRoute, optionsSetupRoute, type OptionsEvidenceKind, type OptionsSetupTab } from '../options-setups.address';
-import { evidenceHolding, holdersOf, newestFirst, type ContentHolders } from './options-setup-evidence';
-import { OptionsSetupIndexService, type IndexedSetup, type OptionsSetupIndex } from './options-setup-index.service';
+import { namesHolding, newestFirst, type ContentHolders } from './options-setup-evidence';
+import { OptionsSetupEvidenceStore } from './options-setup-evidence-store';
+import type { OptionsSetupIndex } from './options-setup-index.service';
+import { OptionsSetupLibrary } from './options-setup-library';
 
 type KindFilter = 'all' | OptionsEvidenceKind;
 
@@ -30,13 +33,16 @@ interface EvidenceRow {
   readonly createdAtMs: number;
   readonly status: string;
   readonly detail: string | null;
-  readonly holders: ContentHolders;
+  readonly holders: ContentHolders<SavedSetup>;
   readonly route: string[];
 }
 
 /** What a saved setup has recorded for exactly its content. */
 interface SetupRow {
-  readonly setup: IndexedSetup;
+  readonly setup: SavedSetup;
+  /** Whether it can be opened: a setup that cannot be has no content hash, and so no page to open. */
+  readonly openable: boolean;
+  readonly underlying: string | null;
   readonly runs: number;
   readonly studies: number;
   readonly approvals: number;
@@ -60,6 +66,8 @@ const FILTERS: readonly { readonly id: KindFilter; readonly label: string }[] = 
  * deleted and reused, so evidence is never listed under one: each row opens by
  * its own id, and says which saved names hold its exact content today, if any.
  *
+ * The saved setups and the evidence are two reads, each made once for the page and joined here by equal content.
+ *
  * `?then=golden` asks which setup to continue with: an old Options Golden Search link that named no
  * setup ends here, and every saved setup then opens on its Golden tab, carrying the study it forks.
  */
@@ -76,11 +84,13 @@ const FILTERS: readonly { readonly id: KindFilter; readonly label: string }[] = 
     WorkspaceStateBlockComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
+  providers: [OptionsSetupLibrary, OptionsSetupEvidenceStore],
   templateUrl: './options-setups-index.component.html',
   styleUrl: './options-setups-index.component.scss',
 })
 export class OptionsSetupsIndexComponent {
-  private readonly indexService = inject(OptionsSetupIndexService);
+  private readonly library = inject(OptionsSetupLibrary);
+  private readonly store = inject(OptionsSetupEvidenceStore);
   private readonly backtest = inject(OptionsBacktestService);
 
   /** What the list is asked to continue with: `golden` sends each saved setup to its Golden tab. */
@@ -92,7 +102,6 @@ export class OptionsSetupsIndexComponent {
   protected readonly landing = computed<OptionsSetupTab>(() => (this.choosing() ? 'golden' : 'overview'));
   protected readonly landingQuery = computed(() => (this.choosing() ? { [GOLDEN_PARENT_STUDY_KEY]: this.parent_study_id() ?? null } : {}));
 
-  protected readonly index = resource({ loader: () => this.indexService.read() });
   protected readonly filters = FILTERS;
   protected readonly filter = signal<KindFilter>('all');
   private readonly limit = signal(PAGE);
@@ -103,14 +112,16 @@ export class OptionsSetupsIndexComponent {
   protected readonly analysis: WorkspaceAction = { id: 'analysis', label: 'Strategy Builder (analysis only)', route: optionsAnalysisRoute('builder') };
   protected readonly setupRoute = optionsSetupRoute;
 
-  protected readonly loaded = computed<OptionsSetupIndex | null>(() => (this.index.hasValue() ? this.index.value() : null));
+  /** The evidence once it is read, and only once the saved setups it is joined to are read too. */
+  protected readonly loaded = computed<OptionsSetupIndex | null>(() => (this.library.status() === 'ready' ? this.store.index() : null));
 
   protected readonly state = computed<WorkspaceStateContent | null>(() => {
-    if (this.index.error() !== undefined) {
+    const evidence = this.store.state();
+    if (this.library.status() === 'error' || evidence.kind === 'failed') {
       return {
         kind: 'failed',
         happened: 'The saved setups and their evidence could not be read.',
-        why: extractServerMessage(this.index.error(), 'The research store did not answer.'),
+        why: this.library.problem() ?? (evidence.kind === 'failed' ? evidence.reason : 'The research store did not answer.'),
         next: 'Read them again. Nothing stored is changed by a failed read.',
         actions: [{ id: 'retry', label: 'Read again' }],
       };
@@ -119,21 +130,22 @@ export class OptionsSetupsIndexComponent {
   });
 
   protected readonly setups = computed<readonly SetupRow[]>(() => {
-    const index = this.loaded();
-    if (index === null) return [];
-    return index.setups.map((setup) => {
-      const held = evidenceHolding(index, setup.setup_sha256);
+    if (this.loaded() === null) return [];
+    const saved = this.library.setups();
+    return saved.map((setup) => {
+      const held = this.store.evidenceHolding(setup.setup_sha256);
       const latest = newestFirst(held.approvals)[0];
       return {
         setup,
+        openable: setup.setup_sha256 !== null && setup.setup_sha256 !== undefined,
+        underlying: setup.setup?.underlying ?? null,
         runs: held.runs.length,
         studies: held.studies.length,
         approvals: held.approvals.length,
         latestApproval: latest === undefined ? null : latest.status,
-        sharedWith:
-          setup.setup_sha256 === null
-            ? []
-            : index.setups.filter((other) => other.name !== setup.name && other.setup_sha256 === setup.setup_sha256).map((other) => other.name),
+        sharedWith: namesHolding(saved, setup.setup_sha256)
+          .filter((other) => other.name !== setup.name)
+          .map((other) => other.name),
       };
     });
   });
@@ -150,7 +162,7 @@ export class OptionsSetupsIndexComponent {
       createdAtMs: run.created_at_ms,
       status: run.status,
       detail: run.net_profit_usd === null || run.net_profit_usd === undefined ? null : `net ${run.net_profit_usd} USD`,
-      holders: holdersOf(index, run),
+      holders: this.library.holdersOf(run),
       route: optionsEvidenceRoute('run', run.id),
     }));
     const studies = index.studies.map<EvidenceRow>((study) => ({
@@ -162,7 +174,7 @@ export class OptionsSetupsIndexComponent {
       createdAtMs: study.created_at_ms,
       status: study.status,
       detail: `phase ${study.phase}`,
-      holders: holdersOf(index, study),
+      holders: this.library.holdersOf(study),
       route: optionsEvidenceRoute('study', study.id),
     }));
     const versions = index.approvals.map<EvidenceRow>((version) => ({
@@ -174,7 +186,7 @@ export class OptionsSetupsIndexComponent {
       createdAtMs: version.created_at_ms,
       status: version.status,
       detail: version.origin === 'search' ? 'from a golden search' : version.origin === 'backtest' ? `from run ${version.source_run_id}` : 'origin not recorded',
-      holders: holdersOf(index, version),
+      holders: this.library.holdersOf(version),
       route: optionsEvidenceRoute('golden', version.id),
     }));
     // Newest first; a tie goes by kind and id, so the order never depends on which list was read first.
@@ -199,7 +211,7 @@ export class OptionsSetupsIndexComponent {
   });
 
   protected act(id: string): void {
-    if (id === 'retry') this.index.reload();
+    if (id === 'retry') this.store.reload();
   }
 
   protected setFilter(kind: KindFilter): void {
@@ -218,6 +230,7 @@ export class OptionsSetupsIndexComponent {
     } catch (error) {
       this.deleteProblem.set(error instanceof SetupRefusedError ? error.message : extractServerMessage(error, 'The setup could not be deleted. Try again.'));
     }
-    this.index.reload();
+    // A deleted name changes which names hold a content, and no evidence: only the saved setups are read again.
+    this.library.reload();
   }
 }

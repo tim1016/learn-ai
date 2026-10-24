@@ -5,6 +5,7 @@ import { botReturnPath } from '../../components/options-evidence/bot-return';
 import { OptionsEvidenceViewComponent } from '../../components/options-evidence/options-evidence-view.component';
 import { OptionsStudyWorkbenchComponent } from '../../components/options-golden-search/options-study-workbench.component';
 import { BreadcrumbComponent } from '../../shared/breadcrumb/breadcrumb.component';
+import { OptionsSetupLibrary } from '../index/options-setup-library';
 import { optionsStudyRoute } from '../options-setups.address';
 
 /**
@@ -18,6 +19,8 @@ import { optionsStudyRoute } from '../options-setups.address';
 @Component({
   selector: 'app-options-study-page',
   imports: [RouterLink, BreadcrumbComponent, OptionsStudyWorkbenchComponent, OptionsEvidenceViewComponent],
+  // The saved setups, read once for the page (and only when the lineage view asks), to say which hold the study's content.
+  providers: [OptionsSetupLibrary],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './options-study-page.component.html',
   styleUrl: './options-study-page.component.scss',

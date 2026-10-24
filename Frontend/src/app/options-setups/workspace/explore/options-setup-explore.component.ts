@@ -215,6 +215,12 @@ export class OptionsSetupExploreComponent {
     this.explore.runChanged();
   }
 
+  /** History deleted a run: a run on screen that was it is forgotten, and the evidence no longer lists it. */
+  protected runDeleted(id: number): void {
+    this.explore.launch.forget(id);
+    this.explore.runChanged();
+  }
+
   /** History opened a run, or closed the one it had: the address says which. */
   protected runShown(id: number | null): void {
     void this.router.navigate(this.address(), { queryParams: optionsExploreQuery('history', id) });

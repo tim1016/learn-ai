@@ -17,10 +17,14 @@ import {
   optionsSetupRoute,
   UNSAVED_DRAFT_SEGMENT,
 } from '../options-setups.address';
+import { OptionsSetupEvidenceStore } from '../index/options-setup-evidence-store';
+import { OptionsSetupLibrary } from '../index/options-setup-library';
 import { OptionsSetupDeployComponent } from './deploy/options-setup-deploy.component';
 import { describeStanding } from './draft-standing';
 import { OptionsSetupExploreStore } from './explore/options-setup-explore-store';
 import { OptionsSetupWorkspaceStore } from './options-setup-store';
+import { OptionsSetupVersions } from './options-setup-versions';
+import { OptionsSetupBotsStore } from './overview/options-setup-bots-store';
 
 /**
  * One options setup as a place (ADR 0084): its saved name in the address, its
@@ -33,7 +37,9 @@ import { OptionsSetupWorkspaceStore } from './options-setup-store';
 @Component({
   selector: 'app-options-setup-workspace',
   imports: [RouterOutlet, WorkspaceHeaderComponent, WorkspaceTabListComponent, WorkspaceStateBlockComponent, HowThisWorksLinkComponent, AssetIdentityComponent, OptionsSetupDeployComponent],
-  providers: [OptionsSetupWorkspaceStore, OptionsSetupExploreStore],
+  // The saved setups and the evidence recorded for them are read once here, and what the tabs that follow keep is
+  // kept beside them. Each is made only when a tab first asks for it, so Define reads no evidence.
+  providers: [OptionsSetupLibrary, OptionsSetupEvidenceStore, OptionsSetupVersions, OptionsSetupBotsStore, OptionsSetupWorkspaceStore, OptionsSetupExploreStore],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './options-setup-workspace.component.html',
   styleUrl: './options-setup-workspace.component.scss',

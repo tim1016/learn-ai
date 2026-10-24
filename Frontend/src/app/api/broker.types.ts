@@ -6761,6 +6761,9 @@ export interface paths {
         /**
          * List Setups
          * @description The two shipped examples, then the saved setups, newest first. One that cannot be opened says why.
+         *
+         *     Each setup carries the hash of its content. Evidence is matched to a setup by an equal hash, so this lists no
+         *     approved version and picks none for a name (``GET /setup-index`` lists the evidence).
          */
         get: operations["list_setups_api_research_options_backtest_setups_get"];
         put?: never;
@@ -20820,24 +20823,6 @@ export interface components {
             /** Unreadable Reason */
             unreadable_reason?: string | null;
         };
-        /**
-         * IndexedSetup
-         * @description One library entry, by name: a shipped example, a saved setup, or one that can no longer be opened.
-         */
-        IndexedSetup: {
-            /** Cannot Open Reason */
-            cannot_open_reason?: string | null;
-            /** Example */
-            example: boolean;
-            /** Name */
-            name: string;
-            /** Saved At Ms */
-            saved_at_ms?: number | null;
-            /** Setup Sha256 */
-            setup_sha256?: string | null;
-            /** Underlying */
-            underlying?: string | null;
-        };
         /** IndexedStudy */
         IndexedStudy: {
             /** Created At Ms */
@@ -27111,8 +27096,6 @@ export interface components {
             runs: components["schemas"]["IndexedRun"][];
             /** Runs Total */
             runs_total: number;
-            /** Setups */
-            setups: components["schemas"]["IndexedSetup"][];
             /** Studies */
             studies: components["schemas"]["IndexedStudy"][];
             /** Studies Total */
@@ -30337,17 +30320,16 @@ export interface components {
             cannot_open_reason?: string | null;
             /** Example */
             example: boolean;
-            /** Golden Setup Id */
-            golden_setup_id?: string | null;
-            /** Golden Status */
-            golden_status?: ("ready" | "stale" | "revoked") | null;
-            /** Golden Status Explanation */
-            golden_status_explanation?: string | null;
             /** Name */
             name: string;
             /** Saved At Ms */
             saved_at_ms?: number | null;
             setup?: components["schemas"]["OptionsBacktestSetup-Output"] | null;
+            /**
+             * Setup Sha256
+             * @description The exact identity of the setup's content, present when the setup is. A run, a search or an approved version is matched to a saved setup by an equal hash and never by name: a name can be edited, deleted and reused, and two names with identical content share one hash.
+             */
+            setup_sha256?: string | null;
         };
         /** ScopedHealthResponse */
         ScopedHealthResponse: {

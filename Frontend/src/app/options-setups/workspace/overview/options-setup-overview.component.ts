@@ -1,18 +1,19 @@
-import { ChangeDetectionStrategy, Component, computed, inject, resource } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
-import { extractServerMessage } from '../../../components/broker/operation-error';
 import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import type { WorkspaceStateContent } from '../../../shared/workspace/workspace-state';
 import { WorkspaceStateBlockComponent } from '../../../shared/workspace/workspace-state-block.component';
-import { evidenceHolding, namesHolding, newestFirst } from '../../index/options-setup-evidence';
-import { OptionsSetupIndexService, type IndexedApproval } from '../../index/options-setup-index.service';
+import { namesHolding, newestFirst } from '../../index/options-setup-evidence';
+import { OptionsSetupEvidenceStore } from '../../index/options-setup-evidence-store';
+import type { IndexedApproval } from '../../index/options-setup-index.service';
+import { OptionsSetupLibrary } from '../../index/options-setup-library';
 import { optionsEvidenceRoute, optionsSetupRoute } from '../../options-setups.address';
 import { describeStanding } from '../draft-standing';
 import { OptionsSetupWorkspaceStore } from '../options-setup-store';
-import { OptionsSetupBotsService } from './options-setup-bots.service';
+import { OptionsSetupBotsStore } from './options-setup-bots-store';
 
 /** How an approved version was made, in words. */
 const ORIGIN_WORDS: Readonly<Record<IndexedApproval['origin'], string>> = {
@@ -30,7 +31,8 @@ const RUNS_SHOWN = 5;
  * deleted, so nothing here is found by name: a run, a search or an approved
  * version is listed because it froze this very content, and a version is never
  * said to belong to a name. Identical content saved under another name shares
- * all of it, and the page says so.
+ * all of it, and the page says so. The evidence, the saved setups and the fleet's bots are read once for the workspace,
+ * so coming back to Overview from another tab asks the server for none of them.
  */
 @Component({
   selector: 'app-options-setup-overview',
@@ -41,11 +43,9 @@ const RUNS_SHOWN = 5;
 })
 export class OptionsSetupOverviewComponent {
   private readonly store = inject(OptionsSetupWorkspaceStore);
-  private readonly indexService = inject(OptionsSetupIndexService);
-  private readonly botsService = inject(OptionsSetupBotsService);
-
-  protected readonly index = resource({ loader: () => this.indexService.read() });
-  protected readonly bots = resource({ loader: () => this.botsService.read() });
+  private readonly evidence = inject(OptionsSetupEvidenceStore);
+  private readonly library = inject(OptionsSetupLibrary);
+  private readonly botsStore = inject(OptionsSetupBotsStore);
 
   protected readonly name = this.store.address;
   protected readonly standing = computed(() => describeStanding(this.store.standing()));
@@ -53,46 +53,35 @@ export class OptionsSetupOverviewComponent {
   protected readonly defineRoute = computed(() => optionsSetupRoute(this.name(), 'define'));
   protected readonly goldenRoute = computed(() => optionsSetupRoute(this.name(), 'golden'));
 
-  /** The saved setup, as the index read it just now. */
+  /** The saved setup, as the library lists it. */
   private readonly saved = computed(() => {
-    const name = this.name();
-    if (name === null || !this.index.hasValue()) return null;
-    return this.index.value().setups.find((setup) => setup.name === name) ?? null;
+    const entry = this.store.entry();
+    return entry.kind === 'open' ? entry.item : null;
   });
-  protected readonly hash = computed(() => this.saved()?.setup_sha256 ?? null);
+  protected readonly hash = this.store.savedHash;
   protected readonly example = computed(() => this.saved()?.example === true);
   protected readonly savedAtMs = computed(() => this.saved()?.saved_at_ms ?? null);
 
-  protected readonly held = computed(() => (this.index.hasValue() ? evidenceHolding(this.index.value(), this.hash()) : null));
-  protected readonly approvals = computed(() => newestFirst(this.held()?.approvals ?? []));
-  protected readonly runs = computed(() => newestFirst(this.held()?.runs ?? []));
+  private readonly held = computed(() => this.evidence.evidenceHolding(this.hash()));
+  protected readonly approvals = computed(() => newestFirst(this.held().approvals));
+  protected readonly runs = computed(() => newestFirst(this.held().runs));
   protected readonly shownRuns = computed(() => this.runs().slice(0, RUNS_SHOWN));
-  protected readonly studies = computed(() => newestFirst(this.held()?.studies ?? []));
+  protected readonly studies = computed(() => newestFirst(this.held().studies));
   /** Other saved names whose content is identical: they hold the same evidence, and none of them owns it. */
-  protected readonly sharedWith = computed(() =>
-    this.index.hasValue() ? namesHolding(this.index.value(), this.hash()).filter((setup) => setup.name !== this.name()) : [],
-  );
+  protected readonly sharedWith = computed(() => namesHolding(this.library.setups(), this.hash()).filter((setup) => setup.name !== this.name()));
 
   /** Said when a list was cut at its limit: "none" would then mean "none in the newest N". */
-  protected readonly cut = computed(() => {
-    if (!this.index.hasValue()) return { runs: null, studies: null, approvals: null };
-    const index = this.index.value();
-    const note = (shown: number, total: number) => (total > shown ? `the newest ${shown} of ${total}` : null);
-    return {
-      runs: note(index.runs.length, index.runs_total),
-      studies: note(index.studies.length, index.studies_total),
-      approvals: note(index.approvals.length, index.approvals_total),
-    };
-  });
+  protected readonly cut = this.evidence.cuts;
 
   /** Bots started from exactly this content, or why that cannot be said. A bot is pinned to the content it was started from. */
   protected readonly botsOfContent = computed(() => {
     const hash = this.hash();
-    if (!this.bots.hasValue()) return null;
-    const read = this.bots.value();
+    const read = this.botsStore.bots();
+    if (read === null) return null;
     if (read.kind === 'unknown') return read;
     return { kind: 'known' as const, bots: read.bots.filter((bot) => bot.setupSha256 === hash) };
   });
+  protected readonly botsFailed = this.botsStore.failed;
 
   protected readonly state = computed<WorkspaceStateContent | null>(() => {
     if (this.name() === null) {
@@ -103,32 +92,26 @@ export class OptionsSetupOverviewComponent {
         actions: [{ id: 'define', label: 'Go to Define', route: this.defineRoute() }],
       };
     }
-    if (this.index.error() !== undefined) {
+    const read = this.evidence.state();
+    if (read.kind === 'failed') {
       return {
         kind: 'failed',
         happened: 'The evidence recorded for this setup could not be read.',
-        why: extractServerMessage(this.index.error(), 'The research store did not answer.'),
+        why: read.reason,
         next: 'Read it again. Nothing about the setup itself is lost.',
         actions: [{ id: 'retry', label: 'Read again' }],
       };
     }
-    if (this.index.isLoading() && !this.index.hasValue()) return { kind: 'checking', happened: 'Reading the evidence recorded for this setup.' };
-    if (this.saved() === null) {
-      return {
-        kind: 'unavailable',
-        happened: 'The saved setup was not in the evidence read.',
-        why: 'It may have been saved or removed a moment ago.',
-        next: 'Read it again.',
-        actions: [{ id: 'retry', label: 'Read again' }],
-      };
-    }
+    if (read.kind === 'loading') return { kind: 'checking', happened: 'Reading the evidence recorded for this setup.' };
+    // The workspace opens only a setup the library holds; its content is not in hand for the moment after a save.
+    if (this.hash() === null) return { kind: 'checking', happened: 'Reading the saved setup.' };
     return null;
   });
 
   protected act(id: string): void {
     if (id === 'retry') {
-      this.index.reload();
-      this.bots.reload();
+      this.evidence.reload();
+      this.botsStore.reload();
     }
   }
 

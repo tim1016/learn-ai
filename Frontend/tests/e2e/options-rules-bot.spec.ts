@@ -196,7 +196,8 @@ test('walks pinned source-76, historical69 and the separate blocked PUT study wi
     else if (path.endsWith(`/workspace/study/${STUDY_WORKSPACE.subject_id}`)) await route.fulfill({ json: STUDY_WORKSPACE });
     else if (path.endsWith('/lineage')) await route.fulfill({ json: lineage });
     // Which saved setups hold the evidence's content: none are saved in this walk.
-    else if (path.endsWith('/setup-index')) await route.fulfill({ json: { read_at_ms: 1_792_000_000_000, setups: [], runs: [], runs_total: 0, studies: [], studies_total: 0, approvals: [], approvals_total: 0 } });
+    else if (path.endsWith('/setup-index')) await route.fulfill({ json: { read_at_ms: 1_792_000_000_000, runs: [], runs_total: 0, studies: [], studies_total: 0, approvals: [], approvals_total: 0 } });
+    else if (path.endsWith('/options-backtest/setups')) await route.fulfill({ json: [] });
     else if (path.endsWith('/setups/describe')) await route.fulfill({ json: route.request().postDataJSON().legs.length === 1 ? studyDescription : description76 });
     else await route.fallback();
   });

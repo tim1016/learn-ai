@@ -15,7 +15,7 @@ export const OPTION_SETUP: ServedSetup = {
   legs: [{ leg_id: 'call', side: 'buy', right: 'call', contracts: 1, expiry: { kind: 'this_week' }, strike: { kind: 'atm' }, stop_loss: { kind: 'percent', value: '25' } },
     { leg_id: 'put', side: 'buy', right: 'put', contracts: 1, expiry: { kind: 'this_week' }, strike: { kind: 'atm' }, stop_loss: { kind: 'percent', value: '25' } }],
 };
-export const SAVED_OPTION_SETUP: SavedSetup = { name: 'Saved two-leg study', setup: OPTION_SETUP, example: false, saved_at_ms: 1791294000000, cannot_open_reason: null };
+export const SAVED_OPTION_SETUP: SavedSetup = { name: 'Saved two-leg study', setup: OPTION_SETUP, setup_sha256: 'a'.repeat(64), example: false, saved_at_ms: 1791294000000, cannot_open_reason: null };
 const DECLARATIONS: SearchDeclarations = {
   setup_name: SAVED_OPTION_SETUP.name, setup: OPTION_SETUP, setup_hash: 'a'.repeat(64),
   history_bounds: { start_ms: 1704171600000, end_ms: 1790999999999 },
@@ -76,8 +76,8 @@ export async function installOptionsSearchWorld(page: Page, initial: OptionsStud
     const fulfill = (json: unknown, status = 200) => route.fulfill({ status, json, headers: { 'Access-Control-Allow-Origin': '*' } });
     if (path === '/api/research/options-backtest/setups') await fulfill([SAVED_OPTION_SETUP]);
     else if (path === '/api/research/options-backtest/setup-index') {
-      // The Golden tab finds a saved setup's evidence by the hash of its content: this one has recorded none.
-      await fulfill({ read_at_ms: 1791294000000, setups: [{ name: SAVED_OPTION_SETUP.name, example: false, saved_at_ms: SAVED_OPTION_SETUP.saved_at_ms, underlying: 'SPY', setup_sha256: DECLARATIONS.setup_hash, cannot_open_reason: null }], runs: [], runs_total: 0, studies: [], studies_total: 0, approvals: [], approvals_total: 0 });
+      // The Golden tab finds a saved setup's evidence by the hash of its content (the saved setup lists it): this one has recorded none.
+      await fulfill({ read_at_ms: 1791294000000, runs: [], runs_total: 0, studies: [], studies_total: 0, approvals: [], approvals_total: 0 });
     }
     else if (path === '/api/calendar/sessions') {
       // Pinned fixture sessions containing the dates typed in this browser test.

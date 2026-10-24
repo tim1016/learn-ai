@@ -54,7 +54,7 @@
               · <a [routerLink]="goldenRoute()" [queryParams]="{ run: item.id, parent_study_id: parent_study_id() ?? null }">Review run {{ item.id }}</a>
             </li>
           } @empty {
-            <li>No completed run of this exact content is recorded{{ runsCut() ? ', among ' + runsCut() : '' }}. Run a backtest in Explore first.</li>
+            <li>No completed run of this exact content is recorded{{ cuts().runs ? ', among ' + cuts().runs : '' }}. Run a backtest in Explore first.</li>
           }
         </ul>
         @if (runs().length > runsOffered().length) {
@@ -73,7 +73,7 @@
         @for (listed of found.exact; track listed.approval.id) {
           <app-options-golden-version [listed]="listed" [detail]="detailOf(listed.approval.id)" [setupName]="savedName()" />
         } @empty {
-          <p>No approved version holds this exact content{{ approvalsCut() ? ', among ' + approvalsCut() : '' }}.</p>
+          <p>No approved version holds this exact content{{ cuts().approvals ? ', among ' + cuts().approvals : '' }}.</p>
         }
         @if (found.throughStudy.length > 0) {
           <h3>Made by searches that began from this content, with changed settings</h3>
@@ -98,7 +98,7 @@
             · started <app-timestamp-display [value]="study.created_at_ms" mode="local" />
           </li>
         } @empty {
-          <li>No golden search began from this exact content{{ studiesCut() ? ', among ' + studiesCut() : '' }}. A search that changed this setup’s settings is linked from the version it produced, not matched by name.</li>
+          <li>No golden search began from this exact content{{ cuts().studies ? ', among ' + cuts().studies : '' }}. A search that changed this setup’s settings is linked from the version it produced, not matched by name.</li>
         }
       </ul>
       <p>

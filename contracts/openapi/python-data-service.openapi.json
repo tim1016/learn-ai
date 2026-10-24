@@ -33124,72 +33124,6 @@
         "title": "IndexedRun",
         "type": "object"
       },
-      "IndexedSetup": {
-        "description": "One library entry, by name: a shipped example, a saved setup, or one that can no longer be opened.",
-        "properties": {
-          "cannot_open_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Cannot Open Reason"
-          },
-          "example": {
-            "title": "Example",
-            "type": "boolean"
-          },
-          "name": {
-            "title": "Name",
-            "type": "string"
-          },
-          "saved_at_ms": {
-            "anyOf": [
-              {
-                "maximum": 253402300799999.0,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Saved At Ms"
-          },
-          "setup_sha256": {
-            "anyOf": [
-              {
-                "pattern": "^[0-9a-f]{64}$",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Setup Sha256"
-          },
-          "underlying": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Underlying"
-          }
-        },
-        "required": [
-          "name",
-          "example"
-        ],
-        "title": "IndexedSetup",
-        "type": "object"
-      },
       "IndexedStudy": {
         "properties": {
           "created_at_ms": {
@@ -49834,13 +49768,6 @@
             "title": "Runs Total",
             "type": "integer"
           },
-          "setups": {
-            "items": {
-              "$ref": "#/components/schemas/IndexedSetup"
-            },
-            "title": "Setups",
-            "type": "array"
-          },
           "studies": {
             "items": {
               "$ref": "#/components/schemas/IndexedStudy"
@@ -49856,7 +49783,6 @@
         },
         "required": [
           "read_at_ms",
-          "setups",
           "runs",
           "runs_total",
           "studies",
@@ -58267,44 +58193,6 @@
             "title": "Example",
             "type": "boolean"
           },
-          "golden_setup_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Golden Setup Id"
-          },
-          "golden_status": {
-            "anyOf": [
-              {
-                "enum": [
-                  "ready",
-                  "stale",
-                  "revoked"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Golden Status"
-          },
-          "golden_status_explanation": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Golden Status Explanation"
-          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -58331,6 +58219,19 @@
                 "type": "null"
               }
             ]
+          },
+          "setup_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The exact identity of the setup's content, present when the setup is. A run, a search or an approved version is matched to a saved setup by an equal hash and never by name: a name can be edited, deleted and reused, and two names with identical content share one hash.",
+            "title": "Setup Sha256"
           }
         },
         "required": [
@@ -95044,7 +94945,7 @@
     },
     "/api/research/options-backtest/setups": {
       "get": {
-        "description": "The two shipped examples, then the saved setups, newest first. One that cannot be opened says why.",
+        "description": "The two shipped examples, then the saved setups, newest first. One that cannot be opened says why.\n\nEach setup carries the hash of its content. Evidence is matched to a setup by an equal hash, so this lists no\napproved version and picks none for a name (``GET /setup-index`` lists the evidence).",
         "operationId": "list_setups_api_research_options_backtest_setups_get",
         "responses": {
           "200": {

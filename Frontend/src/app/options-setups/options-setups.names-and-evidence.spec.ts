@@ -8,7 +8,7 @@ import { fakeService } from '../components/options-backtest/testing/fake-service
 import { EXAMPLE_NO_REENTRY, EXAMPLE_ONE_REENTRY, readBackOf, exampleBody, servedExamples } from '../components/options-backtest/testing/fixtures';
 import { typeInto } from '../components/options-backtest/testing/page-actions';
 import type { OptionsSetupIndex } from './index/options-setup-index.service';
-import { approvalOf, GOLDEN_ID, indexOf, runOf, savedName } from './testing/fixtures';
+import { approvalOf, GOLDEN_ID, indexOf, runOf } from './testing/fixtures';
 import { renderDefine, setupUrl } from './testing/render-workspace';
 
 /**
@@ -40,23 +40,28 @@ const FROZEN = hashOf(readBackOf(exampleBody()));
 
 function world() {
   const library = new Map<string, SetupRequest>();
+  /** A saved setup as the server lists it: with the hash of its content. */
+  const entry = (name: string, setup: SetupRequest): SavedSetup => ({
+    name,
+    example: false,
+    saved_at_ms: 1_760_000_000_000,
+    cannot_open_reason: null,
+    setup: readBackOf(setup),
+    setup_sha256: hashOf(setup),
+  });
   const service = fakeService(vi, {
-    list: vi.fn(async (): Promise<SavedSetup[]> => [
-      ...servedExamples(),
-      ...[...library].map(([name, setup]) => ({ name, example: false, saved_at_ms: 1_760_000_000_000, cannot_open_reason: null, setup: readBackOf(setup) })),
-    ]),
+    list: vi.fn(async (): Promise<SavedSetup[]> => [...servedExamples(), ...[...library].map(([name, setup]) => entry(name, setup))]),
     save: vi.fn(async (name: string, setup: SetupRequest): Promise<SavedSetup> => {
       library.set(name, setup);
-      return { name, example: false, saved_at_ms: 1_760_000_000_000, cannot_open_reason: null, setup: readBackOf(setup) };
+      return entry(name, setup);
     }),
     remove: vi.fn(async (name: string) => {
       library.delete(name);
     }),
   });
-  /** What the evidence read answers now: the saved names as they hold content today, and the evidence as it was frozen. */
+  /** What the evidence read answers now: the evidence as it was frozen. The saved names, and the content they hold today, are the library's. */
   const index = async (): Promise<OptionsSetupIndex> =>
     indexOf({
-      setups: [...library].map(([name, setup]) => savedName(name, '0', { setup_sha256: hashOf(setup) })),
       runs: [runOf(5, '0', { setup_sha256: FROZEN, recorded_name: 'Alpha' })],
       approvals: [approvalOf('0', { setup_sha256: FROZEN, recorded_name: 'Alpha', source_run_id: 5 })],
     });

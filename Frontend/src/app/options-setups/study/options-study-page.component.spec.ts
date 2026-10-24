@@ -8,13 +8,13 @@ import { OptionsResearchLineageService } from '../../components/options-evidence
 import { STUDY_WORKSPACE } from '../../components/options-evidence/testing';
 import { OptionsGoldenSearchService } from '../../components/options-golden-search/options-golden-search.service';
 import { study } from '../../components/options-golden-search/testing';
-import { OptionsSetupIndexService } from '../index/options-setup-index.service';
-import { indexOf, savedName } from '../testing/fixtures';
+import type { SavedSetup } from '../../components/options-backtest/options-backtest.types';
+import { savedName } from '../testing/fixtures';
 import { OptionsStudyPageComponent } from './options-study-page.component';
 
 const BOT = '/brokers/alpaca/clerks/paper/accounts/PA9/bots/options-1';
 
-async function page(inputs: Record<string, unknown> = {}, saved = indexOf({})) {
+async function page(inputs: Record<string, unknown> = {}, saved: SavedSetup[] = []) {
   const searches = { get: vi.fn(async (_id: string) => study({ id: STUDY_WORKSPACE.subject_id })), command: vi.fn() };
   const read = vi.fn(async () => STUDY_WORKSPACE);
   await render(OptionsStudyPageComponent, {
@@ -23,9 +23,8 @@ async function page(inputs: Record<string, unknown> = {}, saved = indexOf({})) {
       provideRouter([]),
       { provide: OptionsGoldenSearchService, useValue: searches },
       { provide: OptionsEvidenceService, useValue: { read } },
-      { provide: OptionsSetupIndexService, useValue: { read: async () => saved } },
       { provide: OptionsResearchLineageService, useValue: { read: async () => { throw new Error('Retained procedure unavailable'); } } },
-      { provide: OptionsBacktestService, useValue: { describe: () => new Promise(() => undefined) } },
+      { provide: OptionsBacktestService, useValue: { list: async () => saved, describe: () => new Promise(() => undefined) } },
     ],
   });
   return { searches, read };
@@ -45,7 +44,7 @@ describe('One golden search study, at the address it has by its own id', () => {
   it('shows the study’s recorded lineage, and which saved setups hold the content it started from, at ?view=lineage', async () => {
     const { searches, read } = await page(
       { view: 'lineage' },
-      indexOf({ setups: [savedName('Alpha', '0', { setup_sha256: STUDY_WORKSPACE.setup_sha256 })] }),
+      [savedName('Alpha', '0', { setup_sha256: STUDY_WORKSPACE.setup_sha256 })],
     );
 
     expect(await screen.findByRole('heading', { name: 'This search did not establish a result.' })).toBeTruthy();

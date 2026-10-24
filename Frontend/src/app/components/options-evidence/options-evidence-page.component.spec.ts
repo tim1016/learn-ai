@@ -8,11 +8,11 @@ import { OptionsEvidencePageComponent } from './options-evidence-page.component'
 import { OptionsEvidenceService, type EvidenceWorkspace } from './options-evidence.service';
 import { RUN_WORKSPACE, STUDY_WORKSPACE } from './testing';
 import { OptionsResearchLineageService } from './options-research-lineage.service';
-import { OptionsSetupIndexService, type OptionsSetupIndex } from '../../options-setups/index/options-setup-index.service';
-import { indexOf, savedName } from '../../options-setups/testing/fixtures';
+import { savedName } from '../../options-setups/testing/fixtures';
+import type { SavedSetup } from '../options-backtest/options-backtest.types';
 
 /** The saved setups the page reads to say which of them hold the evidence's content: none, unless a spec says. */
-const savedSetups = (index: OptionsSetupIndex = indexOf({})) => ({ provide: OptionsSetupIndexService, useValue: { read: async () => index } });
+const library = (...saved: SavedSetup[]) => ({ list: async () => saved });
 
 describe('Options evidence workspace', () => {
   it('keeps a valid source and comparator picker usable when the selected historical run is unavailable', async () => {
@@ -20,9 +20,9 @@ describe('Options evidence workspace', () => {
     const compare = vi.fn().mockRejectedValue(new Error('Missing comparator'));
     const result = await render(OptionsEvidencePageComponent, {
       inputs: { kind: 'run', subjectId: '76', view: 'comparison', comparator_run_id: '999999' },
-      providers: [provideRouter([]), savedSetups(), { provide: OptionsEvidenceService, useValue: { read } },
+      providers: [provideRouter([]), { provide: OptionsEvidenceService, useValue: { read } },
         { provide: RunDetailService, useValue: { compare } },
-        { provide: OptionsBacktestService, useValue: { describe: () => new Promise(() => undefined) } }],
+        { provide: OptionsBacktestService, useValue: { ...library(), describe: () => new Promise(() => undefined) } }],
     });
     expect(await screen.findByText('The comparison could not be read.')).toBeTruthy();
     expect(screen.getByRole('heading', { name: RUN_WORKSPACE.headline })).toBeTruthy();
@@ -40,8 +40,8 @@ describe('Options evidence workspace', () => {
   ])('returns only to an exact in-app bot route: %s', async (bot_return, allowed) => {
     await render(OptionsEvidencePageComponent, {
       inputs: { kind: 'golden', subjectId: RUN_WORKSPACE.approvals[0].golden_id, view: 'lineage', bot_return },
-      providers: [provideRouter([]), savedSetups(), { provide: OptionsEvidenceService, useValue: { read: async () => RUN_WORKSPACE } },
-        { provide: OptionsBacktestService, useValue: { describe: () => new Promise(() => undefined) } }],
+      providers: [provideRouter([]), { provide: OptionsEvidenceService, useValue: { read: async () => RUN_WORKSPACE } },
+        { provide: OptionsBacktestService, useValue: { ...library(), describe: () => new Promise(() => undefined) } }],
     });
     await screen.findByRole('heading', { name: RUN_WORKSPACE.headline });
     const back = screen.queryByRole('link', { name: 'Back to bot' });
@@ -52,8 +52,8 @@ describe('Options evidence workspace', () => {
     const run = vi.fn().mockRejectedValue(new Error('Retained replay offline'));
     await render(OptionsEvidencePageComponent, {
       inputs: { kind: 'run', subjectId: '76' },
-      providers: [provideRouter([]), savedSetups(), { provide: OptionsEvidenceService, useValue: { read: async () => RUN_WORKSPACE } },
-        { provide: OptionsBacktestService, useValue: { run, describe: async () => { throw new Error('Unavailable'); } } }],
+      providers: [provideRouter([]), { provide: OptionsEvidenceService, useValue: { read: async () => RUN_WORKSPACE } },
+        { provide: OptionsBacktestService, useValue: { ...library(), run, describe: async () => { throw new Error('Unavailable'); } } }],
     });
     await screen.findByText('The source replay could not be read. Its identity remains visible above.');
     expect(run).toHaveBeenCalledWith(76);
@@ -63,8 +63,8 @@ describe('Options evidence workspace', () => {
     const run = vi.fn();
     await render(OptionsEvidencePageComponent, {
       inputs: { kind: 'run', subjectId: '76', view: 'lineage' },
-      providers: [provideRouter([]), savedSetups(), { provide: OptionsEvidenceService, useValue: { read: async () => RUN_WORKSPACE } },
-        { provide: OptionsBacktestService, useValue: { run, describe: () => new Promise(() => undefined) } }],
+      providers: [provideRouter([]), { provide: OptionsEvidenceService, useValue: { read: async () => RUN_WORKSPACE } },
+        { provide: OptionsBacktestService, useValue: { ...library(), run, describe: () => new Promise(() => undefined) } }],
     });
     expect(await screen.findByRole('heading', { name: 'Profitable in replay. Research qualification is missing.' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Approved from backtest' })).toBeTruthy();
@@ -80,9 +80,9 @@ describe('Options evidence workspace', () => {
     const read = vi.fn().mockImplementation((kind: string) => kind === 'run' ? oldRead : Promise.resolve(STUDY_WORKSPACE));
     const result = await render(OptionsEvidencePageComponent, {
       inputs: { kind: 'run', subjectId: '76', view: 'lineage' },
-      providers: [provideRouter([]), savedSetups(), { provide: OptionsEvidenceService, useValue: { read } },
+      providers: [provideRouter([]), { provide: OptionsEvidenceService, useValue: { read } },
         { provide: OptionsResearchLineageService, useValue: { read: async () => { throw new Error('Retained procedure unavailable'); } } },
-        { provide: OptionsBacktestService, useValue: { describe: async () => { throw new Error('Description unavailable'); } } }],
+        { provide: OptionsBacktestService, useValue: { ...library(), describe: async () => { throw new Error('Description unavailable'); } } }],
     });
     await waitFor(() => expect(read).toHaveBeenCalledTimes(1));
     await result.rerender({ inputs: { kind: 'study', subjectId: STUDY_WORKSPACE.subject_id, view: 'lineage' } });
@@ -97,8 +97,8 @@ describe('Options evidence workspace', () => {
   it('stays inside the Options setups place: every link it draws is an address of that place', async () => {
     await render(OptionsEvidencePageComponent, {
       inputs: { kind: 'run', subjectId: '76', view: 'lineage' },
-      providers: [provideRouter([]), savedSetups(), { provide: OptionsEvidenceService, useValue: { read: async () => RUN_WORKSPACE } },
-        { provide: OptionsBacktestService, useValue: { describe: () => new Promise(() => undefined) } }],
+      providers: [provideRouter([]), { provide: OptionsEvidenceService, useValue: { read: async () => RUN_WORKSPACE } },
+        { provide: OptionsBacktestService, useValue: { ...library(), describe: () => new Promise(() => undefined) } }],
     });
     await screen.findByRole('heading', { name: RUN_WORKSPACE.headline });
 
@@ -109,11 +109,11 @@ describe('Options evidence workspace', () => {
   });
 
   it('says which saved setups hold this exact content today, and that identical content is shared, not owned', async () => {
-    const index = indexOf({ setups: [savedName('Alpha', '0', { setup_sha256: RUN_WORKSPACE.setup_sha256 }), savedName('Beta', '0', { setup_sha256: RUN_WORKSPACE.setup_sha256 }), savedName('Other', '2')] });
+    const saved = [savedName('Alpha', '0', { setup_sha256: RUN_WORKSPACE.setup_sha256 }), savedName('Beta', '0', { setup_sha256: RUN_WORKSPACE.setup_sha256 }), savedName('Other', '2')];
     await render(OptionsEvidencePageComponent, {
       inputs: { kind: 'run', subjectId: '76' },
-      providers: [provideRouter([]), savedSetups(index), { provide: OptionsEvidenceService, useValue: { read: async () => RUN_WORKSPACE } },
-        { provide: OptionsBacktestService, useValue: { run: vi.fn().mockRejectedValue(new Error('offline')), describe: () => new Promise(() => undefined) } }],
+      providers: [provideRouter([]), { provide: OptionsEvidenceService, useValue: { read: async () => RUN_WORKSPACE } },
+        { provide: OptionsBacktestService, useValue: { ...library(...saved), run: vi.fn().mockRejectedValue(new Error('offline')), describe: () => new Promise(() => undefined) } }],
     });
 
     const holders = await screen.findByText(/Saved setups that hold this exact content today/);
@@ -127,8 +127,8 @@ describe('Options evidence workspace', () => {
   it('opens its evidence from its own id when no saved setup holds the content any more', async () => {
     await render(OptionsEvidencePageComponent, {
       inputs: { kind: 'golden', subjectId: RUN_WORKSPACE.approvals[0].golden_id },
-      providers: [provideRouter([]), savedSetups(indexOf({ setups: [savedName('Alpha', '9')] })), { provide: OptionsEvidenceService, useValue: { read: async () => RUN_WORKSPACE } },
-        { provide: OptionsBacktestService, useValue: { run: vi.fn().mockRejectedValue(new Error('offline')), describe: () => new Promise(() => undefined) } }],
+      providers: [provideRouter([]), { provide: OptionsEvidenceService, useValue: { read: async () => RUN_WORKSPACE } },
+        { provide: OptionsBacktestService, useValue: { ...library(savedName('Alpha', '9')), run: vi.fn().mockRejectedValue(new Error('offline')), describe: () => new Promise(() => undefined) } }],
     });
 
     expect(await screen.findByRole('heading', { name: RUN_WORKSPACE.headline })).toBeTruthy();
@@ -139,9 +139,9 @@ describe('Options evidence workspace', () => {
   it('does not claim which saved setups hold the content when they could not be read, and still shows the evidence', async () => {
     await render(OptionsEvidencePageComponent, {
       inputs: { kind: 'run', subjectId: '76' },
-      providers: [provideRouter([]), { provide: OptionsSetupIndexService, useValue: { read: async () => { throw new Error('store down'); } } },
+      providers: [provideRouter([]),
         { provide: OptionsEvidenceService, useValue: { read: async () => RUN_WORKSPACE } },
-        { provide: OptionsBacktestService, useValue: { run: vi.fn().mockRejectedValue(new Error('offline')), describe: () => new Promise(() => undefined) } }],
+        { provide: OptionsBacktestService, useValue: { list: async () => { throw new Error('store down'); }, run: vi.fn().mockRejectedValue(new Error('offline')), describe: () => new Promise(() => undefined) } }],
     });
 
     expect(await screen.findByRole('heading', { name: RUN_WORKSPACE.headline })).toBeTruthy();
@@ -152,7 +152,7 @@ describe('Options evidence workspace', () => {
     const read = vi.fn();
     await render(OptionsEvidencePageComponent, {
       inputs: { kind: 'setup', subjectId: 'Alpha' },
-      providers: [provideRouter([]), savedSetups(), { provide: OptionsEvidenceService, useValue: { read } }, { provide: OptionsBacktestService, useValue: {} }],
+      providers: [provideRouter([]), { provide: OptionsEvidenceService, useValue: { read } }, { provide: OptionsBacktestService, useValue: { ...library() } }],
     });
 
     expect(await screen.findByText(/“setup” is not a kind of Options evidence/)).toBeTruthy();

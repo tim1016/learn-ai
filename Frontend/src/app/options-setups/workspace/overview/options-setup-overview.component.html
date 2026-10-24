@@ -92,7 +92,7 @@
             }
           </ul>
         }
-      } @else if (bots.error() !== undefined) {
+      } @else if (botsFailed()) {
         <p class="unknown">Unknown. The bots could not be read.</p>
       } @else {
         <p class="muted" role="status">Reading the bots…</p>

@@ -99,14 +99,6 @@ async def get_record(conn: asyncpg.Connection, qualification_id: str) -> GoldenR
     return None if row is None else _record(row)
 
 
-async def records_for_setups(conn: asyncpg.Connection, hashes: list[str]) -> tuple[GoldenRecord, ...]:
-    rows = await conn.fetch(
-        f"SELECT {_COLUMNS} FROM research_golden_option_setups WHERE setup_sha256 = ANY($1::text[]) ORDER BY created_at_ms DESC, id DESC",
-        hashes,
-    )
-    return tuple(_record(row) for row in rows)
-
-
 async def by_command(conn: asyncpg.Connection, command_id: str) -> GoldenRecord | None:
     row = await conn.fetchrow(f"SELECT {_COLUMNS} FROM research_golden_option_setups WHERE command_id = $1", command_id)
     return None if row is None else _record(row)

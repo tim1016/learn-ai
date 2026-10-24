@@ -2,7 +2,6 @@ import { ChangeDetectionStrategy, Component, computed, inject, input, linkedSign
 import { RouterLink } from '@angular/router';
 
 import { extractServerMessage } from '../../../components/broker/operation-error';
-import { GoldenOptionSetupsService, type GoldenOptionSetup } from '../../../components/options-backtest/golden-option-setups.service';
 import { GoldenSetupApprovalComponent } from '../../../components/options-backtest/run/golden-setup-approval.component';
 import { OptionsEvidenceService } from '../../../components/options-evidence/options-evidence.service';
 import { OptionsSearchPlanComponent } from '../../../components/options-golden-search/options-search-plan.component';
@@ -11,12 +10,13 @@ import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import type { WorkspaceStateContent } from '../../../shared/workspace/workspace-state';
 import { WorkspaceStateBlockComponent } from '../../../shared/workspace/workspace-state-block.component';
-import { OptionsSetupIndexService } from '../../index/options-setup-index.service';
+import { OptionsSetupEvidenceStore } from '../../index/options-setup-evidence-store';
 import { optionsEvidenceRoute, optionsSetupRoute } from '../../options-setups.address';
 import { describeStanding } from '../draft-standing';
 import { OptionsSetupWorkspaceStore } from '../options-setup-store';
+import { OptionsSetupVersions } from '../options-setup-versions';
 import { OptionsGoldenVersionComponent } from './golden-version.component';
-import { readVersionDetails, reviewableRuns, reviewedRunId, versionsOfSetup } from './golden-versions';
+import { reviewableRuns, reviewedRunId } from './golden-versions';
 
 /** How many of the setup's runs are offered for review before the rest are left to the Options setups list. */
 const RUNS_OFFERED = 8;
@@ -32,7 +32,8 @@ const RUNS_OFFERED = 8;
  * Nothing here reads the draft in Define. A review is of the run named in the address (`?run=`), by what that
  * run froze, and an approval carries the hash of that content, so an edit made elsewhere in the meantime
  * cannot change what is approved. A search starts from the content as last saved, named by its hash. What a
- * saved name holds is found by exact content in the evidence index, never by the name.
+ * saved name holds is found by exact content in the evidence the workspace holds, never by the name; that evidence
+ * and each version read by its id are read once for the workspace, so moving between tabs asks for neither again.
  */
 @Component({
   selector: 'app-options-setup-golden',
@@ -52,8 +53,8 @@ const RUNS_OFFERED = 8;
 })
 export class OptionsSetupGoldenComponent {
   private readonly store = inject(OptionsSetupWorkspaceStore);
-  private readonly indexService = inject(OptionsSetupIndexService);
-  private readonly goldenService = inject(GoldenOptionSetupsService);
+  private readonly evidence = inject(OptionsSetupEvidenceStore);
+  private readonly versionStore = inject(OptionsSetupVersions);
   private readonly evidenceService = inject(OptionsEvidenceService);
 
   /** The run the review is of (`?run=`). Taking a run to Golden carries this and nothing else. */
@@ -70,46 +71,15 @@ export class OptionsSetupGoldenComponent {
   protected readonly defineRoute = computed(() => optionsSetupRoute(this.name(), 'define'));
   protected readonly goldenRoute = computed(() => optionsSetupRoute(this.name(), 'golden'));
 
-  protected readonly index = resource({ loader: () => this.indexService.read() });
-
-  /** The saved setup, as the index read it just now. */
-  private readonly saved = computed(() => {
-    const name = this.name();
-    if (name === null || !this.index.hasValue()) return null;
-    return this.index.value().setups.find((setup) => setup.name === name) ?? null;
-  });
-  protected readonly hash = computed(() => this.saved()?.setup_sha256 ?? null);
+  /** The content the setup is saved as, from the library: what everything below is found by. */
+  protected readonly hash = this.store.savedHash;
 
   // The versions.
-  protected readonly versions = computed(() => (this.index.hasValue() ? versionsOfSetup(this.index.value(), this.hash()) : null));
-  private readonly versionIds = computed(() => {
-    const found = this.versions();
-    return found === null ? [] : [...found.exact, ...found.throughStudy].map((listed) => listed.approval.id);
-  });
-  /** Each version read by its own id, so none is lost to the newest-first limit of a list. A version that cannot be read says so. */
-  private readonly detailsRead = resource({
-    params: () => (this.versionIds().length === 0 ? undefined : { ids: this.versionIds() }),
-    loader: ({ params }) => readVersionDetails(this.goldenService, params.ids),
-  });
+  protected readonly versions = this.versionStore.found;
   /** The detail of one version: `undefined` while it is read, `null` if it could not be. */
-  protected readonly detailOf = (id: string): GoldenOptionSetup | null | undefined =>
-    this.detailsRead.hasValue() ? (this.detailsRead.value().get(id) ?? null) : this.detailsRead.error() === undefined ? undefined : null;
-  /** Said when a list was cut at its limit: "none" would then mean "none in the newest N". */
-  protected readonly approvalsCut = computed(() => {
-    if (!this.index.hasValue()) return null;
-    const index = this.index.value();
-    return index.approvals_total > index.approvals.length ? `the newest ${index.approvals.length} of ${index.approvals_total}` : null;
-  });
-  protected readonly studiesCut = computed(() => {
-    if (!this.index.hasValue()) return null;
-    const index = this.index.value();
-    return index.studies_total > index.studies.length ? `the newest ${index.studies.length} of ${index.studies_total}` : null;
-  });
-  protected readonly runsCut = computed(() => {
-    if (!this.index.hasValue()) return null;
-    const index = this.index.value();
-    return index.runs_total > index.runs.length ? `the newest ${index.runs.length} of ${index.runs_total}` : null;
-  });
+  protected readonly detailOf = (id: string) => this.versionStore.detailOf(id);
+  /** Said where a list was cut at its limit: "none" would then mean "none in the newest N". */
+  protected readonly cuts = this.evidence.cuts;
 
   // The review of one tested run.
   protected readonly reviewed = computed(() => reviewedRunId(this.run()));
@@ -133,7 +103,10 @@ export class OptionsSetupGoldenComponent {
     const hash = this.hash();
     return frozen === null || hash === null ? null : frozen.setup_sha256 === hash;
   });
-  protected readonly runs = computed(() => (this.index.hasValue() ? reviewableRuns(this.index.value(), this.hash()) : []));
+  protected readonly runs = computed(() => {
+    const index = this.evidence.index();
+    return index === null ? [] : reviewableRuns(index, this.hash());
+  });
   protected readonly runsOffered = computed(() => this.runs().slice(0, RUNS_OFFERED));
   protected readonly reviewIds = computed(() => {
     const id = this.reviewed();
@@ -154,36 +127,30 @@ export class OptionsSetupGoldenComponent {
         actions: [{ id: 'define', label: 'Go to Define', route: this.defineRoute() }],
       };
     }
-    if (this.index.error() !== undefined) {
+    const read = this.evidence.state();
+    if (read.kind === 'failed') {
       return {
         kind: 'failed',
         happened: 'The evidence recorded for this setup could not be read.',
-        why: extractServerMessage(this.index.error(), 'The research store did not answer.'),
+        why: read.reason,
         next: 'Read it again. Nothing about the setup itself is lost.',
         actions: [{ id: 'retry', label: 'Read again' }],
       };
     }
-    if (this.index.isLoading() && !this.index.hasValue()) return { kind: 'checking', happened: 'Reading the evidence recorded for this setup.' };
-    if (this.saved() === null) {
-      return {
-        kind: 'unavailable',
-        happened: 'The saved setup was not in the evidence read.',
-        why: 'It may have been saved or removed a moment ago.',
-        next: 'Read it again.',
-        actions: [{ id: 'retry', label: 'Read again' }],
-      };
-    }
+    if (read.kind === 'loading') return { kind: 'checking', happened: 'Reading the evidence recorded for this setup.' };
+    // The workspace opens only a setup the library holds; its content is not in hand for the moment after a save.
+    if (this.hash() === null) return { kind: 'checking', happened: 'Reading the saved setup.' };
     return null;
   });
 
   protected act(id: string): void {
-    if (id === 'retry') this.index.reload();
+    if (id === 'retry') this.evidence.reload();
   }
 
   /** A version was approved, revoked or re-proved: what is listed is read again. */
   protected versionChanged(): void {
-    this.index.reload();
-    this.detailsRead.reload();
+    this.evidence.reloadIndex();
+    this.versionStore.reloadDetails();
   }
 
   protected togglePlanning(): void {

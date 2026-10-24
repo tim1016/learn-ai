@@ -49,7 +49,8 @@ export function versionsOfSetup(index: OptionsSetupIndex, hash: string | null | 
 
 /**
  * Each version read by its own id, so none is lost to the newest-first limit of a list. A version that cannot be
- * read is `null`: it says so, and nothing stands in its place.
+ * read is `null`: it says so, and nothing stands in its place. So is an answer that names another version than the
+ * one asked for, which is never taken for it.
  */
 export async function readVersionDetails(
   reader: { get(id: string): Promise<GoldenOptionSetup> },
@@ -58,7 +59,7 @@ export async function readVersionDetails(
   const settled = await Promise.allSettled(ids.map((id) => reader.get(id)));
   return new Map(ids.map((id, at): [string, GoldenOptionSetup | null] => {
     const outcome = settled[at];
-    return [id, outcome.status === 'fulfilled' ? outcome.value : null];
+    return [id, outcome.status === 'fulfilled' && outcome.value.id === id ? outcome.value : null];
   }));
 }
 

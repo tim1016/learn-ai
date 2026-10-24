@@ -4,6 +4,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { GoldenOptionSetup } from '../../../components/options-backtest/golden-option-setups.service';
+import type { SavedSetup } from '../../../components/options-backtest/options-backtest.types';
 import { exampleBody } from '../../../components/options-backtest/testing/fixtures';
 import { editSlippage, libraryWorld } from '../../testing/explore-actions';
 import { approvalOf, indexOf, savedName, STUDY_ID, studyOf } from '../../testing/fixtures';
@@ -20,7 +21,7 @@ const QUIET_BOTS = { kind: 'known' as const, bots: [] };
 async function open(
   versions: GoldenOptionSetup[],
   index: OptionsSetupIndex,
-  options: { name?: string | null; tab?: OptionsSetupTab; failing?: readonly string[]; index?: () => Promise<OptionsSetupIndex> } = {},
+  options: { name?: string | null; tab?: OptionsSetupTab; failing?: readonly string[]; index?: () => Promise<OptionsSetupIndex>; saved?: SavedSetup[] } = {},
 ) {
   const library = libraryWorld(vi);
   library.library.set('Mine', exampleBody());
@@ -34,6 +35,8 @@ async function open(
   const name = options.name === undefined ? 'Mine' : options.name;
   await renderTab(library.service, name, options.tab ?? 'overview', {
     index: options.index ?? (async () => index),
+    // `Mine` holds the content the versions below froze, unless a spec says otherwise.
+    saved: options.saved ?? [savedName('Mine', '1')],
     bots: QUIET_BOTS,
     golden: { get, list: async () => [] },
     evidence: { read: vi.fn() },
@@ -50,7 +53,7 @@ const hrefs = (scope: HTMLElement) => within(scope).getAllByRole('link').map((li
 
 describe('Deploy an options bot, from a setup’s header', () => {
   it('is a header button on every tab that goes nowhere by itself', async () => {
-    await open([versionOf(id('a'), '1')], indexOf({ setups: [savedName('Mine', '1')], approvals: [approvalOf('1', { id: id('a') })] }));
+    await open([versionOf(id('a'), '1')], indexOf({ approvals: [approvalOf('1', { id: id('a') })] }));
 
     const button = await screen.findByRole('button', { name: 'Deploy an options bot' });
     expect(screen.queryByRole('link', { name: 'Deploy an options bot' })).toBeNull();
@@ -81,7 +84,6 @@ describe('Deploy an options bot, from a setup’s header', () => {
     await open(
       [versionOf(id('a'), '1', { source_run_id: 7 }), versionOf(id('b'), '1', { source_run_id: 9, evidence: searchEvidence(STUDY_ID) })],
       indexOf({
-        setups: [savedName('Mine', '1')],
         studies: [studyOf('1')],
         approvals: [
           approvalOf('1', { id: id('a'), source_run_id: 7, origin: 'backtest', created_at_ms: 1_791_900_000_000 }),
@@ -105,7 +107,7 @@ describe('Deploy an options bot, from a setup’s header', () => {
   });
 
   it('chooses no version when there is only one', async () => {
-    await open([versionOf(id('a'), '1')], indexOf({ setups: [savedName('Mine', '1')], approvals: [approvalOf('1', { id: id('a') })] }));
+    await open([versionOf(id('a'), '1')], indexOf({ approvals: [approvalOf('1', { id: id('a') })] }));
 
     await openChooser();
 
@@ -121,7 +123,6 @@ describe('Deploy an options bot, from a setup’s header', () => {
         versionOf(id('d'), '1'),
       ],
       indexOf({
-        setups: [savedName('Mine', '1')],
         approvals: [
           approvalOf('1', { id: id('a'), status: 'stale', created_at_ms: 4 }),
           approvalOf('1', { id: id('b'), status: 'revoked', created_at_ms: 3 }),
@@ -145,7 +146,7 @@ describe('Deploy an options bot, from a setup’s header', () => {
   it('says the versions are of the content as last saved when Define holds an edit that is not saved', async () => {
     await open(
       [versionOf(id('a'), '1')],
-      indexOf({ setups: [savedName('Mine', '1')], approvals: [approvalOf('1', { id: id('a') })] }),
+      indexOf({ approvals: [approvalOf('1', { id: id('a') })] }),
       { tab: 'define' },
     );
     await screen.findByRole('heading', { name: 'Entry settings' });
@@ -161,7 +162,6 @@ describe('Deploy an options bot, from a setup’s header', () => {
     await open(
       [versionOf(id('e'), '5', { evidence: searchEvidence(STUDY_ID) })],
       indexOf({
-        setups: [savedName('Mine', '1')],
         studies: [studyOf('1')],
         approvals: [approvalOf('5', { id: id('e'), study_id: STUDY_ID, origin: 'search' })],
       }),
@@ -176,7 +176,7 @@ describe('Deploy an options bot, from a setup’s header', () => {
   it('says no version holds this content, and points to Golden, rather than offering a version of other content', async () => {
     await open(
       [versionOf(id('a'), '9')],
-      indexOf({ setups: [savedName('Mine', '1')], approvals: [approvalOf('9', { id: id('a') })] }),
+      indexOf({ approvals: [approvalOf('9', { id: id('a') })] }),
     );
 
     const chooser = await openChooser();
@@ -190,7 +190,7 @@ describe('Deploy an options bot, from a setup’s header', () => {
   it('says when the list was cut, so that none does not mean none among the newest', async () => {
     await open(
       [versionOf(id('a'), '1')],
-      indexOf({ setups: [savedName('Mine', '1')], approvals: [approvalOf('1', { id: id('a') })], totals: { approvals_total: 40 } }),
+      indexOf({ approvals: [approvalOf('1', { id: id('a') })], totals: { approvals_total: 40 } }),
     );
 
     const chooser = await openChooser();
@@ -202,11 +202,11 @@ describe('Deploy an options bot, from a setup’s header', () => {
     let fail = true;
     await open(
       [versionOf(id('a'), '1')],
-      indexOf({ setups: [savedName('Mine', '1')], approvals: [approvalOf('1', { id: id('a') })] }),
+      indexOf({ approvals: [approvalOf('1', { id: id('a') })] }),
       {
         index: async () => {
           if (fail) throw new Error('research database down');
-          return indexOf({ setups: [savedName('Mine', '1')], approvals: [approvalOf('1', { id: id('a') })] });
+          return indexOf({ approvals: [approvalOf('1', { id: id('a') })] });
         },
       },
     );
@@ -223,7 +223,8 @@ describe('Deploy an options bot, from a setup’s header', () => {
   it('closes from its own button and from the header button, and stays closed for another setup', async () => {
     await open(
       [versionOf(id('a'), '1')],
-      indexOf({ setups: [savedName('Mine', '1'), savedName('Other', '2')], approvals: [approvalOf('1', { id: id('a') })] }),
+      indexOf({ approvals: [approvalOf('1', { id: id('a') })] }),
+      { saved: [savedName('Mine', '1'), savedName('Other', '2')] },
     );
 
     const chooser = await openChooser();
@@ -242,8 +243,57 @@ describe('Deploy an options bot, from a setup’s header', () => {
     expect(screen.queryByRole('region', { name: 'Deploy an options bot' })).toBeNull();
   });
 
+  it('reads the evidence once for the setup, however many times the choice is opened, and each version again whenever it opens', async () => {
+    const read = vi.fn(async () => indexOf({ approvals: [approvalOf('1', { id: id('a') })] }));
+    const { get } = await open([versionOf(id('a'), '1')], indexOf({}), { index: read });
+
+    const first = await openChooser();
+    await within(first).findByRole('link', { name: `Deploy version ${id('a')}` });
+    expect(get).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(first).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Deploy an options bot' })).toBeNull());
+    // Golden lists the same versions, and asks for none of them again.
+    await TestBed.inject(Router).navigateByUrl(setupUrl('Mine', 'golden'));
+    await screen.findByRole('region', { name: 'Approved versions' });
+    expect(get).toHaveBeenCalledTimes(1);
+
+    const second = await openChooser();
+    await within(second).findByRole('link', { name: `Deploy version ${id('a')}` });
+
+    // A link is offered only for a version that is ready now, so opening the choice reads each version again.
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers a link for no version until the version has been read again at this opening', async () => {
+    let revoked = false;
+    const { get } = await open([versionOf(id('a'), '1')], indexOf({ approvals: [approvalOf('1', { id: id('a') })] }));
+    get.mockImplementation(async (versionId: string) => versionOf(versionId, '1', revoked ? { status: 'revoked', status_explanation: 'Revoked by the owner.' } : {}));
+    const first = await openChooser();
+    await within(first).findByRole('link', { name: `Deploy version ${id('a')}` });
+    fireEvent.click(within(first).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Deploy an options bot' })).toBeNull());
+
+    // The version is revoked while the choice is closed: the link the first opening offered is not offered again.
+    revoked = true;
+    const second = await openChooser();
+
+    expect(await within(second).findByText(/Not offered: Revoked by the owner/)).toBeTruthy();
+    expect(within(second).queryByRole('link', { name: `Deploy version ${id('a')}` })).toBeNull();
+  });
+
+  it('does not take an answer that names another version for the one asked for', async () => {
+    const { get } = await open([versionOf(id('a'), '1')], indexOf({ approvals: [approvalOf('1', { id: id('a') })] }));
+    get.mockImplementation(async () => versionOf(id('b'), '1'));
+
+    const chooser = await openChooser();
+
+    expect(await within(chooser).findByText('Not offered: this version could not be read by its own id.')).toBeTruthy();
+    expect(within(chooser).queryByRole('link', { name: /^Deploy version/ })).toBeNull();
+  });
+
   it('offers nothing about a signal program, which deploys from its own workflow', async () => {
-    await open([versionOf(id('a'), '1')], indexOf({ setups: [savedName('Mine', '1')], approvals: [approvalOf('1', { id: id('a') })] }));
+    await open([versionOf(id('a'), '1')], indexOf({ approvals: [approvalOf('1', { id: id('a') })] }));
 
     const chooser = await openChooser();
     await within(chooser).findByRole('link', { name: `Deploy version ${id('a')}` });

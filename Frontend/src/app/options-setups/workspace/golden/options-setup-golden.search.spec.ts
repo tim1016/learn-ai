@@ -29,7 +29,8 @@ async function golden(query = '') {
   const search = searchWorld();
   await renderTab(library.service, 'Mine', 'golden', {
     query,
-    index: async () => indexOf({ setups: [savedName('Mine', '1')] }),
+    saved: [savedName('Mine', '1')],
+    index: async () => indexOf({}),
     golden: { get: vi.fn(), list: async () => [] },
     evidence: { read: vi.fn() },
     search,

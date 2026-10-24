@@ -26,6 +26,7 @@ from app.options_bots.golden_proof import setup_sha256
 from app.options_bots.golden_repository import GoldenEvent, GoldenRecord
 from app.research import options_setup_index as index
 from app.routers import options_backtest as options_backtest_router
+from app.routers.options_backtest import listed_setup
 from app.schemas.options_setup_index import OptionsSetupIndexResponse
 from tests.options_backtest.setup_fixtures import leg, setup
 
@@ -102,7 +103,7 @@ def a_study_row(**changes: Any) -> dict[str, Any]:
 
 
 def test_two_names_with_identical_content_share_one_hash_and_neither_owns_the_evidence() -> None:
-    listed = {entry.name: entry for entry in index.indexed_setups([saved("Alpha"), saved("Beta")])}
+    listed = {entry.name: entry for entry in map(listed_setup, [saved("Alpha"), saved("Beta")])}
 
     assert listed["Alpha"].setup_sha256 == listed["Beta"].setup_sha256 == the_hash()
     # A run recorded under Alpha froze the same content: the join is the hash, and the run's label does not move it.
@@ -116,7 +117,7 @@ def test_editing_deleting_and_reusing_a_name_moves_no_evidence_and_no_approval()
     runs_before = index.indexed_runs([a_run(5, name="Alpha"), a_run(6, name=None)], frozen)
 
     # Alpha is edited, Beta is deleted, and the name Beta is reused for different content.
-    after = {entry.name: entry for entry in index.indexed_setups([saved("Alpha", starting_cash_usd="25000"), saved("Beta", underlying="IWM")])}
+    after = {entry.name: entry for entry in map(listed_setup, [saved("Alpha", starting_cash_usd="25000"), saved("Beta", underlying="IWM")])}
     runs_after = index.indexed_runs([a_run(5, name="Alpha"), a_run(6, name=None)], frozen)
 
     assert runs_after == runs_before
@@ -145,15 +146,15 @@ def test_a_run_whose_stored_setup_cannot_be_read_is_listed_without_a_hash_and_sa
 def test_a_saved_setup_that_cannot_be_opened_keeps_its_reason_and_no_hash() -> None:
     legacy = SavedSetup(name="Old", example=False, saved_at_ms=3, setup=None, cannot_open_reason="entry: Field required")
 
-    [entry] = index.indexed_setups([legacy])
+    entry = listed_setup(legacy)
 
-    assert (entry.setup_sha256, entry.cannot_open_reason, entry.underlying) == (None, "entry: Field required", None)
+    assert (entry.setup_sha256, entry.cannot_open_reason, entry.setup) == (None, "entry: Field required", None)
 
 
 def test_the_shipped_examples_are_listed_as_examples() -> None:
     from app.options_backtest.saved_setups import EXAMPLE_SETUPS
 
-    listed = index.indexed_setups(EXAMPLE_SETUPS)
+    listed = [listed_setup(example) for example in EXAMPLE_SETUPS]
 
     assert [entry.example for entry in listed] == [True] * len(EXAMPLE_SETUPS)
     assert all(entry.setup_sha256 is not None and entry.saved_at_ms is None for entry in listed)
@@ -208,7 +209,6 @@ def test_a_study_whose_frozen_protocol_was_changed_stays_listed_and_claims_no_co
 async def test_the_route_serves_the_index_and_says_when_the_store_cannot_be_reached(monkeypatch: pytest.MonkeyPatch) -> None:
     served = OptionsSetupIndexResponse(
         read_at_ms=1,
-        setups=index.indexed_setups([saved("Alpha")]),
         runs=[],
         runs_total=0,
         studies=[],
@@ -231,7 +231,8 @@ async def test_the_route_serves_the_index_and_says_when_the_store_cannot_be_reac
         unavailable = await client.get(f"{PREFIX}/setup-index")
 
     assert ok.status_code == 200
-    assert ok.json()["setups"][0]["setup_sha256"] == the_hash()
+    # The saved setups are not listed twice: GET /setups lists them, each with its hash.
+    assert "setups" not in ok.json()
     assert unavailable.status_code == 503
     assert unavailable.json()["detail"]["code"] == "OPTIONS_SETUP_INDEX_UNAVAILABLE"
 
@@ -315,3 +316,22 @@ async def test_the_approvals_are_judged_on_a_worker_thread(monkeypatch: pytest.M
 
     assert total == 1 and version.id == a_version().id
     assert ran_on and ran_on[0] != threading.get_ident()
+
+
+async def test_the_saved_setups_carry_their_content_hash_and_pick_no_approved_version_for_a_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A-M1: GET /setups lists what is saved by exact content (R20) and no longer picks one approval for each name."""
+    legacy = SavedSetup(name="Old", example=False, saved_at_ms=3, setup=None, cannot_open_reason="entry: Field required")
+
+    async def with_connection(read: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        return [saved("Alpha"), saved("Beta"), saved("Gamma", underlying="QQQ"), legacy]
+
+    monkeypatch.setattr(options_backtest_router, "with_connection", with_connection)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"{PREFIX}/setups")
+
+    assert response.status_code == 200
+    rows = {row["name"]: row for row in response.json()}
+    assert rows["Alpha"]["setup_sha256"] == rows["Beta"]["setup_sha256"] == the_hash()
+    assert rows["Gamma"]["setup_sha256"] == the_hash(underlying="QQQ") != the_hash()
+    assert (rows["Old"]["setup_sha256"], rows["Old"]["cannot_open_reason"], rows["Old"]["setup"]) == (None, "entry: Field required", None)
+    assert not any(key.startswith("golden_") for row in rows.values() for key in row)

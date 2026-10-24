@@ -9,8 +9,7 @@ import { SetupSentencesComponent } from '../options-backtest/cards/setup-sentenc
 import { OptionsBacktestService } from '../options-backtest/options-backtest.service';
 import type { GoldenOffer } from '../options-backtest/run/golden-offer';
 import { RunResultComponent } from '../options-backtest/run/run-result.component';
-import { holdersOf } from '../../options-setups/index/options-setup-evidence';
-import { OptionsSetupIndexService } from '../../options-setups/index/options-setup-index.service';
+import { OptionsSetupLibrary } from '../../options-setups/index/options-setup-library';
 import { isOptionsEvidenceKind, optionsEvidenceRoute, optionsSetupRoute, optionsStudyRoute, type OptionsEvidenceKind } from '../../options-setups/options-setups.address';
 import { OptionsEvidenceService } from './options-evidence.service';
 import { OptionsHistoricalComparisonComponent } from './options-historical-comparison.component';
@@ -54,7 +53,7 @@ export class OptionsEvidenceViewComponent {
 
   private readonly service = inject(OptionsEvidenceService);
   private readonly backtest = inject(OptionsBacktestService);
-  private readonly saved = inject(OptionsSetupIndexService);
+  private readonly library = inject(OptionsSetupLibrary);
 
   protected readonly activeView = computed(() => this.view() ?? 'performance');
   /** An address with a kind that is not run, study or golden names no evidence: it fails in place and reads nothing. */
@@ -70,14 +69,13 @@ export class OptionsEvidenceViewComponent {
     params: () => (this.knownKind() ? { kind: this.kind(), id: this.subjectId(), study: this.inspected_study_id() } : undefined),
     loader: ({ params }) => this.service.read(params.kind, params.id, params.study),
   });
-  /** The saved setups, read once, to say which of them hold this evidence's exact content today. */
-  private readonly savedSetups = resource({ loader: () => this.saved.read() });
+  /** Which saved setups hold this evidence's exact content today, from the library the holding page already reads. */
   protected readonly holders = computed(() => {
     const item = this.evidence();
-    if (item === null || !this.savedSetups.hasValue()) return null;
-    return holdersOf(this.savedSetups.value(), { setup_sha256: item.setup_sha256 });
+    if (item === null || this.library.status() !== 'ready') return null;
+    return this.library.holdersOf({ setup_sha256: item.setup_sha256 });
   });
-  protected readonly holdersUnread = computed(() => this.savedSetups.error() !== undefined);
+  protected readonly holdersUnread = computed(() => this.library.status() === 'error');
   protected readonly evidence = computed(() => (this.workspace.hasValue() ? this.workspace.value() : null));
   protected readonly performance = resource({
     params: () => (this.activeView() === 'performance' ? (this.evidence()?.source_run_id ?? undefined) : undefined),

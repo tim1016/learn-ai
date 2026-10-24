@@ -6,6 +6,7 @@ import type { Mock } from 'vitest';
 
 import { GoldenOptionSetupsService } from '../../components/options-backtest/golden-option-setups.service';
 import { OptionsBacktestService } from '../../components/options-backtest/options-backtest.service';
+import type { SavedSetup } from '../../components/options-backtest/options-backtest.types';
 import { PastChainService } from '../../components/options-backtest/past-chain/past-chain.service';
 import { OptionsEvidenceService } from '../../components/options-evidence/options-evidence.service';
 import { OptionsGoldenSearchService } from '../../components/options-golden-search/options-golden-search.service';
@@ -55,6 +56,13 @@ interface RenderOptions {
   form?: boolean;
   /** What the evidence read answers, for the tabs that list evidence. */
   index?: OptionsSetupIndex | (() => Promise<OptionsSetupIndex>);
+  /**
+   * Saved names the library lists besides what the service lists, each with the hash of the content it holds, for a spec
+   * about the evidence, which needs a name to hold a content and little else. A name the service lists too keeps its
+   * setup and takes the hash given here. A function is asked each time the library is read, so a spec can move a hash
+   * as a save does.
+   */
+  saved?: readonly SavedSetup[] | (() => readonly SavedSetup[]);
   /** What the fleet's bots read answers. */
   bots?: OptionsBotsRead | (() => Promise<OptionsBotsRead>);
   /** The jobs service a spec scripts; without one the place gets a jobs service that knows of no job. */
@@ -84,7 +92,25 @@ function reading<T extends object>(answer: T | (() => Promise<T>)): () => Promis
   return answer instanceof Function ? answer : async () => answer;
 }
 
-async function renderPlace(service: FakeService, url: string, download: FakeDownload | undefined, options: RenderOptions) {
+/** The service as the place is given it: its library also lists the names a spec adds (`RenderOptions.saved`). */
+function withSaved(service: FakeService, added: RenderOptions['saved']): object {
+  if (added === undefined) return service;
+  return {
+    ...service,
+    list: async (): Promise<SavedSetup[]> => {
+      const saved = added instanceof Function ? added() : added;
+      const listed = await service.list();
+      const held = listed.map((one) => {
+        const named = saved.find((each) => each.name === one.name);
+        return named === undefined ? one : { ...one, setup_sha256: named.setup_sha256 };
+      });
+      return [...held, ...saved.filter((each) => !listed.some((one) => one.name === each.name))];
+    },
+  };
+}
+
+async function renderPlace(placeService: FakeService, url: string, download: FakeDownload | undefined, options: RenderOptions) {
+  const service = withSaved(placeService, options.saved);
   const view = await render(RouterHost, {
     providers: [
       ...provideOptionsSetupsPlace(options.places),

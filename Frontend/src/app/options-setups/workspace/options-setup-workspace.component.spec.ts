@@ -10,7 +10,7 @@ import { indexOf, savedName } from '../testing/fixtures';
 import { renderTab } from '../testing/render-workspace';
 
 const withLibrary = (...extra: SavedSetup[]) => fakeService(vi, { list: vi.fn(async () => [...servedExamples(), ...extra]) });
-const quiet = { index: indexOf({ setups: [savedName('Mine', '1')] }), bots: { kind: 'known' as const, bots: [] } };
+const quiet = { index: indexOf({}), saved: [savedName('Mine', '1')], bots: { kind: 'known' as const, bots: [] } };
 
 describe('a setup that is not in the library', () => {
   it('fails in place, at the address, with a way back, and opens no other setup in its place', async () => {

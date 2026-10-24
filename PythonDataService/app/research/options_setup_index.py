@@ -1,9 +1,9 @@
-"""One read that lists the saved setups and every piece of Options evidence together (#3512, PRD #3490 R20).
+"""One read that lists every piece of Options evidence, each with the content it froze (#3512, PRD #3490 R20).
 
-The owners stay where they are: saved names in ``options_backtest/saved_setups``, runs in ``saved_runs``, studies in
-``options_golden_search/repository`` and approved versions in ``options_bots/golden_repository``. This puts what each
-froze (the ``setup_sha256`` of its setup) beside the others, so the page can say which evidence holds the same content
-as a saved setup. It joins nothing itself and picks no owner: two names with identical content carry the same hash.
+The owners stay where they are: runs in ``saved_runs``, studies in ``options_golden_search/repository`` and approved
+versions in ``options_bots/golden_repository``. This puts what each froze (the ``setup_sha256`` of its setup) side by
+side. The saved setups are not listed here: ``GET /setups`` lists them, each with the hash of its content, and the page
+says which evidence holds the same content as a saved setup by an equal hash. This joins nothing and picks no owner.
 
 A row whose stored setup can no longer be read stays listed, without a hash and with the reason, as a saved setup that
 cannot be opened does. One unreadable record never takes the others with it.
@@ -16,7 +16,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from app.options_backtest import saved_runs, saved_setups
+from app.options_backtest import saved_runs
 from app.options_backtest.saved_runs import RunRecord
 from app.options_backtest.saved_setups import SavedSetup
 from app.options_bots.golden import qualification_status
@@ -30,7 +30,6 @@ from app.research.persistence.db import with_connection
 from app.schemas.options_setup_index import (
     IndexedApproval,
     IndexedRun,
-    IndexedSetup,
     IndexedStudy,
     OptionsSetupIndexResponse,
 )
@@ -38,20 +37,6 @@ from app.utils.timestamps import now_ms_utc
 
 # Each list is cut here, newest first, and says how many exist: a bound that is stated, never a silent first page.
 INDEX_LIMIT = 1000
-
-
-def indexed_setups(saved: Sequence[SavedSetup]) -> list[IndexedSetup]:
-    return [
-        IndexedSetup(
-            name=entry.name,
-            example=entry.example,
-            saved_at_ms=entry.saved_at_ms,
-            underlying=None if entry.setup is None else entry.setup.underlying,
-            setup_sha256=None if entry.setup is None else setup_sha256(entry.setup),
-            cannot_open_reason=entry.cannot_open_reason,
-        )
-        for entry in saved
-    ]
 
 
 def indexed_runs(records: Sequence[RunRecord], stored: Mapping[int, SavedSetup]) -> list[IndexedRun]:
@@ -175,13 +160,11 @@ async def _read_approvals() -> tuple[list[IndexedApproval], int]:
 
 
 async def read_index() -> OptionsSetupIndexResponse:
-    saved = await with_connection(saved_setups.list_setups)
     runs, runs_total = await _read_runs()
     found_studies, studies_total = await _read_studies()
     approvals, approvals_total = await _read_approvals()
     return OptionsSetupIndexResponse(
         read_at_ms=now_ms_utc(),
-        setups=await asyncio.to_thread(indexed_setups, saved),
         runs=runs,
         runs_total=runs_total,
         studies=found_studies,

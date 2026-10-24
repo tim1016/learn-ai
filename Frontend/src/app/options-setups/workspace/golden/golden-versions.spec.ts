@@ -1,12 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { approvalOf, indexOf, runOf, savedName, STUDY_ID, studyOf } from '../../testing/fixtures';
+import { approvalOf, indexOf, runOf, STUDY_ID, studyOf } from '../../testing/fixtures';
 import { reviewableRuns, reviewedRunId, verdictWords, versionsOfSetup } from './golden-versions';
 
 describe('versionsOfSetup', () => {
   it('lists a version by the content it froze, and a changed candidate through the study that began from this content', () => {
     const index = indexOf({
-      setups: [savedName('Mine', '1')],
       studies: [studyOf('1'), studyOf('2', { id: 'os_other' })],
       approvals: [
         approvalOf('1', { id: 'exact-old', created_at_ms: 10 }),
