@@ -1,0 +1,12 @@
+@use '../../styles/tokens' as *;
+
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.returns-tab__note {
+  margin: 0 0 0.75rem;
+  color: $text-secondary;
+  font-size: 0.875rem;
+}

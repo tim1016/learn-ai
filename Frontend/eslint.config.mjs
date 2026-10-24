@@ -128,8 +128,8 @@ const moneySurfaces = (extension) => [
   // The Options Backtest page shows a run's dollars (#3030): its result and its history, whose names say nothing of money.
   `src/app/components/options-backtest/run/**/*.${extension}`,
   `src/app/components/options-backtest/history/**/*.${extension}`,
-  // The Past chain tab shows option prices and strikes as the server wrote them (#3030).
-  `src/app/components/options-backtest/past-chain/**/*.${extension}`,
+  // The Past · Archive chain shows option prices and strikes as the server wrote them (#3030, #3505).
+  `src/app/markets/options/chain/archive/**/*.${extension}`,
   // The closer look at a run (#3030): every trade, one day, a comparison. Its prices are the server's strings, shown as they came.
   `src/app/components/options-backtest/run-detail/**/*.${extension}`,
 ];

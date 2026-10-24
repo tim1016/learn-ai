@@ -111,11 +111,11 @@ export class BaselinesSectionComponent {
   }
 
   open(baseline: BaselineConfig): void {
-    void this.router.navigate(['/research-lab/baselines', baseline.baseline_id]);
+    void this.router.navigate(['/research/history/baseline', baseline.baseline_id]);
   }
 
   openById(baselineId: string): void {
-    void this.router.navigate(['/research-lab/baselines', baselineId]);
+    void this.router.navigate(['/research/history/baseline', baselineId]);
   }
 
   shortHash(value: string | null | undefined, len = 12): string {

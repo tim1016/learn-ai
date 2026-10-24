@@ -48,19 +48,16 @@ export interface IvConfidenceSummary {
   healthImputed: boolean | null;
 }
 
-/** The numbers the Edge hub headlines. They live in the dataset so they carry
- *  its provenance; no template holds a hardcoded figure. */
+/** The numbers the Cross-asset demonstration headlines. They live in the
+ *  dataset so they carry its provenance; no template holds a hardcoded figure. */
 export interface EdgeHeadline {
-  edgeComposite: number;
   robustness: number;
   dsrMean: number;
   pbo: number;
-  /** Weighted per-component contribution to the composite. */
-  contributions: EdgeComponents;
 }
 
-/** Generated demonstration data behind the Edge hub, Cross-asset, Regimes and
- *  the Edge score / Trade simulator drawers. Every number in it is synthetic,
+/** Generated demonstration data behind the Cross-asset, Regimes, Edge score and
+ *  Trade simulator demonstrations. Every number in it is synthetic,
  *  and `provenance` says so to anything that renders it. */
 export interface EdgeSampleData {
   readonly provenance: "sample";
@@ -84,7 +81,6 @@ export interface EdgeSampleData {
   trades: Trade[];
   equityFromTrades: number[];
   costAttribution: CostAttribution;
-  sparklines: { vrp: number[]; equity: number[]; stability: number[]; };
 }
 
 /** Trailing windows (bars) the study asks the endpoint for; it returns one

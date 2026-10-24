@@ -1,0 +1,54 @@
+@use '../../styles/tokens' as *;
+
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.data-gaps__heading {
+  margin: 0 0 0.4rem;
+  font-size: 1rem;
+  color: $text-primary;
+}
+
+.data-gaps__none,
+.data-gaps__count {
+  margin: 0 0 0.5rem;
+  color: $text-secondary;
+  font-size: 0.875rem;
+}
+
+.data-gaps__scroll {
+  overflow-x: auto;
+}
+
+.data-gaps__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+
+  th,
+  td {
+    padding: 0.4rem 0.6rem;
+    border-bottom: 1px solid $border-light;
+    text-align: left;
+    vertical-align: top;
+  }
+
+  th {
+    color: $text-secondary;
+    font-weight: 500;
+  }
+
+  td {
+    color: $text-primary;
+  }
+
+  td:first-child {
+    white-space: nowrap;
+  }
+
+  tr[data-fetchable='false'] td:nth-child(3) {
+    color: $text-subtle;
+  }
+}

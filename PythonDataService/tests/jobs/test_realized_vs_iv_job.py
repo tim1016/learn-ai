@@ -26,6 +26,10 @@ from app.jobs import cache as result_cache
 from app.jobs.progress import ProgressEmitter
 from app.jobs.runner import run_in_thread
 from app.lean_sidecar.trading_calendar import expected_sessions
+from app.research.study_records.captures import capture_realized_vs_iv
+from app.research.study_records.models import StudyRecordConfig, StudyRecordResult
+from app.research.study_records.recorder import keeps_job_record
+from app.research.study_records.store import StudyRecordStore
 from app.routers.jobs import RealizedVsIvJobRequest, start_realized_vs_iv_job
 from app.services import realized_vs_iv_study_service
 from app.services.iv_recorder import InMemoryIvSnapshotStore, RecordedIvSnapshot, get_iv_store, set_iv_store
@@ -57,6 +61,26 @@ class _Harness:
             return run_realized_vs_iv_study(params, job_id=job_id, force=force, emit=emit, cancel=cancel, now_ms=NOW_MS)
 
         run_in_thread(job_id, work, thread_name=f"test-{job_id}").join(timeout=120)
+        return self.fake.hashes[f"job:{job_id}:state"]
+
+    def run_recorded(
+        self, params: RealizedVsIvParams, *, job_id: str, root: Path, force: bool = False, rerun_of: str | None = None
+    ) -> dict[str, str]:
+        """One job as the route starts it: the study's work wrapped to keep a History record under ``root``."""
+        window = {} if params.window is None else {
+            "window_start_ms": et_midnight_ms(params.window[0]), "window_end_ms": et_midnight_ms(params.window[1])
+        }
+        request = RealizedVsIvJobRequest(
+            job_id=job_id, symbol=params.symbol, bar_size=params.bar_size, tenor_days=params.tenor_days,
+            hf_session=params.hf_session, estimators=list(params.estimators), windows=list(params.windows),
+            iv_series=params.iv_series, force=force, rerun_of=rerun_of, **window,
+        )
+
+        def work(emit: ProgressEmitter, cancel: Any) -> dict | None:
+            return run_realized_vs_iv_study(params, job_id=job_id, force=force, emit=emit, cancel=cancel, now_ms=NOW_MS)
+
+        recorded_work = keeps_job_record("realized-vs-iv", request, work, root=root, capture=capture_realized_vs_iv)
+        run_in_thread(job_id, recorded_work, thread_name=f"test-{job_id}").join(timeout=120)
         return self.fake.hashes[f"job:{job_id}:state"]
 
     def result(self, job_id: str) -> dict:
@@ -244,6 +268,85 @@ def test_a_daily_study_reads_minute_artifacts_and_neither_waits_on_nor_builds_th
     window = harness.result("rollup")["data_source"]["coverage"]["window"]
     assert state["status"] == "completed" and window["failed"] == 0
     assert [dict(r) for r in rollups()] == rollup_before, "the daily bars are folded from minutes; the rollup was left as it was"
+
+
+# ---------------------------------------------------------------------------
+# The History record: a lake run is kept with the source it read, a refused run with its refusal
+# ---------------------------------------------------------------------------
+
+
+def saved_records(root: Path) -> list[tuple[StudyRecordConfig, StudyRecordResult]]:
+    store = StudyRecordStore("realized-vs-iv", root=root)
+    return [store.load(record_id) for record_id, _ in store.config_paths()]
+
+
+def test_a_completed_run_is_recorded_with_the_data_source_block_it_returned_and_the_series_its_page_draws(harness, tmp_path):
+    state = harness.run_recorded(params(), job_id="kept", root=tmp_path / "records")
+
+    result = harness.result("kept")
+    [(config, stored)] = saved_records(tmp_path / "records")
+    assert state["status"] == "completed" and config.status == "completed"
+    assert config.data_source == result["data_source"], "the lake block is the record's provenance, field for field"
+    assert config.data_source["kind"] == "lake" and len(config.data_source["snapshot_digest"]) == 64
+    assert config.headline is not None and config.headline.startswith(f"{len(WINDOW)} bars; IV from none, so realized")
+    assert stored.result["ts"] == result["ts"] and stored.result["bars"] == result["bars"], "the chart's bars are stored with the series"
+    assert config.inputs["symbol"] == "SPY" and config.inputs["bar_size"] == "1d" and config.inputs["tenor_days"] == 30
+    assert config.inputs["window_start_ms"] == et_midnight_ms(WINDOW[0]) and config.inputs["window_end_ms"] == et_midnight_ms(WINDOW[-1])
+    assert config.job_id == "kept" and config.data_identity is None
+
+
+def test_a_caller_supplied_iv_series_is_recorded_as_supplied_and_never_copied_into_the_inputs(harness, tmp_path):
+    points = [{"ts": et_midnight_ms(WINDOW[10]) + 9 * 3_600_000, "iv30": 0.25}]
+
+    harness.run_recorded(params(iv_series=points), job_id="with-iv", root=tmp_path / "records")
+    harness.run_recorded(params(), job_id="without-iv", root=tmp_path / "records")
+
+    flags = {config.job_id: config.inputs for config, _ in saved_records(tmp_path / "records")}
+    assert flags["with-iv"]["iv_series_supplied"] is True and flags["without-iv"]["iv_series_supplied"] is False
+    assert all("iv_series" not in inputs for inputs in flags.values()), "the record holds the count and digest in its data_source"
+    assert harness.result("with-iv")["data_source"]["iv_snapshots"] == 1
+
+
+def test_a_window_the_lake_refused_is_recorded_as_a_failed_run_with_its_refusal_and_counts(harness, tmp_path):
+    del harness.tape[WINDOW[4]]
+
+    state = harness.run_recorded(params(), job_id="refused-kept", root=tmp_path / "records")
+
+    parked = harness.result("refused-kept")
+    [(config, stored)] = saved_records(tmp_path / "records")
+    assert state["status"] == "failed" and state["error_code"] == "data_unavailable_from_provider"
+    assert config.status == "failed" and config.status_detail == parked["error"]
+    assert config.headline is None
+    assert stored.result == parked, "the record holds the refusal the page reads, as the job parked it"
+    assert stored.result["refusal"]["code"] == "data_unavailable_from_provider"
+    assert config.data_source == parked["data_source"] and config.data_source["coverage"]["window"]["failed"] == 1
+
+
+def test_a_bar_size_the_study_was_never_defined_for_is_recorded_as_a_failed_run_before_anything_was_read(harness, tmp_path):
+    harness.run_recorded(params(bar_size="5m"), job_id="bad-size-kept", root=tmp_path / "records")
+
+    [(config, stored)] = saved_records(tmp_path / "records")
+    assert config.status == "failed" and config.inputs["bar_size"] == "5m", "the record says what was asked"
+    assert stored.result["refusal"]["code"] == "resolution_unsupported" and config.data_source is None
+
+
+def test_a_repeat_served_from_the_cache_is_not_recorded_a_second_time(harness, tmp_path):
+    harness.run_recorded(params(), job_id="first-kept", root=tmp_path / "records")
+
+    state = harness.run_recorded(params(), job_id="repeat-kept", root=tmp_path / "records")
+
+    assert state["cached"] == "1"
+    assert [config.job_id for config, _ in saved_records(tmp_path / "records")] == ["first-kept"]
+
+
+def test_a_rerun_names_the_record_it_was_prefilled_from(harness, tmp_path):
+    harness.run_recorded(params(), job_id="first-kept", root=tmp_path / "records")
+    [(first, _)] = saved_records(tmp_path / "records")
+
+    harness.run_recorded(params(tenor_days=60), job_id="again-kept", root=tmp_path / "records", rerun_of=first.record_id)
+
+    again = [config for config, _ in saved_records(tmp_path / "records") if config.job_id == "again-kept"]
+    assert [config.rerun_of for config in again] == [first.record_id]
 
 
 # ---------------------------------------------------------------------------

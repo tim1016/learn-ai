@@ -25,6 +25,8 @@ interface CostRow {
 export class TradeSimDrawerComponent {
   data = input.required<EdgeSampleData>();
   open = input(false);
+  /** Drawn in the page, not over it: the Trade simulator demonstration page. */
+  inline = input(false);
 
   closed = output();
 

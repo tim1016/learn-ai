@@ -99,11 +99,11 @@ export class MonteCarloSectionComponent {
   }
 
   open(mc: MonteCarloConfig): void {
-    void this.router.navigate(['/research-lab/monte-carlo', mc.monte_carlo_id]);
+    void this.router.navigate(['/research/history/monte-carlo', mc.monte_carlo_id]);
   }
 
   openById(mcId: string): void {
-    void this.router.navigate(['/research-lab/monte-carlo', mcId]);
+    void this.router.navigate(['/research/history/monte-carlo', mcId]);
   }
 
   shortHash(value: string | null | undefined, len = 12): string {

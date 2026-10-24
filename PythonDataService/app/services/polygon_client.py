@@ -21,7 +21,7 @@ import logging
 import threading
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import date, timedelta
 from typing import Any
 
@@ -864,6 +864,8 @@ class PolygonClientService:
                     "ticker": getattr(details, "ticker", None) if details else None,
                     "contract_type": getattr(details, "contract_type", None) if details else None,
                     "strike_price": getattr(details, "strike_price", None) if details else None,
+                    "exercise_style": getattr(details, "exercise_style", None) if details else None,
+                    "shares_per_contract": getattr(details, "shares_per_contract", None) if details else None,
                     # The vendor's YYYY-MM-DD becomes the anchor instant once,
                     # here at the vendor boundary (ADR 0022 (i), #2934).
                     "expiration_ms": (
@@ -953,6 +955,22 @@ class PolygonClientService:
 
         except Exception as e:
             logger.error(f"Error fetching stock snapshot for {ticker}: {e!s}")
+            raise
+
+    def get_stock_snapshots(self, tickers: Sequence[str]) -> list[dict[str, Any]]:
+        """Snapshots for several stocks in one vendor request (v2 all-tickers endpoint, filtered).
+
+        The vendor answers only the tickers it holds a snapshot for, so a ticker may be
+        missing from the result. One call however many tickers: a list page costs one
+        request, not one per row, and it is paced like every other vendor request.
+        """
+        try:
+            logger.info(f"Fetching stock snapshots for {len(tickers)} tickers")
+            self._throttle.acquire(label=f"snapshots:{len(tickers)}")
+            snapshots = self.client.get_snapshot_all("stocks", tickers=list(tickers))
+            return [self._serialize_ticker_snapshot(snapshot) for snapshot in snapshots]
+        except Exception as e:
+            logger.error(f"Error fetching stock snapshots for {len(tickers)} tickers: {e!s}")
             raise
 
     @staticmethod

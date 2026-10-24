@@ -15,6 +15,8 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { appConfig } from './app.config';
 import { routes } from './app.routes';
 import { TEST_ACCOUNT_ID, TEST_CLERK_ID, provideFleetDirectory } from './fleet/fleet-directory-testing';
+import { PICK_TAB_KEY, PICK_VIEW_KEY, keysForPick, openableTab } from './markets/instrument-address';
+import { optionsViewCommands } from './markets/options/options-address';
 import { activeMenuNodeFor, APP_MENU } from './shell/app-menu';
 import { routeTreeHasData } from './shell/current-url.service';
 import { HELP_DOCUMENTS } from './shared/help/help-documents';
@@ -59,49 +61,93 @@ const ROWS: Readonly<Record<string, Row>> = {
   '': { group: null },
 
   // ── Markets ──────────────────────────────────────────────────────────────
-  'data-lab': { group: MARKETS, lands: '/data-lab/explore' },
-  'data-lab/explore': { group: MARKETS },
-  'data-lab/export': { group: MARKETS },
-  'data-lab/returns': { group: MARKETS },
-  'options-lab': { group: MARKETS, lands: '/options-lab/chain' },
-  'options-lab/chain': { group: MARKETS },
+  markets: { group: MARKETS },
+  'markets/:symbol': { group: MARKETS, lands: '/markets/SPY/chart' },
+  'markets/:symbol/chart': { group: MARKETS },
+  'markets/:symbol/chart/news': { group: MARKETS },
+  'markets/:symbol/returns': { group: MARKETS },
+  'markets/:symbol/data': { group: MARKETS },
+  'markets/:symbol/data/build': { group: MARKETS },
+  'markets/:symbol/options': { group: MARKETS, lands: '/markets/SPY/options/chain' },
+  'markets/:symbol/options/chain': { group: MARKETS },
+  'markets/:symbol/options/surface': { group: MARKETS },
+  'markets/:symbol/options/pricing': { group: MARKETS },
+  // The chart, the Returns study and the dataset builder moved under the instrument; with no instrument named, an old address leads to the list.
+  'data-lab': { group: MARKETS, lands: '/markets' },
+  'data-lab/explore': { group: MARKETS, lands: '/markets' },
+  'data-lab/export': { group: MARKETS, lands: '/markets' },
+  'data-lab/returns': { group: MARKETS, lands: '/markets' },
+  // The chain moved into the instrument's Options tab; with no instrument named, an old address asks for one.
+  'options-lab': { group: MARKETS, lands: '/markets?then=options' },
+  'options-lab/chain': { group: MARKETS, lands: '/markets?then=options' },
   'options-lab/strategy-finder': { group: MARKETS },
-  'broker/options-chain': { group: MARKETS },
-  'broker/options-surface': { group: MARKETS },
-  'pricing-lab': { group: MARKETS },
-  'research-lab/market/news': { group: MARKETS },
+  // This page was the IBKR feed, so with no instrument named the list is asked to open the chain on Now · Live IBKR.
+  'broker/options-chain': { group: MARKETS, lands: '/markets?source=live&then=options' },
+  // Surface and Pricing moved under the instrument; with no instrument named, an old address leads to the list.
+  'broker/options-surface': { group: MARKETS, lands: '/markets?then=options&view=surface' },
+  'pricing-lab': { group: MARKETS, lands: '/markets?then=options&view=pricing' },
+  'research-lab/market/news': { group: MARKETS, lands: '/markets' },
 
   // ── Research ─────────────────────────────────────────────────────────────
-  'research-lab': { group: RESEARCH, lands: '/research-lab/features/validate' },
-  'research-lab/features/validate': { group: RESEARCH },
-  'research-lab/features/cross-sectional': { group: RESEARCH },
-  'research-lab/features/experiments': { group: RESEARCH },
-  'research-lab/signals/engine': { group: RESEARCH },
-  'research-lab/signals/history': { group: RESEARCH },
-  'research-lab/backtests/reliability': { group: RESEARCH },
-  'research-lab/backtests/strategy-runs': { group: RESEARCH },
-  'research-lab/strategy-runs/:run_id': { group: RESEARCH },
-  'research-lab/walk-forward/:wf_id': { group: RESEARCH },
-  'research-lab/monte-carlo/:mc_id': { group: RESEARCH },
-  'research-lab/baselines/:baseline_id': { group: RESEARCH },
-  'research-lab/signal-report/:id': { group: RESEARCH },
-  'research-lab/build/validate': { group: RESEARCH, lands: '/research-lab/features/validate' },
-  'research-lab/build/indicator-reliability': { group: RESEARCH, lands: '/research-lab/backtests/reliability' },
-  'research-lab/build/signal-engine': { group: RESEARCH, lands: '/research-lab/signals/engine' },
-  'research-lab/inspect/cross-sectional': { group: RESEARCH, lands: '/research-lab/features/cross-sectional' },
-  'research-lab/inspect/strategy-runs': { group: RESEARCH, lands: '/research-lab/backtests/strategy-runs' },
-  'research-lab/inspect/experiments': { group: RESEARCH, lands: '/research-lab/features/experiments' },
-  'research-lab/inspect/signal-history': { group: RESEARCH, lands: '/research-lab/signals/history' },
-  'research-lab/feature-runner': { group: RESEARCH, lands: '/research-lab/features/validate' },
-  'research-lab/indicator-reliability': { group: RESEARCH, lands: '/research-lab/backtests/reliability' },
-  'research-lab/signal-engine': { group: RESEARCH, lands: '/research-lab/signals/engine' },
-  'research-lab/cross-sectional': { group: RESEARCH, lands: '/research-lab/features/cross-sectional' },
-  'research-lab/experiment-history': { group: RESEARCH, lands: '/research-lab/features/experiments' },
-  edge: { group: RESEARCH },
-  'edge/realized-vs-iv': { group: RESEARCH },
-  'edge/cross-asset': { group: RESEARCH },
-  'edge/regimes': { group: RESEARCH },
-  'spec-strategy': { group: RESEARCH },
+  research: { group: RESEARCH },
+  'research/feature': { group: RESEARCH },
+  'research/cross-sectional': { group: RESEARCH },
+  'research/signal': { group: RESEARCH },
+  'research/indicator-reliability': { group: RESEARCH },
+  'research/realized-vs-iv': { group: RESEARCH },
+  'research/rule-sandbox': { group: RESEARCH },
+  // A spec run and its children are Research evidence at their native detail pages.
+  'research/history/spec-run/:run_id': { group: RESEARCH },
+  'research/history/walk-forward/:wf_id': { group: RESEARCH },
+  'research/history/monte-carlo/:mc_id': { group: RESEARCH },
+  'research/history/baseline/:baseline_id': { group: RESEARCH },
+  'research/demos': { group: RESEARCH, lands: '/research' },
+  'research/demos/cross-asset': { group: RESEARCH },
+  'research/demos/regimes': { group: RESEARCH },
+  'research/demos/edge-score': { group: RESEARCH },
+  'research/demos/trade-simulator': { group: RESEARCH },
+  // The History indexes every study's own store (R26); a stored signal report opens under it.
+  'research/history': { group: RESEARCH },
+  'research/history/feature-study/:id': { group: RESEARCH },
+  'research/history/signal-study/:id': { group: RESEARCH },
+  'research/history/cross-sectional-study/:id': { group: RESEARCH },
+  'research/history/indicator-reliability/:id': { group: RESEARCH },
+  'research/history/realized-vs-iv/:id': { group: RESEARCH },
+  'research/history/signal-report/:id': { group: RESEARCH },
+  // The Research Lab shell still hosts the Recency Chart.
+  'research-lab': { group: RESEARCH, lands: '/research' },
+  'research-lab/strategy-runs/:run_id': { group: RESEARCH, lands: '/research/history/spec-run/7' },
+  'research-lab/walk-forward/:wf_id': { group: RESEARCH, lands: '/research/history/walk-forward/7' },
+  'research-lab/monte-carlo/:mc_id': { group: RESEARCH, lands: '/research/history/monte-carlo/7' },
+  'research-lab/baselines/:baseline_id': { group: RESEARCH, lands: '/research/history/baseline/7' },
+  // The saved lists went into the History, each filtered to the kind it listed.
+  'research-lab/features/experiments': { group: RESEARCH, lands: '/research/history?type=feature-experiment' },
+  'research-lab/inspect/experiments': { group: RESEARCH, lands: '/research/history?type=feature-experiment' },
+  'research-lab/experiment-history': { group: RESEARCH, lands: '/research/history?type=feature-experiment' },
+  'research-lab/signals/history': { group: RESEARCH, lands: '/research/history?type=signal-report' },
+  'research-lab/inspect/signal-history': { group: RESEARCH, lands: '/research/history?type=signal-report' },
+  'research-lab/backtests/strategy-runs': { group: RESEARCH, lands: '/research/history?type=spec-run' },
+  'research-lab/inspect/strategy-runs': { group: RESEARCH, lands: '/research/history?type=spec-run' },
+  'research-lab/signal-report/:id': { group: RESEARCH, lands: '/research/history/signal-report/7' },
+  // The five studies moved to /research; every old address goes straight to its study.
+  'research-lab/features/validate': { group: RESEARCH, lands: '/research/feature' },
+  'research-lab/features/cross-sectional': { group: RESEARCH, lands: '/research/cross-sectional' },
+  'research-lab/signals/engine': { group: RESEARCH, lands: '/research/signal' },
+  'research-lab/backtests/reliability': { group: RESEARCH, lands: '/research/indicator-reliability' },
+  'research-lab/build/validate': { group: RESEARCH, lands: '/research/feature' },
+  'research-lab/build/indicator-reliability': { group: RESEARCH, lands: '/research/indicator-reliability' },
+  'research-lab/build/signal-engine': { group: RESEARCH, lands: '/research/signal' },
+  'research-lab/inspect/cross-sectional': { group: RESEARCH, lands: '/research/cross-sectional' },
+  'research-lab/feature-runner': { group: RESEARCH, lands: '/research/feature' },
+  'research-lab/indicator-reliability': { group: RESEARCH, lands: '/research/indicator-reliability' },
+  'research-lab/signal-engine': { group: RESEARCH, lands: '/research/signal' },
+  'research-lab/cross-sectional': { group: RESEARCH, lands: '/research/cross-sectional' },
+  // Edge became Research: a study and three demonstrations.
+  edge: { group: RESEARCH, lands: '/research' },
+  'edge/realized-vs-iv': { group: RESEARCH, lands: '/research/realized-vs-iv' },
+  'edge/cross-asset': { group: RESEARCH, lands: '/research/demos/cross-asset' },
+  'edge/regimes': { group: RESEARCH, lands: '/research/demos/regimes' },
+  'spec-strategy': { group: RESEARCH, lands: '/research/rule-sandbox' },
 
   // ── Signal strategies ────────────────────────────────────────────────────
   'strategy-lab': { group: SIGNAL },
@@ -221,6 +267,7 @@ const SAMPLE_PARAMS: Readonly<Record<string, string>> = {
   accountId: 'PA9',
   sid: 'sid-1',
   kind: 'run',
+  symbol: 'SPY',
 };
 
 /** The query and fragment every direct load carries, to prove neither is lost. */
@@ -356,6 +403,21 @@ describe('the route inventory (T01)', () => {
     });
 
     it.each([
+      ['the Surface 3D address', '/broker/options-surface?ticker=spy&expiry=1790000000000#top', '/markets/SPY/options/surface?expiry=1790000000000#top'],
+      ['the Pricing Lab address', '/pricing-lab?symbol=qqq&expiry=1790000000000#top', '/markets/QQQ/options/pricing?expiry=1790000000000#top'],
+      ['the Pricing Lab address with an expiry and no instrument', '/pricing-lab?expiry=1790000000000#top', '/markets?expiry=1790000000000&then=options&view=pricing#top'],
+      ['the Pricing Lab address with no instrument and nothing else', '/pricing-lab', '/markets?then=options&view=pricing'],
+      ['the Surface 3D address with an expiry and no instrument', '/broker/options-surface?expiry=1790000000000#top', '/markets?expiry=1790000000000&then=options&view=surface#top'],
+    ])('takes %s straight to its view under the instrument, or to the list, with the expiry and fragment', async (_name, url, landsOn) => {
+      const { router, ended, cancelled, failed } = await load(url);
+
+      expect.soft(failed).toEqual([]);
+      expect.soft(cancelled, 'redirects within the one navigation').toEqual([]);
+      expect.soft(ended).toEqual([landsOn]);
+      expect(router.url).toBe(landsOn);
+    });
+
+    it.each([
       ['bots', '/brokers/alpaca?surface=bots&deploy=1&strategy=momentum&golden_qualification=abc#go'],
       ['gallery', '/brokers/alpaca?surface=gallery&deploy=1&strategy=momentum&golden_qualification=abc#go'],
     ])('keeps a deploy intent through the retired ?surface=%s hint, going straight to the account list', async (_name, url) => {
@@ -400,7 +462,7 @@ describe('the route inventory (T01)', () => {
       const nextEnd = () => firstValueFrom(router.events.pipe(filter((event) => event instanceof NavigationEnd)));
 
       await router.navigateByUrl('/options-evidence/run/7?view=lineage');
-      await router.navigateByUrl('/data-lab/explore?ticker=SPY');
+      await router.navigateByUrl('/markets/SPY/chart?from=2026-01-02&to=2026-02-27');
 
       const back = nextEnd();
       location.back();
@@ -411,27 +473,38 @@ describe('the route inventory (T01)', () => {
       const forward = nextEnd();
       location.forward();
       await forward;
-      expect(router.url).toBe('/data-lab/explore?ticker=SPY');
+      expect(router.url).toBe('/markets/SPY/chart?from=2026-01-02&to=2026-02-27');
       expect(activeMenuNodeFor(router.url)?.group.title).toBe('Markets');
     });
 
-    it('keeps the Returns study on a legacy-scope link instead of moving to Explore', async () => {
-      const { router } = await load('/data-lab/returns?ticker=SPY&from=2026-01-02');
-
-      expect(router.url).toBe('/data-lab/returns?ticker=SPY&from=2026-01-02');
-    });
-
     it.each([
-      ['/data-lab?mode=build&ticker=SPY#scope', '/data-lab/export?ticker=SPY#scope'],
-      // The archive card left Data Lab, so its anchors lead to the tab that holds each part of it.
+      // The archive card left Data Lab, so its anchors lead to the Operations tab that holds each part of it, whichever page named them.
       ['/data-lab#option-archive-SPY', '/operations/option-archive#option-archive-SPY'],
       ['/data-lab?ticker=SPY#option-archive', '/operations/option-archive?ticker=SPY#option-archive'],
       ['/data-lab#option-archive-backup', '/operations/backups#option-archive-backup'],
       ['/data-lab#option-archive-restore', '/operations/backups#option-archive-restore'],
-      // Validate left Data Lab, so a mode that names it goes to Operations with its scope.
+      ['/data-lab/export#option-archive-SPY', '/operations/option-archive#option-archive-SPY'],
+      ['/data-lab?mode=build&ticker=SPY#option-archive-SPY', '/operations/option-archive?ticker=SPY#option-archive-SPY'],
+      // Validate left Data Lab, so a mode or a path that names it goes to Operations with its scope.
       ['/data-lab?mode=validate', '/operations/data-checks/tradingview'],
       ['/data-lab?mode=validate&ticker=SPY&from=2026-01-02&to=2026-03-31', '/operations/data-checks/tradingview?ticker=SPY&from=2026-01-02&to=2026-03-31'],
-      ['/data-lab?mode=bogus&ticker=SPY', '/data-lab/explore?mode=bogus&ticker=SPY'],
+      ['/data-lab/explore?ticker=QQQ&mode=validate', '/operations/data-checks/tradingview?ticker=QQQ'],
+      ['/data-lab?mode=bogus&ticker=SPY', '/markets/SPY/chart?mode=bogus'],
+      ['/data-lab?mode=explore&ticker=spy&from=2026-01-02&to=2026-02-27&trading-session=extended#top', '/markets/SPY/chart?from=2026-01-02&to=2026-02-27&session=extended#top'],
+      ['/data-lab/explore?ticker=QQQ&from=2026-01-02&to=2026-02-27', '/markets/QQQ/chart?from=2026-01-02&to=2026-02-27'],
+      // The old news page named no instrument in its address; a ticker in the query is the instrument, and with none it leads to the list.
+      ['/research-lab/market/news?ticker=SPY&from=2026-01-02&to=2026-02-27#top', '/markets/SPY/chart/news?from=2026-01-02&to=2026-02-27#top'],
+      ['/research-lab/market/news', '/markets'],
+      // A symbol this app cannot hold is carried to the instrument's address, where it fails in place; it is never swapped for another.
+      ['/data-lab/explore?ticker=%24%24%24', '/markets/$$$/chart'],
+      // The Returns study moved under the instrument too: its window and session go with it, and the ticker becomes the path.
+      ['/data-lab/returns?ticker=spy&from=2026-01-02&to=2026-02-27&trading-session=extended#top', '/markets/SPY/returns?from=2026-01-02&to=2026-02-27&session=extended#top'],
+      ['/data-lab/returns', '/markets'],
+      // Build dataset moved under the instrument, with the full scope its address carried: the ticker becomes the path, the
+      // window and the retired `trading-session` ride as the place's context keys, and a saved setup it named still names it.
+      ['/data-lab/export?ticker=spy&from=2026-01-02&to=2026-02-27&trading-session=extended&sessionId=6f9619ff-8b86-d011-b42d-00c04fc964ff#top', '/markets/SPY/data/build?from=2026-01-02&to=2026-02-27&sessionId=6f9619ff-8b86-d011-b42d-00c04fc964ff&session=extended#top'],
+      ['/data-lab?mode=build&ticker=SPY&from=2026-01-02&to=2026-02-27', '/markets/SPY/data/build?from=2026-01-02&to=2026-02-27'],
+      ['/data-lab/export', '/markets'],
     ])('lands the legacy Data Lab address %s on %s in one navigation', async (url, landsOn) => {
       const { router, ended, cancelled } = await load(url);
 
@@ -455,6 +528,47 @@ describe('the route inventory (T01)', () => {
       expect(router.url).toBe(landsOn);
       expect(ended).toHaveLength(1);
       expect(cancelled).toEqual([]);
+    });
+
+    // The chain moved into the instrument's Options tab: the old chain pages carry no symbol of their own, so one a bookmark
+    // adds in its query is the instrument, and with none the address asks for one rather than guessing SPY.
+    it.each([
+      ['/options-lab/chain?symbol=SPY&expiry=4070984400000&source=archive&date=2026-10-09&at=1791576000000#top', '/markets/SPY/options/chain?expiry=4070984400000&source=archive&date=2026-10-09&at=1791576000000#top'],
+      ['/options-lab/chain?ticker=qqq&source=snapshot', '/markets/QQQ/options/chain?source=snapshot'],
+      // The old Chain (Live) page was the IBKR feed: its address opens Now · Live IBKR unless it names a source.
+      ['/broker/options-chain?symbol=SPY&expiry=4070984400000', '/markets/SPY/options/chain?expiry=4070984400000&source=live'],
+      ['/broker/options-chain?symbol=SPY', '/markets/SPY/options/chain?source=live'],
+      ['/broker/options-chain?symbol=SPY&source=live', '/markets/SPY/options/chain?source=live'],
+      ['/broker/options-chain?symbol=SPY&source=archive&date=2026-10-09', '/markets/SPY/options/chain?source=archive&date=2026-10-09'],
+      ['/options-lab?ticker=SPY', '/markets/SPY/options/chain'],
+      ['/options-lab/chain', '/markets?then=options'],
+      ['/options-lab/chain?expiry=4070984400000&source=archive#top', '/markets?expiry=4070984400000&source=archive&then=options#top'],
+      ['/broker/options-chain', '/markets?source=live&then=options'],
+      ['/broker/options-chain?expiry=4070984400000#top', '/markets?expiry=4070984400000&source=live&then=options#top'],
+      ['/options-lab', '/markets?then=options'],
+    ])('lands the old chain address %s on %s in one navigation', async (url, landsOn) => {
+      const { router, ended, cancelled, failed } = await load(url);
+
+      expect(router.url).toBe(landsOn);
+      expect(ended).toHaveLength(1);
+      expect(cancelled).toEqual([]);
+      expect(failed).toEqual([]);
+    });
+
+    // The redirect writes what the Markets list reads: an old Pricing, Surface or Chain (Live) address with no instrument must
+    // reach the pick as the same view with the same keys, not as the Options tab's default.
+    it.each([
+      ['/pricing-lab?expiry=1790000000000&session=extended', ['/markets', 'SPY', 'options', 'pricing'], { expiry: '1790000000000', session: 'extended' }],
+      ['/broker/options-surface?expiry=1790000000000', ['/markets', 'SPY', 'options', 'surface'], { expiry: '1790000000000' }],
+      ['/broker/options-chain?expiry=1790000000000', ['/markets', 'SPY', 'options'], { expiry: '1790000000000', source: 'live' }],
+      ['/options-lab/chain?source=archive&date=2026-10-09', ['/markets', 'SPY', 'options'], { source: 'archive', date: '2026-10-09' }],
+    ])('hands the pick of %s its view and the keys it carried', async (url, commands, kept) => {
+      const { router } = await load(url);
+      const asked = router.parseUrl(router.url).queryParamMap;
+
+      expect(openableTab(asked.get(PICK_TAB_KEY))).toBe('options');
+      expect(optionsViewCommands('SPY', asked.get(PICK_VIEW_KEY))).toEqual(commands);
+      expect(keysForPick(asked)).toEqual(kept);
     });
 
     it('fails in place on a Data check it does not have, rather than opening the first', async () => {

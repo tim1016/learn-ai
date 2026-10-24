@@ -16,11 +16,14 @@ import {
   answerCompute, failCompute, FakeJobs, lakeDataSource, refuseCompute, tick, YZ_RV_BY_WINDOW, type ComputeWorld,
 } from "../testing/edge-compute-world";
 import { mapLakeStudyDataSource } from "../../../shared/lake-study/lake-study";
+import { environment } from "../../../../environments/environment";
+import { RECORD_ID, RVIV_INPUTS, storedRecord } from "../../../research/stored-study/testing/stored-study-fixtures";
 import { RealizedVsIvComponent } from "./realized-vs-iv.component";
 
-async function renderPage() {
+async function renderPage(inputs: Record<string, unknown> = {}) {
   const jobs = new FakeJobs();
   const view = await render(RealizedVsIvComponent, {
+    inputs,
     providers: [
       ...fakePickerWorld().providers,
       { provide: JobsService, useValue: jobs },
@@ -70,7 +73,7 @@ describe("RealizedVsIvComponent — opens idle", () => {
   it("shows no study, no chart and no sample label before anything is computed", async () => {
     await renderPage();
 
-    expect(screen.getByTestId("rviv-idle")).toBeTruthy();
+    expect(screen.getByText("No result yet.")).toBeTruthy();
     expect(chartCount(), "no chart is drawn from placeholder values").toBe(0);
     expect(screen.queryByTestId("rviv-readout")).toBeNull();
     expect(screen.queryByTestId("rviv-source-tag")).toBeNull();
@@ -103,7 +106,7 @@ describe("RealizedVsIvComponent — the controls show what the run uses", () => 
 
     await user.selectOptions(select("rviv-bar-size"), "15m");
     await user.selectOptions(select("rviv-tenor"), "60D");
-    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await user.click(screen.getByRole("button", { name: "Run study" }));
     await answerCompute(world, { run: { bar_size: "15m", tenor_days: 60, hf_session: "ETH" } });
     fixture.detectChanges();
 
@@ -115,7 +118,7 @@ describe("RealizedVsIvComponent — the controls show what the run uses", () => 
 
   it("says which settings produced the result on screen even after a control is changed without computing again", async () => {
     const { world, user, fixture } = await renderPage();
-    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await user.click(screen.getByRole("button", { name: "Run study" }));
     await answerCompute(world);
     fixture.detectChanges();
 
@@ -141,10 +144,71 @@ describe("RealizedVsIvComponent — the controls show what the run uses", () => 
 
     await user.selectOptions(select("rviv-bar-size"), "15m");
     await user.click(within(screen.getByTestId("rviv-hf-session")).getByRole("button", { name: "RTH" }));
-    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await user.click(screen.getByRole("button", { name: "Run study" }));
     await tick();
 
     expect(world.jobs.started[0].payload).toMatchObject({ bar_size: "15m", hf_session: "RTH" });
+  });
+});
+
+describe("RealizedVsIvComponent — the page says what it will run", () => {
+  it("says its window is fixed instead of offering dates", async () => {
+    await renderPage();
+
+    expect(screen.getByTestId("study-constraints").textContent).toContain("the last year of daily bars");
+  });
+});
+
+describe("RealizedVsIvComponent — one press, one run", () => {
+  it("starts nothing when an input changes, only when Run study is pressed", async () => {
+    const { world, user } = await renderPage();
+
+    await user.selectOptions(screen.getByLabelText("Bar size"), "15m");
+    await user.selectOptions(screen.getByLabelText("Tenor"), "60D");
+    await user.click(screen.getByRole("button", { name: "RTH" }));
+
+    expect(world.jobs.started).toHaveLength(0);
+    world.http.expectNone(() => true);
+  });
+
+  it("starts one job when the second click lands before the page has re-rendered", async () => {
+    const { world } = await renderPage();
+    const run = screen.getByRole("button", { name: "Run study" });
+
+    // Two clicks in one task: the button is not disabled yet when the second arrives.
+    run.click();
+    run.click();
+    await tick();
+
+    expect(world.jobs.started).toHaveLength(1);
+  });
+
+  it("marks the result as previous once an input changes, and keeps what it answered", async () => {
+    const { world, user, fixture } = await renderPage();
+    await user.click(screen.getByRole("button", { name: "Run study" }));
+    await answerCompute(world);
+    fixture.detectChanges();
+
+    await user.selectOptions(screen.getByLabelText("Tenor"), "60D");
+
+    const banner = screen.getByText("Previous result").closest("div");
+    if (banner === null) throw new Error("no previous-result banner");
+    expect(within(banner).getByText("30D"), "the tenor it was computed for").toBeTruthy();
+  });
+});
+
+describe("RealizedVsIvComponent — descriptive result", () => {
+  it("shows what was measured and no pass/fail verdict", async () => {
+    const { world, user, fixture } = await renderPage();
+
+    await user.click(screen.getByRole("button", { name: "Run study" }));
+    await answerCompute(world);
+    fixture.detectChanges();
+
+    expect(screen.getByTestId("study-descriptive-note")).toBeTruthy();
+    expect(screen.getByTestId("rviv-readout")).toBeTruthy();
+    const result = screen.getByRole("region", { name: "Result" });
+    expect(result.textContent ?? "").not.toMatch(/verdict|\bpass(ed)?\b|\bfail(ed)?\b|graduat|stage \d/i);
   });
 });
 
@@ -152,7 +216,7 @@ describe("RealizedVsIvComponent — real response", () => {
   it("draws the returned study and reads edge score as unavailable, not zero", async () => {
     const { world, user, fixture } = await renderPage();
 
-    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await user.click(screen.getByRole("button", { name: "Run study" }));
     await answerCompute(world);
     fixture.detectChanges();
 
@@ -171,7 +235,7 @@ describe("RealizedVsIvComponent — real response", () => {
   it("reports the 30-bar Yang-Zhang series as rv_yz_30_daily, not the first series the server sent", async () => {
     const { world, user, fixture } = await renderPage();
 
-    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await user.click(screen.getByRole("button", { name: "Run study" }));
     await answerCompute(world);
     fixture.detectChanges();
 
@@ -186,7 +250,7 @@ describe("RealizedVsIvComponent — real response", () => {
     const { world, user, fixture } = await renderPage();
 
     await user.selectOptions(screen.getByTestId("rviv-bar-size"), "15m");
-    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await user.click(screen.getByRole("button", { name: "Run study" }));
     await answerCompute(world, { run: { bar_size: "15m", tenor_days: 30, hf_session: "ETH" } });
     fixture.detectChanges();
 
@@ -205,7 +269,7 @@ describe("RealizedVsIvComponent — real response", () => {
   it("keeps the forward-realized tail unavailable, saying how many bars", async () => {
     const { world, user, fixture } = await renderPage();
 
-    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await user.click(screen.getByRole("button", { name: "Run study" }));
     await answerCompute(world);
     fixture.detectChanges();
 
@@ -217,7 +281,7 @@ describe("RealizedVsIvComponent — where the bars came from", () => {
   it("prints the data-source line with the lake, the window, the resolution and the added, reused and missing counts", async () => {
     const { world, user, fixture } = await renderPage();
 
-    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await user.click(screen.getByRole("button", { name: "Run study" }));
     await answerCompute(world);
     fixture.detectChanges();
 
@@ -230,7 +294,7 @@ describe("RealizedVsIvComponent — where the bars came from", () => {
   it("names the IV input as not from the lake, with how many snapshots it read and their fingerprint", async () => {
     const { world, user, fixture } = await renderPage();
 
-    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await user.click(screen.getByRole("button", { name: "Run study" }));
     await answerCompute(world);
     fixture.detectChanges();
 
@@ -243,7 +307,7 @@ describe("RealizedVsIvComponent — where the bars came from", () => {
   it("says there is no IV input at all when nothing was recorded or supplied, rather than naming a source", async () => {
     const { world, user, fixture } = await renderPage();
 
-    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await user.click(screen.getByRole("button", { name: "Run study" }));
     await answerCompute(world, { ivPresent: false });
     fixture.detectChanges();
 
@@ -271,7 +335,7 @@ describe("RealizedVsIvComponent — where the bars came from", () => {
       data_source: lakeDataSource({ snapshot_digest: null, effective_window: null }),
     };
 
-    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await user.click(screen.getByRole("button", { name: "Run study" }));
     await refuseCompute(world, refusal);
     fixture.detectChanges();
 
@@ -289,7 +353,7 @@ describe("RealizedVsIvComponent — where the bars came from", () => {
     const { world, user, fixture } = await renderPage();
     const reason = "5m bars are not supported: the annualization and the HF estimator are defined for 15m and 1d bars only.";
 
-    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await user.click(screen.getByRole("button", { name: "Run study" }));
     await refuseCompute(world, {
       success: false, status: "refused", symbol: "SPY", error: reason,
       refusal: { code: "resolution_unsupported", reason, sessions: [], sessions_total: 0, coverage: null }, data_source: null,
@@ -297,7 +361,7 @@ describe("RealizedVsIvComponent — where the bars came from", () => {
     fixture.detectChanges();
 
     expect(screen.getByTestId("rviv-refused").textContent).toContain(reason);
-    expect(screen.queryByText("Data source"), "nothing was read, so there is no source to name").toBeNull();
+    expect(screen.queryByText(/added · .* reused/), "nothing was read, so no counts are claimed").toBeNull();
   });
 });
 
@@ -305,7 +369,7 @@ describe("RealizedVsIvComponent — no IV at these bars", () => {
   it("says there is no IV30 when the response carries none, rather than drawing an IV line, and why", async () => {
     const { world, user, fixture } = await renderPage();
 
-    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await user.click(screen.getByRole("button", { name: "Run study" }));
     await answerCompute(world, { ivPresent: false });
     fixture.detectChanges();
 
@@ -317,7 +381,7 @@ describe("RealizedVsIvComponent — no IV at these bars", () => {
   it("says when snapshots exist but none lands inside a bar, instead of claiming the recorder is empty", async () => {
     const { world, user, fixture } = await renderPage();
 
-    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await user.click(screen.getByRole("button", { name: "Run study" }));
     await answerCompute(world, {
       ivPresent: false,
       alignment: { snapshots_read: 3, bars_with_iv: 0, superseded: 0, outside_bars: 3 },
@@ -333,7 +397,7 @@ describe("RealizedVsIvComponent — no IV at these bars", () => {
   it("counts how many snapshots reached a bar when only some did, and says nothing is carried forward", async () => {
     const { world, user, fixture } = await renderPage();
 
-    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await user.click(screen.getByRole("button", { name: "Run study" }));
     await answerCompute(world, { alignment: { snapshots_read: 40, bars_with_iv: 35, superseded: 2, outside_bars: 3 } });
     fixture.detectChanges();
 
@@ -348,7 +412,7 @@ describe("RealizedVsIvComponent — no IV at these bars", () => {
   it("never puts the current IV on a past date: with no recorded IV the live value appears only in its own row", async () => {
     const { world, user, fixture } = await renderPage();
 
-    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await user.click(screen.getByRole("button", { name: "Run study" }));
     await answerCompute(world, { ivPresent: false, live: "vix" });
     fixture.detectChanges();
 
@@ -422,7 +486,7 @@ describe("RealizedVsIvComponent — failed request", () => {
   it("shows the error and no numbers", async () => {
     const { world, user, fixture } = await renderPage();
 
-    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await user.click(screen.getByRole("button", { name: "Run study" }));
     await failCompute(world, "Polygon is unavailable");
     fixture.detectChanges();
 
@@ -435,12 +499,12 @@ describe("RealizedVsIvComponent — failed request", () => {
 
   it("drops an earlier result when a later Compute fails, so it never reads as this request's answer", async () => {
     const { world, user, fixture } = await renderPage();
-    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await user.click(screen.getByRole("button", { name: "Run study" }));
     await answerCompute(world);
     fixture.detectChanges();
     expect(screen.getByTestId("rviv-readout")).toBeTruthy();
 
-    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await user.click(screen.getByRole("button", { name: "Run study" }));
     await tick();
     world.jobs.fail("internal_error", "Polygon is unavailable");
     await tick();
@@ -642,5 +706,34 @@ describe("RealizedVsIvComponent — live IV30 readout", () => {
     const method = screen.getByTestId("live-iv30-method");
     expect(method.textContent).toContain("parametric");
     expect(method.textContent).not.toContain("vix-style");
+  });
+});
+
+describe("RealizedVsIvComponent — rerun from a saved run", () => {
+  it("fills the inputs from the saved run and starts nothing, then names the run when Run study is pressed", async () => {
+    const { world, user, fixture } = await renderPage({ rerun: RECORD_ID });
+    world.http
+      .expectOne(`${environment.pythonServiceUrl}/api/research/study-records/realized-vs-iv/${RECORD_ID}`)
+      .flush(
+        storedRecord("realized-vs-iv", {
+          inputs: { ...RVIV_INPUTS, symbol: "qqq", bar_size: "15m", tenor_days: 60, hf_session: "RTH" } as never,
+        }),
+      );
+    await tick();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect((screen.getByLabelText("Bar size") as HTMLSelectElement).value).toBe("15m");
+    expect((screen.getByLabelText("Tenor") as HTMLSelectElement).value).toBe("60D");
+    expect(screen.getByRole("button", { name: "RTH" }).classList.contains("on")).toBe(true);
+    expect(screen.getByTestId("study-prefill").textContent).toContain("Nothing has run");
+    expect(world.jobs.started).toHaveLength(0);
+
+    await user.click(screen.getByRole("button", { name: "Run study" }));
+    await tick();
+
+    expect(world.jobs.started[0].payload).toMatchObject({
+      symbol: "QQQ", bar_size: "15m", tenor_days: 60, hf_session: "RTH", rerun_of: RECORD_ID,
+    });
   });
 });

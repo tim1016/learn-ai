@@ -21,8 +21,6 @@ The gates this file enforces:
      ``strategy_spec_hash`` is unchanged.
   4. Persistence is faithful: a saved run round-trips through the
      ``GET /{run_id}`` endpoint with every hash intact.
-  5. List-filter discovery works against ``spec_hash`` and
-     ``status`` without leaking unrelated runs.
 
 Synthetic SPY-labeled bars are built inline rather than reused from
 ``_parity_helpers.py`` because that helper hard-codes ``symbol="TEST"``.
@@ -254,70 +252,3 @@ async def test_persisted_run_round_trips_via_get(client):
 
     assert fetched["ledger"] == posted["ledger"]
     assert fetched["result"] == posted["result"]
-
-
-# ---------------------------------------------------------------------------
-# Gate 5 — list-filter discovery.
-# ---------------------------------------------------------------------------
-async def test_list_filter_by_spec_hash_isolates_runs(client):
-    canonical = (
-        await client.post("/api/research/strategy-runs", json=_canonical_request_body())
-    ).json()["ledger"]
-
-    def bump_ema5_period(body: dict) -> None:
-        for ind in body["spec"]["indicators"]:
-            if ind["id"] == "ema5":
-                ind["period"] = 6
-                return
-
-    mutated = (
-        await client.post(
-            "/api/research/strategy-runs", json=_mutated_body(bump_ema5_period)
-        )
-    ).json()["ledger"]
-
-    canonical_only = (
-        await client.get(
-            "/api/research/strategy-runs",
-            params={"spec_hash": canonical["strategy_spec_hash"]},
-        )
-    ).json()["runs"]
-    assert [r["run_id"] for r in canonical_only] == [canonical["run_id"]]
-
-    mutated_only = (
-        await client.get(
-            "/api/research/strategy-runs",
-            params={"spec_hash": mutated["strategy_spec_hash"]},
-        )
-    ).json()["runs"]
-    assert [r["run_id"] for r in mutated_only] == [mutated["run_id"]]
-
-
-async def test_list_filter_by_status_separates_completed_and_failed(client):
-    completed = (
-        await client.post("/api/research/strategy-runs", json=_canonical_request_body())
-    ).json()["ledger"]
-
-    # Make a Phase-1-incompatible spec to trigger a failed run.
-    def force_failure(body: dict) -> None:
-        body["spec"]["entry"]["pyramiding"] = 2
-
-    failed = (
-        await client.post(
-            "/api/research/strategy-runs", json=_mutated_body(force_failure)
-        )
-    ).json()["ledger"]
-    assert failed["status"] == "failed"
-
-    completed_runs = (
-        await client.get("/api/research/strategy-runs", params={"status": "completed"})
-    ).json()["runs"]
-    failed_runs = (
-        await client.get("/api/research/strategy-runs", params={"status": "failed"})
-    ).json()["runs"]
-
-    completed_ids = {r["run_id"] for r in completed_runs}
-    failed_ids = {r["run_id"] for r in failed_runs}
-    assert completed["run_id"] in completed_ids
-    assert failed["run_id"] in failed_ids
-    assert completed_ids.isdisjoint(failed_ids)

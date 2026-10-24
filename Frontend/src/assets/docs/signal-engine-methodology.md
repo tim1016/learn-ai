@@ -1,6 +1,6 @@
 # Signal Engine — Authority & Methodology
 
-> **Canonical reference** for Research Lab → Signal Engine. Covers the
+> **Canonical reference** for Research → Signal study. Covers the
 > statistical methodology (z-score signal construction, walk-forward validation,
 > HAC Sharpe inference, measured-grid Deflated Sharpe Ratio,
 > graduation ladder) and the

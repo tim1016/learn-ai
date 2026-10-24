@@ -7,6 +7,7 @@ import { brokerClerkRedirectGuard } from "./fleet/broker-clerk-redirect.guard";
 import { dataCheckRoute } from "./operations/data-checks/data-checks";
 import { operationsTabRoute } from "./operations/operations-tabs";
 import { redirectKeepingState } from "./shell/route-redirects";
+import { redirectToOptionsView } from "./markets/options/options-address";
 
 const loadBrokerLaneUnavailable = () =>
   import('./fleet/broker-lane-unavailable.component').then(
@@ -91,7 +92,7 @@ const RETIRED_IBKR_NAVIGATION_ROUTES: Routes = [
 
 export const routes: Routes = [
   {
-    // The app opens on the entry painting, whose "I'm In" leads to Data Lab.
+    // The app opens on the entry painting, whose "I'm In" leads to Markets.
     // There is no sign-in behind it: every other address still opens directly.
     // Loaded with the app, not lazily: the shell learns a page is chromeless
     // only once its route is active, so a lazy chunk would leave the top bar
@@ -117,14 +118,9 @@ export const routes: Routes = [
         (m) => m.OptionsLabComponent
       ),
     children: [
-      { path: "", redirectTo: "chain", pathMatch: "full" },
-      {
-        path: "chain",
-        loadComponent: () =>
-          import(
-            "./components/options-lab/chain/options-lab-chain.component"
-          ).then((m) => m.OptionsLabChainComponent),
-      },
+      // The chain moved into an instrument's Options tab; the symbol and the expiry go with it.
+      { path: "", redirectTo: redirectToOptionsView("chain"), pathMatch: "full" },
+      { path: "chain", redirectTo: redirectToOptionsView("chain"), pathMatch: "full" },
       {
         path: "strategy-builder",
         loadComponent: () =>
@@ -142,18 +138,17 @@ export const routes: Routes = [
     ],
   },
   {
+    // The Strategy Spec builder became Research's Rule sandbox; its saved specs
+    // are browser state under the same key, so they open at the new address.
     path: "spec-strategy",
-    loadComponent: () =>
-      import(
-        "./components/spec-strategy-runner/spec-strategy-runner.component"
-      ).then((m) => m.SpecStrategyRunnerComponent),
+    redirectTo: redirectKeepingState(["/research", "rule-sandbox"]),
+    pathMatch: "full",
   },
   {
+    // Moved into an instrument's Options tab; the symbol and the expiry go with it.
     path: "pricing-lab",
-    loadComponent: () =>
-      import("./components/pricing-lab/pricing-lab.component").then(
-        (m) => m.PricingLabComponent
-      ),
+    redirectTo: redirectToOptionsView("pricing"),
+    pathMatch: "full",
   },
   {
     path: "indicator-docs",
@@ -161,9 +156,14 @@ export const routes: Routes = [
     pathMatch: "full",
   },
   {
-    // Data Lab shell (explore / export / returns child routes). The route
-    // config owns the component-scoped workspace store — see
-    // components/data-lab/data-lab.routes.ts.
+    // Markets and an instrument's place (ADR 0084); see markets/markets.routes.ts.
+    path: "markets",
+    loadChildren: () =>
+      import("./markets/markets.routes").then((m) => m.MARKETS_ROUTES),
+  },
+  {
+    // The Data Lab is gone: its addresses redirect to the instrument place its
+    // pages moved to — see components/data-lab/data-lab.routes.ts.
     path: "data-lab",
     loadChildren: () =>
       import("./components/data-lab/data-lab.routes").then(
@@ -312,6 +312,16 @@ export const routes: Routes = [
     pathMatch: "full",
   },
   {
+    // Research: the study list, one page per study and the Edge demonstrations.
+    path: "research",
+    loadChildren: () =>
+      import("./research/research.routes").then((m) => m.RESEARCH_ROUTES),
+  },
+  {
+    // The Research Lab shell still hosts the Recency Chart (#3508). Its five
+    // studies moved to /research, its saved lists and run records to the
+    // History, and its headlines under the instrument; their old addresses
+    // redirect from here.
     path: "research-lab",
     loadChildren: () =>
       import("./components/research-lab/research-lab.routes").then(
@@ -558,47 +568,42 @@ export const routes: Routes = [
     loadComponent: loadBrokerLaneUnavailable,
   },
   {
+    // Moved into an instrument's Options tab; the symbol and the expiry go with it. This page was
+    // the IBKR feed, so it opens the chain on Now · Live IBKR unless its address names a source.
     path: "broker/options-chain",
-    loadComponent: () =>
-      import(
-        "./components/broker/broker-options-chain/broker-options-chain.component"
-      ).then((m) => m.BrokerOptionsChainComponent),
+    redirectTo: redirectToOptionsView("chain", { source: "live" }),
+    pathMatch: "full",
   },
   {
+    // Moved into an instrument's Options tab; the symbol and the expiry go with it.
     path: "broker/options-surface",
-    loadComponent: () =>
-      import(
-        "./components/broker/broker-options-surface/broker-options-surface.component"
-      ).then((m) => m.BrokerOptionsSurfaceComponent),
+    redirectTo: redirectToOptionsView("surface"),
+    pathMatch: "full",
   },
   ...RETIRED_IBKR_NAVIGATION_ROUTES,
+  // Edge became Research: its Realized vs IV page is a study, and the rest are
+  // demonstrations on sample data. Each old address goes straight to its page,
+  // keeping its query and fragment; the hub, which showed hard-coded numbers,
+  // goes to the study list that now names those pages.
   {
     path: "edge",
-    loadComponent: () =>
-      import("./components/edge/edge.component").then((m) => m.EdgeComponent),
-    children: [
-      {
-        path: "realized-vs-iv",
-        loadComponent: () =>
-          import(
-            "./components/edge/realized-vs-iv/realized-vs-iv.component"
-          ).then((m) => m.RealizedVsIvComponent),
-      },
-      {
-        path: "cross-asset",
-        loadComponent: () =>
-          import("./components/edge/cross-asset/cross-asset.component").then(
-            (m) => m.CrossAssetComponent
-          ),
-      },
-      {
-        path: "regimes",
-        loadComponent: () =>
-          import("./components/edge/regimes/regimes.component").then(
-            (m) => m.RegimesComponent
-          ),
-      },
-    ],
+    redirectTo: redirectKeepingState(["/research"]),
+    pathMatch: "full",
+  },
+  {
+    path: "edge/realized-vs-iv",
+    redirectTo: redirectKeepingState(["/research", "realized-vs-iv"]),
+    pathMatch: "full",
+  },
+  {
+    path: "edge/cross-asset",
+    redirectTo: redirectKeepingState(["/research", "demos", "cross-asset"]),
+    pathMatch: "full",
+  },
+  {
+    path: "edge/regimes",
+    redirectTo: redirectKeepingState(["/research", "demos", "regimes"]),
+    pathMatch: "full",
   },
   {
     // The Golden Fixtures catalog became Operations → Math checks.

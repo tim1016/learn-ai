@@ -97,6 +97,10 @@ class OptionsContractSnapshotItem(BaseModel):
     contract_type: str | None = None
     strike_price: float | None = None
     expiration_ms: OptionExpiryMs | None = None
+    #: Whether the contract is a standard one (American, 100 shares, a symbol that names it), by the rule
+    #: a stored listing applies. ``None`` when the snapshot left out a fact the rule needs. A chain can
+    #: list a standard and an adjusted contract at one strike and right; this tells them apart.
+    standard: bool | None = None
     break_even_price: float | None = None
     implied_volatility: float | None = None
     open_interest: float | None = None

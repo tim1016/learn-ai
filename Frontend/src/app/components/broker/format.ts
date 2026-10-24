@@ -30,19 +30,6 @@ export function fmtSignedCurrency(value: number | null | undefined): string {
   return value == null ? '—' : SIGNED_CURRENCY.format(value);
 }
 
-export function fmtPercent(
-  value: number | null | undefined,
-  fractionDigits = 2,
-): string {
-  if (value == null) return '—';
-  const formatter = new Intl.NumberFormat('en-US', {
-    style: 'percent',
-    minimumFractionDigits: fractionDigits,
-    maximumFractionDigits: fractionDigits,
-  });
-  return formatter.format(value);
-}
-
 /** Display a broker position without rounding fractional shares away. */
 export function fmtSignedQuantity(value: number | null | undefined): string {
   if (value == null) return '—';
@@ -65,18 +52,6 @@ export function fmtExposure(exposure: Readonly<Record<string, number>>): string 
   return entries
     .map(([symbol, quantity]) => `${fmtSignedQuantity(quantity)} ${symbol}`)
     .join(', ');
-}
-
-export function fmtNumber(
-  value: number | null | undefined,
-  fractionDigits = 2,
-): string {
-  if (value == null) return '—';
-  const formatter = new Intl.NumberFormat('en-US', {
-    minimumFractionDigits: fractionDigits,
-    maximumFractionDigits: fractionDigits,
-  });
-  return formatter.format(value);
 }
 
 /** Format an `int64 ms UTC` timestamp in the viewer's browser-local timezone. */
@@ -134,6 +109,10 @@ export function absDiff(
 
 export type ToleranceBand = 'green' | 'yellow' | 'red';
 
+/** The upper edges of the delta-gap bands: green up to the first, yellow up to the second, red above. */
+export const DELTA_GAP_GREEN_MAX = 0.005;
+export const DELTA_GAP_YELLOW_MAX = 0.02;
+
 /**
  * Map an absolute delta disagreement to a tolerance band. Thresholds
  * picked so an at-the-money disagreement of 50 bps (delta ~0.5 → 0.005
@@ -143,7 +122,7 @@ export type ToleranceBand = 'green' | 'yellow' | 'red';
 export function deltaAbsBand(diff: number | null): ToleranceBand | null {
   if (diff === null) return null;
   const abs = Math.abs(diff);
-  if (abs <= 0.005) return 'green';
-  if (abs <= 0.02) return 'yellow';
+  if (abs <= DELTA_GAP_GREEN_MAX) return 'green';
+  if (abs <= DELTA_GAP_YELLOW_MAX) return 'yellow';
   return 'red';
 }

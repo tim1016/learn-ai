@@ -1,8 +1,7 @@
-"""HTTP contracts for the Research Lab's experiment history: the legacy rows its screens still read.
+"""HTTP contract of a stored signal experiment's report: the legacy rows the Research History still opens.
 
-These replace the retired GraphQL ``getResearchExperiments`` / ``getSignalExperiments`` /
-``getSignalExperimentReport`` queries. Nothing writes the experiment tables any more; a run is started and kept
-through the jobs surface. The rows that remain are history.
+This replaces the retired GraphQL ``getSignalExperimentReport`` query. Nothing writes the experiment tables any more; a
+run is started and kept through the jobs surface. The rows that remain are history, and the Research History lists them.
 
 A signal experiment's report was stored as the JSON text of the Python signal engine's own report
 (``_serialize_signal_report`` in ``app/routers/jobs.py``). ``SignalExperimentReport`` and the models under it copy that
@@ -14,7 +13,7 @@ Every report field has the signal engine's own default, so a report stored by an
 reads. A value of the wrong type does not: it fails the whole report.
 
 Dates inside a report (``start_date``, ``dates``, ``train_start`` ...) are the ``YYYY-MM-DD`` strings the engine
-stored; they are served as stored, not converted. Instants (``created_at_ms``) are ``int64 ms UTC``.
+stored; they are served as stored, not converted.
 """
 
 from __future__ import annotations
@@ -22,57 +21,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Annotated, Any
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict
 
-from app.utils.session_anchors import MAX_TIMESTAMP_MS
-
-TICKER_MAX_LENGTH = 50
 # ``"Id"`` is a 32-bit identity column; a larger id names no row, and asking the driver for it would be an error.
 MAX_EXPERIMENT_ID = 2_147_483_647
-
-InstantMs = Annotated[int, Field(ge=0, le=MAX_TIMESTAMP_MS)]
-
-
-class ResearchExperimentResponse(BaseModel):
-    """One stored feature-research (information-coefficient) experiment."""
-
-    id: int
-    ticker: str
-    feature_name: str
-    start_date: str
-    end_date: str
-    bars_used: int
-    mean_ic: float
-    ic_t_stat: float
-    ic_p_value: float
-    adf_p_value: float
-    kpss_p_value: float
-    is_stationary: bool
-    passed_validation: bool
-    monotonicity_ratio: float
-    is_monotonic: bool
-    created_at_ms: InstantMs
-
-
-class SignalExperimentResponse(BaseModel):
-    """One stored signal-engine experiment: the headline of its report."""
-
-    id: int
-    ticker: str
-    feature_name: str
-    start_date: str
-    end_date: str
-    bars_used: int
-    overall_grade: str
-    status_label: str
-    overall_passed: bool
-    mean_oos_sharpe: float
-    best_threshold: float
-    best_cost_bps: float
-    flip_sign: bool
-    regime_gate_enabled: bool
-    created_at_ms: InstantMs
-
 
 # ── The stored report ──────────────────────────────────────────────
 

@@ -141,6 +141,19 @@ previously tracked items (issues #1655, #1671, #1672, #1674, #1677, #1664,
   or `str()` it, and both are exact for `Decimal`. But a future
   `bar.volume * <float>` raises `TypeError` only on lake bars. Fix the
   annotation, to `Decimal | int`, at the next seal re-qualification.
+- **The live option-chain cross-check computes its gap and its tolerance band in Angular (medium,
+  2026-10-24).** On an instrument's Options chain in Now · Live IBKR,
+  `Frontend/src/app/markets/options/chain/live/live-cross-check.ts` computes
+  `|Δ IBKR − Δ engine|` (`absDiff`) and judges it green, yellow or red
+  (`deltaAbsBand`, edges 0.005 and 0.02, in `Frontend/src/app/components/broker/format.ts`).
+  ADR 0068 decision 1 keeps every number a user compares, and every verdict, in Python;
+  this has no canonical, no parity test and no named exception. It came over unchanged
+  from the retired Chain (Live) page, which #2747 did not inventory. Fix: Python returns,
+  per contract, the engine delta, the gap, the band and the reason a contract was not
+  compared (in the chain stream or a batch pricing call), and Angular draws them. That
+  also retires the `POST /api/quantlib/price` per contract that
+  `live-engine-reads.service.ts` makes whenever a contract's spot, volatility or midpoint
+  moves. #3533
 - **Frontend naive `new Date(string)` — Tier 2 (medium).** Eighteen production
   calls still parse date-only or local-wall strings across validation,
   option-expiry, Options Lab, Strategy Builder, ticker ranges, Data Lab, Past
@@ -474,7 +487,10 @@ current budget, risk-edit and mode behavior is recorded in ADRs 0059 and 0060.
 
 Tracked open items left by the Data Lab redesign PR
 (its PRD is in Git history). Implemented:
-child routes Explore/Export/Validate, workspace store, legacy URL ingress,
+child routes Explore/Export/Validate (Explore is now the instrument place's
+Chart tab and Export its Build dataset page, Validate is Operations → Data
+checks, ADR 0084; `/data-lab` is redirects only), workspace store, legacy URL
+redirects,
 searchable indicator picker, theme-token chart colors, `POST /api/dataset/plan`,
 additive `DataLabSession` ms-UTC columns (dual-read).
 
@@ -493,26 +509,29 @@ additive `DataLabSession` ms-UTC columns (dual-read).
   GraphQL projection this entry used to name is gone (ADR 0081); the REST
   response reads `created_at_ms`/`updated_at_ms`. The numeric-only write flip
   lands with the §13 step 5/6 migration, now a numbered SQL file.
-- **Legacy indicator recipe/param query keys are dropped by the ingress, not
+- **Legacy indicator recipe/param query keys are named as ignored, not
   decoded (low).** PRD §14 routes legacy recipe URLs through a bounded
-  recipe-schema validator; until that validator exists the ingress keeps
-  scope keys and drops recipe keys with a visible warning, so FR-014 is
-  partially met for recipe-carrying bookmarks.
+  recipe-schema validator; until that validator exists the legacy redirect
+  carries scope keys to the instrument place and leaves recipe keys in the
+  address, where the place names them in its "Migrated link" notice, so FR-014
+  is partially met for recipe-carrying bookmarks.
 - **Plan↔ZIP column parity is structural (shared function), not
   artifact-tested (low).** The plan endpoint test pins the receipt to
   `project_output_columns` — the same function the CSV/metadata/ZIP paths
   call — but no test yet diffs a generated ZIP manifest itself against the
   receipt.
-- **Legacy `sessionId` URL param is preserved but not auto-loaded (low).** The
-  Saved setups drawer is the only session-load path; auto-load was deferred to
-  avoid URL state triggering fetches.
-- **`computeAllIndicators` has no UI toggle in the new Explore (low).** The
+- **A legacy address that names only a saved setup ends at Markets (low).**
+  `/data-lab?sessionId=<id>` with no `ticker` leads to the Markets list, which
+  does not read the id: the setup's instrument is stored evidence, and a
+  redirect cannot read it. With a `ticker` the instrument opens and the setup is
+  opened under the instrument its record names. The old Data Lab never wrote a
+  `sessionId` into an address, so only a hand-made link is affected; the setup
+  opens from its instrument's Saved setups.
+- **`computeAllIndicators` has no UI toggle in the Chart tab (low).** The
   signal defaults to false; wire a control if the legacy behavior is missed.
-- **Export and TradingView-check templates still exceed the ~80-line path
-  rule (low).** Explore was split into drawer/controls/headlines children; the
-  Export four-section form (~230 lines) and the TradingView check (Validate,
-  now Operations → Data checks; ~130 lines) remain single templates — same
-  follow-up refactor class as the shell split.
+- **The Build dataset template still exceeds the ~80-line path rule (low).**
+  The four-section form (~240 lines) remains a single template — same follow-up
+  refactor class as the shell split.
 - **Responsive overflow assertions need a browser pass (medium).** The §8
   structural rules are in place, but the 320–1920px `scrollWidth === clientWidth`
   checks and AXE scans have not been executed against a live browser.
@@ -532,19 +551,18 @@ re-arms the server-authored timeframe auto-correct, and numeric
 `start_ms_utc`/`end_ms_utc` declared authoritative-over-ISO on
 `ChartDataRequest`. Residuals:
 
-- **PRD §14's explicit-refresh-only rule is superseded for deliberate
-  actions (decision, not a gap).** Explore auto-loads on mount when a
-  committed scope exists; preset clicks, Apply scope (shell bar and the
-  Edit-scope drawer alike), and the one-shot timeframe auto-correct re-fetch
-  immediately through the store's refresh request. Uncommitted edits still
-  only mark stale, and a fetch that fails to load anything leaves the stale
-  badge on — staleness clears only when replacement data settles. Restored
-  saved sessions keep the cached-snapshot + stale-badge behavior.
+- **PRD §14's explicit-refresh-only rule is superseded (decision, not a
+  gap).** The instrument place's Chart tab has no Apply and no Refresh
+  (PRD #3490 R05): it loads when the committed context changes, a repeated
+  equal emission loads nothing, a request a newer one replaced is ended, and
+  the one-shot timeframe auto-correct commits the recommendation to the
+  address. A fetch that fails to load anything leaves the stale flag set —
+  it clears only when replacement data settles.
 - **Committed-window anchors are day-shaped, not session-shaped (interim,
   low).** The Data Lab commits `startMsUtc` = UTC midnight of the from-date
   and `endMsUtc` = the to-date's final UTC instant (23:59:59.999) — applied
-  by every date-intent→ms boundary (quick ranges, From/To inputs, legacy
-  URL ingress, saved-session load, the Edit-scope drawer). The chart floors
+  by every date-intent→ms boundary (quick ranges, From/To inputs, the
+  instrument's address, saved-setup opening). The chart floors
   both to inclusive UTC trading dates; half-open instant readers (the news
   query, dataset numeric overrides) get a non-degenerate window covering the
   full end date. The canonical half-open session-open resolution (PRD §13

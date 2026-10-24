@@ -38,7 +38,7 @@ import { WalkForwardParameterComparisonComponent } from '../walk-forward-paramet
 
 /**
  * Full-page detail view for a walk-forward analysis, mounted at
- * ``/research-lab/walk-forward/:wf_id``. Loads the persisted
+ * ``/research/history/walk-forward/:wf_id``. Loads the persisted
  * ``(config, result)`` pair via ``WalkForwardService.getWalkForward``
  * and renders:
  *
@@ -49,7 +49,7 @@ import { WalkForwardParameterComparisonComponent } from '../walk-forward-paramet
  *   * Combined OOS equity curve (lightweight-charts AreaSeries).
  *   * Fold table — one row per fold with status, train+test windows,
  *     test metrics; click → navigates to that fold's individual run
- *     detail (``/research-lab/strategy-runs/<test_run_id>``).
+ *     detail (``/research/history/spec-run/<test_run_id>``).
  *
  * Same wire-format invariants as Phase B: timestamps stay
  * ``int64 ms UTC`` end-to-end, converted to lightweight-charts'
