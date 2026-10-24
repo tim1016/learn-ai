@@ -28543,9 +28543,9 @@ export interface components {
          * @description Body of POST /api/jobs-internal/realized-vs-iv.
          *
          *     The worker reads the study's bars from the data lake itself, materializing what the lake lacks: the browser
-         *     sends the symbol and the study's settings, never bars. Unless ``from_date`` and ``to_date`` name a window, it is
-         *     the last year (``1d``) or month (``15m``) of sessions whose tape is final; see
-         *     ``app.services.realized_vs_iv_study_service``.
+         *     sends the symbol and the study's settings, never bars. Unless ``window_start_ms`` and ``window_end_ms`` (ET
+         *     midnight of the first and last session, ``int64 ms UTC``) name a window, it is the last year (``1d``) or month
+         *     (``15m``) of sessions whose tape is final; see ``app.services.realized_vs_iv_study_service``.
          *
          *     ``bar_size`` is ``15m`` or ``1d``. Anything else is accepted here and refused by the job with
          *     ``resolution_unsupported`` and a reason, so the answer is a typed refusal a page can show rather than a 422.
@@ -28572,8 +28572,6 @@ export interface components {
              * @default false
              */
             force?: boolean;
-            /** Fromdate */
-            fromDate?: string | null;
             /**
              * Hfsession
              * @default ETH
@@ -28593,8 +28591,16 @@ export interface components {
              * @default 30
              */
             tenorDays?: number;
-            /** Todate */
-            toDate?: string | null;
+            /**
+             * Windowendms
+             * @description ET midnight of the last session, int64 ms UTC
+             */
+            windowEndMs?: number | null;
+            /**
+             * Windowstartms
+             * @description ET midnight of the first session, int64 ms UTC
+             */
+            windowStartMs?: number | null;
             /** Windows */
             windows?: number[];
         };

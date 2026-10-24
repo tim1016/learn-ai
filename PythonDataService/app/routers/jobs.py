@@ -50,7 +50,6 @@ from app.research.signal.engine import run_signal_engine
 from app.schemas.broker_bots import normalized_symbol
 from app.schemas.engine_backtest import EngineBacktestRequest
 from app.schemas.ticker_request import (
-    DATE_PATTERN,
     MultiTickerRequest,
     Session,
     TickerRequest,
@@ -60,7 +59,7 @@ from app.services.engine_backtest_service import execute_engine_backtest
 from app.services.feature_study_service import FeatureStudyParams, run_feature_study
 from app.services.polygon_client import PolygonClientService
 from app.services.realized_vs_iv_study_service import RealizedVsIvParams, run_realized_vs_iv_study
-from app.utils.session_anchors import MAX_TIMESTAMP_MS
+from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms, et_midnight_ms
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -249,9 +248,9 @@ class RealizedVsIvJobRequest(_CamelCaseModel):
     """Body of POST /api/jobs-internal/realized-vs-iv.
 
     The worker reads the study's bars from the data lake itself, materializing what the lake lacks: the browser
-    sends the symbol and the study's settings, never bars. Unless ``from_date`` and ``to_date`` name a window, it is
-    the last year (``1d``) or month (``15m``) of sessions whose tape is final; see
-    ``app.services.realized_vs_iv_study_service``.
+    sends the symbol and the study's settings, never bars. Unless ``window_start_ms`` and ``window_end_ms`` (ET
+    midnight of the first and last session, ``int64 ms UTC``) name a window, it is the last year (``1d``) or month
+    (``15m``) of sessions whose tape is final; see ``app.services.realized_vs_iv_study_service``.
 
     ``bar_size`` is ``15m`` or ``1d``. Anything else is accepted here and refused by the job with
     ``resolution_unsupported`` and a reason, so the answer is a typed refusal a page can show rather than a 422.
@@ -273,22 +272,25 @@ class RealizedVsIvJobRequest(_CamelCaseModel):
     windows: list[Annotated[int, Field(ge=2, le=500)]] = Field(default_factory=lambda: [5, 10, 30], min_length=1)
     iv_series: list[IvPointPayload] | None = None
     confidence_floor: float = Field(DEFAULT_CONFIDENCE_FLOOR, ge=0.0, le=1.0)
-    from_date: str | None = Field(None, pattern=DATE_PATTERN)
-    to_date: str | None = Field(None, pattern=DATE_PATTERN)
+    window_start_ms: int | None = Field(
+        None, ge=0, le=MAX_TIMESTAMP_MS, description="ET midnight of the first session, int64 ms UTC"
+    )
+    window_end_ms: int | None = Field(
+        None, ge=0, le=MAX_TIMESTAMP_MS, description="ET midnight of the last session, int64 ms UTC"
+    )
     force: bool = False
     """Skip the result cache and always re-run."""
 
     @model_validator(mode="after")
-    def _window_is_both_dates_or_neither(self) -> RealizedVsIvJobRequest:
-        if (self.from_date is None) != (self.to_date is None):
-            raise ValueError("from_date and to_date name a window together; send both or neither")
-        if self.from_date is not None and self.to_date is not None:
-            try:
-                first, last = date.fromisoformat(self.from_date), date.fromisoformat(self.to_date)
-            except ValueError as exc:
-                raise ValueError(f"invalid calendar date: {exc}") from exc
-            if last < first:
-                raise ValueError(f"to_date ({self.to_date}) must be >= from_date ({self.from_date})")
+    def _window_is_two_et_midnights_or_neither(self) -> RealizedVsIvJobRequest:
+        if (self.window_start_ms is None) != (self.window_end_ms is None):
+            raise ValueError("window_start_ms and window_end_ms name a window together; send both or neither")
+        if self.window_start_ms is not None and self.window_end_ms is not None:
+            for name, value in (("window_start_ms", self.window_start_ms), ("window_end_ms", self.window_end_ms)):
+                if value != et_midnight_ms(et_date_at_ms(value)):
+                    raise ValueError(f"{name} must be ET midnight of the session date, got {value}")
+            if self.window_end_ms < self.window_start_ms:
+                raise ValueError(f"window_end_ms ({self.window_end_ms}) must be >= window_start_ms ({self.window_start_ms})")
         return self
 
     @field_validator("symbol", mode="before")
@@ -866,8 +868,8 @@ async def start_realized_vs_iv_job(req: RealizedVsIvJobRequest) -> dict:
             [point.model_dump(exclude_unset=True) for point in req.iv_series] if req.iv_series is not None else None
         ),
         confidence_floor=req.confidence_floor,
-        window=(date.fromisoformat(req.from_date), date.fromisoformat(req.to_date))
-        if req.from_date is not None and req.to_date is not None
+        window=(et_date_at_ms(req.window_start_ms), et_date_at_ms(req.window_end_ms))
+        if req.window_start_ms is not None and req.window_end_ms is not None
         else None,
     )
 

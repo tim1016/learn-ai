@@ -383,6 +383,7 @@ def test_the_result_reports_how_many_recorded_snapshots_reached_a_bar_and_the_pa
 # The route: wiring, and the bar size the browser sends
 # ---------------------------------------------------------------------------
 
+ET_MIDNIGHT_MAR_4 = et_midnight_ms(date(2024, 3, 4))
 BROWSER = {"job_id": "j", "symbol": "SPY", "bar_size": "15m", "tenor_days": 30, "hf_session": "ETH", "estimators": ["yz"], "windows": [5, 10, 30], "force": False}
 
 
@@ -415,10 +416,12 @@ def test_the_estimators_a_request_may_name_are_exactly_the_ones_the_composition_
         {"hf_session": "AH"},
         {"session": "regular"},
         {"tenor_days": 0},
-        {"from_date": "2024-03-04"},
-        {"to_date": "2024-03-04"},
-        {"from_date": "2024-03-05", "to_date": "2024-03-04"},
-        {"from_date": "2024-13-45", "to_date": "2024-13-46"},
+        {"window_start_ms": ET_MIDNIGHT_MAR_4},
+        {"window_end_ms": ET_MIDNIGHT_MAR_4},
+        {"window_start_ms": ET_MIDNIGHT_MAR_4 + 86_400_000, "window_end_ms": ET_MIDNIGHT_MAR_4},
+        {"window_start_ms": ET_MIDNIGHT_MAR_4 + 1, "window_end_ms": ET_MIDNIGHT_MAR_4 + 86_400_000},
+        {"window_start_ms": ET_MIDNIGHT_MAR_4, "window_end_ms": "2024-03-05"},
+        {"from_date": "2024-03-04", "to_date": "2024-03-05"},
         {"symbol": "../etc"},
         {"bars": [{"ts": 1}]},
         {"iv_series": [{"ts": -1, "iv30": 0.2}]},
@@ -443,7 +446,8 @@ async def test_the_route_hands_the_worker_the_study_it_was_asked_for(monkeypatch
     monkeypatch.setattr("app.routers.jobs.run_in_thread", fake_run_in_thread)
     monkeypatch.setattr("app.routers.jobs.run_realized_vs_iv_study", fake_study)
     request = RealizedVsIvJobRequest.model_validate(
-        {**BROWSER, "job_id": "j1", "force": True, "session": "rth", "from_date": "2024-03-04", "to_date": "2024-05-03",
+        {**BROWSER, "job_id": "j1", "force": True, "session": "rth",
+         "window_start_ms": et_midnight_ms(date(2024, 3, 4)), "window_end_ms": et_midnight_ms(date(2024, 5, 3)),
          "iv_series": [{"ts": 1_700_000_000_000, "iv30": 0.2, "health_score": None}]}
     )
 

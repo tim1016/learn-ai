@@ -53366,7 +53366,7 @@
       },
       "RealizedVsIvJobRequest": {
         "additionalProperties": false,
-        "description": "Body of POST /api/jobs-internal/realized-vs-iv.\n\nThe worker reads the study's bars from the data lake itself, materializing what the lake lacks: the browser\nsends the symbol and the study's settings, never bars. Unless ``from_date`` and ``to_date`` name a window, it is\nthe last year (``1d``) or month (``15m``) of sessions whose tape is final; see\n``app.services.realized_vs_iv_study_service``.\n\n``bar_size`` is ``15m`` or ``1d``. Anything else is accepted here and refused by the job with\n``resolution_unsupported`` and a reason, so the answer is a typed refusal a page can show rather than a 422.\n\n``session`` is which bars the study folds from: ``extended`` (04:00-20:00 ET) or ``rth``. Omitted, it is the session\neach bar size has always read (``extended`` for ``15m``, ``rth`` for ``1d``; D02). ``hf_session`` is the HF\nestimator's own ETH/RTH filter and is unchanged.",
+        "description": "Body of POST /api/jobs-internal/realized-vs-iv.\n\nThe worker reads the study's bars from the data lake itself, materializing what the lake lacks: the browser\nsends the symbol and the study's settings, never bars. Unless ``window_start_ms`` and ``window_end_ms`` (ET\nmidnight of the first and last session, ``int64 ms UTC``) name a window, it is the last year (``1d``) or month\n(``15m``) of sessions whose tape is final; see ``app.services.realized_vs_iv_study_service``.\n\n``bar_size`` is ``15m`` or ``1d``. Anything else is accepted here and refused by the job with\n``resolution_unsupported`` and a reason, so the answer is a typed refusal a page can show rather than a 422.\n\n``session`` is which bars the study folds from: ``extended`` (04:00-20:00 ET) or ``rth``. Omitted, it is the session\neach bar size has always read (``extended`` for ``15m``, ``rth`` for ``1d``; D02). ``hf_session`` is the HF\nestimator's own ETH/RTH filter and is unchanged.",
         "properties": {
           "barSize": {
             "default": "1d",
@@ -53399,18 +53399,6 @@
             "default": false,
             "title": "Force",
             "type": "boolean"
-          },
-          "fromDate": {
-            "anyOf": [
-              {
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Fromdate"
           },
           "hfSession": {
             "default": "ETH",
@@ -53468,17 +53456,33 @@
             "title": "Tenordays",
             "type": "integer"
           },
-          "toDate": {
+          "windowEndMs": {
             "anyOf": [
               {
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
-                "type": "string"
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Todate"
+            "description": "ET midnight of the last session, int64 ms UTC",
+            "title": "Windowendms"
+          },
+          "windowStartMs": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ET midnight of the first session, int64 ms UTC",
+            "title": "Windowstartms"
           },
           "windows": {
             "items": {
