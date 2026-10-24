@@ -71,4 +71,37 @@ describe('SamplingCardComponent', () => {
     fixture.detectChanges();
     expect(fixture.nativeElement.querySelector('.session')).toBeNull();
   });
+
+  describe('sessionMode=enabled', () => {
+    const button = (label: string): HTMLButtonElement | undefined =>
+      Array.from<HTMLButtonElement>(fixture.nativeElement.querySelectorAll('.session-btn')).find(
+        (b) => b.textContent?.trim() === label,
+      );
+
+    beforeEach(() => {
+      fixture.componentRef.setInput('sessionMode', 'enabled');
+      fixture.detectChanges();
+    });
+
+    it('offers both sessions as buttons a person can press, with no "RTH only" reason beside them', () => {
+      expect.soft(button('RTH')?.disabled).toBe(false);
+      expect.soft(button('Ext')?.disabled).toBe(false);
+      expect.soft(fixture.nativeElement.querySelector('[data-testid="session-reason"]')).toBeNull();
+    });
+
+    it('reports the session a person pressed, and only that field', () => {
+      button('Ext')?.click();
+      button('RTH')?.click();
+
+      expect(changes).toEqual([{ session: 'extended' }, { session: 'rth' }]);
+    });
+
+    it('shows the host\'s session as the pressed one', () => {
+      fixture.componentRef.setInput('value', { ...baseValue, session: 'extended' });
+      fixture.detectChanges();
+
+      expect.soft(button('Ext')?.getAttribute('aria-pressed')).toBe('true');
+      expect.soft(button('RTH')?.getAttribute('aria-pressed')).toBe('false');
+    });
+  });
 });
