@@ -11,6 +11,9 @@ import { AlpacaLiveVerdictService } from '../../../services/alpaca-live-verdict.
 import { fakeAccountMoney } from '../../../testing/account-money-fixtures';
 import { fakeVerdictState } from '../../../testing/alpaca-live-verdict-fixtures';
 import { BrokerV2PanelService } from '../../broker/v2-panel/lib/broker-v2-panel.service';
+import { GoldenSearchService } from '../../golden-search/golden-search.service';
+import type { QualificationDeployOffer } from '../../golden-search/golden-search.types';
+import { deployOffer as goldenDeployOffer } from '../../golden-search/testing/fixtures';
 import { GoldenOptionSetupsService, type GoldenOptionSetup } from '../../options-backtest/golden-option-setups.service';
 import { goldenSetup } from '../../options-backtest/testing/golden-fixture';
 import { AlpacaAccountListPageComponent } from './alpaca-account-list-page.component';
@@ -42,7 +45,11 @@ function twoAccounts(): FleetDirectoryResponse {
 }
 
 /** The list opened on a handoff's address, with the router standing on it as it does in the app. */
-async function renderHandoff(query: Record<string, string>, get: (id: string) => Promise<GoldenOptionSetup>) {
+async function renderHandoff(
+  query: Record<string, string>,
+  get: (id: string) => Promise<GoldenOptionSetup>,
+  deployOffer: (id: string) => Promise<QualificationDeployOffer> = () => Promise.reject(new Error('No signal version was expected to be read here.')),
+) {
   const queryParamMap = convertToParamMap(query);
   const paramMap = convertToParamMap({});
   const view = await render(AlpacaAccountListPageComponent, {
@@ -54,6 +61,7 @@ async function renderHandoff(query: Record<string, string>, get: (id: string) =>
       { provide: BrokerConfigurationService, useValue: { readDeskState: () => Promise.resolve({ headline: 'Not ready yet' }) } },
       // Anything but a read of the one version named would fail loudly.
       { provide: GoldenOptionSetupsService, useValue: { get } },
+      { provide: GoldenSearchService, useValue: { deployOffer } },
       { provide: ActivatedRoute, useValue: { queryParamMap: of(queryParamMap), paramMap: of(paramMap), snapshot: { queryParamMap, paramMap } } },
     ],
   });
@@ -189,14 +197,16 @@ describe('the account list, carrying an approved options version', () => {
 
   it('is not shown for a signal handoff, which reads no options version and is carried under its own keys', async () => {
     const get = vi.fn();
-    await renderHandoff({ strategy: 'ema_crossover_signal', golden_qualification: 'gq-0001-aaaa-bbbb' }, get);
+    const deployOffer = vi.fn(async (id: string) => goldenDeployOffer({ qualification_id: id }));
+    await renderHandoff({ strategy: 'ema_crossover_signal', golden_qualification: 'gq-0001-aaaa-bbbb' }, get, deployOffer);
 
-    expect(await screen.findByText(/choose a ready Paper or Live account below to use the golden configuration/i)).toBeTruthy();
+    expect((await screen.findByRole('status', { name: 'Golden configuration' })).textContent).toContain('Choose a ready Paper or Live account below to use the golden configuration.');
     expect(screen.queryByRole('status', { name: 'Approved options setup' })).toBeNull();
     for (const link of screen.getAllByRole('link', { name: /Paper|Live/ })) {
       expect(link.getAttribute('href')).toContain('golden_qualification=gq-0001-aaaa-bbbb');
       expect(link.getAttribute('href')).not.toContain('options_setup');
     }
     expect(get).not.toHaveBeenCalled();
+    expect(deployOffer).toHaveBeenCalledExactlyOnceWith('gq-0001-aaaa-bbbb');
   });
 });

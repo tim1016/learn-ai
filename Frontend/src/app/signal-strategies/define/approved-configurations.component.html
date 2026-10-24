@@ -1,0 +1,42 @@
+<app-signal-strategy-section
+  title="Approved configuration values"
+  scope="Values that carry a Golden Search version or a person's review, for one symbol each. A status other than ready means the values no longer apply."
+  [read]="read()"
+  (retry)="retry.emit()"
+>
+  @if (read(); as state) {
+    @if (state.kind === 'ready') {
+      <h3 class="group__heading">Qualified versions</h3>
+      @for (group of qualified(); track group.symbol) {
+        <div class="group">
+          <h4 class="group__heading"><app-asset-identity [symbol]="group.symbol" size="sm" /></h4>
+          <table class="rows rows--lead">
+            <tbody>
+              @for (version of group.versions; track version.id) {
+                <tr>
+                  <td>
+                    <app-signal-strategy-chip [tone]="tones[version.status]">{{ version.status | receiptLabel }}</app-signal-strategy-chip>
+                  </td>
+                  <td class="mono">{{ version.parameters === null ? 'no parameters' : version.parameters.join(' · ') }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      } @empty {
+        <p class="note">No qualified version carries values for this strategy.</p>
+      }
+
+      <h3 class="group__heading">Reviewed configurations</h3>
+      @for (review of reviewed(); track review.id) {
+        <div class="group">
+          <h4 class="group__heading"><app-asset-identity [symbol]="review.symbol" size="sm" /></h4>
+          <p class="note">{{ review.review }}</p>
+          <p class="mono">{{ review.parameters === null ? 'not recorded' : review.parameters.join(' · ') }}</p>
+        </div>
+      } @empty {
+        <p class="note">No configuration has been reviewed for this strategy.</p>
+      }
+    }
+  }
+</app-signal-strategy-section>

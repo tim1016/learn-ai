@@ -163,3 +163,43 @@ async def test_post_trusted_run_returns_502_when_metadata_staging_fails(monkeypa
     # CORS headers must still be attached — the whole point of the fix
     # is that the browser doesn't see "no Access-Control-Allow-Origin".
     assert response.headers.get("access-control-allow-origin") == "http://localhost:4200"
+
+
+_CUSTOM_SOURCE = "class MyAlgorithm: pass"
+
+
+def test_trusted_run_request_model_accepts_a_registered_owner_for_a_custom_source() -> None:
+    from app.routers.lean_sidecar import TrustedRunRequestModel
+
+    model = TrustedRunRequestModel(
+        run_id="custom-owned",
+        symbol="SPY",
+        start_ms_utc=_GOOD_START_MS,
+        end_ms_utc=_GOOD_END_MS,
+        algorithm_source=_CUSTOM_SOURCE,
+        strategy_key="rsi_mean_reversion",
+    )
+
+    assert model.strategy_key == "rsi_mean_reversion"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        pytest.param({"algorithm_source": _CUSTOM_SOURCE, "strategy_key": "no_such_strategy"}, "not a registered strategy", id="unregistered key"),
+        pytest.param({"strategy_key": "rsi_mean_reversion"}, "only with algorithm_source", id="bundled template"),
+    ],
+)
+def test_trusted_run_request_model_refuses_an_owner_it_cannot_record(overrides: dict[str, str], message: str) -> None:
+    from pydantic import ValidationError
+
+    from app.routers.lean_sidecar import TrustedRunRequestModel
+
+    with pytest.raises(ValidationError, match=message):
+        TrustedRunRequestModel(
+            run_id="custom-refused",
+            symbol="SPY",
+            start_ms_utc=_GOOD_START_MS,
+            end_ms_utc=_GOOD_END_MS,
+            **overrides,
+        )

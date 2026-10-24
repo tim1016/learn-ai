@@ -1,0 +1,151 @@
+<section class="strategy-lab" aria-label="Backtest">
+  <p-tabs [(value)]="config.activeTab">
+      <p-tablist>
+        <p-tab value="configuration"><i class="pi pi-sliders-h" aria-hidden="true"></i> Workbench</p-tab>
+        <p-tab value="history"><i class="pi pi-history" aria-hidden="true"></i> History</p-tab>
+      </p-tablist>
+
+      <p-tabpanels>
+        <p-tabpanel value="configuration">
+          @if (mismatch(); as refusal) {
+            <app-workspace-state-block [state]="refusal" />
+          }
+          @if (otherRunning(); as other) {
+            <app-workspace-state-block [state]="other" />
+          }
+          @if (shownRun(); as shown) {
+            <nav class="next-steps" aria-label="Next steps for this run">
+              <span>Run #{{ shown.id }} is exploratory and in-sample.</span>
+              @if (sweepCapability(); as sweep) {
+                @if (sweep.supported) {
+                  <a [routerLink]="sweepRoute()" [queryParams]="{ run: shown.id }">Sweep this run's settings</a>
+                  <a [routerLink]="walkForwardRoute()" [queryParams]="{ run: shown.id }">Walk-forward from this run</a>
+                } @else {
+                  <span>Sweep and Walk-forward are not allowed for this strategy. {{ sweep.reason }}</span>
+                }
+              }
+              @if (goldenCapability(); as golden) {
+                @if (golden.supported) {
+                  <a [routerLink]="goldenRoute()" [queryParams]="{ run: shown.id }">Plan a golden search from this run</a>
+                } @else {
+                  <span>A golden search is not allowed for this strategy. {{ golden.reason }}</span>
+                }
+              }
+            </nav>
+          }
+          <div class="workbench">
+            <aside class="workbench__rail" aria-label="Configuration and run statistics">
+              @if (config.strategiesLoading()) {
+                <div class="lab-notice" role="status">Loading strategies…</div>
+              } @else if (config.strategiesError(); as error) {
+                <div class="lab-notice lab-notice--error" role="alert">Failed to load strategies: {{ error }}</div>
+              } @else if (config.strategies().length === 0) {
+                <div class="lab-notice" role="status">No runnable strategies are currently registered.</div>
+              } @else {
+                <app-strategy-lab-config-rail
+                  [collapsed]="config.configNavCollapsed()"
+                  [engine]="config.engine()"
+                  [range]="config.range()"
+                  [dataPolicy]="config.dataPolicy()"
+                  [strategy]="config.runnableStrategy()"
+                  [engineRestrictions]="config.engineRestrictions()"
+                  [selectedStrategyName]="config.selectedStrategyName()"
+                  [paramValues]="config.paramValues()"
+                  [fillMode]="config.fillMode()"
+                  [initialCash]="config.initialCash()"
+                  [commissionPerOrder]="config.commissionPerOrder()"
+                  [running]="runs.running()"
+                  [engineBusy]="runs.engineBusy()"
+                  [registryError]="jobs.registryError()"
+                  [adjustmentMode]="config.adjustmentMode()"
+                  [dateBounds]="config.dateBounds()"
+                  [dateGaps]="config.dateGaps()"
+                  [runBlocked]="config.rerunBlocked() || config.datesMissing()"
+                  [launcherStatus]="runs.leanLauncherStatus()"
+                  [launcherDetail]="runs.leanLauncherDetail()"
+                  [launcherCommand]="runs.leanLauncherCommand"
+                  [leanTemplateLabel]="config.leanTemplateLabel()"
+                  (collapseToggled)="config.toggleConfigNav()"
+                  (engineChanged)="config.changeEngine($event)"
+                  (rangeChange)="config.changeRange($event)"
+                  (parameterChanged)="config.updateParameter($event.field, $event.rawValue, $event.type)"
+                  (fillModeChanged)="config.fillMode.set($event)"
+                  (initialCashChanged)="config.initialCash.set($event)"
+                  (commissionChanged)="config.commissionPerOrder.set($event)"
+                  (launcherCheckRequested)="runs.checkLeanLauncher()"
+                  (runRequested)="runs.run()"
+                  (leanSourceRequested)="leanSourceOpen.set(true)"
+                />
+              }
+
+              @if (shownRun(); as currentRun) {
+                @if (report.engineResult(); as result) {
+                  <app-strategy-lab-run-stats
+                    [run]="currentRun"
+                    [result]="result"
+                    [verdict]="report.verdict()"
+                    [parity]="report.parity()"
+                    [tradesTruncated]="currentRun.tradesTruncated"
+                  />
+                }
+              } @else if (mismatch() !== null) {
+                <!-- The refusal above names the run's owner; nothing of it is drawn here. -->
+              } @else if (report.loadError()) {
+                <div class="lab-notice lab-notice--error" role="alert">
+                  Run report could not be loaded. Try again from History.
+                </div>
+              } @else if (report.notFound()) {
+                <div class="lab-notice lab-notice--error" role="alert">
+                  Saved run #{{ report.activeRunId() }} was not found.
+                </div>
+              }
+            </aside>
+
+            <app-strategy-lab-stage
+              [run]="shownRun()"
+              [markers]="markers()"
+              [equityPoints]="equityPoints()"
+              [notices]="reportNotices()"
+              [error]="runs.runError() ?? config.configurationWarning()"
+              [running]="runs.running()"
+              [runStatus]="runs.runStatusBanner()"
+              [runPhaseDetail]="runs.runPhaseDetail()"
+              [symbol]="config.effectiveSymbol()"
+              [resolution]="config.resolution()"
+              [fillMode]="config.runFillMode()"
+              [engine]="config.engine()"
+              [dataPolicyNote]="config.dataPolicyNote()"
+            />
+          </div>
+        </p-tabpanel>
+
+        <p-tabpanel value="history">
+          <app-engine-lab-run-history
+            [strategyKey]="key()"
+            (runSelected)="selectHistoryRun($event)"
+            (goldenRunRequested)="selectGoldenCandidate($event)"
+          />
+        </p-tabpanel>
+      </p-tabpanels>
+  </p-tabs>
+
+  @if (leanSourceOpen() && config.selectedStrategyName(); as strategyName) {
+    <p-drawer
+      [visible]="true"
+      (visibleChange)="leanSourceOpen.set($event)"
+      position="right"
+      [modal]="true"
+      [dismissible]="true"
+      [style]="{ width: 'min(960px, 92vw)' }"
+    >
+      <app-lean-source-editor
+        [strategyName]="strategyName"
+        [launcherStatus]="runs.leanLauncherStatus()"
+        [customSource]="config.customLeanSource()"
+        (customSourceChange)="config.customLeanSource.set($event)"
+      />
+    </p-drawer>
+  }
+
+  <app-run-dock />
+</section>

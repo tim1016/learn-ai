@@ -8,9 +8,7 @@
   @if (optionsHandoff()) {
     <app-alpaca-options-deploy-intent [optionsSetupId]="optionsSetupId()" />
   } @else if (goldenHandoff()) {
-    <p class="account-list__state" role="status">
-      Choose a ready Paper or Live account below to use the golden configuration.
-    </p>
+    <app-alpaca-deploy-intent [qualificationId]="pinnedVersion()" [strategyKey]="strategyKey()" />
   } @else if (deployIntent()) {
     <p class="account-list__state" role="status">
       Choose a ready Paper or Live account below to deploy a strategy.

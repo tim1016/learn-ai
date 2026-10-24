@@ -1,0 +1,44 @@
+@for (group of versions().bySymbol; track group.symbol) {
+  <div class="group">
+    <h3 class="group__heading">
+      <app-asset-identity [symbol]="group.symbol" size="sm" />
+      <span class="group__summary">
+        @for (count of group.statusCounts; track count.status; let last = $last) {
+          {{ count.count }} {{ count.status | receiptLabel | lowercase }}@if (!last) { · }
+        }
+      </span>
+    </h3>
+    <table class="rows">
+      <thead>
+        <tr>
+          <th>Version</th><th>Status</th><th>Configuration</th>
+          @if (columns(); as extra) { <ng-container [ngTemplateOutlet]="extra.template" /> }
+        </tr>
+      </thead>
+      <tbody>
+        @for (version of group.versions; track version.id) {
+          <tr>
+            <td class="mono">
+              {{ version.id }}
+              @if (version.is_default) { <app-signal-strategy-chip tone="ready">default for {{ group.symbol }}</app-signal-strategy-chip> }
+              <div class="muted">program {{ version.program_version }} · <app-timestamp-display [value]="version.created_at_ms" mode="local" /></div>
+            </td>
+            <td>
+              <div class="status-cell">
+                <app-signal-strategy-chip [tone]="tones[version.status]">{{ version.status | receiptLabel }}</app-signal-strategy-chip>
+                <span class="muted">{{ version.status_explanation }}</span>
+              </div>
+            </td>
+            <td class="mono">{{ settings(version) }}</td>
+            @if (cells(); as extra) { <ng-container [ngTemplateOutlet]="extra.template" [ngTemplateOutletContext]="{ $implicit: version }" /> }
+          </tr>
+        }
+      </tbody>
+    </table>
+  </div>
+} @empty {
+  <p class="note">{{ goldenRefusal() ?? 'No symbol has a qualified version of this strategy yet. A study ends in one when its final decision is approved.' }}</p>
+}
+@if (versions().mayBeCut) {
+  <p class="note">The read returns at most {{ listLimit }} versions, so some may not be listed here.</p>
+}

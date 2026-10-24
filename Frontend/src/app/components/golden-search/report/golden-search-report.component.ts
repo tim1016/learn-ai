@@ -4,6 +4,7 @@ import { RouterLink } from '@angular/router';
 import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
+import { goldenStudyRoute } from '../../../signal-strategies/golden/golden-tabs';
 import { GoldenSearchChanceFinalPanelComponent } from '../golden-search-chance-final-panel.component';
 import { GoldenSearchChancePanelComponent } from '../golden-search-chance-panel.component';
 import { metricTexts } from '../golden-search-display';
@@ -23,6 +24,8 @@ import type { CandidateKey, StrategyCapability, StudyDetail } from '../golden-se
 export class GoldenSearchReportComponent {
   readonly study = input.required<StudyDetail>();
   readonly capability = input<StrategyCapability | null>(null);
+  /** The study's workbench, under the strategy it ran for. */
+  protected readonly studyRoute = computed(() => goldenStudyRoute(this.study().strategy_key, this.study().id));
   protected readonly selected = signal<CandidateKey | null>(null);
   protected readonly chosenFit = computed(() => {
     const exam = this.study().results.exam;

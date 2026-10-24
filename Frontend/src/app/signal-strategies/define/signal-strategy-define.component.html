@@ -1,0 +1,30 @@
+@if (entry(); as strategy) {
+  <app-signal-strategy-description [entry]="strategy" (viewSource)="sourceOpen.set(true)" />
+
+  <app-signal-strategy-declared-parameters
+    [entry]="strategy"
+    [declarations]="store.declarations()"
+    (retry)="store.retry('declarations')"
+  />
+
+  <app-signal-strategy-approved-configurations
+    [versions]="store.qualifiedVersions()"
+    [reviews]="store.configurationReviews()"
+    (retry)="store.retry('approvals')"
+  />
+
+  <app-signal-strategy-exploratory-values />
+
+  @if (sourceOpen()) {
+    <p-drawer
+      [visible]="true"
+      (visibleChange)="sourceOpen.set($event)"
+      position="right"
+      [modal]="true"
+      [dismissible]="true"
+      [style]="{ width: 'min(960px, 92vw)' }"
+    >
+      <app-lean-twin-source [strategyKey]="strategy.strategy_key" />
+    </p-drawer>
+  }
+}

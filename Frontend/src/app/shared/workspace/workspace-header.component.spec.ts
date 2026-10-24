@@ -132,6 +132,6 @@ describe('WorkspaceHeaderComponent — trail from the menu', () => {
     const links = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('nav[aria-label="Breadcrumb"] a')).map(
       (link) => `${link.textContent?.trim()} -> ${link.getAttribute('href')}`,
     );
-    expect(links).toEqual(['Signal strategies -> /strategy-lab']);
+    expect(links).toEqual(['Signal strategies -> /signal-strategies']);
   });
 });

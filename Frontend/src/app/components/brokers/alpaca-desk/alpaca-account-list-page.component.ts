@@ -6,6 +6,7 @@ import { GOLDEN_QUALIFICATION_QUERY_PARAM } from '../../../fleet/account-workspa
 import { BreadcrumbComponent } from '../../../shared/breadcrumb/breadcrumb.component';
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import { OPTIONS_SETUP_QUERY_PARAM } from '../../../fleet/options-setup-handoff';
+import { AlpacaDeployIntentComponent } from './alpaca-deploy-intent.component';
 import { AlpacaLaneCardComponent } from './alpaca-lane-card.component';
 import { AlpacaOptionsDeployIntentComponent } from './alpaca-options-deploy-intent.component';
 
@@ -40,7 +41,12 @@ export const DIRECTORY_RUNBOOK_URL = `${RUNBOOKS}/fleet-directory-unavailable.md
 @Component({
   selector: 'app-alpaca-account-list-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AlpacaLaneCardComponent, AlpacaOptionsDeployIntentComponent, BreadcrumbComponent],
+  imports: [
+    AlpacaDeployIntentComponent,
+    AlpacaLaneCardComponent,
+    AlpacaOptionsDeployIntentComponent,
+    BreadcrumbComponent,
+  ],
   templateUrl: './alpaca-account-list-page.component.html',
   styleUrl: './alpaca-account-list-page.component.scss',
 })
@@ -54,6 +60,12 @@ export class AlpacaAccountListPageComponent {
   /** A golden configuration on its way to Deploy (#2696): "Use in Deploy"
    * names no account, so choosing one here is the step it still needs. */
   protected readonly goldenHandoff = computed(() => this.queryParams().has(GOLDEN_QUALIFICATION_QUERY_PARAM));
+
+  /** The exact version the handoff names, as the address carries it. It stays
+   * in the address while an account is chosen and is read again, never
+   * replaced, by the panel that shows it (PRD #3490 R19). */
+  protected readonly pinnedVersion = computed(() => this.queryParams().get(GOLDEN_QUALIFICATION_QUERY_PARAM) ?? '');
+  protected readonly strategyKey = computed(() => this.queryParams().get('strategy'));
 
   /** An approved options version on its way to Deploy (PRD #3490 R23): an
    * options setup's "Deploy an options bot" names no account either. The id is

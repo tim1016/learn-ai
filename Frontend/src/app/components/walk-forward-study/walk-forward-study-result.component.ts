@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, inject, input, output, signal, untracked } from '@angular/core';
 import { DecimalPipe, PercentPipe } from '@angular/common';
+import { RouterLink } from '@angular/router';
 import { ButtonModule } from 'primeng/button';
 
 import { storedFillMode } from '../../models/fill-mode';
@@ -33,7 +34,7 @@ export interface OpenSweep {
  */
 @Component({
   selector: 'app-walk-forward-study-result',
-  imports: [AssetIdentityComponent, ButtonModule, DecimalPipe, PercentPipe, GridSearchResultComponent, RecordControlsComponent, ReceiptLabelPipe, TimestampDisplayComponent, ValidationScopeNoteComponent, WalkForwardFoldCurvesComponent, WaitingBadgeComponent],
+  imports: [AssetIdentityComponent, ButtonModule, DecimalPipe, PercentPipe, GridSearchResultComponent, RecordControlsComponent, ReceiptLabelPipe, RouterLink, TimestampDisplayComponent, ValidationScopeNoteComponent, WalkForwardFoldCurvesComponent, WaitingBadgeComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './walk-forward-study-result.component.html',
   styleUrl: './walk-forward-study-result.component.scss',
@@ -45,6 +46,8 @@ export class WalkForwardStudyResultComponent {
 
   readonly studyId = input.required<string>();
   readonly strategies = input<readonly StrategyInfo[]>([]);
+  /** Where "Plan a golden search from this study" leads: the strategy's Golden studies, with this study as its starting point. Unset, no link is offered. */
+  readonly goldenRoute = input<readonly string[] | null>(null);
   /** Poll interval while the study runs; tests set 0 to disable. */
   readonly pollMs = input(3000);
   readonly deleted = output<string>();

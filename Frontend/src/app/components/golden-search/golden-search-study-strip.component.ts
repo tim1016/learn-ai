@@ -4,6 +4,7 @@ import { RouterLink } from '@angular/router';
 import { AssetIdentityComponent } from '../../shared/asset-identity/asset-identity.component';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
+import { goldenStudyRoute } from '../../signal-strategies/golden/golden-tabs';
 import { EXPOSURE_LABELS } from './golden-search-display';
 import type { StrategyCapability, StudyDetail } from './golden-search.types';
 
@@ -22,6 +23,11 @@ import type { StrategyCapability, StudyDetail } from './golden-search.types';
 export class GoldenSearchStudyStripComponent {
   readonly study = input.required<StudyDetail>();
   readonly capability = input<StrategyCapability | null>(null);
+
+  /** The study this one was revised from, under the strategy both ran for. */
+  protected parentRoute(parentId: string): readonly string[] {
+    return goldenStudyRoute(this.study().strategy_key, parentId);
+  }
 
   /** The final test's exposure as the server recorded it; before it is opened, that it is still held back. */
   protected readonly exposure = computed(() => {

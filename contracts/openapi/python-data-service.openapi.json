@@ -3274,6 +3274,10 @@
             ],
             "title": "Commissionperorder"
           },
+          "customSource": {
+            "title": "Customsource",
+            "type": "boolean"
+          },
           "dataPolicy": {
             "anyOf": [
               {
@@ -3602,6 +3606,7 @@
           "verdictGrade",
           "verdictSignal",
           "parityGroupId",
+          "customSource",
           "requestedEngine",
           "fillMode",
           "durationMs",
@@ -3830,6 +3835,10 @@
             ],
             "title": "Commissionperorder"
           },
+          "customSource": {
+            "title": "Customsource",
+            "type": "boolean"
+          },
           "dataPolicy": {
             "anyOf": [
               {
@@ -3973,6 +3982,7 @@
           "verdictGrade",
           "verdictSignal",
           "parityGroupId",
+          "customSource",
           "hasSyntheticExit"
         ],
         "title": "BacktestRunSummaryResponse",
@@ -8096,6 +8106,33 @@
           "sessions"
         ],
         "title": "Candidate",
+        "type": "object"
+      },
+      "CapabilityAnswer": {
+        "additionalProperties": false,
+        "description": "Whether the registry allows one action for a strategy; ``reason`` says why not.",
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set exactly when the action is not supported.",
+            "title": "Reason"
+          },
+          "supported": {
+            "title": "Supported",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "supported"
+        ],
+        "title": "CapabilityAnswer",
         "type": "object"
       },
       "CaptureReceiptModel": {
@@ -63601,6 +63638,43 @@
         "title": "StrategyBehavioralEquivalence",
         "type": "object"
       },
+      "StrategyCapabilities": {
+        "additionalProperties": false,
+        "description": "What the registry allows. Allowed is not approved: proof, qualification and admission are judged elsewhere.",
+        "properties": {
+          "golden": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CapabilityAnswer"
+              }
+            ],
+            "description": "A Golden Search study."
+          },
+          "live": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CapabilityAnswer"
+              }
+            ],
+            "description": "A bot of this strategy on a Live account."
+          },
+          "sweep": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CapabilityAnswer"
+              }
+            ],
+            "description": "Sweep, Walk-forward and Recency Chart, which share one eligibility rule."
+          }
+        },
+        "required": [
+          "sweep",
+          "golden",
+          "live"
+        ],
+        "title": "StrategyCapabilities",
+        "type": "object"
+      },
       "StrategyEvidenceSnapshot": {
         "properties": {
           "audit_copy_ref": {
@@ -64207,6 +64281,122 @@
           "source"
         ],
         "title": "StrategyReferenceCode",
+        "type": "object"
+      },
+      "StrategyRegistryEntry": {
+        "additionalProperties": false,
+        "description": "One registered strategy, as its registry entry declares it.",
+        "properties": {
+          "capabilities": {
+            "$ref": "#/components/schemas/StrategyCapabilities"
+          },
+          "catalog_visible": {
+            "title": "Catalog Visible",
+            "type": "boolean"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "experimental_notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Experimental Notice"
+          },
+          "parameter_units": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Parameter Units",
+            "type": "object"
+          },
+          "program_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Program Version"
+          },
+          "rule_statement": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule Statement"
+          },
+          "strategy_category": {
+            "enum": [
+              "production_candidate",
+              "operational_validation_harness"
+            ],
+            "title": "Strategy Category",
+            "type": "string"
+          },
+          "strategy_key": {
+            "title": "Strategy Key",
+            "type": "string"
+          },
+          "validated_settings": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            },
+            "title": "Validated Settings",
+            "type": "object"
+          },
+          "validated_symbols": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Validated Symbols",
+            "type": "array"
+          }
+        },
+        "required": [
+          "strategy_key",
+          "display_name",
+          "description",
+          "strategy_category",
+          "experimental_notice",
+          "catalog_visible",
+          "program_version",
+          "rule_statement",
+          "validated_settings",
+          "validated_symbols",
+          "parameter_units",
+          "capabilities"
+        ],
+        "title": "StrategyRegistryEntry",
         "type": "object"
       },
       "StrategyRunRequest": {
@@ -67547,6 +67737,20 @@
             "minimum": 1000.0,
             "title": "Starting Cash",
             "type": "number"
+          },
+          "strategy_key": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Registry key of the strategy whose Explore submitted ``algorithm_source``. A custom source is not a bundled template, so this key becomes the saved run's owner (its ``strategy_name``) and the run opens under that strategy. Accepted only with ``algorithm_source``: a bundled template run is already owned by the strategy that registers the template as its LEAN twin.",
+            "title": "Strategy Key"
           },
           "strategy_parameters": {
             "anyOf": [
@@ -72048,6 +72252,26 @@
               ],
               "description": "Only this bot, with all of its runs.",
               "title": "Strategy Instance Id"
+            }
+          },
+          {
+            "description": "Only this strategy's bots, by registry key.",
+            "in": "query",
+            "name": "strategy_key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this strategy's bots, by registry key.",
+              "title": "Strategy Key"
             }
           },
           {
@@ -89410,6 +89634,32 @@
         ]
       }
     },
+    "/api/engine/strategy-registry": {
+      "get": {
+        "description": "Every registered strategy with what the registry allows for it (#3508).\n\nUnlike ``GET /strategies`` this lists the compatibility entries the picker\nhides, and it answers Sweep, Golden Search and Live for each, with the\nreason when one is not allowed. Allowed never means proven, approved or\ndeployable: those are judged by their own reads.",
+        "operationId": "list_strategy_registry_api_engine_strategy_registry_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/StrategyRegistryEntry"
+                  },
+                  "title": "Response List Strategy Registry Api Engine Strategy Registry Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Strategy Registry",
+        "tags": [
+          "engine"
+        ]
+      }
+    },
     "/api/golden-fixtures": {
       "get": {
         "description": "Return the golden fixture catalog with the most recent validation status.",
@@ -91425,7 +91675,7 @@
     },
     "/api/research/backtest-runs": {
       "get": {
-        "description": "Run history, newest first.",
+        "description": "Run history, newest first; the limit applies after the filters.",
         "operationId": "list_backtest_runs_api_research_backtest_runs_get",
         "parameters": [
           {
@@ -91446,6 +91696,26 @@
                 }
               ],
               "title": "Engine"
+            }
+          },
+          {
+            "description": "Only this strategy's runs.",
+            "in": "query",
+            "name": "strategy_name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this strategy's runs.",
+              "title": "Strategy Name"
             }
           },
           {

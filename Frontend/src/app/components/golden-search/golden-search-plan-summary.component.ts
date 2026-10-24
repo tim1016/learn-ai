@@ -6,6 +6,7 @@ import { ButtonModule } from 'primeng/button';
 import { fillModeLabel } from '../../models/fill-mode';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
+import { goldenTabRoute } from '../../signal-strategies/golden/golden-tabs';
 import { extractServerMessage } from '../broker/operation-error';
 import { GoldenSearchChartComponent } from './charts/golden-search-chart.component';
 import { sameChart } from './charts/golden-search-chart-spec';
@@ -111,6 +112,8 @@ export class GoldenSearchPlanSummaryComponent {
 
   protected readonly fillMode = computed(() => fillModeLabel(this.study().protocol.execution.fill_mode));
   protected readonly canRevise = computed(() => this.study().permitted_actions.includes('revise'));
+  /** A revision is planned in the Studies page of the strategy this study ran for. */
+  protected readonly studiesRoute = computed(() => goldenTabRoute(this.study().strategy_key, 'studies'));
   protected readonly frequencyBased = computed(() => usesTradeFrequency(this.study().protocol));
   protected readonly pairs = computed(() => {
     const knobs = knobsByName(this.capability());

@@ -76,6 +76,15 @@ const RECONCILE_NOW: components['schemas']['RecoveryCapabilityResponse']['action
  * the chosen account's Deploy, which applies its exact settings. */
 export const GOLDEN_QUALIFICATION_QUERY_PARAM = 'golden_qualification';
 
+/** A Golden Search qualification id as a path segment may carry it. The
+ * account list and Deploy both judge `?golden_qualification=` by this, so a
+ * value one of them refuses is never read by the other. */
+const QUALIFICATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
+
+export function isQualificationId(value: string | null): value is string {
+  return value !== null && QUALIFICATION_ID_PATTERN.test(value);
+}
+
 /** Where "Use in Deploy" lands: the account list, where choosing the account
  * is the owner's step (#2696). */
 export const GOLDEN_DEPLOY_HANDOFF_ROUTE = '/brokers/alpaca';

@@ -68,6 +68,24 @@ async def test_an_engine_run_survives_a_write_then_read_round_trip_with_every_fi
     assert persisted.signal_reason == "ema cross" and persisted.is_synthetic_exit is False
 
 
+async def test_a_run_of_pasted_source_reads_back_marked_and_one_saved_before_the_mark_reads_by_its_old_owner(
+    conn, unique: str
+) -> None:
+    marked_id = await _insert(
+        conn, lean_payload(f"{unique}-marked", symbol=unique, strategy_name="rsi_mean_reversion", custom_source=True)
+    )
+    legacy_id = await _insert(conn, lean_payload(f"{unique}-legacy", symbol=unique, strategy_name="user_provided"))
+    bundled_id = await _insert(conn, lean_payload(f"{unique}-bundled", symbol=unique, strategy_name="rsi_mean_reversion"))
+
+    marked, legacy, bundled = [await repo.get_run(conn, run_id) for run_id in (marked_id, legacy_id, bundled_id)]
+
+    assert (marked.custom_source, marked.ran_custom_source) == (True, True)
+    assert (legacy.custom_source, legacy.ran_custom_source) == (False, True)
+    assert (bundled.custom_source, bundled.ran_custom_source) == (False, False)
+    listed = {row.id: row.ran_custom_source for row in await repo.list_runs(conn, engine=None, limit=500, strategy_name="rsi_mean_reversion")}
+    assert listed[marked_id] is True and listed[bundled_id] is False
+
+
 async def test_a_lean_run_is_idempotent_on_its_run_id_and_refuses_a_different_engine(conn, unique: str) -> None:
     first = await repo.insert_run(conn, record_from_payload(lean_payload(f"lean-{unique}", symbol=unique)))
     again = await repo.insert_run(conn, record_from_payload(lean_payload(f"lean-{unique}", symbol=unique)))

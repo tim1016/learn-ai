@@ -52,6 +52,15 @@ describe("MetricReferenceEntryComponent", () => {
     expect(screen.getByRole("status").textContent).toContain("does not claim a local formula contract");
   });
 
+  it("leads back to a run by its evidence address, so its strategy is resolved from the run itself", async () => {
+    await render(MetricReferenceEntryComponent, {
+      inputs: { variant: FORMULA_UNAVAILABLE_VARIANT, alternative: null, runId: 204 },
+      providers: [provideRouter([])],
+    });
+
+    expect(screen.getByRole("link", { name: "Back to run" }).getAttribute("href")).toBe("/signal-strategies/evidence/run/204");
+  });
+
   it("renders a display formula and keeps malformed formula text out of the DOM as markup", async () => {
     const { container, rerender } = await render(MetricReferenceEntryComponent, {
       inputs: {

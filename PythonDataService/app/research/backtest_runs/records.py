@@ -33,6 +33,8 @@ from app.research.documentation.analytical_metric_catalog import metric_document
 from app.utils.session_anchors import et_midnight_ms
 
 RunSource = Literal["engine", "lean-sidecar"]
+#: The name a LEAN run of pasted source was filed under before it was filed under the strategy that submitted it.
+USER_PROVIDED_ALGORITHM_NAME = "user_provided"
 RequestedEngine = Literal["python", "lean", "both"]
 
 REQUESTED_ENGINES_BY_SOURCE: Mapping[str, tuple[str, ...]] = {
@@ -108,6 +110,8 @@ class BacktestRunRecord:
     metric_documentation_json: str
     trades: tuple[TradeRecord, ...]
     evidence_provenance_json: str | None = None
+    # The run executed pasted LEAN source, whichever strategy it is filed under.
+    custom_source: bool = False
 
 
 def record_from_payload(payload: Mapping[str, Any]) -> BacktestRunRecord:
@@ -138,6 +142,9 @@ def record_from_payload(payload: Mapping[str, Any]) -> BacktestRunRecord:
     if start_date > end_date:
         raise RunPayloadError(f"start_date ({start_date}) must be <= end_date ({end_date})")
 
+    custom_source = payload.get("custom_source", False)
+    if not isinstance(custom_source, bool):
+        raise RunPayloadError("custom_source must be a boolean")
     parameters = dict(payload.get("parameters") or {})
     # The symbol on the row is authoritative; the parameters echo it so a
     # consumer reading the configuration alone still sees the instrument.
@@ -194,6 +201,7 @@ def record_from_payload(payload: Mapping[str, Any]) -> BacktestRunRecord:
         insight_summary_json=_json_text(payload.get("insight_summary_json")),
         metric_documentation_json=_metric_documentation(payload.get("metric_documentation_json"), source),
         trades=tuple(_trade(index, trade) for index, trade in enumerate(trades)),
+        custom_source=custom_source,
     )
 
 

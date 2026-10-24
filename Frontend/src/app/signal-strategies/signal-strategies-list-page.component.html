@@ -1,0 +1,101 @@
+<app-workspace-header [title]="title" [purpose]="purpose" [secondaryActions]="headerActions" />
+
+@if (registryNotice(); as notice) {
+  <div class="notices"><app-workspace-state-block [state]="notice" (actionTriggered)="onRetry($event)" /></div>
+} @else {
+  @for (failed of failedReads(); track failed.name) {
+    <div class="notices"><app-workspace-state-block [state]="failed.content" (actionTriggered)="onRetry($event)" /></div>
+  }
+
+  <div class="table-wrap">
+    <table class="strategies">
+      <thead>
+        <tr>
+          <th>Strategy</th>
+          <th>Registry allows</th>
+          <th>Program proof</th>
+          <th>Qualified versions</th>
+          <th>Running now</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (row of rows(); track row.entry.strategy_key) {
+          <tr>
+            <td>
+              <a class="name" [routerLink]="row.overview">{{ row.entry.display_name }}</a>
+              <code class="key">{{ row.entry.strategy_key }}</code>
+              <app-signal-strategy-chip>
+                {{ row.entry.strategy_category === 'production_candidate' ? 'Production candidate' : 'Operational harness' }}
+              </app-signal-strategy-chip>
+              @if (!row.entry.catalog_visible) {
+                <span class="muted block">Compatibility entry, not offered in Strategy Lab's picker.</span>
+              }
+              @if (row.entry.experimental_notice; as notice) {
+                <span class="notice-text block">{{ notice }}</span>
+              }
+            </td>
+            <td><app-signal-strategy-capabilities [capabilities]="row.entry.capabilities" /></td>
+            <td>
+              @switch (row.proof.kind) {
+                @case ('known') {
+                  <app-signal-strategy-chip [tone]="proofTones[row.proof.state]">{{ row.proof.state | receiptLabel }}</app-signal-strategy-chip>
+                }
+                @case ('norecord') { <span class="muted">No proof record</span> }
+                @case ('loading') { <span class="muted">Reading…</span> }
+                @default { <span class="muted">Unknown</span> }
+              }
+            </td>
+            <td>
+              @switch (row.versions.kind) {
+                @case ('known') {
+                  @for (group of row.versions.bySymbol; track group.symbol) {
+                    <div class="symbol-line">
+                      <app-asset-identity [symbol]="group.symbol" size="xs" />
+                      <span class="muted">
+                        @for (count of group.statusCounts; track count.status; let last = $last) {
+                          {{ count.count }} {{ count.status | receiptLabel | lowercase }}@if (!last) { · }
+                        }
+                      </span>
+                    </div>
+                  } @empty {
+                    <span class="muted">None</span>
+                  }
+                }
+                @case ('loading') { <span class="muted">Reading…</span> }
+                @default { <span class="muted">Unknown</span> }
+              }
+            </td>
+            <td>
+              @if (row.runningRead === 'loading') {
+                <span class="muted">Reading…</span>
+              } @else {
+                @switch (row.running.state) {
+                  @case ('none') { <span class="muted">None running</span> }
+                  @case ('some') {
+                    {{ row.running.atLeast ? 'At least ' : '' }}{{ row.running.bots.length }} running
+                    @for (world of row.running.worlds; track world.world) {
+                      <span class="muted block">{{ world.label }} · {{ world.count }} {{ world.count === 1 ? 'bot' : 'bots' }}</span>
+                    }
+                  }
+                  @default { <span class="muted">Unknown</span> }
+                }
+              }
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </div>
+
+  <div class="footnotes">
+    @if (fleetObservedAtMs(); as observedAtMs) {
+      <p>Running counts as of <app-timestamp-display [value]="observedAtMs" mode="local" /></p>
+    }
+    @if (fleetGaps() > 0) {
+      <p>The fleet read could not see {{ fleetGaps() }} {{ fleetGaps() === 1 ? 'account' : 'accounts' }}, so a strategy with none running there is unknown, not idle.</p>
+    }
+    @if (versionsMayBeCut()) {
+      <p>The versions read returns at most {{ listLimit }} versions, so some may not be counted.</p>
+    }
+  </div>
+}

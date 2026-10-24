@@ -1,0 +1,12 @@
+<app-signal-strategy-section
+  title="Qualified versions"
+  scope="Versions Golden Search approved, each for one symbol and one exact configuration. Only a ready version is current."
+  [read]="versions()"
+  (retry)="retry.emit()"
+>
+  @if (versions(); as state) {
+    @if (state.kind === 'ready') {
+      <app-symbol-version-groups [versions]="state.value" />
+    }
+  }
+</app-signal-strategy-section>

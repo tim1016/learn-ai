@@ -16,6 +16,8 @@ import {
 } from "./options-setups/options-setups.redirects";
 import { redirectKeepingState } from "./shell/route-redirects";
 import { redirectToOptionsView } from "./markets/options/options-address";
+import { lazyEntryResolver } from "./signal-strategies/explore/entry/explore-entry.lazy";
+import { lazyGoldenEntryResolver } from "./signal-strategies/golden/entry/golden-entry.lazy";
 
 const loadBrokerLaneUnavailable = () =>
   import('./fleet/broker-lane-unavailable.component').then(
@@ -43,18 +45,37 @@ const markdownDocRoute = (path: string, data: MarkdownDocRouteData): Route => ({
   data,
 });
 
-// Shared by every legacy persisted-run URL (strategy-lab/runs/:id and the
-// older engine/runs/:id bookmark). Both redirect straight to this same final
-// destination rather than to each other: a redirect lands in one hop (PRD
-// #3490 R32). Angular follows an absolute redirect (a `/` string or a
-// `UrlTree`, as here) into another redirect by restarting from the root; it
-// does not follow a relative one, which is re-matched with redirects off and
-// falls through to the wildcard. One hop is the one shape that works for both.
-// The run id joins whatever else the bookmark carried (a tab, a filter, a
-// fragment) rather than replacing it.
-const redirectToStrategyLabRun = redirectKeepingState(["/strategy-lab"], {
-  set: (params) => ({ run: String(params["id"] ?? "") }),
-});
+// The old Strategy Lab, Grid Search and Walk-Forward addresses are no longer
+// pages. Each resolves the owner of what it names from the stored record (the
+// run's or the search's own strategy) in its resolver, and ends on that
+// strategy's Explore in one redirect, with the query and fragment it carried.
+// A record that names no registered strategy fails in place, keeping its id;
+// an address that names none opens a chooser. The persisted-run addresses
+// (strategy-lab/runs/:id and the older engine/runs/:id bookmark) each carry
+// the resolver themselves, so a bookmark lands in one hop (PRD #3490 R32)
+// rather than through a redirect to another redirect.
+const loadExploreEntry = () =>
+  import("./signal-strategies/explore/entry/explore-entry.component").then(
+    (module) => module.ExploreEntryComponent,
+  );
+const backtestEntry = {
+  resolve: { entry: lazyEntryResolver((resolvers) => resolvers.resolveBacktestEntry) },
+  loadComponent: loadExploreEntry,
+} satisfies Route;
+
+// The retired Golden Search and Strategy Validation pages end at the owning
+// strategy's Golden or Proof in one redirect, the strategy named by the stored
+// study or by the link. An address that names none opens a chooser, never a
+// guessed strategy. The study address carries the resolver itself, for the same
+// reason as the run addresses above.
+const loadGoldenEntry = () =>
+  import("./signal-strategies/golden/entry/golden-entry.component").then(
+    (module) => module.GoldenEntryComponent,
+  );
+const goldenStudiesEntry = {
+  resolve: { entry: lazyGoldenEntryResolver((resolvers) => resolvers.resolveGoldenStudiesEntry) },
+  loadComponent: loadGoldenEntry,
+} satisfies Route;
 
 // The retired broker-wide choosers (Bots, Gallery, Settings and
 // Configuration) end at the account list. Their query and fragment go with
@@ -110,12 +131,23 @@ export const routes: Routes = [
     component: EntryComponent,
     data: { fullBleed: true, chromeless: true },
   },
+  // The engine and LEAN aliases keep their query and fragment to `strategy-lab`,
+  // which resolves them like any other Strategy Lab address.
   { path: "lean-lab", redirectTo: "strategy-lab", pathMatch: "full" },
   {
     path: "strategy-docs",
     loadComponent: () =>
       import("./components/strategy-docs/strategy-docs.component").then(
         (m) => m.StrategyDocsComponent
+      ),
+  },
+  {
+    // The Signal strategies place: the registry list, the Recency Chart
+    // comparison and one strategy's workspace (ADR 0084).
+    path: "signal-strategies",
+    loadChildren: () =>
+      import("./signal-strategies/signal-strategies.routes").then(
+        (m) => m.SIGNAL_STRATEGIES_ROUTES
       ),
   },
   {
@@ -208,14 +240,7 @@ export const routes: Routes = [
         "./components/data-quality/data-quality-docs/data-quality-docs.component"
       ).then((m) => m.DataQualityDocsComponent),
   },
-  {
-    // The workbench and this URL must be the SAME route config: a different
-    // one would destroy and recreate StrategyLabComponent, tearing down its
-    // component-scoped config store and runner while a run is in flight.
-    path: "strategy-lab/runs/:id",
-    redirectTo: redirectToStrategyLabRun,
-    pathMatch: "full",
-  },
+  { path: "strategy-lab/runs/:id", ...backtestEntry },
   {
     path: "strategy-lab/docs",
     loadComponent: () =>
@@ -223,42 +248,19 @@ export const routes: Routes = [
         (m) => m.StrategyLabAnalyticalManualComponent
       ),
   },
-  {
-    path: "strategy-lab",
-    data: { fullBleed: true },
-    loadComponent: () =>
-      import("./components/strategy-lab/strategy-lab.component").then(
-        (m) => m.StrategyLabComponent
-      ),
-  },
+  { path: "strategy-lab", ...backtestEntry },
   {
     path: "grid-search",
-    loadComponent: () =>
-      import("./components/grid-search/grid-search-page.component").then(
-        (m) => m.GridSearchPageComponent
-      ),
+    resolve: { entry: lazyEntryResolver((resolvers) => resolvers.resolveSweepEntry) },
+    loadComponent: loadExploreEntry,
   },
   {
     path: "walk-forward",
-    loadComponent: () =>
-      import("./components/walk-forward-study/walk-forward-study-page.component").then(
-        (m) => m.WalkForwardStudyPageComponent
-      ),
+    resolve: { entry: lazyEntryResolver((resolvers) => resolvers.resolveWalkForwardEntry) },
+    loadComponent: loadExploreEntry,
   },
-  {
-    path: "golden-search",
-    loadComponent: () =>
-      import("./components/golden-search/golden-search-page.component").then(
-        (m) => m.GoldenSearchPageComponent
-      ),
-  },
-  {
-    path: "golden-search/:studyId",
-    loadComponent: () =>
-      import("./components/golden-search/golden-search-page.component").then(
-        (m) => m.GoldenSearchPageComponent
-      ),
-  },
+  { path: "golden-search", ...goldenStudiesEntry },
+  { path: "golden-search/:studyId", ...goldenStudiesEntry },
   {
     path: "options-setups",
     loadChildren: () =>
@@ -286,10 +288,8 @@ export const routes: Routes = [
   },
   {
     path: "strategy-validation",
-    loadComponent: () =>
-      import(
-        "./components/strategy-validation/strategy-validation.component"
-      ).then((m) => m.StrategyValidationComponent),
+    resolve: { entry: lazyGoldenEntryResolver((resolvers) => resolvers.resolveValidationEntry) },
+    loadComponent: loadGoldenEntry,
   },
   {
     path: "engine/docs",
@@ -301,13 +301,7 @@ export const routes: Routes = [
     redirectTo: "strategy-lab/docs",
     pathMatch: "full",
   },
-  {
-    // Redirects straight to the final destination (not to strategy-lab/runs/:id)
-    // for the same reason as that route: a redirect lands in one hop.
-    path: "engine/runs/:id",
-    redirectTo: redirectToStrategyLabRun,
-    pathMatch: "full",
-  },
+  { path: "engine/runs/:id", ...backtestEntry },
   {
     path: "engine",
     redirectTo: "strategy-lab",

@@ -73,6 +73,7 @@ function baseRun(over: Partial<BacktestRunSummary> = {}): BacktestRunSummary {
     verdictGrade: null,
     verdictSignal: null,
     parityGroupId: null,
+    customSource: false,
     notes: null,
     dataPolicy: {
       source: "polygon",
@@ -92,11 +93,13 @@ function baseRun(over: Partial<BacktestRunSummary> = {}): BacktestRunSummary {
   };
 }
 
+const STRATEGY = "sma_crossover";
+
 const FAKE_RUNS: BacktestRunSummary[] = [
-  baseRun({ id: 30, strategyName: "sma_crossover" }),
+  baseRun({ id: 30, strategyName: STRATEGY }),
   baseRun({
     id: 31,
-    strategyName: "rsi_mean_reversion",
+    strategyName: STRATEGY,
     engine: "LEAN",
     source: "lean-sidecar",
     endDate: 1736139600000,
@@ -107,9 +110,12 @@ const FAKE_RUNS: BacktestRunSummary[] = [
   }),
 ];
 
+/** A run service that filters by strategy the way the server does, before it limits. */
 function makeRunsService(runs: BacktestRunSummary[] = FAKE_RUNS) {
   return {
-    list: vi.fn(() => of(runs)),
+    list: vi.fn((_engine: unknown, _limit: unknown, strategy: string | null = null) =>
+      of(runs.filter((run) => strategy === null || run.strategyName === strategy)),
+    ),
     get: vi.fn(),
     updateNotes: vi.fn((id: number, notes: string) => of({ id, notes })),
   };
@@ -130,6 +136,7 @@ async function setup(
     ],
   }).compileComponents();
   const fixture = TestBed.createComponent(EngineLabRunHistoryComponent);
+  fixture.componentRef.setInput("strategyKey", STRATEGY);
   fixture.detectChanges();
   await fixture.whenStable();
   fixture.detectChanges();
@@ -143,24 +150,23 @@ describe("EngineLabRunHistoryComponent", () => {
     fakeJobsSignal.set([]);
   });
 
-  it("renders the default run history: every engine's runs as one fixed page, with each row's strategy, symbol, bars summary, open-at-end note and Mark golden", async () => {
+  it("renders the strategy's run history: every engine's runs as one fixed page, with each row's strategy, symbol, bars summary, open-at-end note and Select baseline run", async () => {
     const runs = makeRunsService();
     const fixture = await setup(runs);
     const element = fixture.nativeElement as HTMLElement;
     const html = element.textContent ?? "";
     const buttons = Array.from(element.querySelectorAll("button")).map((button) => button.textContent?.trim());
 
-    expect.soft(runs.list, "lists every engine's runs by default (All filter) as one fixed page").toHaveBeenCalledWith(null, HISTORY_PAGE_SIZE);
-    expect.soft(html, "renders strategy names from mapped rows (first row)").toContain("sma_crossover");
-    expect.soft(html, "renders strategy names from mapped rows (second row)").toContain("rsi_mean_reversion");
+    expect.soft(runs.list, "lists every engine's runs of the strategy by default (All filter) as one fixed page").toHaveBeenCalledWith(null, HISTORY_PAGE_SIZE, STRATEGY);
+    expect.soft(html, "renders strategy names from mapped rows").toContain("sma_crossover");
     expect.soft(html, "renders the symbol stored on the run").toContain("AAPL");
     expect.soft(html, "renders the DataPolicy bars summary with explicit input and strategy cadences").toContain("Input M1 / Strategy M15");
     expect.soft(html, "renders 'Open at end' for rows with a synthetic exit").toContain("Open at end");
-    expect.soft(buttons, "offers Mark golden for a Python run when the catalog was read and does not list it").toContain("Mark golden");
-    expect.soft(html, "does not say the Golden catalog could not be read when it was read").not.toContain("Golden catalog could not be read");
+    expect.soft(buttons, "offers Select baseline run for a Python run when the catalog was read and does not list it").toContain("Select baseline run");
+    expect.soft(html, "does not say the selected baseline runs could not be read when it was read").not.toContain("selected baseline runs could not be read");
   });
 
-  it("badges a designated run and opens its Golden Validation workflow", async () => {
+  it("badges a designated run and opens its configuration review", async () => {
     goldenValidationMock.list.mockReturnValue(of([{ source_run_id: 30, state: "candidate" }]));
     const fixture = await setup();
     const requested = vi.fn();
@@ -168,13 +174,13 @@ describe("EngineLabRunHistoryComponent", () => {
     fixture.detectChanges();
 
     const button = Array.from(fixture.nativeElement.querySelectorAll("button"))
-      .find((entry) => (entry as HTMLButtonElement).textContent?.includes("Golden · Candidate")) as HTMLButtonElement;
+      .find((entry) => (entry as HTMLButtonElement).textContent?.includes("Baseline run · Candidate")) as HTMLButtonElement;
     button.click();
 
     expect(requested).toHaveBeenCalledWith(30);
   });
 
-  it("marks a Golden badge whose review no longer applies to the current evidence", async () => {
+  it("marks a baseline badge whose review no longer applies to the current evidence", async () => {
     goldenValidationMock.list.mockReturnValue(of([
       { source_run_id: 30, state: "accepted_engine_agreement", review_is_current: false },
       { source_run_id: 31, state: "accepted_engine_agreement", review_is_current: true },
@@ -183,35 +189,47 @@ describe("EngineLabRunHistoryComponent", () => {
     const badges = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>("button.badge--golden"));
 
     expect(badges.map((badge) => badge.textContent?.trim())).toEqual([
-      "Golden · Accepted Engine Agreement · review no longer applies",
-      "Golden · Accepted Engine Agreement",
+      "Baseline run · Accepted Engine Agreement · review no longer applies",
+      "Baseline run · Accepted Engine Agreement",
     ]);
   });
 
-  it("does not offer Mark golden, and says so, when the Golden catalog could not be read", async () => {
+  it("does not offer Select baseline run, and says so, when the selected baseline runs could not be read", async () => {
     goldenValidationMock.list.mockReturnValue(throwError(() => new Error("catalog down")));
     const fixture = await setup();
     const element = fixture.nativeElement as HTMLElement;
     const buttons = Array.from(element.querySelectorAll("button")).map((button) => button.textContent?.trim());
 
-    expect(buttons).not.toContain("Mark golden");
-    expect(element.textContent).toContain("Golden catalog could not be read");
+    expect(buttons).not.toContain("Select baseline run");
+    expect(element.textContent).toContain("selected baseline runs could not be read");
     expect(element.textContent).toContain("sma_crossover");
   });
 
-  it("says Golden badges stop at the newest 100 designated runs when the catalog is exactly that long", async () => {
+  it("says baseline badges stop at the newest 100 selected runs when the catalog is exactly that long", async () => {
     goldenValidationMock.list.mockReturnValue(
       of(Array.from({ length: 100 }, (_, index) => ({ source_run_id: 5000 + index, state: "candidate" }))),
     );
     const fixture = await setup();
 
-    expect((fixture.nativeElement as HTMLElement).textContent).toContain("newest 100 Validation Golden Runs");
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain("newest 100 selected baseline runs");
   });
 
   it("renders the empty state when no rows are returned", async () => {
     const fixture = await setup(makeRunsService([]));
     const html = (fixture.nativeElement as HTMLElement).textContent ?? "";
     expect(html).toContain("No runs yet");
+  });
+});
+
+describe("EngineLabRunHistoryComponent — one strategy's history", () => {
+  it("asks the server for only that strategy's runs, so a busy fleet never cuts it short", async () => {
+    const service = makeRunsService([...FAKE_RUNS, baseRun({ id: 32, strategyName: "rsi_mean_reversion" })]);
+    const fixture = await setup(service);
+    const html = (fixture.nativeElement as HTMLElement).textContent ?? "";
+
+    expect(service.list).toHaveBeenCalledWith(null, HISTORY_PAGE_SIZE, STRATEGY);
+    expect(html).toContain("sma_crossover");
+    expect(html).not.toContain("rsi_mean_reversion");
   });
 });
 
@@ -228,7 +246,7 @@ describe("EngineLabRunHistoryComponent — filter dropdown", () => {
     fixture.detectChanges();
     await fixture.whenStable();
 
-    expect(runs.list).toHaveBeenLastCalledWith(engine, HISTORY_PAGE_SIZE);
+    expect(runs.list).toHaveBeenLastCalledWith(engine, HISTORY_PAGE_SIZE, STRATEGY);
   });
 });
 

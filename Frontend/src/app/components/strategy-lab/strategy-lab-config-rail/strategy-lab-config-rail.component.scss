@@ -84,7 +84,17 @@ input {
     cursor: pointer;
 
     &:last-child { border-right: 0; }
+
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
+    }
   }
+}
+
+.rail-field__locked {
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
 }
 
 .engine-choice__active {
