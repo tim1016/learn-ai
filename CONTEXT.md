@@ -1620,7 +1620,7 @@ these are the others.
 
 - **Instrument place** — one symbol, opened from Markets, with its tabs: Chart,
   Returns, Options and Data. Its identity is the symbol, not a page that happens to
-  show it. Build dataset is an action on it, not a tab.
+  show it. Build dataset and Saved setups are actions on it, not tabs.
   _Avoid_: stock page, ticker page, symbol workspace.
 - **Instrument context** — what an instrument's tabs share: the window, the bar
   timeframe and the session. It lives in the address (`?from=&to=&timeframe=&session=`),

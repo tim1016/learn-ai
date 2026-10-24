@@ -438,7 +438,8 @@ current budget, risk-edit and mode behavior is recorded in ADRs 0059 and 0060.
 Tracked open items left by the Data Lab redesign PR
 (its PRD is in Git history). Implemented:
 child routes Explore/Export/Validate (Explore is now the instrument place's
-Chart tab, ADR 0084), workspace store, legacy URL ingress,
+Chart tab and Export its Build dataset page, ADR 0084; only Validate is still
+under `/data-lab`), workspace store, legacy URL redirects,
 searchable indicator picker, theme-token chart colors, `POST /api/dataset/plan`,
 additive `DataLabSession` ms-UTC columns (dual-read).
 
@@ -457,21 +458,26 @@ additive `DataLabSession` ms-UTC columns (dual-read).
   GraphQL projection this entry used to name is gone (ADR 0081); the REST
   response reads `created_at_ms`/`updated_at_ms`. The numeric-only write flip
   lands with the §13 step 5/6 migration, now a numbered SQL file.
-- **Legacy indicator recipe/param query keys are dropped by the ingress, not
+- **Legacy indicator recipe/param query keys are named as ignored, not
   decoded (low).** PRD §14 routes legacy recipe URLs through a bounded
-  recipe-schema validator; until that validator exists the ingress keeps
-  scope keys and drops recipe keys with a visible warning, so FR-014 is
-  partially met for recipe-carrying bookmarks.
+  recipe-schema validator; until that validator exists the legacy redirect
+  carries scope keys to the instrument place and leaves recipe keys in the
+  address, where the place names them in its "Migrated link" notice, so FR-014
+  is partially met for recipe-carrying bookmarks.
 - **Plan↔ZIP column parity is structural (shared function), not
   artifact-tested (low).** The plan endpoint test pins the receipt to
   `project_output_columns` — the same function the CSV/metadata/ZIP paths
   call — but no test yet diffs a generated ZIP manifest itself against the
   receipt.
-- **Legacy `sessionId` URL param is preserved but not auto-loaded (low).** The
-  Saved setups drawer is the only session-load path; auto-load was deferred to
-  avoid URL state triggering fetches.
-- **Export and Validate templates still exceed the ~80-line path rule
-  (low).** The Export four-section form (~230 lines) and Validate (~115
+- **A legacy address that names only a saved setup ends at Markets (low).**
+  `/data-lab?sessionId=<id>` with no `ticker` leads to the Markets list, which
+  does not read the id: the setup's instrument is stored evidence, and a
+  redirect cannot read it. With a `ticker` the instrument opens and the setup is
+  opened under the instrument its record names. The old Data Lab never wrote a
+  `sessionId` into an address, so only a hand-made link is affected; the setup
+  opens from its instrument's Saved setups.
+- **Build dataset and Validate templates still exceed the ~80-line path rule
+  (low).** The Build dataset four-section form (~230 lines) and Validate (~115
   lines) remain single templates — same follow-up refactor class as the
   shell split.
 - **Responsive overflow assertions need a browser pass (medium).** The §8
@@ -499,15 +505,12 @@ re-arms the server-authored timeframe auto-correct, and numeric
   equal emission loads nothing, a request a newer one replaced is ended, and
   the one-shot timeframe auto-correct commits the recommendation to the
   address. A fetch that fails to load anything leaves the stale flag set —
-  it clears only when replacement data settles. The saved-setups drawer
-  still lives in the Data Lab shell, which no longer hosts a chart, so a saved
-  chart snapshot is staged there and rendered nowhere until saved scopes open
-  under their instrument (#3504).
+  it clears only when replacement data settles.
 - **Committed-window anchors are day-shaped, not session-shaped (interim,
   low).** The Data Lab commits `startMsUtc` = UTC midnight of the from-date
   and `endMsUtc` = the to-date's final UTC instant (23:59:59.999) — applied
-  by every date-intent→ms boundary (quick ranges, From/To inputs, legacy
-  URL ingress, saved-session load, the Edit-scope drawer). The chart floors
+  by every date-intent→ms boundary (quick ranges, From/To inputs, the
+  instrument's address, saved-setup opening). The chart floors
   both to inclusive UTC trading dates; half-open instant readers (the news
   query, dataset numeric overrides) get a non-degenerate window covering the
   full end date. The canonical half-open session-open resolution (PRD §13
