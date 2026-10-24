@@ -13,16 +13,20 @@
   dataSourceWindows="date-et"
   (run)="runAnalysis()"
 >
-  <!-- Sampling card hidden: the study reads 1-minute regular-hours bars whatever is picked,
+  <!-- The Sampling card offers the session and nothing else: the study reads 1-minute bars whatever is picked,
        so the picker offers no other bars. -->
-  <app-ticker-range-picker
-    studyInstrument
-    [(value)]="range"
-    dateBounds="provider"
-    presentation="embedded"
-    [hideSampling]="true"
-    [availableResolutions]="['minute']"
-  />
+  <div studyInstrument>
+    <app-ticker-range-picker
+      [value]="shownRange()"
+      (valueChange)="range.set($event)"
+      dateBounds="provider"
+      presentation="embedded"
+      sessionMode="enabled"
+      [showAutoFetch]="false"
+      [availableResolutions]="['minute']"
+    />
+    <app-lake-holding-notice [holding]="holding" />
+  </div>
 
   <div studyConfig class="indicator-reliability study-config">
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -136,8 +140,8 @@
     }
 
     <!-- A run the lake refused: no result, the reason, and what admission reached. Any other failure is a message. -->
-    @if (refusal(); as refused) {
-      <app-lake-study-source [refusal]="refused.refusal" />
+    @if (refusal(); as shown) {
+      <app-lake-study-source [refusal]="shown.refused.refusal" [session]="shown.session" />
     } @else if (error()) {
       <p-message severity="error" class="mb-4">{{ error()! }}</p-message>
     }

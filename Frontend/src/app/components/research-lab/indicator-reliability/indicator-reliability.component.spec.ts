@@ -3,6 +3,8 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { HttpTestingController, provideHttpClientTesting, type TestRequest } from '@angular/common/http/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideRouter } from '@angular/router';
+import { screen, within } from '@testing-library/angular';
+import userEvent from '@testing-library/user-event';
 
 import { provideFakeDateWorld } from '../../../shared/date-picker/testing/fake-trading-calendar';
 import {
@@ -11,32 +13,52 @@ import {
 } from '../../../shared/ticker-catalog/testing/fake-ticker-catalog';
 import { fakeVendorCatalog, provideFakeVendorCatalog } from '../../../shared/symbol-catalog/testing/fake-symbol-catalog';
 import { environment } from '../../../../environments/environment';
-import { RECORD_ID, storedRecord } from '../../../research/stored-study/testing/stored-study-fixtures';
+import { RECORD_ID, RELIABILITY_INPUTS, storedRecord } from '../../../research/stored-study/testing/stored-study-fixtures';
+import { DataLakeService, type DataLakeRead, type InstrumentDataReport } from '../../../shared/data-lake';
+import type { BackfillJobRun } from '../../../shared/data-lake/backfill-job-runner';
+import { TradeBackfillRunner, type TradeBackfillEnd } from '../../../shared/data-lake/trade-backfill-runner';
+import type { TradeBackfillWindow } from '../../../shared/data-lake/trade-backfill-spec';
+import { heldReport } from '../../../shared/data-lake/testing/instrument-data-report';
 import { IndicatorReliabilityComponent } from './indicator-reliability.component';
 
 describe('IndicatorReliabilityComponent (Indicator reliability study)', () => {
   let fixture: ComponentFixture<IndicatorReliabilityComponent>;
   let component: IndicatorReliabilityComponent;
   let http: HttpTestingController;
+  // The lake's count of the sessions the run needs (read once per span), and the shared capture.
+  let instrumentData: ReturnType<typeof vi.fn<(query: unknown) => Promise<DataLakeRead<InstrumentDataReport>>>>;
+  let captureRun: ReturnType<typeof vi.fn<(select: (defaults: never) => TradeBackfillWindow, accepted: (job: BackfillJobRun) => boolean | Promise<boolean>) => Promise<TradeBackfillEnd>>>;
 
   const root = () => fixture.nativeElement as HTMLElement;
   const runs = () => http.match((request) => request.method === 'POST' && request.url.endsWith('/api/research/indicator-reliability'));
   const paramReads = () => http.match((request) => request.url.includes('/api/research/indicator-params/'));
+  const spanReads = () => http.match((request) => request.method === 'POST' && request.url.endsWith('/api/research/indicator-reliability/span'));
   const SCHEMA = [{ name: 'length', type: 'int', default: 14, min: 1, max: 200, description: 'Lookback.' }];
-  /** The indicator's parameters arrive; until they do, Run study is off. */
+  /**
+   * What the server names for the default window (2024-01-02 to 2024-06-28) and RSI(14): one lead-in session, Friday
+   * 2023-12-29, ahead of it. ET midnights, `int64 ms UTC`.
+   */
+  const SPAN = { start_ms: Date.UTC(2023, 11, 29, 5), end_ms: Date.UTC(2024, 5, 28, 4), warmup_sessions: 1 };
+  /** The indicator's parameters arrive; until they do, Run study is off. The span read they let go out is answered too. */
   const answerParams = () => {
     for (const request of paramReads()) request.flush(SCHEMA);
     fixture.detectChanges();
+    for (const request of spanReads()) request.flush(SPAN);
   };
   const runButton = () => root().querySelector<HTMLButtonElement>('button.study-run');
 
   beforeEach(async () => {
+    // Left alone, the lake holds every session the run needs, so only the specs about the count see a warning.
+    instrumentData = vi.fn().mockResolvedValue({ kind: 'ok', value: heldReport({ sessions: 125 }) });
+    captureRun = vi.fn().mockResolvedValue({ kind: 'completed', failure: null });
     await TestBed.configureTestingModule({
       imports: [IndicatorReliabilityComponent],
       providers: [
         provideHttpClient(),
         provideHttpClientTesting(),
         provideRouter([]),
+        { provide: DataLakeService, useValue: { instrumentData } },
+        { provide: TradeBackfillRunner, useValue: { run: captureRun } },
         provideFakeTickerCatalog(
           fakeTickerCatalog([{ symbol: 'SPY', name: 'SPDR S&P 500 ETF Trust', exchange: 'ARCA' }]),
         ),
@@ -51,11 +73,20 @@ describe('IndicatorReliabilityComponent (Indicator reliability study)', () => {
     fixture.detectChanges();
   });
 
-  it('says its session and bars are fixed instead of offering controls for them', () => {
-    expect.soft(root().querySelector('app-sampling-card'), 'no resolution or session control').toBeNull();
+  it('offers the session as its one control, regular hours chosen, and says the bars are fixed instead of offering other sizes', () => {
+    const rth = screen.getByRole('button', { name: 'RTH' }) as HTMLButtonElement;
+    const ext = screen.getByRole('button', { name: 'Ext' }) as HTMLButtonElement;
+
+    expect.soft(rth.disabled).toBe(false);
+    expect.soft(ext.disabled).toBe(false);
+    expect.soft(rth.getAttribute('aria-pressed'), 'regular hours is what the study has always computed on').toBe('true');
+    expect.soft(ext.getAttribute('aria-pressed')).toBe('false');
+    expect.soft(Array.from(root().querySelectorAll('.res-btn')).map((el) => el.textContent?.trim()), 'one-minute bars only').toEqual(['1m']);
+    expect.soft(root().querySelector('select[aria-label="Bar multiplier"]'), 'no other bar length is offered').toBeNull();
+    expect.soft(root().querySelector('.autofetch'), 'the study fetches nothing on its own').toBeNull();
     const fixed = root().querySelector('[data-testid="study-constraints"]')?.textContent?.replace(/\s+/g, ' ') ?? '';
-    expect.soft(fixed).toContain('regular trading hours, fixed');
     expect.soft(fixed).toContain('1 minute, fixed');
+    expect.soft(fixed, 'the session is a choice now').not.toContain('regular trading hours, fixed');
     // The default window is long enough for the picker's hour-bars hint.
     expect.soft(root().textContent, 'no hint to switch to bars the study does not read').not.toContain('Switch to hour');
   });
@@ -133,6 +164,8 @@ describe('IndicatorReliabilityComponent (Indicator reliability study)', () => {
     for (const request of http.match((r) => r.url.includes('/api/research/indicator-params/'))) {
       request.flush([{ name: 'length', type: 'int', default: 10, min: 1, max: 200, description: 'Lookback.' }]);
     }
+    fixture.detectChanges();
+    for (const request of spanReads()) request.flush(SPAN);
     await fixture.whenStable();
 
     expect(component.range()).toMatchObject({ symbol: 'SPY', from: '2024-01-02', to: '2024-03-28' });
@@ -145,6 +178,230 @@ describe('IndicatorReliabilityComponent (Indicator reliability study)', () => {
 
     const [run] = runs();
     expect(run.request.body).toMatchObject({ indicator_name: 'rsi', horizons: [5, 1], rerun_of: RECORD_ID });
+  });
+
+  describe('the session', () => {
+    /** Presses a button of the page and lets the page settle. */
+    async function press(name: string): Promise<void> {
+      await userEvent.setup().click(screen.getByRole('button', { name }));
+      await fixture.whenStable();
+      fixture.detectChanges();
+    }
+    const summary = () => root().querySelector('.study-run__summary')?.textContent?.replace(/\s+/g, ' ').trim();
+
+    it('sends the session that was pressed, and regular hours when nothing was', async () => {
+      answerParams();
+      const sent: unknown[] = [];
+      const runOnce = async () => {
+        runButton()?.click();
+        for (const request of runs()) {
+          sent.push((request.request.body as { session: string }).session);
+          request.flush({ detail: 'stop here' }, { status: 400, statusText: 'Bad Request' });
+        }
+        await fixture.whenStable();
+        fixture.detectChanges();
+      };
+
+      await runOnce();
+      await press('Ext');
+      await runOnce();
+      await press('RTH');
+      await runOnce();
+
+      expect(sent).toEqual(['rth', 'extended', 'rth']);
+    });
+
+    it('names the session in the sentence that says what is about to run', async () => {
+      answerParams();
+      expect.soft(summary()).toContain('regular hours');
+
+      await press('Ext');
+
+      expect.soft(summary()).toContain('extended hours');
+      expect.soft(summary()).not.toContain('regular hours');
+    });
+
+    it('reads a range that names no session as regular hours, in the sentence and in the request', () => {
+      component.range.set({ symbol: 'AAPL', from: '2024-01-02', to: '2024-06-28', resolution: 'minute' });
+      answerParams();
+
+      expect.soft(summary()).toContain('regular hours');
+      expect.soft(screen.getByRole('button', { name: 'RTH' }).getAttribute('aria-pressed'), 'the picker shows what the run sends').toBe('true');
+      runButton()?.click();
+      expect(runs()[0].request.body).toMatchObject({ session: 'rth' });
+    });
+
+    describe('a restored saved run', () => {
+      const recordUrl = `${environment.pythonServiceUrl}/api/research/study-records/indicator-reliability/${RECORD_ID}`;
+
+      async function openSaved(inputs: object): Promise<void> {
+        fixture.componentRef.setInput('rerun', RECORD_ID);
+        fixture.detectChanges();
+        http.expectOne(recordUrl).flush(storedRecord('indicator-reliability', { inputs: inputs as never }));
+        await new Promise((resolve) => setTimeout(resolve)); // the read resolves in a later task than the flush
+        await fixture.whenStable();
+        fixture.detectChanges();
+        answerParams();
+        await fixture.whenStable();
+      }
+
+      it.each([
+        ['regular hours', 'rth', 'RTH'],
+        ['extended hours', 'extended', 'Ext'],
+      ])('fills the session the saved run computed on: %s', async (_name, session, button) => {
+        await openSaved({ ...RELIABILITY_INPUTS, session });
+
+        expect(component.range().session).toBe(session);
+        expect(screen.getByRole('button', { name: button }).getAttribute('aria-pressed')).toBe('true');
+      });
+
+      it('fills regular hours for a saved run that names no session, which is what the study computed on before it did', async () => {
+        const unnamed = Object.fromEntries(Object.entries(RELIABILITY_INPUTS).filter(([key]) => key !== 'session'));
+        await press('Ext');
+
+        await openSaved(unnamed);
+
+        expect(component.range().session).toBe('rth');
+      });
+
+      it('fills nothing when the saved run’s session is not one this page offers', async () => {
+        const before = component.range();
+
+        await openSaved({ ...RELIABILITY_INPUTS, session: 'overnight' });
+
+        expect(component.range()).toBe(before);
+        expect(root().querySelector('[data-testid="study-prefill"]')?.textContent).toContain('could not be read');
+      });
+    });
+  });
+
+  describe('sessions the lake does not hold yet', () => {
+    const warning = () => screen.queryByText(/in the lake yet/);
+    it('reads nothing while the indicator’s parameters have not arrived', async () => {
+      await fixture.whenStable();
+
+      expect(spanReads()).toHaveLength(0);
+      expect(instrumentData).not.toHaveBeenCalled();
+    });
+
+    it('asks the server which sessions the run needs, then counts the lake over that span: the lead-in the server sized, not the typed start', async () => {
+      for (const request of paramReads()) request.flush(SCHEMA);
+      fixture.detectChanges();
+
+      const [span, ...others] = spanReads();
+      expect(others).toHaveLength(0);
+      expect(span.request.body).toEqual({
+        symbol: 'AAPL', from_date: '2024-01-02', to_date: '2024-06-28', timespan: 'minute', multiplier: 1,
+        indicator_name: 'rsi', indicator_params: { length: 14 },
+      });
+      expect(instrumentData, 'the lake is asked about nothing until the span is named').not.toHaveBeenCalled();
+
+      span.flush(SPAN);
+      await vi.waitFor(() => expect(instrumentData).toHaveBeenCalledTimes(1));
+
+      expect(instrumentData).toHaveBeenCalledWith({ symbol: 'AAPL', from: '2023-12-29', to: '2024-06-28', tree: 'polygon_split_adjusted' });
+      await fixture.whenStable();
+      fixture.detectChanges();
+      expect(warning(), 'the lake holds it all').toBeNull();
+    });
+
+    it('warns how many sessions the lake lacks over that span, with the action that captures them, and Run study stays on', async () => {
+      instrumentData.mockResolvedValue({ kind: 'ok', value: heldReport({ sessions: 125, missing: 30 }) });
+      answerParams();
+      await vi.waitFor(() => expect(instrumentData).toHaveBeenCalledTimes(1));
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(warning()?.textContent).toBe('30 of 125 sessions aren’t in the lake yet.');
+      expect(screen.getByText('The first run fetches them one session at a time, so it will be slow.')).toBeTruthy();
+      expect((screen.getByRole('button', { name: 'Run study' }) as HTMLButtonElement).disabled).toBe(false);
+      expect(captureRun, 'nothing captures by itself').not.toHaveBeenCalled();
+
+      let asked: TradeBackfillWindow | null = null;
+      captureRun.mockImplementation(async (select) => {
+        asked = select(undefined as never);
+        return { kind: 'completed', failure: null } as TradeBackfillEnd;
+      });
+      const named = (instrumentData.mock.results[0].value as Promise<{ value: InstrumentDataReport }>);
+      const fill = (await named).value.fill_window;
+      await userEvent.setup().click(screen.getByRole('button', { name: 'Capture 30 sessions' }));
+
+      expect(asked).toEqual({
+        symbol: 'AAPL', price_adjustment_mode: 'polygon_split_adjusted',
+        start_trading_date_ms: fill?.start_trading_date_ms, end_trading_date_ms: fill?.end_trading_date_ms,
+      });
+    });
+
+    it('says a span the server could not name could not be checked, and not that nothing is missing', async () => {
+      for (const request of paramReads()) request.flush(SCHEMA);
+      fixture.detectChanges();
+      for (const request of spanReads()) request.flush({ detail: 'the calendar is unavailable' }, { status: 503, statusText: 'Unavailable' });
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(screen.getByText('Could not check which of this run’s sessions the lake holds.')).toBeTruthy();
+      expect(screen.getByText(/the calendar is unavailable/)).toBeTruthy();
+      expect(instrumentData).not.toHaveBeenCalled();
+      expect(warning()).toBeNull();
+      expect((screen.getByRole('button', { name: 'Run study' }) as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    it('reads the span again for another instrument, window or indicator parameter, not for another session', async () => {
+      answerParams();
+      await vi.waitFor(() => expect(instrumentData).toHaveBeenCalledTimes(1));
+      await fixture.whenStable();
+
+      await userEvent.setup().click(screen.getByRole('button', { name: 'Ext' }));
+      fixture.detectChanges();
+      await fixture.whenStable();
+      expect(spanReads(), 'the lead-in does not depend on the session').toHaveLength(0);
+      expect(instrumentData).toHaveBeenCalledTimes(1);
+
+      component.paramValues.set({ length: 200 });
+      fixture.detectChanges();
+      const [another] = spanReads();
+      expect(another.request.body).toMatchObject({ indicator_params: { length: 200 } });
+      another.flush({ start_ms: Date.UTC(2023, 11, 27, 5), end_ms: SPAN.end_ms, warmup_sessions: 3 });
+      await vi.waitFor(() => expect(instrumentData).toHaveBeenCalledTimes(2));
+
+      expect(instrumentData).toHaveBeenLastCalledWith({ symbol: 'AAPL', from: '2023-12-27', to: '2024-06-28', tree: 'polygon_split_adjusted' });
+    });
+
+    it('draws no count for a span that answers inputs since changed', async () => {
+      instrumentData.mockResolvedValue({ kind: 'ok', value: heldReport({ sessions: 125, missing: 30 }) });
+      for (const request of paramReads()) request.flush(SCHEMA);
+      fixture.detectChanges();
+      const [stale] = spanReads();
+
+      component.range.update((r) => ({ ...r, symbol: 'MSFT' }));
+      fixture.detectChanges();
+      stale.flush(SPAN);
+      await new Promise((resolve) => setTimeout(resolve)); // the stale answer resolves in a later task than the flush
+      fixture.detectChanges();
+
+      expect(instrumentData, 'the AAPL span is not MSFT’s').not.toHaveBeenCalled();
+      expect(warning()).toBeNull();
+      const [current] = spanReads();
+      expect(current.request.body).toMatchObject({ symbol: 'MSFT' });
+    });
+
+    it('counts again once its own run ends, because the run filled the lake', async () => {
+      instrumentData.mockResolvedValue({ kind: 'ok', value: heldReport({ sessions: 125, missing: 30 }) });
+      answerParams();
+      await vi.waitFor(() => expect(instrumentData).toHaveBeenCalledTimes(1));
+      await fixture.whenStable();
+      fixture.detectChanges();
+      expect(warning()).not.toBeNull();
+      instrumentData.mockResolvedValue({ kind: 'ok', value: heldReport({ sessions: 125 }) });
+
+      runButton()?.click();
+      runs()[0].flush({ detail: 'stop here' }, { status: 400, statusText: 'Bad Request' });
+      await vi.waitFor(() => expect(instrumentData).toHaveBeenCalledTimes(2));
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(warning()).toBeNull();
+    });
   });
 
   describe('where the bars came from (#3523)', () => {
@@ -232,6 +489,69 @@ describe('IndicatorReliabilityComponent (Indicator reliability study)', () => {
       expect(line).toContain('1 session before the window');
       expect(line, 'a window of dates carries no time of day').not.toMatch(/\d{1,2}:\d{2}/);
       expect(root().textContent).not.toContain('Warmup is');
+    });
+
+    it('sends extended hours when they are picked, and shows the extended source the run came back with', async () => {
+      answerParams();
+      await userEvent.setup().click(screen.getByRole('button', { name: 'Ext' }));
+      fixture.detectChanges();
+      runButton()?.click();
+      const [request] = runs();
+      expect(request.request.body).toMatchObject({ symbol: 'AAPL', timespan: 'minute', multiplier: 1, session: 'extended' });
+
+      request.flush(completed(dataSource({ session_policy: 'extended' })));
+      fixture.detectChanges();
+
+      expect(lines()[0].textContent).toMatch(/Session policy\s*Extended/);
+    });
+
+    describe('a shown result', () => {
+      const previous = () => screen.queryByText('Previous result');
+
+      it('is marked as from other inputs, naming the session it answers, once the session is switched', async () => {
+        run((request) => request.flush(completed(dataSource())));
+        expect.soft(previous(), 'it answers the inputs entered').toBeNull();
+
+        await userEvent.setup().click(screen.getByRole('button', { name: 'Ext' }));
+        fixture.detectChanges();
+
+        expect.soft(previous()).toBeTruthy();
+        const answered = screen.getByText('Previous result').closest('.previous-result__banner') as HTMLElement;
+        expect.soft(within(answered).getByText('Session').nextElementSibling?.textContent).toBe('regular hours');
+
+        await userEvent.setup().click(screen.getByRole('button', { name: 'RTH' }));
+        fixture.detectChanges();
+
+        expect.soft(previous(), 'switching back asks the question it answers again').toBeNull();
+      });
+    });
+
+    it('names the session a refusal judged: the one its source records, or the one asked for when nothing was read', async () => {
+      const early = 'The lake cannot admit this window: 1 of 12 sessions was captured before the session closed: 2024-03-06.';
+      answerParams();
+      await userEvent.setup().click(screen.getByRole('button', { name: 'Ext' }));
+      fixture.detectChanges();
+      runButton()?.click();
+      runs()[0].flush(
+        refused(
+          { code: 'captured_before_final', reason: early, sessions: [], sessions_total: 0, coverage: null },
+          dataSource({ session_policy: 'extended', snapshot_digest: null, effective_window: null, warmup: null, coverage: null }),
+        ),
+        { status: 409, statusText: 'Conflict' },
+      );
+      fixture.detectChanges();
+
+      expect.soft(root().textContent).toContain('No result: the lake could not supply this study its data for extended hours.');
+
+      const before = 'Daily bars are not read from the lake.';
+      runButton()?.click();
+      runs()[0].flush(
+        refused({ code: 'resolution_unsupported', reason: before, sessions: [], sessions_total: 0, coverage: null }, null),
+        { status: 409, statusText: 'Conflict' },
+      );
+      fixture.detectChanges();
+
+      expect.soft(root().textContent, 'nothing was read, so the session the run asked for is named').toContain('its data for extended hours.');
     });
 
     it('warns, in the server\'s words, that the warmup was short when the lake could not supply the whole lead-in', () => {

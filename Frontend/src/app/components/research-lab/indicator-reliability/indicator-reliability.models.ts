@@ -5,6 +5,9 @@ import type { components } from '../../../api/broker.types';
 /** The `data_source` of a reliability result: the shared lake block plus the warmup report (#3523). */
 export type ReliabilityDataSource = components['schemas']['ReliabilityDataSource-Output'];
 
+/** The sessions a run asks the lake for, warmup lead-in and window, as the server sizes them (#3523). */
+export type ReliabilitySpan = components['schemas']['ReliabilitySpan'];
+
 export type StrengthLabel = 'Noise' | 'Weak' | 'Moderate' | 'Strong';
 export type StabilityLabel = 'Low' | 'Moderate' | 'High';
 export type DirectionLabel = 'Mean-Reversion' | 'Momentum' | 'None';
