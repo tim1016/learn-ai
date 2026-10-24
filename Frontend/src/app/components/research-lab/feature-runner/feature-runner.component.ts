@@ -26,8 +26,6 @@ import {
   IcCi,
   FeatureStageInfo,
   FeatureStageCriterion,
-  FeatureStudyDataSource,
-  StudyCoverageGroup,
 } from '../../../services/research.service';
 import { JobsService, JobState } from '../../../services/jobs.service';
 import {
@@ -58,6 +56,13 @@ import type {
 } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
 import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
 import { tickerRangeToWire } from '../../../utils/ticker-wire';
+import { LakeStudySourceComponent } from '../../../shared/lake-study/lake-study-source.component';
+import {
+  mapLakeStudyDataSource,
+  readLakeStudyRefusal,
+  type LakeDataSourceRaw,
+  type LakeStudyRefused,
+} from '../../../shared/lake-study/lake-study';
 
 /** Shape of the ``target`` payload emitted by ``_serialize_target`` in
  *  ``PythonDataService/app/routers/jobs.py``. Mirrors the view model's
@@ -72,41 +77,6 @@ interface FeatureResearchTargetRaw {
   total_count: number;
   valid_ratio: number;
   invalid_reason_counts: { reason: string; count: number }[];
-}
-
-/** Session counts for one group, as the lake admission reports them. */
-interface StudyCoverageGroupRaw {
-  expected_sessions: number;
-  reused: number;
-  added: number;
-  missing: number;
-  failed: number;
-  building: number;
-  corrupt: number;
-  unavailable_from_provider: number;
-}
-
-/** The ``data_source`` block of a Feature study result (``feature_study_service.data_source_block``). */
-interface FeatureStudyDataSourceRaw {
-  kind: 'lake';
-  provider: string;
-  price_adjustment_mode: string;
-  bar_minutes: number;
-  session_policy: 'extended' | 'regular';
-  window_start_ms: number;
-  window_end_ms: number;
-  warmup_sessions: number;
-  look_forward_minutes: number;
-  snapshot_digest: string | null;
-  identity_digest: string | null;
-  calculation_version: string;
-  coverage: {
-    window: StudyCoverageGroupRaw;
-    warmup: StudyCoverageGroupRaw;
-    artifacts: { fetched: number; reused: number; refreshed: number };
-  } | null;
-  bars_used: number | null;
-  cache: { hit: boolean; cached_at_ms: number | null };
 }
 
 /** Snake-case shape returned by /api/jobs-internal/feature-research worker. */
@@ -135,7 +105,7 @@ interface FeatureResearchJobResultRaw {
   feature_spec: unknown;
   validation_verdict: unknown;
   target?: FeatureResearchTargetRaw | null;
-  data_source?: FeatureStudyDataSourceRaw | null;
+  data_source?: LakeDataSourceRaw | null;
   passed_validation: boolean;
   error: string | null;
 }
@@ -156,6 +126,7 @@ interface FeatureResearchJobResultRaw {
     IndicatorConfigModalComponent,
     TickerRangePickerComponent,
     AssetIdentityComponent,
+    LakeStudySourceComponent,
   ],
   templateUrl: './feature-runner.component.html',
   styleUrls: ['./feature-runner.component.scss'],
@@ -183,8 +154,14 @@ export class FeatureRunnerComponent {
     resolution: 'minute',
     multiplier: 1,
   });
-  readonly availableMultipliers: readonly number[] = [1, 5, 15, 60, 240];
-  readonly availableResolutions: readonly Resolution[] = ['minute', 'hour', 'daily'];
+  /**
+   * The bars the backend accepts: minute bars whose length divides the study's
+   * 15-minute forward target (`SUPPORTED_BAR_MINUTES` in
+   * `feature_study_service.py`). Hourly, daily and the other multiples are
+   * refused up front, so the page does not offer them.
+   */
+  readonly availableMultipliers: readonly number[] = [1, 3, 5, 15];
+  readonly availableResolutions: readonly Resolution[] = ['minute'];
 
   /** Catalog-driven selection: indicator key + params (matches data-lab's
    *  ``IndicatorEntry`` shape). The ``featureName`` sent to the backend is
@@ -229,6 +206,8 @@ export class FeatureRunnerComponent {
   readonly jobId = signal<string | null>(null);
   readonly result = signal<ResearchResult | null>(null);
   readonly error = signal<string | null>(null);
+  /** Why the lake could not supply the window, when the run failed on that; read from the payload the failed job parked. */
+  readonly refusal = signal<LakeStudyRefused | null>(null);
   readonly formCollapsed = signal(false);
 
   /** Rolling FIFO log buffer (cap 500). */
@@ -249,18 +228,10 @@ export class FeatureRunnerComponent {
   readonly cached = computed<boolean>(() => this.job()?.cached === true);
 
   // ── Range guard ─────────────────────────────────────
-  // Minute-resolution research at 2 years exceeds ~200k bars, which overruns
-  // the backend→python keep-alive window. Cap minute studies to 180 calendar
-  // days; hour at 3 years; day unrestricted.
-  private readonly MAX_DAYS_BY_RESOLUTION: Readonly<Record<Resolution, number>> = {
-    minute: 180,
-    hour: 1095,
-    daily: Number.POSITIVE_INFINITY,
-  };
-
-  readonly maxRangeDays = computed<number>(
-    () => this.MAX_DAYS_BY_RESOLUTION[this.range().resolution] ?? 180,
-  );
+  // A minute-resolution study is capped at 180 calendar days. The cap is older
+  // than the lake path (it was sized to the provider fetch's connection window)
+  // and is kept as it was; only minute bars are offered now.
+  private readonly MAX_RANGE_DAYS = 180;
 
   readonly rangeDays = computed<number | null>(() => {
     const r = this.range();
@@ -272,11 +243,8 @@ export class FeatureRunnerComponent {
 
   readonly rangeWarning = computed<string | null>(() => {
     const days = this.rangeDays();
-    if (days === null) return null;
-    const cap = this.maxRangeDays();
-    if (days <= cap) return null;
-    const capLabel = Number.isFinite(cap) ? `${cap} days` : 'no cap';
-    return `${this.range().resolution}-resolution research is capped at ${capLabel} (you selected ${days} days). Long minute-bar requests don't survive the backend→python connection window. Shorten the range, or switch to an hourly/daily resolution.`;
+    if (days === null || days <= this.MAX_RANGE_DAYS) return null;
+    return `Minute-bar research is capped at ${this.MAX_RANGE_DAYS} days (you selected ${days} days). Shorten the range.`;
   });
 
   canRun = computed(() => {
@@ -378,6 +346,7 @@ export class FeatureRunnerComponent {
       } else if (j.status === 'failed' && this.resultSettledFor !== id) {
         this.resultSettledFor = id;
         this.error.set(j.errorMessage ?? 'Feature research run failed');
+        void this.loadRefusal(id);
       } else if (j.status === 'cancelled' && this.resultSettledFor !== id) {
         this.resultSettledFor = id;
         this.error.set(j.message ?? 'Run cancelled');
@@ -387,6 +356,7 @@ export class FeatureRunnerComponent {
 
   async runResearch(): Promise<void> {
     this.error.set(null);
+    this.refusal.set(null);
     this.result.set(null);
     this.logBuffer.clear();
 
@@ -400,9 +370,13 @@ export class FeatureRunnerComponent {
       // Python's FeatureResearchJobRequest inherits TickerRequest in PR
       // (ii); legacy aliases are still accepted until PR (iii)'s
       // alias-removal commit.
+      // The session is named, not defaulted: this study has always computed on extended hours (04:00-20:00 ET),
+      // and which session it should use is an open owner decision (D02 of PRD #3490). The page offers no
+      // session choice until that is decided.
       const wire = tickerRangeToWire({
         ...this.range(),
         symbol: this.range().symbol.toUpperCase(),
+        session: 'extended',
       });
       const id = await this.jobsService.startJob('feature_research', {
         ...wire,
@@ -454,8 +428,22 @@ export class FeatureRunnerComponent {
     this.jobId.set(null);
     this.result.set(null);
     this.error.set(null);
+    this.refusal.set(null);
     this.formCollapsed.set(false);
     this.logBuffer.clear();
+  }
+
+  /**
+   * A run the lake refused parks its reason and counts as the job's result (`status: "refused"`). A run that failed
+   * for any other reason parks nothing, and the fetch finds none: the failure message already shown is all there is.
+   */
+  private async loadRefusal(id: string): Promise<void> {
+    try {
+      const refused = readLakeStudyRefusal(await this.jobsService.fetchResult<unknown>(id));
+      if (refused !== null && this.jobId() === id) this.refusal.set(refused);
+    } catch {
+      // No parked result: the job failed on something other than a refused window.
+    }
   }
 
   private async handleCompleted(id: string): Promise<void> {
@@ -523,44 +511,8 @@ export class FeatureRunnerComponent {
             invalidReasonCounts: raw.target.invalid_reason_counts,
           }
         : null,
-      dataSource: raw.data_source ? this.mapDataSource(raw.data_source) : null,
+      dataSource: raw.data_source ? mapLakeStudyDataSource(raw.data_source) : null,
       error: raw.error ?? undefined,
-    };
-  }
-
-  private mapDataSource(raw: FeatureStudyDataSourceRaw): FeatureStudyDataSource {
-    const group = (g: StudyCoverageGroupRaw): StudyCoverageGroup => ({
-      expectedSessions: g.expected_sessions,
-      reused: g.reused,
-      added: g.added,
-      missing: g.missing,
-      failed: g.failed,
-      building: g.building,
-      corrupt: g.corrupt,
-      unavailableFromProvider: g.unavailable_from_provider,
-    });
-    return {
-      kind: raw.kind,
-      provider: raw.provider,
-      priceAdjustmentMode: raw.price_adjustment_mode,
-      barMinutes: raw.bar_minutes,
-      sessionPolicy: raw.session_policy,
-      windowStartMs: raw.window_start_ms,
-      windowEndMs: raw.window_end_ms,
-      warmupSessions: raw.warmup_sessions,
-      lookForwardMinutes: raw.look_forward_minutes,
-      snapshotDigest: raw.snapshot_digest,
-      identityDigest: raw.identity_digest,
-      calculationVersion: raw.calculation_version,
-      coverage: raw.coverage
-        ? {
-            window: group(raw.coverage.window),
-            warmup: group(raw.coverage.warmup),
-            artifacts: raw.coverage.artifacts,
-          }
-        : null,
-      barsUsed: raw.bars_used,
-      cache: { hit: raw.cache.hit, cachedAtMs: raw.cache.cached_at_ms },
     };
   }
 
