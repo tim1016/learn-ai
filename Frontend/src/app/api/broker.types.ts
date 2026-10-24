@@ -31370,8 +31370,9 @@ export interface components {
          *     **Default override**: ``session="extended"``. ``session`` is the one
          *     control for which bars the study computes on: ``extended`` is every bar the
          *     provider served, 04:00-20:00 ET, which is what the study has always read;
-         *     ``rth`` is the scheduled session. The base default (``rth``) would have
-         *     silently moved every caller that omits it onto a different sample (D02).
+         *     ``rth`` is the scheduled session, and the page offers both. The base default
+         *     (``rth``) would have silently moved every caller that omits it onto a
+         *     different sample (#3522).
          */
         SignalEngineJobRequest: {
             /** Featurename */

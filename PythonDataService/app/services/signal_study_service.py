@@ -30,22 +30,40 @@ and what it reads now, field by field:
   holds fewer), the vendor's whole tape for ``extended`` (``PRE_MARKET_HEAD_MS``
   before the open to ``AFTER_HOURS_TAIL_MS`` after the close). A length that
   cannot reach 70% there failed the run every time; hour bars, daily bars and
-  minute bars past 29 can never reach it in any session.
+  minute bars past 29 can never reach it in any session. For an ordinary window
+  that leaves 1, 2, 3, 4, 5 and 6 minutes under ``regular`` and those plus 10,
+  12 and 15 under ``extended``; the page offers exactly these, read from
+  ``contracts/signal-study-bar-minutes.json``, which
+  ``tests/research/test_signal_study.py`` pins to the refusals below. A window
+  of early closes alone is shorter, and the refusal names what it can use.
 * **Adjustment.** Before: Polygon ``adjusted=True`` (split-only), never set
   explicitly. Now: the lake's ``polygon_split_adjusted`` mode, named in the
-  identity. Prices sit on the lake's 1/10,000 grid (rounded half-up): a change
-  to the input data, not float rounding, measured at three price levels in
-  ``tests/research/test_signal_study_lake_vs_provider.py``.
-* **Session.** Before and now: **extended hours** — every bar the provider
-  served, 04:00 to 20:00 ET. The request's ``session`` is the one control and
-  defaults to ``extended``, so no caller's sample moves (the old route never
-  read the field the browser sent); ``rth`` is the scheduled session, named
-  ``regular`` in the identity (``session_policy``). Which session the study
-  *should* use is an owner decision (D02), and it is not neutral: on regular
-  hours a session holds 26 fifteen-minute bars, a 15-bar target is valid for at
-  most 11 of them (42%), under the engine's 70% gate, so the default 15-minute
-  run is refused up front; 6-minute bars (77%) and shorter clear it. The
-  comparison is measured in ``tests/research/test_signal_study.py``.
+  identity. Prices sit on the lake's 1/10,000 grid (rounded half-up). The
+  vendor's are already on it where measured: none of the 8,904 prices of a
+  split-adjusted WMT tape (2024-02-20..23, the week before its 3:1 split) is
+  finer, and every output is identical on the provider and lake paths. A tape
+  finer than the grid would move the outputs by an amount that grows as the
+  price falls (a change to the input data, not float rounding); that is
+  measured on a synthetic tape at three price levels. Both are in
+  ``tests/research/test_signal_study_lake_vs_provider.py``, and the owner
+  accepted the grid on that evidence (#3522).
+* **Session.** Before: **extended hours** — every bar the provider served, 04:00
+  to 20:00 ET, whatever the request said (the old route never read the field the
+  browser sent). Now the request's ``session`` is the one control and the person's
+  choice (#3522), as in the Feature study: ``extended`` is the default, so no
+  caller's sample moves, and ``rth`` is the scheduled session, named ``regular`` in
+  the identity (``session_policy``). The two are different samples with different
+  cache identities, and the page offers both. They also differ in which bars can
+  clear the engine's 70% gate: on regular hours a session holds 26 fifteen-minute
+  bars, a 15-bar target is valid for at most 11 of them (42%), so a 15-minute run is
+  refused up front; 6-minute bars (77%) and shorter clear it. The comparison is
+  measured in ``tests/research/test_signal_study.py``. A session counts as complete
+  only once the vendor has delivered its whole tape (the close, plus four hours of
+  after-hours for ``extended``, plus the vendor's 15-minute delay), and a held day
+  captured before that is refused (``captured_before_final``) rather than read as
+  complete or captured again (``app.data_lake.capture_finality``). The lake keeps one
+  copy of a day for every reader, so a ``rth`` run that would have to capture a day
+  waits for the extended tape too (``window_not_complete``).
 * **Warmup.** None. Features run inside the window (the same one continuous
   series, straight across overnight gaps; their first values are NaN) and the
   engine needs at least ``SignalConfig.min_bars_for_signal`` bars.
@@ -70,7 +88,13 @@ from, refuse with the counts) is the shared one,
 identity, the math and the serializer.
 
 Differences a run can show against the provider path are documented and
-measured in ``tests/research/test_signal_study_lake_vs_provider.py``.
+measured in ``tests/research/test_signal_study_lake_vs_provider.py``. That file also holds
+two measurements on the vendor's real answers, recorded on 2026-10-24: Polygon's own
+15-minute aggregates for SPY (2025-01-13..17, ``adjusted=false``) equal ``fold_minute_bars``
+of the repo's SPY minute capture bar for bar, all 320 of them, extended hours and regular
+hours alike; and the WMT tape above. The first does not cover other symbols, half-days,
+split-adjusted aggregates or other bar sizes: the fold's alignment for the other lengths
+that divide the hour is proven against an independent stand-in, not against the vendor.
 """
 
 from __future__ import annotations

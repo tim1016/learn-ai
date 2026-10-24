@@ -18,7 +18,9 @@ Two claims, kept apart as PRD #3490 R14 requires.
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -28,6 +30,7 @@ import respx
 
 from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_open_ms_utc
 from app.research.features.ta_features import TechnicalFeatures
+from app.research.lake_study import SESSION_POLICY_FOR_REQUEST
 from app.research.signal.config import SignalConfig
 from app.research.study_inputs import StudyInputRefusal
 from app.research.target import compute_15min_forward_return, compute_forward_log_return
@@ -50,6 +53,7 @@ from tests._helpers.signal_study import EARLY_CLOSES, LONG, SHORT, engine_report
 
 ET = ZoneInfo("America/New_York")
 HORIZON = SignalConfig().horizon
+BAR_MINUTES_CONTRACT = Path(__file__).resolve().parents[3] / "contracts" / "signal-study-bar-minutes.json"
 
 #: The vendor's tape and the exchange's session, as New York minutes past midnight: 04:00-19:59 and 09:30-15:59.
 EXTENDED_SPAN = (240, 1199)
@@ -205,7 +209,7 @@ def test_no_bar_is_read_past_the_requested_end_so_the_last_fifteen_bars_have_no_
 
 
 # ---------------------------------------------------------------------------
-# The session policy (D02): what extended and regular hours each do to the target and the gate
+# The session policy: what extended and regular hours each do to the target and the gate
 # ---------------------------------------------------------------------------
 
 
@@ -244,7 +248,7 @@ def _measured_against_the_refusal(session: str, cases: list[tuple[int, float, bo
 
 
 def test_extended_hours_clear_the_gate_to_15_minutes_and_not_at_20(monkeypatch, tmp_path):
-    """Cause: ``data-quality`` (session scope), measured on the pinned tape. The choice between the two is the owner's (D02).
+    """Cause: ``data-quality`` (session scope), measured on the pinned tape. The person chooses the session on the page (#3522).
 
     The shares are of bars with a valid 15-bar target; the engine refuses a series under 70% (``validate_return_series``).
     """
@@ -258,7 +262,8 @@ def test_extended_hours_clear_the_gate_to_15_minutes_and_not_at_20(monkeypatch, 
 
 def test_regular_hours_cut_the_valid_targets_and_at_15_minutes_below_the_gate(monkeypatch, tmp_path):
     """Cause: ``data-quality`` (session scope). Regular hours leave 26 fifteen-minute bars a day and 15 of them look
-    past the close: the default run would stop producing results, so it is refused up front instead (D02)."""
+    past the close: a 15-minute run would stop producing results, so it is refused up front and the page does not
+    offer it (#3522)."""
     _measured_against_the_refusal(
         "regular",
         [(1, 0.9613, True), (5, 0.8077, True), (6, 0.7692, True), (10, 0.6154, False), (15, 0.4231, False)],
@@ -334,6 +339,32 @@ def test_the_bar_lengths_that_reach_the_gate_are_derived_from_the_sessions_the_w
     for minutes in HOUR_ALIGNED_BAR_MINUTES:
         best = max(max_target_share(minutes, HORIZON, *span) for span in spans)
         assert (best >= 0.70) is (minutes in reach), minutes
+
+
+def _accepted_minute_bars(session: str, window: list[date]) -> list[int]:
+    """Every minute bar length up to 240 that the study takes for ``session`` over ``window``, found by asking it."""
+    accepted = []
+    for minutes in range(1, 241):
+        try:
+            signal_study_identity(study(window, multiplier=minutes, session=SESSION_POLICY_FOR_REQUEST[session]))
+        except StudyInputRefusal:
+            continue
+        accepted.append(minutes)
+    return accepted
+
+
+@pytest.mark.parametrize("session", ["rth", "extended"])
+def test_the_bar_sizes_the_page_offers_for_a_session_are_exactly_the_ones_the_server_accepts(session):
+    """The page reads ``contracts/signal-study-bar-minutes.json`` and never works the gate out itself (#3522).
+
+    The window is ten ordinary sessions. The study judges a length by the longest session a window holds, so early
+    closes among full days give the same list; a window of early closes alone gives a shorter one, and the refusal
+    names what that window can use.
+    """
+    offered = json.loads(BAR_MINUTES_CONTRACT.read_text())
+
+    assert offered.keys() == SESSION_POLICY_FOR_REQUEST.keys(), "one list for each session the request can name"
+    assert offered[session] == _accepted_minute_bars(session, SHORT), session
 
 
 @pytest.mark.parametrize(

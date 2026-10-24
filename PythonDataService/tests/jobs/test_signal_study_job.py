@@ -527,7 +527,7 @@ def test_the_one_session_field_is_honoured_and_defaults_to_the_session_the_study
     asked_for_rth = SignalEngineJobRequest.model_validate({**browser, "session": "rth"})
 
     assert asked_for_extended.session == "extended"
-    assert omitted.session == "extended", "a caller that omits it keeps the sample the study has always computed on (D02)"
+    assert omitted.session == "extended", "a caller that omits it keeps the sample the study has always computed on (#3522)"
     assert asked_for_rth.session == "rth"
     assert [SESSION_POLICY_FOR_REQUEST[r.session] for r in (asked_for_extended, omitted, asked_for_rth)] == [
         "extended", "extended", "regular",
