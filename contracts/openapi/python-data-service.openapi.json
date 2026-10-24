@@ -55430,6 +55430,361 @@
         "title": "ResearchExperimentResponse",
         "type": "object"
       },
+      "ResearchHistoryEntry": {
+        "description": "One stored study or run, as its own store describes it.",
+        "properties": {
+          "completed_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "``null`` when the store records no completion time.",
+            "title": "Completed At Ms"
+          },
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "headline": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The stored headline result, for a store whose list row holds one.",
+            "title": "Headline"
+          },
+          "native_id": {
+            "title": "Native Id",
+            "type": "string"
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResearchHistoryRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The record this one was derived from, when the store links one."
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The inputs and data it ran on, as the store recorded them; ``null`` when none.",
+            "title": "Provenance"
+          },
+          "question": {
+            "description": "What this record asked, in a sentence built from what the store holds.",
+            "title": "Question",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "completed",
+              "partial",
+              "failed",
+              "cancelled",
+              "unreadable"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "status_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why it failed, or what part failed; ``null`` when none was recorded.",
+            "title": "Status Detail"
+          },
+          "symbols": {
+            "description": "The instrument (one symbol) or the universe (several) it covered; empty when not recorded.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Symbols",
+            "type": "array"
+          },
+          "type": {
+            "enum": [
+              "spec-run",
+              "walk-forward",
+              "monte-carlo",
+              "baseline",
+              "signal-report",
+              "feature-experiment"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "window": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResearchHistoryWindow"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The requested window; ``null`` when not recorded."
+          }
+        },
+        "required": [
+          "type",
+          "native_id",
+          "question",
+          "symbols",
+          "window",
+          "status",
+          "status_detail",
+          "created_at_ms",
+          "completed_at_ms",
+          "provenance",
+          "headline",
+          "parent"
+        ],
+        "title": "ResearchHistoryEntry",
+        "type": "object"
+      },
+      "ResearchHistoryPage": {
+        "description": "One page of the merged history, with the count it is a page of.",
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/ResearchHistoryEntry"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "page": {
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "partial": {
+            "description": "A queried store was unavailable or held unreadable records: ``total`` and the entries leave them out.",
+            "title": "Partial",
+            "type": "boolean"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/ResearchHistorySource"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "symbols": {
+            "description": "Every symbol in the stores read, within the time filter, for the symbol filter to offer.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Symbols",
+            "type": "array"
+          },
+          "total": {
+            "description": "Matching records across every ``read`` store; the pages add up to exactly this.",
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "entries",
+          "total",
+          "page",
+          "page_size",
+          "partial",
+          "sources",
+          "symbols"
+        ],
+        "title": "ResearchHistoryPage",
+        "type": "object"
+      },
+      "ResearchHistoryRef": {
+        "description": "Another record, named the only way a record can be named: its type and its native id.",
+        "properties": {
+          "native_id": {
+            "title": "Native Id",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "spec-run",
+              "walk-forward",
+              "monte-carlo",
+              "baseline",
+              "signal-report",
+              "feature-experiment"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "native_id"
+        ],
+        "title": "ResearchHistoryRef",
+        "type": "object"
+      },
+      "ResearchHistoryRefusal": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/ResearchHistorySource"
+            },
+            "title": "Sources",
+            "type": "array"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "sources"
+        ],
+        "title": "ResearchHistoryRefusal",
+        "type": "object"
+      },
+      "ResearchHistoryRefusalBody": {
+        "description": "The 503 body: FastAPI wraps an ``HTTPException`` detail as ``{\"detail\": ...}``.",
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/ResearchHistoryRefusal"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "ResearchHistoryRefusalBody",
+        "type": "object"
+      },
+      "ResearchHistorySource": {
+        "description": "What one registered store contributed to this page, so a gap is never mistaken for an empty store.",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why the store could not be read; ``null`` unless ``unavailable``.",
+            "title": "Error"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "state": {
+            "description": "``read``: counted in ``total``. ``unavailable``: failed, so absent from ``total``. ``not_queried``: left out by the type filter.",
+            "enum": [
+              "read",
+              "unavailable",
+              "not_queried"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Records in this store matching the filters; ``null`` unless ``read``.",
+            "title": "Total"
+          },
+          "type": {
+            "enum": [
+              "spec-run",
+              "walk-forward",
+              "monte-carlo",
+              "baseline",
+              "signal-report",
+              "feature-experiment"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "unreadable": {
+            "description": "Stored records that could not be read and so are in neither ``total`` nor the entries.",
+            "title": "Unreadable",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "type",
+          "label",
+          "state",
+          "total",
+          "unreadable",
+          "error"
+        ],
+        "title": "ResearchHistorySource",
+        "type": "object"
+      },
+      "ResearchHistoryWindow": {
+        "description": "The window the study was asked about: the store's own start and end instants.",
+        "properties": {
+          "end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Start Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start_ms",
+          "end_ms"
+        ],
+        "title": "ResearchHistoryWindow",
+        "type": "object"
+      },
       "Resolution": {
         "additionalProperties": false,
         "properties": {
@@ -93297,6 +93652,187 @@
         "summary": "Get Grid Search Cell Curves",
         "tags": [
           "research-grid-search"
+        ]
+      }
+    },
+    "/api/research/history": {
+      "get": {
+        "description": "One page of the merged history, newest first, with the count the pages add up to.",
+        "operationId": "list_research_history_api_research_history_get",
+        "parameters": [
+          {
+            "description": "Only this kind of record.",
+            "in": "query",
+            "name": "type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "spec-run",
+                    "walk-forward",
+                    "monte-carlo",
+                    "baseline",
+                    "signal-report",
+                    "feature-experiment"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this kind of record.",
+              "title": "Type"
+            }
+          },
+          {
+            "description": "Only records that covered this symbol; case does not matter.",
+            "in": "query",
+            "name": "symbol",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 50,
+                  "minLength": 1,
+                  "pattern": "^\\S+$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only records that covered this symbol; case does not matter.",
+              "title": "Symbol"
+            }
+          },
+          {
+            "description": "Only records that ended this way.",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "running",
+                    "completed",
+                    "partial",
+                    "failed",
+                    "cancelled",
+                    "unreadable"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only records that ended this way.",
+              "title": "Status"
+            }
+          },
+          {
+            "description": "Only records created at or after this instant.",
+            "in": "query",
+            "name": "created_from_ms",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 253402300799999,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only records created at or after this instant.",
+              "title": "Created From Ms"
+            }
+          },
+          {
+            "description": "Only records created before this instant.",
+            "in": "query",
+            "name": "created_before_ms",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 253402300799999,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only records created before this instant.",
+              "title": "Created Before Ms"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchHistoryPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchHistoryRefusalBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "List Research History",
+        "tags": [
+          "research-history"
         ]
       }
     },

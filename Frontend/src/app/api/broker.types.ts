@@ -6361,6 +6361,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Research History
+         * @description One page of the merged history, newest first, with the count the pages add up to.
+         */
+        get: operations["list_research_history_api_research_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/indicator-params/{indicator_name}": {
         parameters: {
             query?: never;
@@ -29234,6 +29254,162 @@ export interface components {
             /** Ticker */
             ticker: string;
         };
+        /**
+         * ResearchHistoryEntry
+         * @description One stored study or run, as its own store describes it.
+         */
+        ResearchHistoryEntry: {
+            /**
+             * Completed At Ms
+             * @description ``null`` when the store records no completion time.
+             */
+            completed_at_ms: number | null;
+            /** Created At Ms */
+            created_at_ms: number;
+            /**
+             * Headline
+             * @description The stored headline result, for a store whose list row holds one.
+             */
+            headline: string | null;
+            /** Native Id */
+            native_id: string;
+            /** @description The record this one was derived from, when the store links one. */
+            parent: components["schemas"]["ResearchHistoryRef"] | null;
+            /**
+             * Provenance
+             * @description The inputs and data it ran on, as the store recorded them; ``null`` when none.
+             */
+            provenance: string | null;
+            /**
+             * Question
+             * @description What this record asked, in a sentence built from what the store holds.
+             */
+            question: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "completed" | "partial" | "failed" | "cancelled" | "unreadable";
+            /**
+             * Status Detail
+             * @description Why it failed, or what part failed; ``null`` when none was recorded.
+             */
+            status_detail: string | null;
+            /**
+             * Symbols
+             * @description The instrument (one symbol) or the universe (several) it covered; empty when not recorded.
+             */
+            symbols: string[];
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "spec-run" | "walk-forward" | "monte-carlo" | "baseline" | "signal-report" | "feature-experiment";
+            /** @description The requested window; ``null`` when not recorded. */
+            window: components["schemas"]["ResearchHistoryWindow"] | null;
+        };
+        /**
+         * ResearchHistoryPage
+         * @description One page of the merged history, with the count it is a page of.
+         */
+        ResearchHistoryPage: {
+            /** Entries */
+            entries: components["schemas"]["ResearchHistoryEntry"][];
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+            /**
+             * Partial
+             * @description A queried store was unavailable or held unreadable records: ``total`` and the entries leave them out.
+             */
+            partial: boolean;
+            /** Sources */
+            sources: components["schemas"]["ResearchHistorySource"][];
+            /**
+             * Symbols
+             * @description Every symbol in the stores read, within the time filter, for the symbol filter to offer.
+             */
+            symbols: string[];
+            /**
+             * Total
+             * @description Matching records across every ``read`` store; the pages add up to exactly this.
+             */
+            total: number;
+        };
+        /**
+         * ResearchHistoryRef
+         * @description Another record, named the only way a record can be named: its type and its native id.
+         */
+        ResearchHistoryRef: {
+            /** Native Id */
+            native_id: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "spec-run" | "walk-forward" | "monte-carlo" | "baseline" | "signal-report" | "feature-experiment";
+        };
+        /** ResearchHistoryRefusal */
+        ResearchHistoryRefusal: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+            /** Sources */
+            sources: components["schemas"]["ResearchHistorySource"][];
+        };
+        /**
+         * ResearchHistoryRefusalBody
+         * @description The 503 body: FastAPI wraps an ``HTTPException`` detail as ``{"detail": ...}``.
+         */
+        ResearchHistoryRefusalBody: {
+            detail: components["schemas"]["ResearchHistoryRefusal"];
+        };
+        /**
+         * ResearchHistorySource
+         * @description What one registered store contributed to this page, so a gap is never mistaken for an empty store.
+         */
+        ResearchHistorySource: {
+            /**
+             * Error
+             * @description Why the store could not be read; ``null`` unless ``unavailable``.
+             */
+            error: string | null;
+            /** Label */
+            label: string;
+            /**
+             * State
+             * @description ``read``: counted in ``total``. ``unavailable``: failed, so absent from ``total``. ``not_queried``: left out by the type filter.
+             * @enum {string}
+             */
+            state: "read" | "unavailable" | "not_queried";
+            /**
+             * Total
+             * @description Records in this store matching the filters; ``null`` unless ``read``.
+             */
+            total: number | null;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "spec-run" | "walk-forward" | "monte-carlo" | "baseline" | "signal-report" | "feature-experiment";
+            /**
+             * Unreadable
+             * @description Stored records that could not be read and so are in neither ``total`` nor the entries.
+             */
+            unreadable: number;
+        };
+        /**
+         * ResearchHistoryWindow
+         * @description The window the study was asked about: the store's own start and end instants.
+         */
+        ResearchHistoryWindow: {
+            /** End Ms */
+            end_ms: number;
+            /** Start Ms */
+            start_ms: number;
+        };
         /** Resolution */
         Resolution: {
             /** Period Minutes */
@@ -47321,6 +47497,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_research_history_api_research_history_get: {
+        parameters: {
+            query?: {
+                /** @description Only this kind of record. */
+                type?: ("spec-run" | "walk-forward" | "monte-carlo" | "baseline" | "signal-report" | "feature-experiment") | null;
+                /** @description Only records that covered this symbol; case does not matter. */
+                symbol?: string | null;
+                /** @description Only records that ended this way. */
+                status?: ("running" | "completed" | "partial" | "failed" | "cancelled" | "unreadable") | null;
+                /** @description Only records created at or after this instant. */
+                created_from_ms?: number | null;
+                /** @description Only records created before this instant. */
+                created_before_ms?: number | null;
+                page?: number;
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchHistoryPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchHistoryRefusalBody"];
                 };
             };
         };
