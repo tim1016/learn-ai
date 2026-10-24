@@ -16,6 +16,7 @@ import {
 } from "../../../shared/lake-study/lake-study";
 import type { InstrumentDataRequest } from "../../../shared/data-lake";
 import type { Session } from "../../../shared/ticker-range-picker/ticker-range-picker.types";
+import { etIsoDate } from "../../../shared/date/et-midnight";
 import { TimestampDisplayComponent, formatTimestampDisplay } from "../../../shared/timestamp";
 import { StudyPageComponent } from "../../../research/study-page/study-page.component";
 import { createRerunPrefill } from "../../../research/stored-study/rerun";
@@ -140,7 +141,7 @@ export class RealizedVsIvComponent {
       const window = this.defaultWindow();
       const symbol = this.symbol().trim().toUpperCase();
       if (window === null || symbol === "") return null;
-      return { symbol, from: etDate(window.windowStartMs), to: etDate(window.windowEndMs), tree: LAKE_STUDY_TREE };
+      return { symbol, from: etIsoDate(window.windowStartMs), to: etIsoDate(window.windowEndMs), tree: LAKE_STUDY_TREE };
     }),
   );
 
@@ -212,6 +213,10 @@ export class RealizedVsIvComponent {
    * for any other size was refused and fills in nothing. Its session is the one it names, or the one its bar size read
    * before a run named one (extended for 15-minute bars, regular hours for daily bars); a combination the page no longer
    * offers is refused, never filled as another. Everything is read first, so a field it cannot read leaves the page as it was.
+   *
+   * It does not fill the window. The saved run's window is not restored: the page reads today's default window for the
+   * bar size and session it filled, so a rerun asks about the span ending at the last session that can be read now, not
+   * the span the saved run read. The new run's own window is what the page shows before Run study.
    */
   private fillFrom(stored: StoredInputs): void {
     const sent = stored.text("bar_size");
@@ -243,7 +248,8 @@ export class RealizedVsIvComponent {
   protected sessionOn(s: Session): boolean { return this.session() === s; }
 }
 
-/** An ET-midnight `int64 ms UTC` as the `YYYY-MM-DD` session date a lake reading is asked for (the shared date-only display). */
+/** An ET-midnight `int64 ms UTC` as a date for the page to show (the shared date-only display). The lake reading above is asked
+ *  for `etIsoDate`: a display string is never sent to a server. */
 function etDate(ms: number): string {
   return formatTimestampDisplay(ms, { mode: "date-et", granularity: "date" });
 }

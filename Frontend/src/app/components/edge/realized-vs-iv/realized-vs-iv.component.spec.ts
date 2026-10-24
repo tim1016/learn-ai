@@ -986,6 +986,16 @@ describe("RealizedVsIvComponent — sessions the lake does not hold yet", () => 
     expect(warning(), "the lake holds it all, so the page says nothing").toBeNull();
   });
 
+  it("asks the lake for the ET dates of the window's two midnights, whichever side of a clock change each falls", async () => {
+    const page = await renderPage();
+    // 2025-03-09 starts in standard time (05:00Z) and 2025-03-10 in daylight time (04:00Z).
+    await answerWindow(page.world.http, { window_start_ms: Date.UTC(2025, 2, 9, 5), window_end_ms: Date.UTC(2025, 2, 10, 4) });
+    page.fixture.detectChanges();
+    await vi.waitFor(() => expect(page.instrumentData).toHaveBeenCalledTimes(1));
+
+    expect(page.instrumentData).toHaveBeenCalledWith({ symbol: "SPY", from: "2025-03-09", to: "2025-03-10", tree: "polygon_split_adjusted" });
+  });
+
   it("reads nothing until the server has named the window: the browser works out no span of its own", async () => {
     const { instrumentData, fixture } = await renderPage();
     await settle(fixture);
