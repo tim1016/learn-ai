@@ -72,7 +72,7 @@ class ReadyOptions:
         pins = pins_from_wire(wire["pins"])
         metrics = summarize_evidence(sessions, starting_capital_usd=setup.starting_cash_usd,
             annualization_sessions=window.annualization_sessions,
-            risk_free_daily_return=float(self.payload.get("risk_free_daily_return", 0)))
+            risk_free_daily_return=float(self.payload.get("risk_free_daily_return", 0)), mark_rule=self.payload["mark_rule"])
         input_failures = tuple(wire.get("input_failures", ()))
         result = EvaluationResult(sessions, pins, with_input_failures(metrics, input_failures), len(window.session_ms), input_failures)
         return OptionsDelivery(self.key, self.attempt, self.task_gen, result, tuple(wire["actual_reads"]))
@@ -151,6 +151,7 @@ def run_options_task(task: Mapping[str, Any], *, out: Any,
         result = evaluate_setup(setup, window, data,
             fee_multiplier=Decimal(payload.get("fee_multiplier", "1")),
             risk_free_daily_return=float(payload.get("risk_free_daily_return", 0)),
+            mark_rule=payload["mark_rule"],
             should_stop=cancel_flag.is_set,
             on_progress=lambda cursor: checkpoint("search", cursor_kind="processed_bars", cursor=cursor) if cursor % 60 == 0 else None)
         state["completed"] = int(state.get("completed", 0)) + 1

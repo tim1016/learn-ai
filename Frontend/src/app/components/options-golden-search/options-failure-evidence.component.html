@@ -6,6 +6,7 @@
     <p>{{ view.scope | receiptLabel }}: <app-timestamp-display [value]="view.start_ms" mode="date-et" /> to <app-timestamp-display [value]="view.end_ms" mode="date-et" /> (end exclusive).</p>
     <p>{{ view.replayed_sessions }} / {{ view.scheduled_sessions }} scheduled sessions replayed; {{ view.traded_sessions }} completed traded sessions.</p>
     <p>{{ view.present_held_marks }} / {{ view.required_held_marks }} required held marks present; {{ view.missing_held_marks }} missing.</p>
+    <p>Mark rule <code>{{ view.mark_rule }}</code>.@if (view.mark_rule !== 'options-held-minute-close-v1') { {{ view.carried_held_marks }} required held marks valued at the previous same-session traded close ({{ view.carried_share_percent | number:'1.0-4' }}% of required); longest carried run {{ view.longest_carried_run }} minutes. }</p>
     <p>{{ view.eligible_fold_winners }} / {{ view.forward_fold_count }} eligible forward-fold winners. Final test: {{ view.final_exposure | receiptLabel }}.</p>
     <p [class.warning]="!view.risk_complete">Selected base trace: {{ view.risk_complete ? 'complete' : 'incomplete' }}. A finished compute job does not establish sufficient research. Final stress gates remain separate.</p>
     @for (point of view.items; track point.id) {

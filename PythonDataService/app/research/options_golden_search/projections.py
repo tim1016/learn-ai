@@ -4,13 +4,14 @@ The one gate written here, ``FINAL_BATCH_GATE``, only marks a final batch as unf
 """
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from decimal import Decimal, localcontext
 from typing import Any
 
 from app.options_backtest import fills
 from app.research.options_golden_search.evaluator import EvaluationResult
-from app.research.options_golden_search.metrics import QualificationMetrics
+from app.research.options_golden_search.marks import MARK_RULE_V1, value_session
+from app.research.options_golden_search.metrics import OMIT_AT_DEFAULT, QualificationMetrics
 from app.research.options_golden_search.policy import Metrics, Verdict
 
 
@@ -32,7 +33,12 @@ def exact_data(value: Any) -> Any:
     if isinstance(value, BaseModel):
         return value.model_dump(mode="json")
     if hasattr(value, "__dataclass_fields__"):
-        return exact_data(asdict(value))
+        data = asdict(value)
+        for item in fields(value):
+            # A field added after results were retained is absent while it holds its default, so old hashes hold.
+            if item.metadata.get(OMIT_AT_DEFAULT) and data[item.name] == item.default:
+                del data[item.name]
+        return exact_data(data)
     if isinstance(value, dict):
         return {str(k):exact_data(v) for k,v in value.items()}
     if isinstance(value, list | tuple):
@@ -46,7 +52,7 @@ def candidate(result: EvaluationResult, verdict: Verdict, digest: str, *, origin
     equity = []
     with localcontext(fills.EXACT):
         for session in result.sessions:
-            for point in session.observations:
+            for point in value_session(session.observations, result.mark_rule).observations:
                 if point.equity_usd is not None:
                     peak = max(peak,point.equity_usd)
                     equity.append({"timestamp_ms":point.at_ms,"equity_usd":str(point.equity_usd),"drawdown_usd":str(peak-point.equity_usd)})
@@ -92,6 +98,16 @@ def _drawdown_percent(fraction: Decimal) -> str:
         return str(fraction * 100)
 
 
+_MARK_RULE_ROWS = ("mark_rule", "carried_held_marks", "carried_share_of_required_held_marks", "longest_carried_run")
+
+
+def _mark_rule_rows(metrics: Any) -> list[dict[str, str]]:
+    """The mark-rule disclosure of a result valued under a rule after v1; a v1 result has none to show (ADR 0080)."""
+    if getattr(metrics, "mark_rule", MARK_RULE_V1) == MARK_RULE_V1:
+        return []
+    return [{"label": name.replace("_", " "), "value": str(getattr(metrics, name))} for name in _MARK_RULE_ROWS]
+
+
 def rejected_candidate(metrics: Metrics, verdict: Verdict, digest: str) -> dict[str, Any]:
     """Diagnostic scalar view; full traces remain retained without loading them for this table."""
     return {"candidate_hash": digest, "label": "Candidate " + digest[:8], "is_original": False,
@@ -99,7 +115,7 @@ def rejected_candidate(metrics: Metrics, verdict: Verdict, digest: str) -> dict[
         "drawdown_fraction": str(metrics.max_drawdown_fraction), "drawdown_percent": _drawdown_percent(metrics.max_drawdown_fraction),
         "sharpe": metrics.sharpe, "completed_sessions": metrics.completed_traded_sessions,
         "recovery": "Recovery ongoing" if metrics.ongoing_recovery else f"Longest underwater spell: {metrics.max_recovery_sessions} sessions",
-        "gate_outcomes": gates(verdict), "evidence": [], "monthly": [], "equity": [], "sessions": []}
+        "gate_outcomes": gates(verdict), "evidence": _mark_rule_rows(metrics), "monthly": [], "equity": [], "sessions": []}
 
 
 def session_summary(session: Any) -> dict[str, Any]:

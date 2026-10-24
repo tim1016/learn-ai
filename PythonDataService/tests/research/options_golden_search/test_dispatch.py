@@ -5,6 +5,7 @@ import asyncio
 import json
 import time
 from collections.abc import Callable
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -17,9 +18,11 @@ from app.options_backtest.setup import OptionsBacktestSetup
 from app.options_bots.golden_proof import input_manifest
 from app.research.golden_search.proof import BlobStore
 from app.research.golden_search.worker import ResearchWorker, WorkerDispatchContext
-from app.research.options_golden_search.dispatch import ReadyOptions
+from app.research.options_golden_search.dispatch import ReadyOptions, pins_to_wire
 from app.research.options_golden_search.evaluator import evaluate_setup
 from app.research.options_golden_search.identity import execution_identity
+from app.research.options_golden_search.marks import MARK_RULE_V1, MARK_RULE_V2
+from app.research.options_golden_search.metrics import evidence_to_json
 from app.research.options_golden_search.protocol import Window
 from app.research.options_golden_search.snapshots import Snapshot, SnapshotRunData
 from tests._helpers.fake_lake_catalog import FakeCatalog
@@ -38,6 +41,62 @@ from tests.options_backtest._lake import fake_catalog as fake_catalog
 from tests.options_backtest._lake import the_clock_is_fixed as the_clock_is_fixed
 from tests.options_backtest._lake import tmp_lake as tmp_lake
 from tests.options_bots.test_golden_proof import _run
+
+
+@pytest.mark.parametrize(("frozen", "carried", "missing"), [(MARK_RULE_V2, 1, 0), (MARK_RULE_V1, 0, 1)])
+def test_the_parent_values_a_workers_raw_evidence_under_the_frozen_mark_rule(
+    frozen: str, carried: int, missing: int,
+) -> None:
+    from app.lean_sidecar.trading_calendar import session_window_for_date
+    from tests.research.options_golden_search._evidence import scene
+
+    day = date(2026, 10, 7)
+    written, data = scene((day,), exits=("2",), missing_minute=7)
+    clock = session_window_for_date(day)
+    window = Window(key="development", start_ms=clock.open_ms_utc, end_ms=clock.close_ms_utc + 1,
+                    session_ms=(clock.open_ms_utc,), annualization_sessions=251, activity_floor=1)
+    raw = evaluate_setup(written, window, data, mark_rule=MARK_RULE_V2)
+    payload = {"setup": written.model_dump(mode="json"), "window": window.model_dump(mode="json"), "mark_rule": frozen}
+    item = ReadyOptions(key="b" * 64, attempt=1, task_gen=1, payload=payload)
+    message = {"key": item.key, "options_result": {"sessions": [evidence_to_json(s) for s in raw.sessions],
+        "pins": pins_to_wire(raw.pins), "input_failures": [], "actual_reads": []}}
+    delivered = item.outcome_of(message).result
+    assert delivered.mark_rule == frozen
+    assert (delivered.metrics.carried_held_marks or 0, delivered.metrics.missing_held_marks) == (carried, missing)
+    # A payload that lost its rule is refused rather than read as v1.
+    lost = ReadyOptions(key="b" * 64, attempt=1, task_gen=1, payload={k: v for k, v in payload.items() if k != "mark_rule"})
+    with pytest.raises(KeyError, match="mark_rule"):
+        lost.outcome_of(message)
+
+
+@pytest.mark.parametrize(("frozen", "sessions"), [(MARK_RULE_V2, 2), (MARK_RULE_V1, 1)])
+def test_a_worker_goes_through_or_stops_at_a_silent_minute_by_the_rule_the_study_froze(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, frozen: str, sessions: int,
+) -> None:
+    import threading
+    from types import SimpleNamespace
+
+    from app.research.options_golden_search import snapshots
+    from app.research.options_golden_search.dispatch import run_options_task
+    from tests.options_backtest._run_data import THU, WED, open_ms
+    from tests.research.options_golden_search._evidence import scene
+
+    written, data = scene((WED, THU), exits=("2", "3"), missing_minute=7)
+    data.actual_reads = set()
+    monkeypatch.setattr(snapshots, "SnapshotRunData", lambda *_args: data)
+    window = Window(key="development", start_ms=open_ms(WED), end_ms=open_ms(THU) + 86_400_000,
+                    session_ms=(open_ms(WED), open_ms(THU)), annualization_sessions=251, activity_floor=1)
+    payload = {"setup": written.model_dump(mode="json"), "window": window.model_dump(mode="json"),
+        "snapshot": Snapshot(manifest={}, absent=(), retained_bytes=0).model_dump(mode="json"),
+        "blob_root": str(tmp_path), "identity": execution_identity(), "mark_rule": frozen}
+    messages: list[dict[str, object]] = []
+    run_options_task({"key": "k", "options": payload}, out=SimpleNamespace(write=messages.append),
+        ask_admission=lambda _path: b"", cancel_flag=threading.Event(),
+        state={"decoded_cache": SimpleNamespace(take_residency_delta=lambda: ([], []))})
+    answers = [message for message in messages if message["type"] != "checkpoint"]
+    assert [message["type"] for message in answers] == ["result"]
+    # The silent minute stops research under v1 after the first session and is valued under v2.
+    assert len(answers[0]["options_result"]["sessions"]) == sessions
 
 
 @pytest.mark.parametrize(("width", "reason"), [(3, "must be 1, 2, 4 or 8"), (4, "exceeds the current operator profile")])
@@ -96,11 +155,11 @@ async def test_spawned_worker_reproduces_all_exact_evidence_from_retained_inputs
                         absent=absent, retained_bytes=retained)
     window = Window(key="development", start_ms=FRIDAY_OPEN_MS, end_ms=FRIDAY_OPEN_MS + 86_400_000,
                     session_ms=(FRIDAY_OPEN_MS,), annualization_sessions=251, activity_floor=1)
-    expected = evaluate_setup(source.setup, window, SnapshotRunData("SPY", snapshot, blobs))
+    expected = evaluate_setup(source.setup, window, SnapshotRunData("SPY", snapshot, blobs), mark_rule=MARK_RULE_V2)
     item = ReadyOptions(key="a" * 64, attempt=1, task_gen=1, payload={
         "setup": source.setup.model_dump(mode="json"), "window": window.model_dump(mode="json"),
         "snapshot": snapshot.model_dump(mode="json"), "blob_root": str(blobs.root),
-        "identity": execution_identity(),
+        "identity": execution_identity(), "mark_rule": MARK_RULE_V2,
     })
     context = WorkerDispatchContext(strategy_key="options", execution={}, manifest={}, identity={}, job_id="", generation=1)
     def execute():
@@ -168,12 +227,13 @@ async def test_real_shared_pool_width_matrix_preserves_exact_evidence_and_global
     scenarios = (CostScenario(key="base"), CostScenario(key="slippage", slippage_multiplier=Decimal(2)),
                  CostScenario(key="fees", fee_multiplier=Decimal(2)))
     expected = {scenario.key: evaluate_setup(apply_scenario(source.setup, scenario), window,
-        SnapshotRunData("SPY", snapshot, blobs), fee_multiplier=scenario.effective_fee_multiplier) for scenario in scenarios}
+        SnapshotRunData("SPY", snapshot, blobs), fee_multiplier=scenario.effective_fee_multiplier,
+        mark_rule=MARK_RULE_V2) for scenario in scenarios}
     assert all(result.complete and not result.metrics.technical_failures for result in expected.values())
     assert all(len(result.sessions[0].outcome.trades) == 16 for result in expected.values())
     payloads = [{"setup": apply_scenario(source.setup, scenario).model_dump(mode="json"), "window": window.model_dump(mode="json"),
         "snapshot": snapshot.model_dump(mode="json"), "blob_root": str(blobs.root), "identity": execution_identity(),
-        "fee_multiplier": str(scenario.effective_fee_multiplier)} for scenario in scenarios]
+        "fee_multiplier": str(scenario.effective_fee_multiplier), "mark_rule": MARK_RULE_V2} for scenario in scenarios]
     monkeypatch.setattr(settings, "RESEARCH_WORKER_COUNT", width)
     monkeypatch.setattr(settings, "OPTIONS_SEARCH_WORKER_COUNT", width)
     monkeypatch.setenv("LEAN_DATA_WRITE_ROOT", str(tmp_lake))

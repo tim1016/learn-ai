@@ -46471,9 +46471,31 @@
       },
       "OptionsCandidateCoverage": {
         "properties": {
+          "carried_held_marks": {
+            "minimum": 0.0,
+            "title": "Carried Held Marks",
+            "type": "integer"
+          },
+          "carried_share_percent": {
+            "title": "Carried Share Percent",
+            "type": "string"
+          },
           "complete": {
             "title": "Complete",
             "type": "boolean"
+          },
+          "longest_carried_run": {
+            "minimum": 0.0,
+            "title": "Longest Carried Run",
+            "type": "integer"
+          },
+          "mark_rule": {
+            "enum": [
+              "options-held-minute-close-v1",
+              "options-held-minute-close-v2"
+            ],
+            "title": "Mark Rule",
+            "type": "string"
           },
           "missing_held_marks": {
             "title": "Missing Held Marks",
@@ -46497,6 +46519,10 @@
           }
         },
         "required": [
+          "mark_rule",
+          "carried_held_marks",
+          "carried_share_percent",
+          "longest_carried_run",
           "scheduled_sessions",
           "replayed_sessions",
           "traded_sessions",
@@ -47930,6 +47956,15 @@
             "title": "Candidate Hash",
             "type": "string"
           },
+          "carried_held_marks": {
+            "minimum": 0.0,
+            "title": "Carried Held Marks",
+            "type": "integer"
+          },
+          "carried_share_percent": {
+            "title": "Carried Share Percent",
+            "type": "string"
+          },
           "eligible_fold_winners": {
             "title": "Eligible Fold Winners",
             "type": "integer"
@@ -47971,6 +48006,19 @@
           "limit": {
             "title": "Limit",
             "type": "integer"
+          },
+          "longest_carried_run": {
+            "minimum": 0.0,
+            "title": "Longest Carried Run",
+            "type": "integer"
+          },
+          "mark_rule": {
+            "enum": [
+              "options-held-minute-close-v1",
+              "options-held-minute-close-v2"
+            ],
+            "title": "Mark Rule",
+            "type": "string"
           },
           "missing_held_marks": {
             "title": "Missing Held Marks",
@@ -48039,6 +48087,10 @@
           }
         },
         "required": [
+          "mark_rule",
+          "carried_held_marks",
+          "carried_share_percent",
+          "longest_carried_run",
           "study_id",
           "setup_name",
           "candidate_hash",

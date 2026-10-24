@@ -7,6 +7,9 @@ Validated against: tests/research/options_golden_search/test_evaluator.py.
 
 No cash or slippage ladders run implicitly. Approval separately materializes the complete ordinary source run.
 An incomplete session or missing held-minute mark stops before any synthetic settlement can fund another day.
+Which marks are missing depends on the frozen mark rule (``marks.py``): under ``options-held-minute-close-v2`` a minute
+whose held contract has no bar is valued at its previous same-session close and does not stop research, while a
+position that has traded nothing yet still does. The replay, its fills and its cash are the same under both rules.
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ from app.options_backtest.results import Fill, SessionStatus, SkipReason
 from app.options_backtest.run import RunStopped, SessionDataMissing, load_session_market, validate_run_sessions
 from app.options_backtest.session_result import SessionPins
 from app.options_backtest.setup import OptionsBacktestSetup
+from app.research.options_golden_search.marks import MARK_RULE_V1, value_session
 from app.research.options_golden_search.metrics import QualificationMetrics, SessionEvidence, summarize_evidence
 from app.research.options_golden_search.protocol import Window
 from app.utils.session_anchors import et_date_at_ms
@@ -39,6 +43,10 @@ class EvaluationResult:
     input_failures: tuple[str, ...] = ()
 
     @property
+    def mark_rule(self) -> str:
+        return self.metrics.mark_rule
+
+    @property
     def complete(self) -> bool:
         return len(self.sessions) == self.scheduled_sessions
 
@@ -50,7 +58,7 @@ def with_input_failures(metrics: QualificationMetrics, failures: tuple[str, ...]
 
 def evaluate_setup(
     setup: OptionsBacktestSetup, window: Window, data: RunData, *,
-    risk_free_daily_return: float = 0, fee_multiplier: Decimal = Decimal(1),
+    risk_free_daily_return: float = 0, fee_multiplier: Decimal = Decimal(1), mark_rule: str = MARK_RULE_V1,
     should_stop: Callable[[], bool] | None = None,
     on_progress: Callable[[int], None] | None = None,
 ) -> EvaluationResult:
@@ -101,7 +109,7 @@ def evaluate_setup(
         if (
             outcome.status is SessionStatus.INCOMPLETE
             or outcome.skip_reason is SkipReason.UNDERLYING_DID_NOT_TRADE
-            or any(point.missing_leg_ids for point in observations)
+            or any(point.missing_leg_ids for point in value_session(observations, mark_rule).observations)
             or capital.ended_by is not None
         ):
             break
@@ -110,5 +118,6 @@ def evaluate_setup(
     metrics = summarize_evidence(
         kept, starting_capital_usd=setup.starting_cash_usd,
         annualization_sessions=window.annualization_sessions, risk_free_daily_return=risk_free_daily_return,
+        mark_rule=mark_rule,
     )
     return EvaluationResult(tuple(kept), tuple(pins), with_input_failures(metrics, input_failures), len(days), input_failures)

@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.options_candidate_evidence import OptionsHeldMarkRule
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 Timestamp = Annotated[int, Field(ge=0, le=MAX_TIMESTAMP_MS)]
@@ -23,7 +24,7 @@ class OptionsFailureEvent(BaseModel):
     explanation: str
 
 
-class OptionsFailureEvidence(BaseModel):
+class OptionsFailureEvidence(OptionsHeldMarkRule):
     study_id: str
     setup_name: str
     candidate_hash: str

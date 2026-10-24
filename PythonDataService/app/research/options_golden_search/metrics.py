@@ -6,11 +6,18 @@ Formula: DD = max_t(running_high(equity) - equity_t) / fixed starting capital;
 Reference: owner-defined fixed-capital, calendar annualization and recovery conventions in #3332.
 Canonical implementation: this file for minute evidence; shared daily Sharpe, annualization and ratios
   live in app/options_backtest/daily_metrics.py. Stock account-return metrics keep their own semantics.
-Validated against: tests/research/options_golden_search/test_metrics.py and test_evaluator.py.
+Validated against: tests/research/options_golden_search/test_metrics.py, test_evaluator.py and test_marks.py.
 
 Dollar accumulation is exact. Ratios use 50 decimal digits; Sharpe alone uses binary64.
 Annualization is descriptive and assumes time-scaling conditions; serial dependence can invalidate them.
 An incomplete trace is a technical failure even if the final session profit is positive.
+
+Minute equity is valued under a mark rule (``marks.py``, ADR 0080). Under ``options-held-minute-close-v1`` a held
+leg with no bar makes that minute's equity unavailable and a technical failure. Under ``options-held-minute-close-v2``
+it takes its previous same-session close; drawdown, peak and recovery run over those carried values, and the result
+discloses how many marks were carried, their share of the required held marks and the longest carried run. Net
+profit, Sharpe and cash carry come from actual fills under either rule. A v1 result serializes exactly as it did
+before the rule existed, so retained v1 identities are unchanged.
 """
 
 from __future__ import annotations
@@ -18,7 +25,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from decimal import Decimal, localcontext
 from itertools import pairwise
 from typing import Any
@@ -39,9 +46,14 @@ from app.options_backtest.results import (
     SkipReason,
 )
 from app.options_backtest.setup import MS_PER_MINUTE
+from app.research.options_golden_search.marks import MARK_RULE_V1, value_session
 from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms
 
 METRIC_VERSION = "options-fixed-capital-minute-v1"
+
+# Field metadata: the field is left out of the exact-data identity while it holds its default, so a result that
+# predates the field keeps the bytes (and hash) it was retained with.
+OMIT_AT_DEFAULT = "omit_at_default"
 
 
 @dataclass(frozen=True)
@@ -125,6 +137,10 @@ class QualificationMetrics:
     winning_session_rate: Decimal | None
     losing_session_rate: Decimal | None
     breakeven_session_rate: Decimal | None
+    mark_rule: str = field(default=MARK_RULE_V1, metadata={OMIT_AT_DEFAULT: True})
+    carried_held_marks: int | None = field(default=None, metadata={OMIT_AT_DEFAULT: True})
+    carried_share_of_required_held_marks: Decimal | None = field(default=None, metadata={OMIT_AT_DEFAULT: True})
+    longest_carried_run: int | None = field(default=None, metadata={OMIT_AT_DEFAULT: True})
 
 
 @dataclass(frozen=True)
@@ -161,9 +177,12 @@ def paired_daily_comparison(
 
 def summarize_evidence(
     sessions: Sequence[SessionEvidence], *, starting_capital_usd: Decimal,
-    annualization_sessions: float, risk_free_daily_return: float = 0,
+    annualization_sessions: float, risk_free_daily_return: float = 0, mark_rule: str = MARK_RULE_V1,
 ) -> QualificationMetrics:
-    """Recompute metrics and validity from exact persisted trace and canonical session outcomes."""
+    """Recompute metrics and validity from exact persisted trace and canonical session outcomes.
+
+    ``mark_rule`` is the protocol's frozen held-minute mark rule; the default is the rule every earlier study used.
+    """
     if not starting_capital_usd.is_finite() or starting_capital_usd <= 0:
         raise ValueError("starting capital must be finite and positive")
     if not math.isfinite(annualization_sessions) or annualization_sessions <= 0:
@@ -173,11 +192,11 @@ def summarize_evidence(
     if any(b.session_open_ms <= a.session_close_ms for a, b in pairwise(sessions)):
         raise ValueError("evidence sessions must be chronological and disjoint")
     with localcontext(fills.EXACT):
-        return _summarize(sessions, starting_capital_usd, annualization_sessions, risk_free_daily_return)
+        return _summarize(sessions, starting_capital_usd, annualization_sessions, risk_free_daily_return, mark_rule)
 
 
 def _summarize(
-    sessions: Sequence[SessionEvidence], capital: Decimal, annualization: float, risk_free: float,
+    sessions: Sequence[SessionEvidence], capital: Decimal, annualization: float, risk_free: float, mark_rule: str,
 ) -> QualificationMetrics:
     failures: list[str] = []
     daily: list[DailyProfit] = []
@@ -188,7 +207,7 @@ def _summarize(
     drawdown = peak_relative = end_drawdown = Decimal(0)
     end_peak = capital
     expected_cash = capital
-    required_marks = missing_marks = 0
+    required_marks = missing_marks = carried_marks = longest_carried_run = 0
     monthly: dict[tuple[int, int], MonthlyProfit] = {}
     capital_sessions: list[CapitalSession] = []
     for session in sessions:
@@ -210,7 +229,10 @@ def _summarize(
             initial = session.observations[0]
             if initial.held or initial.cash_usd != session.cash_before_usd:
                 failures.append(f"{tag}:initial_equity_mismatch")
-        for point in session.observations:
+        valuation = value_session(session.observations, mark_rule)
+        carried_marks += len(valuation.carried)
+        longest_carried_run = max(longest_carried_run, valuation.longest_carried_run)
+        for point in valuation.observations:
             required_marks += len(point.held)
             missing_marks += len(point.missing_leg_ids)
             equity = point.equity_usd
@@ -233,7 +255,7 @@ def _summarize(
                 peak_relative = max(peak_relative, _ratio(fall, peak) or Decimal(0))
         pnl = session.outcome.pnl_usd
         expected_cash += pnl
-        if session.observations and session.observations[-1].equity_usd != expected_cash:
+        if valuation.observations and valuation.observations[-1].equity_usd != expected_cash:
             failures.append(f"{tag}:daily_equity_reconciliation")
         end_peak = max(end_peak, expected_cash)
         end_drawdown = max(end_drawdown, end_peak - expected_cash)
@@ -263,6 +285,11 @@ def _summarize(
     capital_result = capital_evidence(capital_sessions, starting_cash=capital) if len(capital_sessions) == len(sessions) else None
     if capital_result is not None and capital_result.ended_by is not None:
         failures.append(f"{capital_result.ended_by.session_open_ms}:capital_invalid:{capital_result.ended_by.kind.value}")
+    disclosure: dict[str, Any] = {}
+    if mark_rule != MARK_RULE_V1:
+        disclosure = {"mark_rule": mark_rule, "carried_held_marks": carried_marks,
+            "carried_share_of_required_held_marks": _ratio(Decimal(carried_marks), required_marks) or Decimal(0),
+            "longest_carried_run": longest_carried_run}
     return QualificationMetrics(
         net_profit_usd=net, max_drawdown_usd=drawdown,
         max_drawdown_fraction=_ratio(drawdown, capital) or Decimal(0),
@@ -291,6 +318,7 @@ def _summarize(
         winning_session_rate=_ratio(Decimal(len(wins)), len(profits)),
         losing_session_rate=_ratio(Decimal(len(losses)), len(profits)),
         breakeven_session_rate=_ratio(Decimal(profits.count(Decimal(0))), len(profits)),
+        **disclosure,
     )
 
 

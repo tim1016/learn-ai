@@ -29,7 +29,7 @@ export function retainedCandidate(value: SearchCandidate = candidate()): Candida
     scope: 'development', start_ms: 1791293400000, end_ms: 1791379800000, setup: declarations().setup,
     settings_description: ['The entry is read 5 minutes after the open.'],
     candidate: { ...value, gate_outcomes: [...value.gate_outcomes], evidence: [...value.evidence], monthly: [...value.monthly], equity: [...value.equity], sessions: value.sessions.map(s => ({ ...s, attempts: [...s.attempts] })) },
-    coverage: { scheduled_sessions: 1, replayed_sessions: 1, traded_sessions: 1, required_held_marks: 10, missing_held_marks: 0, complete: true },
+    coverage: { scheduled_sessions: 1, replayed_sessions: 1, traded_sessions: 1, required_held_marks: 10, missing_held_marks: 0, complete: true, mark_rule: 'options-held-minute-close-v1', carried_held_marks: 0, carried_share_percent: '0', longest_carried_run: 0 },
     sampling: { state: 'available', raw_observations: 2, displayed_observations: 2, maximum_observations: 2000, explanation: 'Synthetic retained trace for UI behavior.' },
     session_offset: 0, session_limit: 50, session_total: 1, unobserved_sessions: 0,
   };

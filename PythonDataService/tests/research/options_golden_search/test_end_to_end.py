@@ -100,6 +100,9 @@ async def test_saved_setup_to_retained_qualification_uses_real_transport_and_ato
         option_rows = []
         exit_price = 2 if index % 2 == 0 else 3
         for minute in range(65):
+            if minute == 20:
+                # The held contract prints nothing this minute: a new study's mark rule values it, the original stops.
+                continue
             opened, closed = (1, 0.85) if minute == 6 else (0.9, 1) if minute == 7 else (exit_price, exit_price) if minute == 60 else (1, 1)
             option_rows.append({**minute_bar(minute, opened, max(opened, closed), min(opened, closed), closed), "t": window.open_ms_utc + minute * 60000})
         await store_option_day(contract, option_rows, day=day, listed_under=symbol)
@@ -258,9 +261,13 @@ async def test_saved_setup_to_retained_qualification_uses_real_transport_and_ato
     )
     assert linked is not None and linked["qualification_id"] == record["qualification_id"]
     assert linked["source_status"] == "complete"
+    manifest = json.loads(linked["manifest"])
+    final_sessions = [day for day in days if day.month == 5]
+    assert manifest["mark_rule"] == manifest["protocol"]["mark_rule"] == "options-held-minute-close-v2"
+    assert manifest["carried_marks"]["carried_held_marks"] == len(final_sessions), "one carried minute in each final session"
+    assert manifest["carried_marks"]["longest_carried_run"] == 1
     source = await saved_runs.read_result(conn, linked["source_run_id"])
     golden = await golden_repository.get_record(conn, linked["qualification_id"])
-    manifest = json.loads(linked["manifest"])
     assert golden.setup_sha256 == winner["candidate_hash"] == setup_sha256(source.setup)
     assert golden.evidence["verdict"] == ("owner_exception" if owner_exception else "meets_rules")
     assert manifest["exception"] == owner_exception

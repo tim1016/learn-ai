@@ -1,3 +1,4 @@
+import { DecimalPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, input, linkedSignal, output, resource } from '@angular/core';
 
 import type { components } from '../../api/broker.types';
@@ -16,7 +17,7 @@ export type CandidatePageLoader = (study: string, offset: number) => Promise<Can
 
 @Component({
   selector: 'app-options-candidate-evidence',
-  imports: [OptionsSearchCandidateComponent, OptionsFailureEvidenceComponent, OptionsRobustnessComponent, ReceiptLabelPipe, TimestampDisplayComponent],
+  imports: [DecimalPipe, OptionsSearchCandidateComponent, OptionsFailureEvidenceComponent, OptionsRobustnessComponent, ReceiptLabelPipe, TimestampDisplayComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './options-candidate-evidence.component.html',
   styleUrl: './options-golden-search.component.scss',

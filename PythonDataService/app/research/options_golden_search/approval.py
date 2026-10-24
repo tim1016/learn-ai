@@ -11,6 +11,7 @@ from app.options_bots.golden import LIMITATIONS
 from app.options_bots.golden_proof import build_proof, proof_sha256, setup_sha256
 from app.options_bots.golden_repository import GoldenRecord
 from app.research.options_golden_search import repository as repo
+from app.research.options_golden_search.marks import MARK_RULE_V1
 from app.research.options_golden_search.policy import validate_exception
 from app.research.options_golden_search.projections import FINAL_BATCH_GATE
 from app.research.options_golden_search.protocol import OptionsSearchProtocol, materialize
@@ -174,6 +175,13 @@ def approve(row: dict[str, Any], evaluator) -> dict[str, Any]:
         "approved_point":digest,"selection_count":len(row["finalists"]),"exception":request.command=="approve_exception",
         "failed_rules":approval_failures(row,digest),"waived_gate_ids":list(request.waived_gate_ids),
         "comment":request.comment,"execution_proof_sha256":proof_sha256(proof)}
+    if protocol.mark_rule != MARK_RULE_V1:
+        # A manifest written under the original rule names none, so its bytes and hash stay as they were (ADR 0080).
+        manifest["mark_rule"] = protocol.mark_rule
+        manifest["carried_marks"] = {"required_held_marks": scored.metrics.required_held_marks,
+            "carried_held_marks": scored.metrics.carried_held_marks,
+            "carried_share_of_required_held_marks": str(scored.metrics.carried_share_of_required_held_marks),
+            "longest_carried_run": scored.metrics.longest_carried_run}
     manifest_hash = hash_payload(manifest)
     record = GoldenRecord(id="ogs_"+hash_payload({"study":row["id"],"command":request.idempotency_key})[:40],
         name=row["setup_name"],source_run_id=source_id,setup=setup.model_dump(mode="json"),setup_sha256=digest,

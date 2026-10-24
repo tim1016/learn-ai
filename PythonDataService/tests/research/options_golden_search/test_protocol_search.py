@@ -1,22 +1,27 @@
 """Executable frozen-procedure examples; synthetic profits are exact decimal dollars."""
 from __future__ import annotations
 
+import json
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
 from app.options_backtest.setup import OptionsBacktestSetup
+from app.research.options_golden_search.marks import MARK_RULE_V1, MARK_RULE_V2
 from app.research.options_golden_search.planning import budget_plan, freeze_protocol
 from app.research.options_golden_search.protocol import (
     CostScenario,
     Knob,
+    OptionsSearchProtocol,
     Policy,
     apply_scenario,
     materialize,
     point_hash,
 )
 from app.research.options_golden_search.search import Evaluation, run_forward, run_search
+from app.research.runs.hashing import hash_payload
 from app.utils.session_anchors import et_midnight_ms
 
 
@@ -235,3 +240,35 @@ def test_decimal_candidate_identity_v2_preserves_the_saved_seed_and_deduplicates
     legacy = protocol(knobs=knobs)
     assert str(materialize(legacy, {knobs[0].path: "20.0000"}).legs[0].stop_loss.value) == "20.0000"
     assert "candidate_identity_version" not in legacy.model_dump(mode="json")
+
+
+def test_a_protocol_frozen_before_mark_rule_v2_reads_as_v1_and_keeps_its_retained_identity() -> None:
+    row = json.loads((Path(__file__).parents[2] / "fixtures" / "options_evidence" / "study-record.json").read_text())
+    assert "mark_rule" not in row["protocol"]
+    retained = OptionsSearchProtocol.model_validate(row["protocol"])
+    assert retained.mark_rule == MARK_RULE_V1
+    assert retained.model_dump(mode="json") == row["protocol"]
+    assert retained.protocol_hash == row["protocol_hash"] == hash_payload(row["protocol"])
+
+
+def test_a_new_protocol_freezes_mark_rule_v2_and_only_the_rule_moves_its_identity() -> None:
+    original = protocol()
+    frozen = protocol(mark_rule=MARK_RULE_V2)
+    assert "mark_rule" not in original.model_dump(mode="json"), "v1 leaves its identity as it was"
+    assert frozen.model_dump(mode="json")["mark_rule"] == MARK_RULE_V2
+    assert {k: v for k, v in frozen.model_dump(mode="json").items() if k != "mark_rule"} == original.model_dump(mode="json")
+    assert frozen.protocol_hash != original.protocol_hash
+    assert OptionsSearchProtocol.model_validate(frozen.model_dump(mode="json")).protocol_hash == frozen.protocol_hash
+    with pytest.raises(ValueError, match="mark_rule"):
+        OptionsSearchProtocol.model_validate({**frozen.model_dump(mode="json"), "mark_rule": "options-held-minute-close-v3"})
+
+
+def test_locking_a_study_freezes_the_current_mark_rule_into_the_protocol() -> None:
+    from app.research.options_golden_search.service import build_protocol
+    from app.schemas.options_golden_search import History, PlanRequest
+
+    written = setup()
+    request = PlanRequest(setup_name="two legs", expected_setup_hash="a" * 64,
+        knobs=(Knob(path="legs.call_a.stop_loss.value", values=("20", "30")),),
+        history=History(start_ms=et_midnight_ms(date(2024, 1, 1)), end_ms=et_midnight_ms(date(2025, 7, 1))))
+    assert build_protocol(request, written).mark_rule == MARK_RULE_V2
