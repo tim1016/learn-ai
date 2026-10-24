@@ -8,7 +8,35 @@ import { DEFAULT_OPTIONS_VIEW, OPTIONS_VIEWS, type OptionsView } from './options
 /*
  * Where an option view lives (ADR 0084): `/markets/:symbol/options/<view>`,
  * with the expiry it opens on in `?expiry=` (an expiry anchor, `int64 ms UTC`).
+ * This file is the one place that spells those addresses and reads an instant
+ * out of one: a link to the chain, and the rule for what `?expiry=` and `?at=` hold.
  */
+
+/** The domain's latest instant (end of 9999-12-31 UTC): a longer count of milliseconds is not a time. */
+const MAX_INSTANT_MS = 253_402_300_799_999;
+const INSTANT = /^\d{1,15}$/;
+
+/**
+ * An instant an address carries (`?expiry=`, `?at=`) as `int64 ms UTC`: whole milliseconds, no later than
+ * the domain's latest instant. `null` for text that is not one. Nothing is corrected.
+ */
+export function parseInstantMs(text: string): number | null {
+  return INSTANT.test(text) && Number(text) <= MAX_INSTANT_MS ? Number(text) : null;
+}
+
+/** Where a link goes: router commands and the query the address carries. */
+export interface OptionsLink {
+  readonly commands: string[];
+  readonly queryParams: Params;
+}
+
+/** The instrument's Options chain on Past · Archive, at the session `date` (`YYYY-MM-DD`) when one is named. */
+export function archiveChainLink(symbol: string, date: string | null = null): OptionsLink {
+  return {
+    commands: instrumentCommands(symbol, 'options', ['chain']),
+    queryParams: date === null || date === '' ? { source: 'archive' } : { source: 'archive', date },
+  };
+}
 
 /**
  * The redirect for the address a view had before it moved into the instrument

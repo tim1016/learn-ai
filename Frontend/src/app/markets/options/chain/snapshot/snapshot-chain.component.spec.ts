@@ -101,7 +101,8 @@ describe('Now · Snapshot, as a source of the chain', () => {
     const text = facts();
     expect(text).toContain('Now · Snapshot');
     expect(text).toContain('Polygon option-chain snapshot, read through the data service.');
-    expect(text).toMatch(/Quotes received \d{1,2}:\d{2}/);
+    expect(text).toMatch(/Received by this page \d{1,2}:\d{2}/);
+    expect(text).toContain('not when the provider observed its quotes');
     expect(text).toContain('Quote state Not stated: the provider does not say whether these quotes are delayed.');
     expect(text).toContain('Underlying SPY 700.00, +2.50 (+0.35%)');
     expect(text).not.toContain('9.87');

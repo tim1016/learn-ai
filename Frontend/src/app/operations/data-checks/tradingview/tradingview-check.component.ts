@@ -4,7 +4,7 @@ import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 
 import { environment } from '../../../../environments/environment';
-import { instrumentCommands } from '../../../markets/instrument-address';
+import { archiveChainLink } from '../../../markets/options/options-address';
 import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-picker.component';
 
 interface ValidationResponse {
@@ -40,7 +40,7 @@ export class TradingviewCheckComponent {
   /** The picker's value. A link carrying a new symbol replaces it; an edit holds until then. */
   protected readonly symbol = linkedSignal(() => (this.ticker() ?? '').trim().toUpperCase() || 'SPY');
   /** Where the Options chain is for the instrument the picker holds, to be opened on Past · Archive. */
-  protected readonly pastChain = computed(() => instrumentCommands(this.symbol() || 'SPY', 'options', ['chain']));
+  protected readonly pastChain = computed(() => archiveChainLink(this.symbol() || 'SPY'));
 
   readonly ourCsvFile = signal<File | null>(null);
   readonly tvCsvFile = signal<File | null>(null);

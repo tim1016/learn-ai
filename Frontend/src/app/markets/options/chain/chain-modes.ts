@@ -1,7 +1,8 @@
 /*
- * The four ways to ask for a chain (PRD #3490 R11), declared once. The strip,
- * the request reader and the window title all read this list, so a mode can
- * never pick up a second name or a second reason.
+ * The four ways to ask for a chain (PRD #3490 R11), declared once. The strip
+ * and the chain view's Mode fact both read this list, and no source adapter
+ * writes its own mode's name, so a mode can never pick up a second name or a
+ * second reason.
  *
  * The reasons are the domain's own words. A mode that cannot be chosen stays
  * on the strip, disabled, with its reason beside it, and is never replaced by

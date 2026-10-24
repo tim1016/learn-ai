@@ -2,7 +2,7 @@
   @if (again()) {
     <p class="muted" role="status">Reading again. What is shown is the last answer.</p>
   }
-  <app-chain-facts [facts]="chain().facts" [notes]="chain().notes" />
+  <app-chain-facts [facts]="facts()" [notes]="chain().notes" />
   @if (chain().crossCheck; as crossCheck) {
     <app-chain-cross-check [crossCheck]="crossCheck" />
   }

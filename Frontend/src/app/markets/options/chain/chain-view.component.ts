@@ -1,11 +1,12 @@
-import { ChangeDetectionStrategy, Component, input, output } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
 
 import { WorkspaceStateBlockComponent } from '../../../shared/workspace/workspace-state-block.component';
 import type { WorkspaceStateContent } from '../../../shared/workspace/workspace-state';
 import { ChainCrossCheckComponent } from './chain-cross-check.component';
 import { ChainFactsComponent } from './chain-facts.component';
 import { ChainGridComponent } from './chain-grid.component';
-import type { ChainPresentation } from './chain-presentation';
+import { chainModeName } from './chain-modes';
+import type { ChainFact, ChainPresentation } from './chain-presentation';
 
 /**
  * The one chain presentation (PRD #3490 R11): what the chain says about itself, then its grid,
@@ -21,6 +22,11 @@ import type { ChainPresentation } from './chain-presentation';
 })
 export class ChainViewComponent {
   readonly chain = input.required<ChainPresentation>();
+  /** The mode's name from the one list of modes, then the source's own facts. */
+  protected readonly facts = computed<readonly ChainFact[]>(() => [
+    { label: 'Mode', value: { kind: 'text', text: chainModeName(this.chain().mode) } },
+    ...this.chain().facts,
+  ]);
   /** Why the grid is not drawn, when it is not. */
   readonly state = input<WorkspaceStateContent | null>(null);
   /** The chain on screen is the last answer, while the same question is read again. */

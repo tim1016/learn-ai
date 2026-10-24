@@ -48,6 +48,7 @@ import {
   bsTheta, bsVega,
 } from '../../../utils/black-scholes';
 import { InstrumentContextService } from '../../instrument-context.service';
+import { parseInstantMs } from '../options-address';
 
 type ChartMetric = 'price' | GreekType;
 
@@ -452,10 +453,8 @@ export class OptionsPricingComponent implements OnDestroy {
   private expiryAsked(): { readonly ms: number | null; readonly what: string } | null {
     const raw = this.route.snapshot.queryParamMap.get('expiry')?.trim();
     if (raw === undefined || raw === '') return null;
-    const ms = Number(raw);
-    if (!/^\d+$/.test(raw) || Number.isNaN(new Date(ms).getTime())) {
-      return { ms: null, what: `The expiry in the address ("${raw}")` };
-    }
+    const ms = parseInstantMs(raw);
+    if (ms === null) return { ms: null, what: `The expiry in the address ("${raw}")` };
     return { ms, what: `The expiry in the address (${formatTimestampDisplay(ms, { mode: 'date-et', granularity: 'short-date' })})` };
   }
 

@@ -67,6 +67,6 @@
   <summary>Options past-chain inspection</summary>
   <p class="validate__muted">
     Past-chain inspection is on an instrument's Options tab, in Past · Archive.
-    <a [routerLink]="pastChain()" [queryParams]="{ source: 'archive' }">Open {{ symbol() || 'SPY' }}'s Options tab</a>.
+    <a [routerLink]="pastChain().commands" [queryParams]="pastChain().queryParams">Open {{ symbol() || 'SPY' }}'s Options tab</a>.
   </p>
 </details>

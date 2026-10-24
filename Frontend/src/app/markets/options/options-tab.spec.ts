@@ -155,7 +155,7 @@ describe('the Options tab of an instrument', () => {
 
     expect(modeButton('Now · Snapshot').getAttribute('aria-pressed')).toBe('true');
     expect(facts()).toContain('Polygon option-chain snapshot');
-    expect(facts()).toMatch(/Quotes received \d{1,2}:\d{2}/);
+    expect(facts()).toMatch(/Received by this page \d{1,2}:\d{2}/);
     expect(market.chain).toHaveBeenCalledWith('SPY', NEAR);
   });
 

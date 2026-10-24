@@ -160,7 +160,6 @@ function facts(inputs: LiveChainInputs): readonly ChainFact[] {
   const { snapshot } = inputs;
   const line = (label: string, status: StatusLine): ChainFact => ({ label, value: { kind: 'text', text: status.text }, ...(status.tone === undefined ? {} : { tone: status.tone }) });
   return [
-    { label: 'Mode', value: { kind: 'text', text: 'Now · Live IBKR' } },
     { label: 'Source', value: { kind: 'text', text: 'IBKR, read-only, through the data plane\'s retained Gateway session. Real-time quotes only.' } },
     line('Connection', inputs.connection),
     line('Entitlement', inputs.entitlement),
@@ -179,7 +178,6 @@ export function livePresentation(inputs: LiveChainInputs): ChainPresentation {
   return {
     mode: 'now-live',
     underlying: inputs.symbol,
-    expiryMs: inputs.expiryMs,
     facts: facts(inputs),
     notes: [],
     ...(inputs.serving ? { crossCheck: crossCheckStatement(inputs.engine, crossCheckOutcome(cells)) } : {}),

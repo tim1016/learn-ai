@@ -136,7 +136,6 @@ describe('Now · Live IBKR, as the one chain presentation', () => {
   it('states connection, entitlement and subscription as facts, with their tone', () => {
     const presentation = livePresentation(inputs({ connection: { text: 'Unavailable: down.', tone: 'bad' }, subscription: { text: 'Paused.', tone: 'warn' } }));
 
-    expect(fact(presentation, 'Mode')?.value).toEqual({ kind: 'text', text: 'Now · Live IBKR' });
     expect(fact(presentation, 'Connection')).toEqual({ label: 'Connection', value: { kind: 'text', text: 'Unavailable: down.' }, tone: 'bad' });
     expect(fact(presentation, 'Entitlement')?.value).toEqual({ kind: 'text', text: 'Quotes arriving.' });
     expect(fact(presentation, 'Subscription')?.tone).toBe('warn');
@@ -147,8 +146,7 @@ describe('Now · Live IBKR, as the one chain presentation', () => {
     const before = livePresentation(inputs({ snapshot: null, expiryMs: null }));
     const after = livePresentation(inputs());
 
-    expect(before.facts.map((each) => each.label)).toEqual(['Mode', 'Source', 'Connection', 'Entitlement', 'Subscription']);
-    expect(before.expiryMs).toBeNull();
+    expect(before.facts.map((each) => each.label)).toEqual(['Source', 'Connection', 'Entitlement', 'Subscription']);
     expect(before.table.rows).toEqual([]);
     expect(fact(after, 'Snapshot')?.value).toEqual({ kind: 'instant', ms: AS_OF_MS, mode: 'local', granularity: 'time' });
     expect(fact(after, 'Expiry')?.value).toEqual({ kind: 'expiry', ms: NEAR, tag: null });

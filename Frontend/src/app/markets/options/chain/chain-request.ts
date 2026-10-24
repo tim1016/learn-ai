@@ -1,6 +1,7 @@
 import { parseYmdMsUtc } from '../../../components/data-lab/data-lab-scope';
 import { etIsoDate } from '../../../shared/date/et-midnight';
 import type { QueryReader } from '../../instrument-context';
+import { parseInstantMs } from '../options-address';
 import type { ChainModeId, ChainSource } from './chain-modes';
 
 /*
@@ -21,10 +22,6 @@ const DEFAULT_CHAIN_SOURCE: ChainSource = 'snapshot';
 
 const SOURCES: readonly ChainSource[] = ['snapshot', 'live', 'archive'];
 
-/** The domain's latest instant (end of 9999-12-31 UTC): a longer count of milliseconds is not a time. */
-const MAX_INSTANT_MS = 253_402_300_799_999;
-const INSTANT = /^\d{1,15}$/;
-
 /** What an address asks for. Each kind is one way the chain can be asked, and `invalid` is none of them. */
 export type ChainRequest =
   /** Now · Snapshot: the current provider snapshot. `expiryMs` null: the nearest expiry, which the chain says it chose. */
@@ -42,10 +39,8 @@ type Part<T> = { readonly ok: true; readonly value: T | null } | { readonly ok: 
 
 function readInstant(text: string | null, what: string): Part<number> {
   if (text === null) return { ok: true, value: null };
-  if (!INSTANT.test(text) || Number(text) > MAX_INSTANT_MS) {
-    return { ok: false, problem: `The ${what} "${text}" is not a time in whole milliseconds.` };
-  }
-  return { ok: true, value: Number(text) };
+  const instant = parseInstantMs(text);
+  return instant === null ? { ok: false, problem: `The ${what} "${text}" is not a time in whole milliseconds.` } : { ok: true, value: instant };
 }
 
 function readDate(text: string | null): Part<string> {

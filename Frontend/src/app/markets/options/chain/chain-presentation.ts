@@ -201,11 +201,11 @@ export interface ChainCrossCheck {
 
 /** What one source says for one underlying and one expiry. */
 export interface ChainPresentation {
+  /** The mode this chain is of. The view names it, once, as the first fact, so no source writes its own name. */
   readonly mode: ChainModeId;
-  /** Contract identity: the underlying and expiry this chain is of. They survive filtering, and a mode change leaves them in the address. */
+  /** Contract identity: the underlying this chain is of. It survives filtering, and a mode change leaves it (and the expiry) in the address. */
   readonly underlying: string;
-  /** The expiry this chain is of; null while a source has none to name yet (its listing is not read, or none is picked). */
-  readonly expiryMs: number | null;
+  /** The facts after the mode's name; the expiry among them is the source's own (the archive tags it, the snapshot counts its days). */
   readonly facts: readonly ChainFact[];
   /** What this source cannot say, as sentences under the facts. */
   readonly notes: readonly string[];

@@ -21,6 +21,7 @@ import {
   type OptionsCompanionWireConfig,
 } from '../../../components/data-lab/data-lab-request-mapper';
 import { instrumentCommands } from '../../instrument-address';
+import { archiveChainLink } from '../../options/options-address';
 import { DataLabPlanService, type DataLabPlanReceipt } from './data-lab-plan.service';
 import { ExportColumnPickerComponent } from './export-column-picker/export-column-picker.component';
 import { columnsForPayload } from '../../../components/data-lab/export-csv-options';
@@ -390,11 +391,7 @@ export class BuildDatasetComponent {
   });
 
   /** The instrument's Options tab, where the Past · Archive chain shows what the archive listed for the companion's ticker. */
-  readonly pastChainCommands = computed(() => instrumentCommands(this.store.committedTicker(), 'options', ['chain']));
-  readonly pastChainQuery = computed(() => {
-    const date = this.analysisDate();
-    return date === '' ? { source: 'archive' } : { source: 'archive', date };
-  });
+  readonly pastChain = computed(() => archiveChainLink(this.store.committedTicker(), this.analysisDate()));
 }
 
 type OptionsFlagKey =

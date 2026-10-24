@@ -177,10 +177,9 @@ describe('Now · Snapshot, as the one chain presentation', () => {
   it('says which source, when the quotes arrived, and the underlying and expiry the chain is of', () => {
     const chain = present({ contracts: both(720), stock: { todaysChange: 2.5, todaysChangePercent: 0.35, day: { open: 1, high: 1, low: 1, close: 700, volume: 1, vwap: 1 } } as StockTickerSnapshot });
 
-    expect(chain).toMatchObject({ mode: 'now-snapshot', underlying: 'SPY', expiryMs: EXPIRY });
-    expect(fact(chain, 'Mode')).toEqual({ kind: 'text', text: 'Now · Snapshot' });
+    expect(chain).toMatchObject({ mode: 'now-snapshot', underlying: 'SPY' });
     expect(fact(chain, 'Source')).toEqual({ kind: 'text', text: 'Polygon option-chain snapshot, read through the data service.' });
-    expect(fact(chain, 'Quotes received')).toEqual({ kind: 'instant', ms: 1_791_559_000_000, mode: 'local', granularity: 'time' });
+    expect(fact(chain, 'Received by this page')).toEqual({ kind: 'instant', ms: 1_791_559_000_000, mode: 'local', granularity: 'time' });
     expect(fact(chain, 'Underlying')).toEqual({ kind: 'text', text: 'SPY 700.00, +2.50 (+0.35%)' });
     expect(fact(chain, 'Expiry')).toEqual({ kind: 'expiry', ms: EXPIRY, tag: null });
   });

@@ -263,15 +263,18 @@ function daysToExpiry(expiryMs: number, todayEt: string): number {
   return Math.max(daysBetween(todayEt, optionExpiryDate(expiryMs)), 0);
 }
 
+/** The only time the snapshot is dated by is the arrival of the answer: the provider's own times for its quotes and trades are not carried here. */
+const RECEIVED_NOTE =
+  "Received by this page is when the snapshot arrived here, not when the provider observed its quotes. The provider's own observation times are not shown.";
+
 function facts(inputs: SnapshotChainInputs, spot: number): readonly ChainFact[] {
   const provider = PROVIDER_WORDS[providerLabel(inputs.contracts)];
   const stale = inputs.refreshError;
   return [
-    { label: 'Mode', value: { kind: 'text', text: 'Now · Snapshot' } },
     { label: 'Source', value: { kind: 'text', text: 'Polygon option-chain snapshot, read through the data service.' } },
     ...(inputs.receivedAtMs === null
       ? []
-      : [{ label: 'Quotes received', value: { kind: 'instant', ms: inputs.receivedAtMs, mode: 'local', granularity: 'time' } } satisfies ChainFact]),
+      : [{ label: 'Received by this page', value: { kind: 'instant', ms: inputs.receivedAtMs, mode: 'local', granularity: 'time' } } satisfies ChainFact]),
     stale === null
       ? { label: 'Quote state', value: { kind: 'text', text: provider.text }, ...(provider.tone === undefined ? {} : { tone: provider.tone }) }
       : { label: 'Quote state', value: { kind: 'text', text: `Stale: the last refresh failed (${stale}). These quotes are from the last refresh that worked.` }, tone: 'bad' },
@@ -287,9 +290,8 @@ export function snapshotPresentation(inputs: SnapshotChainInputs): ChainPresenta
   return {
     mode: 'now-snapshot',
     underlying: inputs.symbol,
-    expiryMs: inputs.expiryMs,
     facts: facts(inputs, spot),
-    notes: [],
+    notes: [RECEIVED_NOTE],
     table: {
       columns: DENSITY_COLUMNS[inputs.density],
       centre: true,

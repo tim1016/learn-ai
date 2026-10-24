@@ -153,7 +153,6 @@ const SOURCE_WORDS =
 function facts(chain: ChainExpiry): readonly ChainFact[] {
   const { calls, puts } = chain;
   return [
-    { label: 'Mode', value: { kind: 'text', text: 'Past · Archive' } },
     { label: 'Source', value: { kind: 'text', text: SOURCE_WORDS } },
     { label: 'Session', value: { kind: 'date', ms: chain.session_open_ms } },
     { label: 'Priced as of', value: { kind: 'instant', ms: chain.at_ms, mode: 'et', granularity: 'minute' } },
@@ -187,7 +186,6 @@ export function archivePresentation(chain: ChainExpiry, body: ChainBody = bodyOf
   return {
     mode: 'past-archive',
     underlying: chain.underlying,
-    expiryMs: chain.expiry_ms,
     facts: facts(chain),
     notes: [...NOT_ARCHIVED, ...(body.kind === 'rows' ? body.undrawn.map(undrawnNote) : [])],
     table: {

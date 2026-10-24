@@ -109,7 +109,7 @@ describe('a Past · Archive chain, as the one chain presentation', () => {
   it('states the contract identity of the chain: the underlying, the expiry with its series, and the standard counts as served', () => {
     const presentation = archivePresentation(chainExpiry());
 
-    expect(presentation).toMatchObject({ mode: 'past-archive', underlying: 'SPY', expiryMs: EXPIRY_MS['2026-10-16'] });
+    expect(presentation).toMatchObject({ mode: 'past-archive', underlying: 'SPY' });
     expect(presentation.facts.find((fact) => fact.label === 'Expiry')?.value).toMatchObject({ kind: 'expiry', ms: EXPIRY_MS['2026-10-16'], tag: { series: 'monthly' } });
     expect(presentation.facts.find((fact) => fact.label === 'Contracts')?.value).toEqual({ kind: 'text', text: 'Calls: 3 listed, 3 standard. Puts: 3 listed, 3 standard.' });
   });
