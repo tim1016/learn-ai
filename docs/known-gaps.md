@@ -602,3 +602,52 @@ re-arms the server-authored timeframe auto-correct, and numeric
   `DECISION_BAR_MISSED` after IB Gateway's nightly blackout -- leaves the
   position held. It is not silent: Start refuses with
   `START_REQUIRES_FLAT_CUSTODY`, and the dead-run warning and Flatten apply.
+
+## Lake-sourced research studies: divergences from the provider path (#3521, 2026-10-24)
+
+The Feature study reads admitted lake bars instead of one provider call per run. The open differences below are
+measured in `tests/research/test_feature_study_lake_vs_provider.py`.
+
+- **P2: a held day with no recorded capture time cannot be judged early.** `captured_early` treats a missing
+  `CompletedAtMs` as final, and an imported day carries its import time, which is later than its capture. Such a day
+  captured before its session finished stays as short as it was captured. New captures always carry the time. A
+  capture is judged by `CompletedAtMs` less the claim lease (five minutes), the earliest the vendor can have been
+  asked; `FetchedAtMs` is not used because it keeps the row's first claim through a retry or a re-capture.
+- **P2: the vendor's after-hours tail (four hours) and delivery delay (15 minutes) are constants.**
+  `app/data_lake/capture_finality.py` names them once. A plan that delivers in real time makes the delay
+  conservative, not wrong; a change to the extended window needs the constant changed.
+- **P2: a held day captured before its session finished stays refused, and no re-capture path exists (owner,
+  2026-10-24).** A study whose window holds one refuses it (`captured_before_final`, with the day, when it was captured and what it needs) rather than
+  computing on the short tape; it asks the vendor for nothing and rewrites nothing. The lake keeps a committed day as
+  captured, so the only way to capture it again today is a forced rewrite of a complete day
+  (`refresh_complete_artifact`, the path of a provider correction), and that is not safe to run from a study:
+  - it changes bytes that sealed receipts may have pinned, so a golden proof replay then fails with
+    `RECEIPT_MISMATCH` although its numbers would not move;
+  - it moves the shared day to `fetching`, so Golden, Grid Search and a regular-hours study cannot read it until the
+    fetch ends, and a vendor failure leaves it `failed` with the prior row not restored (the prior path and sha are
+    returned for exactly this, and unused).
+
+  The owner chose to leave held early days refused rather than build an operator-run re-capture. An extended-hours
+  study refuses a day whose capture completed before 20:20 ET (17:20 on an early close); a
+  regular-hours study one that completed before 16:20 ET (13:20). Those are the final instants (20:15, 16:15) plus the
+  five-minute claim lease. Any writer, such as a chart or a backfill, whose capture completes in the five minutes after
+  the final instant leaves a day that is refused for good although it may be whole; that is the price of the conservative bound. A
+  study that has to capture a day does not start on it until the extended final instant plus that lease has passed
+  (`window_not_complete` before), whichever session it reads, because the lake keeps one copy of a day for every reader; a
+  study that finds the day held waits only for its own session's final instant plus the lease. So a day a study captures
+  itself is never one of those.
+- **P2: a split announced after a day was captured stays invisible to that held day until a later capture of the
+  symbol refreshes its adjusted history (accepted by the owner, 2026-10-24).** The provider path adjusted to the moment of the request. Price-level
+  outputs (MACD signal, quantile-bin bounds) move by the split factor, not only the prices.
+- **P3: the pre-run count of sessions the lake lacks does not see a held early day.** The Feature page counts
+  missing sessions from the catalog, as the Data tab does, and there a day captured early is `ready`; the run still
+  refuses it (`captured_before_final`, naming the day) after the count warned of nothing. The count also treats today
+  as forming until the New York date rolls, while a run admits it once the extended final instant plus the lease has
+  passed (20:20 ET, or 17:20 on an early close), so between 20:20 ET and midnight the notice says nothing and the run fetches one session.
+- **P2: a window that starts before the symbol listed refuses.** Admission has no "not applicable" outcome for a
+  session before the first trade; the provider path computed on the shorter series. The refusal is
+  `data_unavailable_from_provider` for the sessions the vendor answers empty.
+- **Unverified assumptions:** that Polygon's own N-minute aggregate equals a fold of its minute aggregates, and that a
+  date-string window is ET-anchored on the live API. Both are asserted by the comparison tests against an
+  independent stand-in, not against live data.
+

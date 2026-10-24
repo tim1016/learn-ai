@@ -16,6 +16,7 @@ import {
   FeatureStageInfo,
   FeatureStageCriterion,
 } from '../../../services/research.service';
+import { mapLakeStudyDataSource, type LakeDataSourceRaw } from '../../../shared/lake-study/lake-study';
 
 /** Shape of the ``target`` payload emitted by ``_serialize_target`` in
  *  ``PythonDataService/app/routers/jobs.py``. Mirrors the view model's
@@ -58,6 +59,7 @@ export interface FeatureResearchJobResultRaw {
   feature_spec: unknown;
   validation_verdict: unknown;
   target?: FeatureResearchTargetRaw | null;
+  data_source?: LakeDataSourceRaw | null;
   passed_validation: boolean;
   error: string | null;
 }
@@ -104,6 +106,7 @@ export function toResearchResult(raw: FeatureResearchJobResultRaw): ResearchResu
           invalidReasonCounts: raw.target.invalid_reason_counts,
         }
       : null,
+    dataSource: raw.data_source ? mapLakeStudyDataSource(raw.data_source) : null,
     error: raw.error ?? undefined,
   };
 }

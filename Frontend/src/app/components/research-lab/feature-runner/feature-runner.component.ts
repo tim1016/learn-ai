@@ -8,6 +8,7 @@ import {
   effect,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { HttpErrorResponse } from '@angular/common/http';
 import { FormsModule } from '@angular/forms';
 
 import { ResearchResult } from '../../../services/research.service';
@@ -36,6 +37,7 @@ import { IndicatorConfigModalComponent } from '../../data-lab/indicator-config-m
 import { TickerRangePickerComponent } from '../../../shared/ticker-range-picker/ticker-range-picker.component';
 import type {
   Resolution,
+  Session,
   TickerRange,
 } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
 import { tickerRangeToWire } from '../../../utils/ticker-wire';
@@ -44,10 +46,38 @@ import { createRunGate } from '../../../research/run-gate';
 import { createRerunPrefill } from '../../../research/stored-study/rerun';
 import { StoredInputsError, type StoredInputs } from '../../../research/stored-study/stored-inputs';
 import { createResultInputTracker } from '../../../shared/workspace/previous-result';
+import type { DataSourceProvenance } from '../../../shared/workspace/data-source-provenance';
+import { LakeStudySourceComponent } from '../../../shared/lake-study/lake-study-source.component';
+import { LakeHoldingNoticeComponent } from '../../../shared/lake-study/lake-holding-notice.component';
+import { createLakeHolding } from '../../../shared/lake-study/create-lake-holding';
+import type { InstrumentDataRequest } from '../../../shared/data-lake';
+import {
+  LAKE_STUDY_TREE,
+  readLakeStudyRefusal,
+  SESSION_POLICY_FOR_REQUEST,
+  sessionPolicyWords,
+  toDataSourceProvenance,
+  type LakeSessionPolicy,
+  type LakeStudyRefused,
+} from '../../../shared/lake-study/lake-study';
+import featureBarMinutes from '@repo-contracts/feature-study-bar-minutes.json';
+
+/** The session a saved run computed on: the one it names, or extended, which is what the study computed on before it named one. */
+function storedSession(stored: StoredInputs): Session {
+  if (!stored.has('session')) return 'extended';
+  const session = stored.text('session');
+  if (session !== 'rth' && session !== 'extended') {
+    throw new StoredInputsError(`"${session}" is not a session this page offers`);
+  }
+  return session;
+}
 
 /** What a Feature study's request is made from: the inputs a shown result answers. */
 interface FeatureStudyInputs {
-  readonly range: TickerRange;
+  /** Always names its session, so the wire never falls back to the adapter's `rth` default. */
+  readonly range: TickerRange & { readonly session: Session };
+  /** What the range's session asks the lake for. */
+  readonly policy: LakeSessionPolicy;
   readonly indicator: string;
   readonly params: Record<string, number>;
 }
@@ -67,6 +97,8 @@ interface FeatureStudyInputs {
     IndicatorConfigModalComponent,
     TickerRangePickerComponent,
     StudyPageComponent,
+    LakeStudySourceComponent,
+    LakeHoldingNoticeComponent,
   ],
   templateUrl: './feature-runner.component.html',
   styleUrls: ['./feature-runner.component.scss'],
@@ -95,19 +127,22 @@ export class FeatureRunnerComponent {
   // Single TickerRange replaces (ticker, fromDate, toDate, timespan,
   // multiplier). multiplier=1 matches FeatureResearchJobRequest's
   // pre-migration default; the base TickerRequest also defaults to 1
-  // so no behavior change.
+  // so no behavior change. The session is extended hours, which the study has
+  // always computed on, so a run started without touching it moves no number (#3521).
   range = signal<TickerRange>({
     symbol: 'AAPL',
     from: '2024-01-02',
     to: '2024-03-28',
     resolution: 'minute',
     multiplier: 1,
+    session: 'extended',
   });
   /**
-   * The study looks 15 minutes ahead, so a bar must divide 15 minutes: hour,
-   * daily, ×60 and ×240 bars always fail (#3527), and are not offered.
+   * The bar lengths the study accepts: the study looks 15 minutes ahead, so a bar must divide 15 minutes, and hour,
+   * daily, ×60 and ×240 bars always fail (#3527). The list is the server's `SUPPORTED_BAR_MINUTES`, which a data-plane
+   * test pins to this file (`contracts/fixtures`).
    */
-  readonly availableMultipliers: readonly number[] = [1, 5, 15];
+  readonly availableMultipliers: readonly number[] = featureBarMinutes.bar_minutes;
   readonly availableResolutions: readonly Resolution[] = ['minute'];
 
   /** Catalog-driven selection: indicator key + params (matches data-lab's
@@ -153,6 +188,20 @@ export class FeatureRunnerComponent {
   readonly jobId = signal<string | null>(null);
   readonly result = signal<ResearchResult | null>(null);
   readonly error = signal<string | null>(null);
+  /**
+   * Why the lake could not supply the window, when the run failed on that; read from the payload the failed job
+   * parked, with the session it judged: the one its source records, or the one the run asked for when nothing was read.
+   */
+  readonly refusal = signal<{ readonly refused: LakeStudyRefused; readonly session: LakeSessionPolicy | null } | null>(null);
+
+  /**
+   * The data-source line for what is on screen: the shown result's lake source, or the source a refused run was
+   * refused against. `undefined` before either exists, which leaves the study's own pre-run line.
+   */
+  readonly dataSource = computed<DataSourceProvenance | undefined>(() => {
+    const source = this.result()?.dataSource ?? this.refusal()?.refused.dataSource ?? null;
+    return source === null ? undefined : toDataSourceProvenance(source);
+  });
 
   /** Rolling FIFO log buffer (cap 500). */
   readonly logBuffer = new RunLogBuffer();
@@ -175,27 +224,41 @@ export class FeatureRunnerComponent {
   private readonly gate = createRunGate();
   readonly starting = this.gate.starting;
 
+  /**
+   * The range the picker shows: one that names no session is extended hours, which is what the study computed on before
+   * it named one. The picker shows the same session the run sends, instead of its own `rth` fallback.
+   */
+  readonly shownRange = computed<TickerRange & { readonly session: Session }>(() => {
+    const range = this.range();
+    return { ...range, session: range.session ?? 'extended' };
+  });
+
   /** The inputs the shown result answers; a result is "previous" once these change. */
-  private readonly enteredInputs = computed<FeatureStudyInputs>(() => ({
-    range: this.range(),
-    indicator: this.selectedIndicator(),
-    params: this.selectedParams(),
-  }));
-  readonly inputs = createResultInputTracker(this.enteredInputs, ({ range, indicator, params }) => ({
-    key: JSON.stringify([range.symbol.toUpperCase(), range.from, range.to, range.resolution, range.multiplier ?? 1, indicator, params]),
+  private readonly enteredInputs = computed<FeatureStudyInputs>(() => {
+    const range = this.shownRange();
+    return {
+      range,
+      policy: SESSION_POLICY_FOR_REQUEST[range.session],
+      indicator: this.selectedIndicator(),
+      params: this.selectedParams(),
+    };
+  });
+  readonly inputs = createResultInputTracker(this.enteredInputs, ({ range, policy, indicator, params }) => ({
+    key: JSON.stringify([range.symbol.toUpperCase(), range.from, range.to, range.resolution, range.multiplier ?? 1, policy, indicator, params]),
     facts: [
       { label: 'Instrument', value: range.symbol.toUpperCase() },
       { label: 'Window', value: `${range.from} to ${range.to}` },
       { label: 'Bars', value: `${range.multiplier ?? 1} minute` },
+      { label: 'Session', value: sessionPolicyWords(policy) },
       { label: 'Indicator', value: `${indicator} ${JSON.stringify(params)}` },
     ],
   }));
   private submitted: FeatureStudyInputs | null = null;
 
   // ── Range guard ─────────────────────────────────────
-  // Minute-resolution research at 2 years exceeds ~200k bars, which overruns
-  // the backend→python keep-alive window, so the window is capped at 180
-  // calendar days. Minute bars are the only bars this study offers (#3527).
+  // A minute-bar study is capped at 180 calendar days. The cap is older than the
+  // lake path (it was sized to the provider fetch's connection window) and is kept
+  // as it was; minute bars are the only bars this study offers (#3527).
   private static readonly MAX_RANGE_DAYS = 180;
 
   readonly rangeDays = computed<number | null>(() => {
@@ -211,21 +274,31 @@ export class FeatureRunnerComponent {
     if (days === null) return null;
     const cap = FeatureRunnerComponent.MAX_RANGE_DAYS;
     if (days <= cap) return null;
-    return `Minute-bar research is capped at ${cap} days (you selected ${days} days). Long minute-bar requests don't survive the backend→python connection window. Shorten the range.`;
+    return `Minute-bar research is capped at ${cap} days (you selected ${days} days). Shorten the range.`;
   });
 
-  canRun = computed(() => {
+  /** The instrument and a window the study can run on are both entered. */
+  private readonly windowEntered = computed(() => {
     const r = this.range();
-    return (
-      r.symbol.trim().length > 0 &&
-      this.featureMapping() !== null &&
-      r.from.trim().length > 0 &&
-      r.to.trim().length > 0 &&
-      this.rangeWarning() === null &&
-      !this.loading() &&
-      !this.starting()
-    );
+    return r.symbol.trim().length > 0 && r.from.trim().length > 0 && r.to.trim().length > 0 && this.rangeWarning() === null;
   });
+
+  canRun = computed(
+    () => this.windowEntered() && this.featureMapping() !== null && !this.loading() && !this.starting(),
+  );
+
+  /**
+   * How many of the run's sessions the lake does not hold yet, and the capture of them. The span is the one the run
+   * admits: the entered window, in the split-adjusted tree (`FeatureStudyParams.price_adjustment_mode`), with no warmup.
+   * Read once per instrument or window; it warns and never holds up Run study.
+   */
+  readonly holding = createLakeHolding(
+    computed<InstrumentDataRequest | null>(() => {
+      if (!this.windowEntered()) return null;
+      const r = this.range();
+      return { symbol: r.symbol.trim().toUpperCase(), from: r.from, to: r.to, tree: LAKE_STUDY_TREE };
+    }),
+  );
 
   /** Block reason shown next to a disabled run button when the user has
    *  picked a catalog indicator the backend can't compute as a feature yet. */
@@ -241,8 +314,8 @@ export class FeatureRunnerComponent {
 
   /** What step 3 says is about to run. */
   readonly readySummary = computed(() => {
-    const r = this.range();
-    return `${this.selectedFeatureLabel} on ${r.symbol.toUpperCase()}, ${r.from} to ${r.to}`;
+    const { range, policy } = this.enteredInputs();
+    return `${this.selectedFeatureLabel} on ${range.symbol.toUpperCase()}, ${range.from} to ${range.to}, ${sessionPolicyWords(policy)}`;
   });
 
   /** Why Run study cannot start, in words that point at the step to fix. */
@@ -273,6 +346,7 @@ export class FeatureRunnerComponent {
       to: stored.text('to_date'),
       resolution: 'minute',
       multiplier,
+      session: storedSession(stored),
     });
     this.selectedIndicator.set(mapping.indicator);
     this.selectedParams.set({ ...mapping.params });
@@ -348,9 +422,12 @@ export class FeatureRunnerComponent {
       } else if (j.status === 'failed' && this.resultSettledFor !== id) {
         this.resultSettledFor = id;
         this.error.set(j.errorMessage ?? 'Feature research run failed');
+        void this.loadRefusal(id);
+        this.holding.reread();
       } else if (j.status === 'cancelled' && this.resultSettledFor !== id) {
         this.resultSettledFor = id;
         this.error.set(j.message ?? 'Run cancelled');
+        this.holding.reread();
       }
     });
   }
@@ -362,6 +439,7 @@ export class FeatureRunnerComponent {
 
   private async startResearch(): Promise<void> {
     this.error.set(null);
+    this.refusal.set(null);
     this.result.set(null);
     this.inputs.clear();
     this.logBuffer.clear();
@@ -377,13 +455,8 @@ export class FeatureRunnerComponent {
       // (ii); legacy aliases are still accepted until PR (iii)'s
       // alias-removal commit.
       const submitted = this.enteredInputs();
-      // The run reads extended-hours bars whatever the request says, and the saved run keeps what was
-      // sent, so it says "extended" rather than the "rth" the wire would fill in.
-      const wire = tickerRangeToWire({
-        ...submitted.range,
-        symbol: submitted.range.symbol.toUpperCase(),
-        session: 'extended',
-      });
+      // The run admits exactly the session the person chose from the lake, and the saved run records it.
+      const wire = tickerRangeToWire({ ...submitted.range, symbol: submitted.range.symbol.toUpperCase() });
       const parent = this.prefill.parent();
       const id = await this.jobsService.startJob('feature_research', {
         ...wire,
@@ -426,6 +499,32 @@ export class FeatureRunnerComponent {
     }
   }
 
+  /**
+   * A run the lake refused parks its reason and counts as the job's result (`status: "refused"`). A run that failed
+   * for any other reason parks nothing, and the result route answers 404: the failure message already shown is all
+   * there is. Any other failure to read the result is shown beside that message, never swallowed.
+   */
+  private async loadRefusal(id: string): Promise<void> {
+    try {
+      const refused = readLakeStudyRefusal(await this.jobsService.fetchResult<unknown>(id));
+      if (refused !== null && this.jobId() === id) {
+        this.refusal.set({ refused, session: refused.dataSource?.sessionPolicy ?? this.submitted?.policy ?? null });
+      }
+    } catch (err: unknown) {
+      if (err instanceof HttpErrorResponse && err.status === 404) return;
+      if (this.jobId() !== id) return;
+      const detail =
+        err instanceof HttpErrorResponse
+          ? `HTTP ${err.status}`
+          : err instanceof Error
+            ? err.message
+            : 'unknown error';
+      this.error.update(
+        (shown) => `${shown ?? 'Feature research run failed'}. The lake's reason could not be loaded: ${detail}`,
+      );
+    }
+  }
+
   private async handleCompleted(id: string): Promise<void> {
     try {
       const raw = await this.jobsService.fetchResult<FeatureResearchJobResultRaw>(id);
@@ -440,6 +539,8 @@ export class FeatureRunnerComponent {
       // a transient ``fetchResult`` failure should leave the guard open
       // so the next event tick can retry.
       this.resultSettledFor = id;
+      // The run filled the lake with whatever it lacked, so the count of what it lacks is read again.
+      this.holding.reread();
     } catch (err: unknown) {
       const msg =
         err && typeof err === 'object' && 'message' in err

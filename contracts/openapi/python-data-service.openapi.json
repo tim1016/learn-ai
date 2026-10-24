@@ -17919,7 +17919,7 @@
       },
       "FeatureResearchJobRequest": {
         "additionalProperties": false,
-        "description": "Body of POST /api/jobs-internal/feature-research.\n\nThe runner fetches bars from Polygon itself \u2014 the Frontend sends only\nthe symbol + date range + feature, no payload of OHLCV. This keeps\nthe request small and matches the cross-sectional pattern.\n\nInherits all defaults from the base (``multiplier=1``,\n``timespan=\"minute\"``, ``session=\"rth\"``) \u2014 those match the\npre-migration shape exactly.",
+        "description": "Body of POST /api/jobs-internal/feature-research.\n\nThe worker reads the study's bars from the data lake itself, materializing\nwhat the lake lacks \u2014 the Frontend sends only the symbol + date range +\nfeature, no payload of OHLCV. Only minute bars of a length that divides\nthe study's 15-minute target are accepted (1, 3, 5, 15); other sizes are\nrefused with a reason (``app.services.feature_study_service``).\n\n**Default override**: ``session=\"extended\"``. ``session`` is the one\ncontrol for which bars the study computes on, and the page offers both:\n``extended`` is every bar the provider served, 04:00-20:00 ET, which is what\nthe study has always read; ``rth`` is the scheduled session. The base\ndefault (``rth``) would have silently moved every caller that omits it onto\na different sample (#3521).",
         "properties": {
           "featureName": {
             "minLength": 1,
@@ -17960,7 +17960,7 @@
             "title": "Rerunof"
           },
           "session": {
-            "default": "rth",
+            "default": "extended",
             "enum": [
               "rth",
               "extended"
@@ -89906,7 +89906,7 @@
     },
     "/api/jobs-internal/feature-research": {
       "post": {
-        "description": "Kick off a feature-validation experiment in a worker thread.\n\nThe runner fetches bars from Polygon, computes the feature, runs IC\n+ stationarity + quantile + robustness analysis, and assigns a\n0/1/2/3 stage verdict via the per-feature validation contract.\nPhases stream over SSE so the user sees what's happening.\n\nA successful prior run with identical (ticker, feature, range,\nbar resolution) is served from cache. Pass ``force=true`` to bypass.",
+        "description": "Kick off a feature-validation experiment in a worker thread.\n\nThe worker admits the study's bars from the data lake (materializing what\nis missing), computes the feature, runs IC + stationarity + quantile +\nrobustness analysis, and assigns a 0/1/2/3 stage verdict via the\nper-feature validation contract. Phases stream over SSE so the user sees\nwhat's happening. A window the lake cannot admit fails the job with a\ntyped refusal and its coverage counts; no result is computed.\n\nA successful prior run over the same admitted data is served from cache\n(the lookup follows admission \u2014 see ``feature_study_service``). Pass\n``force=true`` to bypass.",
         "operationId": "start_feature_research_job_api_jobs_internal_feature_research_post",
         "requestBody": {
           "content": {

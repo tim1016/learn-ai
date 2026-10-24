@@ -14,6 +14,7 @@ from httpx import ASGITransport
 import app.routers.edge as edge_router
 import app.routers.indicator_reliability as reliability_router
 import app.routers.jobs as jobs
+import app.services.feature_study_service as feature_study_service
 from app.main import app
 from app.research.study_records.models import STUDY_TYPES, StudyType
 from app.research.study_records.store import StudyRecordStore
@@ -100,7 +101,8 @@ async def test_opening_a_record_again_and_again_recomputes_nothing_and_writes_no
         raise AssertionError("opening a stored run computed something")
 
     for module, name in (
-        (jobs, "run_feature_research"),
+        (jobs, "run_feature_study"),
+        (feature_study_service, "run_feature_research"),
         (jobs, "run_signal_engine"),
         (jobs, "run_cross_sectional_study"),
         (jobs, "run_in_thread"),

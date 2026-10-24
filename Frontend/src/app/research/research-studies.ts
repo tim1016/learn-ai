@@ -1,3 +1,4 @@
+import { LAKE_STUDY_TREE } from '../shared/lake-study/lake-study';
 import type { HelpDocumentRoute } from '../shared/help/help-documents';
 import type { DataSourceProvenance } from '../shared/workspace/data-source-provenance';
 import type { StoredStudyType } from './stored-study/stored-study';
@@ -95,13 +96,12 @@ export const RESEARCH_STUDIES: readonly StudyDefinition[] = [
     subject: 'instrument',
     resultKind: 'assessed',
     help: { route: '/data-lab-docs' },
-    constraints: [
-      { label: 'Session', value: 'extended hours included, fixed' },
-      { label: 'Looks ahead', value: '15 minutes, fixed' },
-    ],
-    source: providerSource({ sources: ['polygon'], adjustment: 'split_adjusted', sessionPolicy: 'extended' }),
+    constraints: [{ label: 'Looks ahead', value: '15 minutes, fixed' }],
+    // Reads the data lake (#3521); a result's own block replaces this line with the window, session and counts it recorded.
+    // The session is a choice made on the page, so this line, which describes the study before any run, names none.
+    source: providerSource({ sources: ['Data lake', 'polygon'], adjustment: LAKE_STUDY_TREE }),
     limitations: [
-      'Bars include pre-market and after-hours trades, and the indicator runs straight across the overnight gap.',
+      'With extended hours chosen, bars include pre-market and after-hours trades; either way the indicator runs straight across the overnight gap.',
       'It tests one instrument and one indicator at a time, over the window you pick and nothing before it.',
     ],
     nextStep: 'An indicator that holds up here can be tried as a trading signal, which adds a train and test split and costs.',

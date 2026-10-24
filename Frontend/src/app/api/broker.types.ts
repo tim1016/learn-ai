@@ -5052,13 +5052,16 @@ export interface paths {
          * Start Feature Research Job
          * @description Kick off a feature-validation experiment in a worker thread.
          *
-         *     The runner fetches bars from Polygon, computes the feature, runs IC
-         *     + stationarity + quantile + robustness analysis, and assigns a
-         *     0/1/2/3 stage verdict via the per-feature validation contract.
-         *     Phases stream over SSE so the user sees what's happening.
+         *     The worker admits the study's bars from the data lake (materializing what
+         *     is missing), computes the feature, runs IC + stationarity + quantile +
+         *     robustness analysis, and assigns a 0/1/2/3 stage verdict via the
+         *     per-feature validation contract. Phases stream over SSE so the user sees
+         *     what's happening. A window the lake cannot admit fails the job with a
+         *     typed refusal and its coverage counts; no result is computed.
          *
-         *     A successful prior run with identical (ticker, feature, range,
-         *     bar resolution) is served from cache. Pass ``force=true`` to bypass.
+         *     A successful prior run over the same admitted data is served from cache
+         *     (the lookup follows admission — see ``feature_study_service``). Pass
+         *     ``force=true`` to bypass.
          */
         post: operations["start_feature_research_job_api_jobs_internal_feature_research_post"];
         delete?: never;
@@ -15128,13 +15131,18 @@ export interface components {
          * FeatureResearchJobRequest
          * @description Body of POST /api/jobs-internal/feature-research.
          *
-         *     The runner fetches bars from Polygon itself — the Frontend sends only
-         *     the symbol + date range + feature, no payload of OHLCV. This keeps
-         *     the request small and matches the cross-sectional pattern.
+         *     The worker reads the study's bars from the data lake itself, materializing
+         *     what the lake lacks — the Frontend sends only the symbol + date range +
+         *     feature, no payload of OHLCV. Only minute bars of a length that divides
+         *     the study's 15-minute target are accepted (1, 3, 5, 15); other sizes are
+         *     refused with a reason (``app.services.feature_study_service``).
          *
-         *     Inherits all defaults from the base (``multiplier=1``,
-         *     ``timespan="minute"``, ``session="rth"``) — those match the
-         *     pre-migration shape exactly.
+         *     **Default override**: ``session="extended"``. ``session`` is the one
+         *     control for which bars the study computes on, and the page offers both:
+         *     ``extended`` is every bar the provider served, 04:00-20:00 ET, which is what
+         *     the study has always read; ``rth`` is the scheduled session. The base
+         *     default (``rth``) would have silently moved every caller that omits it onto
+         *     a different sample (#3521).
          */
         FeatureResearchJobRequest: {
             /** Featurename */
@@ -15157,7 +15165,7 @@ export interface components {
             rerunOf?: string | null;
             /**
              * Session
-             * @default rth
+             * @default extended
              * @enum {string}
              */
             session?: "rth" | "extended";

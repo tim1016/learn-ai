@@ -1,8 +1,10 @@
 """The three job routes record their runs: Feature, Signal and Cross-sectional (#3520).
 
 Each test calls the route, takes the work it would have started on a worker thread and runs it on the spot, then reads the
-record from a temporary artifact root. Feature and Signal compute on synthetic bars for real; the cross-sectional
-universe study, which reads a provider's option chains, answers with a report of its own.
+record from a temporary artifact root. Signal computes on synthetic bars for real; the cross-sectional universe study,
+which reads a provider's option chains, answers with a report of its own. The Feature study reads admitted lake bars, so
+its completed, refused and cache-served records are driven through the real lake in
+``tests/jobs/test_feature_study_job.py``; what is left here for it is the cancel that comes before any lake read.
 """
 
 from __future__ import annotations
@@ -56,39 +58,6 @@ def artifact_root() -> Path:
 
 
 FEATURE = {"job_id": "feature-job", "symbol": "TEST", "from_date": "2024-01-02", "to_date": "2024-01-05", "feature_name": "rsi_14"}
-
-
-async def test_a_feature_run_is_recorded_with_its_headline_and_its_full_report(
-    monkeypatch: pytest.MonkeyPatch, artifact_root: Path
-) -> None:
-    taken = captured_jobs(monkeypatch)
-    monkeypatch.setattr(jobs.polygon_client, "fetch_aggregates", lambda **_: synthetic_bars(1_500, step_ms=60_000))
-
-    await jobs.start_feature_research_job(FeatureResearchJobRequest(**FEATURE))
-    delivered = taken.only()(StubEmitter(), StubCancel())
-
-    ((config, stored),) = the_records(artifact_root, "feature-study")
-    assert config.status == "completed" and config.job_id == "feature-job"
-    assert config.inputs["feature_name"] == "rsi_14" and config.inputs["symbol"] == "TEST"
-    assert config.headline is not None and config.headline.startswith("Mean IC ")
-    assert stored.result is not None
-    assert stored.result["mean_ic"] == delivered["mean_ic"], "what is stored is what the job delivered"
-    assert stored.result["bars_used"] == delivered["bars_used"]
-
-
-async def test_a_feature_run_with_no_bars_is_recorded_as_failed_and_the_job_still_fails(
-    monkeypatch: pytest.MonkeyPatch, artifact_root: Path
-) -> None:
-    taken = captured_jobs(monkeypatch)
-    monkeypatch.setattr(jobs.polygon_client, "fetch_aggregates", lambda **_: [])
-
-    await jobs.start_feature_research_job(FeatureResearchJobRequest(**FEATURE))
-    with pytest.raises(ValueError, match="No bars returned for TEST"):
-        taken.only()(StubEmitter(), StubCancel())
-
-    ((config, stored),) = the_records(artifact_root, "feature-study")
-    assert config.status == "failed" and config.status_detail == "No bars returned for TEST in date range"
-    assert stored.result is None
 
 
 async def test_a_feature_run_cancelled_before_it_loads_anything_is_recorded_as_cancelled(
@@ -156,7 +125,7 @@ async def test_a_run_answered_from_the_result_cache_starts_no_work_and_records_n
     monkeypatch.setattr(jobs.result_cache, "lookup", lambda *_: ("hash", {"result": {}, "cached_at": 1}))
     monkeypatch.setattr(jobs.result_cache, "serve_cached_result", lambda *_: None)
 
-    answer = await jobs.start_feature_research_job(FeatureResearchJobRequest(**FEATURE))
+    answer = await jobs.start_signal_engine_job(SignalEngineJobRequest(**{**FEATURE, "job_id": "signal-job"}))
 
     assert answer["status"] == "cached" and taken.works == []
-    assert the_records(artifact_root, "feature-study") == []
+    assert the_records(artifact_root, "signal-study") == []

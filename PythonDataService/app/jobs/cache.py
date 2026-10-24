@@ -100,12 +100,16 @@ def store(job_type: str, params: Mapping[str, Any], result: Any) -> str:
     return h
 
 
-def serve_cached_result(job_id: str, job_type: str, cached: dict) -> None:
+def serve_cached_result(job_id: str, job_type: str, cached: dict, *, announce_start: bool = True) -> None:
     """Write a cached result into a fresh job_id slot and emit terminal events.
 
     Mirrors what ``ProgressEmitter.completed`` does, plus a ``cached=True``
     marker on the completion event so the frontend can render the report
     without showing the live-progress panel.
+
+    ``announce_start=False`` is for a worker that found its hit after its
+    thread had already emitted ``job.started``: only the completion is new, and
+    the ``started_at`` that start recorded (when the worker really began) stays.
     """
     from app.jobs.progress import active_set_key, result_key, state_key  # local to avoid cycles
 
@@ -114,19 +118,18 @@ def serve_cached_result(job_id: str, job_type: str, cached: dict) -> None:
     cached_at = cached.get("cached_at", int(time.time() * 1000))
     now_ms = str(int(time.time() * 1000))
 
+    state: dict[str, str] = {
+        "status": "completed",
+        "completed_at": now_ms,
+        "result_kind": "json",
+        "phase": "completed",
+        "cached": "1",
+    }
+    if announce_start:
+        state["started_at"] = now_ms
     pipe = r.pipeline()
     pipe.set(result_key(job_id), json.dumps(result, default=str), ex=JOB_TTL_SECONDS)
-    pipe.hset(
-        state_key(job_id),
-        mapping={
-            "status": "completed",
-            "started_at": now_ms,
-            "completed_at": now_ms,
-            "result_kind": "json",
-            "phase": "completed",
-            "cached": "1",
-        },
-    )
+    pipe.hset(state_key(job_id), mapping=state)
     pipe.expire(state_key(job_id), JOB_TTL_SECONDS)
     pipe.execute()
 
@@ -135,7 +138,8 @@ def serve_cached_result(job_id: str, job_type: str, cached: dict) -> None:
     from app.jobs.progress import ProgressEmitter
 
     emitter = ProgressEmitter(job_id)
-    emitter._emit("job.started", {"cached": True})
+    if announce_start:
+        emitter._emit("job.started", {"cached": True})
     emitter._emit(
         "job.completed",
         {

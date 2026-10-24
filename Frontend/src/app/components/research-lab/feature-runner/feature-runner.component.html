@@ -9,14 +9,17 @@
   [previous]="inputs.isPrevious()"
   [captured]="inputs.captured()"
   [prefill]="prefillNotice()"
+  [dataSource]="dataSource()"
+  dataSourceWindows="date-et"
   (run)="runResearch()"
 >
   <div studyInstrument>
     <app-ticker-range-picker
-      [(value)]="range"
+      [value]="shownRange()"
+      (valueChange)="range.set($event)"
       dateBounds="provider"
       presentation="embedded"
-      sessionMode="hidden"
+      sessionMode="enabled"
       [showAutoFetch]="false"
       [availableResolutions]="availableResolutions"
       [availableMultipliers]="availableMultipliers"
@@ -24,6 +27,7 @@
     @if (rangeWarning(); as warn) {
       <p-message severity="warn" class="w-full">{{ warn }}</p-message>
     }
+    <app-lake-holding-notice [holding]="holding" />
   </div>
 
   <div studyConfig class="study-config">
@@ -79,7 +83,9 @@
       }
     }
 
-    @if (error(); as err) {
+    @if (refusal(); as shown) {
+      <app-lake-study-source [refusal]="shown.refused.refusal" [session]="shown.session" />
+    } @else if (error(); as err) {
       <p-message severity="error">{{ err }}</p-message>
     }
   </div>

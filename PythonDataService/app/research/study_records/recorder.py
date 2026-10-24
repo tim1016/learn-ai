@@ -148,9 +148,13 @@ class RunRecorder:
 
         return self._keep(settled)
 
-    def fail(self, reason: str) -> str | None:
-        """The run ended without a result."""
-        return self._keep(lambda: ("failed", reason, None))
+    def fail(self, reason: str, *, result: Mapping[str, Any] | None = None) -> str | None:
+        """The run ended without a result.
+
+        A ``result`` is the payload the work parked beside its failure (a lake study's refusal and the counts admission
+        reached). It is kept as the record's result, and the ``data_source`` it carries as the record's own.
+        """
+        return self._keep(lambda: ("failed", reason, None if result is None else to_wire_json(result)))
 
     def cancel(self, reason: str) -> str | None:
         return self._keep(lambda: ("cancelled", reason, None))
@@ -232,9 +236,9 @@ class _WatchedEmitter:
         self._emit = emit
         self._run = run
 
-    def failed(self, code: str, message: str) -> None:
-        _say(self._emit, self._run.fail(message))
-        self._emit.failed(code, message)
+    def failed(self, code: str, message: str, *, result: Any = None) -> None:
+        _say(self._emit, self._run.fail(message, result=result))
+        self._emit.failed(code, message, result=result)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._emit, name)

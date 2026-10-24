@@ -10,9 +10,10 @@
 export type Resolution = "minute" | "hour" | "daily";
 
 /** Trading session filter. ``rth`` = regular hours (09:30–16:00 ET);
- *  ``extended`` = pre + post-market (04:00–20:00 ET). The picker does not
- *  offer Extended: the Python engine still hardcodes RTH (see
- *  ``PythonDataService/app/routers/engine.py``). */
+ *  ``extended`` = pre + post-market (04:00–20:00 ET). The picker offers
+ *  Extended only to a host that sets ``sessionMode="enabled"`` (the Feature
+ *  study); otherwise it is shown disabled or hidden, because the host's run
+ *  reads regular hours only. */
 export type Session = "rth" | "extended";
 
 export interface TickerRange {

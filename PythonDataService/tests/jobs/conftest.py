@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 
+from app.jobs import cache as result_cache
 from app.jobs import progress
 from app.research.persistence import lifecycle
 
@@ -32,6 +33,10 @@ class _FakePipeline:
 
     def hset(self, key: str, mapping: dict[str, Any] | None = None, **_: Any) -> _FakePipeline:
         self._ops.append(lambda: self._fake.hset(key, mapping=mapping))
+        return self
+
+    def set(self, key: str, value: str, ex: int | None = None) -> _FakePipeline:
+        self._ops.append(lambda: self._fake.set(key, value, ex=ex))
         return self
 
     def expire(self, key: str, seconds: int) -> _FakePipeline:
@@ -80,6 +85,9 @@ class _FakeRedis:
 
     def set(self, key: str, value: str, ex: int | None = None) -> None:
         self.strings[key] = value
+
+    def get(self, key: str) -> str | None:
+        return self.strings.get(key)
 
     def eval(self, script: str, number_of_keys: int, *values: Any) -> int:
         if number_of_keys == 2:
@@ -134,4 +142,5 @@ def fake(monkeypatch: pytest.MonkeyPatch) -> _FakeRedis:
     fake = _FakeRedis()
     monkeypatch.setattr(progress, "get_redis", lambda: fake)
     monkeypatch.setattr(lifecycle, "get_redis", lambda: fake)
+    monkeypatch.setattr(result_cache, "get_redis", lambda: fake)
     return fake

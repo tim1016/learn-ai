@@ -38,6 +38,12 @@ before execution. The legacy Spec environment-root resolver is removed.
 Exact consumed-bar parity and the scope of the fingerprint are documented
 in [the Spec reference note](../references/strategy-spec-layer.md#lake-input-authority-2446).
 
+**Lake-sourced research studies (#3521).** `app/research/study_inputs.py` owns
+the admission of a study's minute-bar input from the lake (the materializer
+fills what is missing; the UI is never a writer), and
+`app/research/lake_study.py` owns the run around a study's math: cache identity,
+the data-source block and the typed refusal. No calculation ownership changes.
+
 Committed lake-file admission (#2456) is owned by
 `PythonDataService/app/data_lake/admission.py`, backed by committed catalog
 receipts. Python reads and LEAN preflight refuse files whose exact bytes have

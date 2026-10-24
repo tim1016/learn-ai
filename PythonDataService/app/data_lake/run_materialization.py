@@ -9,10 +9,12 @@ arbitrates who fetches what, and every run leaves with a fingerprint of the
 lake state it materialized against — whose scope :func:`materialize_engine_run`
 states canonically.
 
-This module is only the bridge, and its public surface is two symbols:
-:func:`materialize_engine_run` and the :class:`LakeMaterializationError` it
-raises. Everything else is private, because the call composes three things no
-caller should have to solve — or be able to second-guess — for itself:
+This module is only the bridge. A backtest run calls
+:func:`materialize_engine_run` and sees :class:`LakeMaterializationError`; the
+chart calls :func:`materialize_chart_range`; a research study that reads minute
+bars calls :func:`materialize_minute_window`. Everything else is private, because
+each call composes three things no caller should have to solve — or be able to
+second-guess — for itself:
 
 1. **The spec.** What a Python-engine run actually needs from the lake —
    minute and daily trade bars, and nothing else (see
@@ -113,6 +115,7 @@ def _build_engine_run_spec(
     requester: str | None = None,
     request_id: UUID | None = None,
     fetch_timeout_seconds: int = 600,
+    include_daily_trade: bool = True,
 ) -> DataRunSpec:
     """Describe what a Python-engine backtest needs from the lake.
 
@@ -122,6 +125,12 @@ def _build_engine_run_spec(
     inputs and belong to the sidecar's spec, not this one. Asking for
     them here would buy provider round-trips per run for files this
     engine never reads.
+
+    ``include_daily_trade=False`` is for a consumer that reads minute bars
+    only (:func:`materialize_minute_window`): the daily rollup is a
+    whole-symbol artifact rebuilt whenever the symbol's catalogued coverage
+    changes, so building it for a reader that never opens it costs a pass
+    over the symbol's whole history.
     """
     # Imported here rather than at module scope: the digest is the sidecar
     # package's to publish, and the lake should not depend on it to import.
@@ -144,6 +153,7 @@ def _build_engine_run_spec(
         price_adjustment_mode=price_adjustment_mode,
         include_factor_files=False,
         include_map_files=False,
+        include_daily_trade=include_daily_trade,
         lean_image_digest=PINNED_LEAN_IMAGE_DIGEST,
         fetch_timeout_seconds=fetch_timeout_seconds,
     )
@@ -513,6 +523,94 @@ def materialize_engine_run(
         fetched_artifact_count=result.fetched_artifact_count,
         reused_artifact_count=result.reused_artifact_count,
         incomplete_summary=incomplete_summary,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Minute-window materialization (research studies that read minute bars only)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class MinuteWindowMaterialization:
+    """What materializing a minute window left behind, failure by failure.
+
+    :class:`EngineRunMaterialization` collapses the lake's answer into one
+    refusal string, which is right for a run that either proceeds or does not.
+    A research study reports per session what it could and could not admit
+    (missing, building, corrupt, unavailable from the provider), so this keeps
+    the failures that withhold a bar a minute reader opens as data — and
+    judges nothing: the caller decides what its window may do without them.
+
+    ``interruption`` is set when the capture could not run to its end, and
+    ``withheld`` is then empty and means nothing: ``"catalog_unavailable"`` —
+    the catalog's Postgres is down, so no claim was possible — or
+    ``"did_not_finish"`` — the wait for the capture ran out its deadline.
+    """
+
+    availability_hash: str
+    fetched_artifact_count: int
+    reused_artifact_count: int
+    refreshed_artifact_count: int
+    withheld: tuple[ArtifactFailure, ...]
+    interruption: Literal["catalog_unavailable", "did_not_finish"] | None = None
+    detail: str | None = None
+
+
+def materialize_minute_window(
+    *,
+    symbol: str,
+    start: date,
+    end: date,
+    price_adjustment_mode: PriceAdjustmentMode,
+    requester: str,
+    fetch_timeout_seconds: int = 600,
+) -> MinuteWindowMaterialization:
+    """Put a window's minute bars in the lake and report, per session, what it could not.
+
+    The same catalog-arbitrated capture a backtest run makes
+    (:func:`_materialize_run_data`: claims coalesce concurrent writers, a
+    sibling's fetch is waited out), without the daily rollup this reader never
+    opens, and without raising for a data reason. Raises
+    :class:`LakeMaterializationError` only when the lake cannot name its
+    session calendar (no pinned LEAN image), which no window can fix.
+    """
+    spec = _build_engine_run_spec(
+        symbol=symbol,
+        start=start,
+        end=end,
+        price_adjustment_mode=price_adjustment_mode,
+        requester=requester,
+        fetch_timeout_seconds=fetch_timeout_seconds,
+        include_daily_trade=False,
+    )
+    try:
+        result = _materialize_run_data_sync(spec, resolution="minute")
+    except (TimeoutError, CallerStoppedWaitingError) as exc:
+        logger.warning(
+            "data_lake.run_materialization: minute window %s %s..%s did not finish within %ds",
+            symbol,
+            start,
+            end,
+            fetch_timeout_seconds,
+        )
+        return MinuteWindowMaterialization("", 0, 0, 0, (), "did_not_finish", f"{type(exc).__name__}: {exc}")
+    except (CatalogUnavailableError, asyncpg.PostgresError) as exc:
+        logger.warning(
+            "data_lake.run_materialization: catalog unavailable for minute window %s %s..%s (%s: %s)",
+            symbol,
+            start,
+            end,
+            type(exc).__name__,
+            exc,
+        )
+        return MinuteWindowMaterialization("", 0, 0, 0, (), "catalog_unavailable", f"{type(exc).__name__}: {exc}")
+    return MinuteWindowMaterialization(
+        availability_hash=result.data_availability_hash,
+        fetched_artifact_count=result.fetched_artifact_count,
+        reused_artifact_count=result.reused_artifact_count,
+        refreshed_artifact_count=result.refreshed_artifact_count,
+        withheld=tuple(f for f in result.failures if _withholds_bars_the_run_reads(f, resolution="minute")),
     )
 
 

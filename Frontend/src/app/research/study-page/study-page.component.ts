@@ -8,6 +8,7 @@ import type { StudyPrefill } from '../stored-study/rerun';
 import { HowThisWorksLinkComponent } from '../../shared/help/how-this-works-link.component';
 import { menuLabelFor } from '../../shell/app-menu';
 import type { DataSourceProvenance } from '../../shared/workspace/data-source-provenance';
+import type { TimestampDisplayMode } from '../../shared/timestamp/timestamp-display';
 import { PreviousResultComponent } from '../../shared/workspace/previous-result.component';
 import type { ResultInputs } from '../../shared/workspace/previous-result';
 import { WorkspaceDataSourceComponent } from '../../shared/workspace/workspace-data-source.component';
@@ -79,6 +80,11 @@ export class StudyPageComponent {
    * hands over what its result records.
    */
   readonly dataSource = input<DataSourceProvenance | null | undefined>(undefined);
+  /**
+   * How the data-source line writes its window. A study over a lake window hands over dates (ET midnights), which
+   * read as `date-et`; the default writes the exchange-aligned instant.
+   */
+  readonly dataSourceWindows = input<Extract<TimestampDisplayMode, 'et' | 'date-et'>>('et');
   /** The saved run the inputs were filled in from (`?rerun=`), or why they were not. */
   readonly prefill = input<StudyPrefill | null>(null);
 

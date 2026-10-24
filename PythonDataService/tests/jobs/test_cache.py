@@ -117,3 +117,24 @@ class TestServeCachedResult:
         bodies = [e[1] for e in events]
         assert any('"job.started"' in b.get("event", "") for b in bodies)
         assert any('"cached": true' in b.get("event", "") for b in bodies)
+
+
+class TestServeCachedResultStart:
+    def test_a_hit_found_after_the_worker_started_keeps_the_start_time_the_worker_recorded(
+        self, fake_redis: FakeRedis
+    ) -> None:
+        fake_redis.hashes["job:job-9:state"] = {"status": "running", "started_at": "111"}
+
+        cache.serve_cached_result("job-9", "feature_research", {"result": {"ok": True}}, announce_start=False)
+
+        state = fake_redis.hashes["job:job-9:state"]
+        assert state["started_at"] == "111", "the study admitted for some seconds first; that is when it started"
+        assert state["status"] == "completed" and state["cached"] == "1"
+        events = [e[1]["event"] for e in fake_redis.streams["job:job-9:events"]]
+        assert len(events) == 1 and '"job.completed"' in events[0], "only the completion is new"
+
+    def test_a_hit_answered_before_any_worker_started_stamps_its_own_start(self, fake_redis: FakeRedis) -> None:
+        cache.serve_cached_result("job-8", "feature_research", {"result": {"ok": True}})
+
+        assert int(fake_redis.hashes["job:job-8:state"]["started_at"]) > 0
+

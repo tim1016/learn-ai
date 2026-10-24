@@ -45,6 +45,7 @@ CROSS_SECTIONAL_PHASES: tuple[Phase, ...] = (
 
 # ── Feature research runner ──────────────────────────────────────────────
 FEATURE_RESEARCH_PHASES: tuple[Phase, ...] = (
+    Phase("admitting_data", "Checking the data lake for this window", 2),
     Phase("loading_bars", "Loading price history", 1),
     Phase("compute_target", "Computing forward returns", 1),
     Phase("compute_feature", "Computing feature values", 2),

@@ -56,9 +56,9 @@ describe('DataLakeService', () => {
   it('reads one instrument\'s data for the window in int64 ms UTC and the tree named, and never POSTs', async () => {
     const pending = service.instrumentData({
       symbol: 'SPY',
-      startTradingDate: '2026-05-18',
-      endTradingDate: '2026-05-20',
-      priceAdjustmentMode: 'raw',
+      from: '2026-05-18',
+      to: '2026-05-20',
+      tree: 'raw',
     });
 
     const request = http.expectOne((candidate) => candidate.url === `${BASE}/instrument-data`);
@@ -75,9 +75,9 @@ describe('DataLakeService', () => {
   it('refuses an instrument-data window with a date that is not one, without sending it', async () => {
     const read = await service.instrumentData({
       symbol: 'SPY',
-      startTradingDate: '2026-05-18',
-      endTradingDate: '',
-      priceAdjustmentMode: 'polygon_split_adjusted',
+      from: '2026-05-18',
+      to: '',
+      tree: 'polygon_split_adjusted',
     });
 
     expect(read).toMatchObject({ kind: 'rejected', reason: 'invalid_trading_date' });

@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import asdict
+from datetime import date
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
@@ -41,8 +42,7 @@ from app.research.batch_runner import (
     CrossSectionalReport,
     run_cross_sectional_study,
 )
-from app.research.config import ResearchConfig
-from app.research.runner import run_feature_research
+from app.research.lake_study import SESSION_POLICY_FOR_REQUEST
 from app.research.signal.config import SignalConfig
 from app.research.signal.engine import run_signal_engine
 from app.research.study_records.models import RecordId
@@ -50,10 +50,12 @@ from app.research.study_records.recorder import keeps_job_record
 from app.schemas.engine_backtest import EngineBacktestRequest
 from app.schemas.ticker_request import (
     MultiTickerRequest,
+    Session,
     TickerRequest,
 )
 from app.services.dataset_service import RunCancelledError
 from app.services.engine_backtest_service import execute_engine_backtest
+from app.services.feature_study_service import FeatureStudyParams, run_feature_study
 from app.services.polygon_client import PolygonClientService
 
 router = APIRouter()
@@ -204,14 +206,22 @@ class CrossSectionalJobRequest(_CamelCaseMultiTickerRequest):
 class FeatureResearchJobRequest(_CamelCaseTickerRequest):
     """Body of POST /api/jobs-internal/feature-research.
 
-    The runner fetches bars from Polygon itself — the Frontend sends only
-    the symbol + date range + feature, no payload of OHLCV. This keeps
-    the request small and matches the cross-sectional pattern.
+    The worker reads the study's bars from the data lake itself, materializing
+    what the lake lacks — the Frontend sends only the symbol + date range +
+    feature, no payload of OHLCV. Only minute bars of a length that divides
+    the study's 15-minute target are accepted (1, 3, 5, 15); other sizes are
+    refused with a reason (``app.services.feature_study_service``).
 
-    Inherits all defaults from the base (``multiplier=1``,
-    ``timespan="minute"``, ``session="rth"``) — those match the
-    pre-migration shape exactly.
+    **Default override**: ``session="extended"``. ``session`` is the one
+    control for which bars the study computes on, and the page offers both:
+    ``extended`` is every bar the provider served, 04:00-20:00 ET, which is what
+    the study has always read; ``rth`` is the scheduled session. The base
+    default (``rth``) would have silently moved every caller that omits it onto
+    a different sample (#3521).
     """
+
+    # Override base default — preserves the session the study has always computed on.
+    session: Session = "extended"
 
     job_id: str = Field(..., min_length=1)
     feature_name: str = Field(..., min_length=1)
@@ -732,104 +742,34 @@ def _emit_friendly_phase(
 async def start_feature_research_job(req: FeatureResearchJobRequest) -> dict:
     """Kick off a feature-validation experiment in a worker thread.
 
-    The runner fetches bars from Polygon, computes the feature, runs IC
-    + stationarity + quantile + robustness analysis, and assigns a
-    0/1/2/3 stage verdict via the per-feature validation contract.
-    Phases stream over SSE so the user sees what's happening.
+    The worker admits the study's bars from the data lake (materializing what
+    is missing), computes the feature, runs IC + stationarity + quantile +
+    robustness analysis, and assigns a 0/1/2/3 stage verdict via the
+    per-feature validation contract. Phases stream over SSE so the user sees
+    what's happening. A window the lake cannot admit fails the job with a
+    typed refusal and its coverage counts; no result is computed.
 
-    A successful prior run with identical (ticker, feature, range,
-    bar resolution) is served from cache. Pass ``force=true`` to bypass.
+    A successful prior run over the same admitted data is served from cache
+    (the lookup follows admission — see ``feature_study_service``). Pass
+    ``force=true`` to bypass.
     """
     if not req.symbol.strip():
         raise HTTPException(status_code=400, detail="symbol is required")
     if not req.feature_name.strip():
         raise HTTPException(status_code=400, detail="feature_name is required")
 
-    cache_params = {
-        "ticker": req.symbol.upper(),
-        "feature_name": req.feature_name,
-        "from_date": req.from_date,
-        "to_date": req.to_date,
-        "multiplier": req.multiplier,
-        "timespan": req.timespan,
-    }
-    if not req.force:
-        hit = result_cache.lookup("feature_research", cache_params)
-        if hit is not None:
-            _, cached = hit
-            result_cache.serve_cached_result(req.job_id, "feature_research", cached)
-            return {"job_id": req.job_id, "status": "cached"}
+    params = FeatureStudyParams(
+        symbol=req.symbol.upper(),
+        feature_name=req.feature_name,
+        from_date=date.fromisoformat(req.from_date),
+        to_date=date.fromisoformat(req.to_date),
+        timespan=req.timespan,
+        multiplier=req.multiplier,
+        session_policy=SESSION_POLICY_FOR_REQUEST[req.session],
+    )
 
-    def work(emit: ProgressEmitter, cancel) -> dict:
-        ticker = req.symbol.upper()
-
-        # ── Phase: load bars ─────────────────────────────────────────
-        _emit_friendly_phase(
-            emit,
-            cancel,
-            "feature_research",
-            "loading_bars",
-            f"Loading {ticker} {req.multiplier}{req.timespan} bars from {req.from_date} to {req.to_date}",
-        )
-
-        bars = polygon_client.fetch_aggregates(
-            ticker=ticker,
-            multiplier=req.multiplier,
-            timespan=req.timespan,
-            from_date=req.from_date,
-            to_date=req.to_date,
-        )
-        if not bars:
-            raise ValueError(f"No bars returned for {ticker} in date range")
-        emit.log(f"Loaded {len(bars):,} bars")
-        emit.progress(current=len(bars), total=len(bars), unit="bars", message="bars loaded")
-
-        # The runner emits its own phase events via callbacks; we forward
-        # them through the friendly-label table so the UI text reads
-        # cleanly without the runner having to know about phase ids.
-        def on_phase(phase: str) -> None:
-            cancel.raise_if_cancelled()
-            emit.phase(phase)
-
-        def on_log(message: str, level: str = "info") -> None:
-            emit.log(message, level=level)
-
-        def on_progress(current: int, total: int, unit: str = "windows", message: str | None = None) -> None:
-            emit.progress(current=current, total=total, unit=unit, message=message)
-
-        def cancel_check() -> bool:
-            # Raises JobCancelled when set; otherwise returns False so
-            # call sites can use it either as a poll or as a sync barrier.
-            cancel.raise_if_cancelled()
-            return False
-
-        report = run_feature_research(
-            ticker=ticker,
-            feature_name=req.feature_name,
-            bars=bars,
-            start_date=req.from_date,
-            end_date=req.to_date,
-            config=ResearchConfig(),
-            on_phase=on_phase,
-            on_log=on_log,
-            on_progress=on_progress,
-            cancel_check=cancel_check,
-        )
-
-        if report.error:
-            # Surface the failure as an exception so run_in_thread emits
-            # job.failed (the runner caught the exception internally to
-            # populate report.error; here we re-raise so the SSE consumer
-            # sees a clean terminal event instead of "completed but
-            # error_field=…").
-            raise ValueError(report.error)
-
-        cancel.raise_if_cancelled()
-        _emit_friendly_phase(emit, cancel, "feature_research", "completed")
-
-        result = _serialize_feature_report(report)
-        result_cache.store("feature_research", cache_params, result)
-        return result
+    def work(emit: ProgressEmitter, cancel) -> dict | None:
+        return run_feature_study(params, job_id=req.job_id, force=req.force, emit=emit, cancel=cancel)
 
     run_in_thread(
         req.job_id,
@@ -947,66 +887,6 @@ async def start_signal_engine_job(req: SignalEngineJobRequest) -> dict:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _serialize_target(target: Any) -> dict:
-    """Project a ``TargetResult`` to the JSON-friendly ``TargetMetadata``
-    shape the Frontend consumes. The bulky ``values``/``timestamps``
-    Series are intentionally dropped — only the metadata that drives
-    the UI disclosure travels with the report. ``invalid_reason_counts``
-    is emitted as a list of ``{reason, count}``.
-    """
-    return {
-        "target_name": target.target_name,
-        "horizon_minutes": target.horizon_minutes,
-        "horizon_bars": target.horizon_bars,
-        "bar_minutes": target.bar_minutes,
-        "timezone": target.timezone,
-        "valid_count": target.valid_count,
-        "total_count": target.total_count,
-        "valid_ratio": target.valid_ratio,
-        "invalid_reason_counts": [
-            {"reason": reason, "count": count} for reason, count in target.invalid_reason_counts.items()
-        ],
-    }
-
-
-def _serialize_feature_report(report: Any) -> dict:
-    """Serialize a ResearchReport for storage in the result cache and
-    delivery to the Frontend.
-
-    Hand-rolled (rather than ``asdict``) so we can keep the Pydantic-
-    response-model shape stable: nested dataclasses become dicts and we
-    flatten the validation verdict.
-    """
-    return {
-        "success": report.error is None,
-        "ticker": report.ticker,
-        "feature_name": report.feature_name,
-        "start_date": report.start_date,
-        "end_date": report.end_date,
-        "bars_used": report.bars_used,
-        "mean_ic": report.mean_ic,
-        "ic_t_stat": report.ic_t_stat,
-        "ic_p_value": report.ic_p_value,
-        "nw_t_stat": report.nw_t_stat,
-        "nw_p_value": report.nw_p_value,
-        "effective_n": report.effective_n,
-        "ic_values": report.ic_values,
-        "ic_dates": report.ic_dates,
-        "adf_pvalue": report.adf_pvalue,
-        "kpss_pvalue": report.kpss_pvalue,
-        "is_stationary": report.is_stationary,
-        "quantile_bins": report.quantile_bins,
-        "is_monotonic": report.is_monotonic,
-        "monotonicity_ratio": report.monotonicity_ratio,
-        "robustness": asdict(report.robustness) if report.robustness is not None else None,
-        "feature_spec": asdict(report.feature_spec) if report.feature_spec is not None else None,
-        "validation_verdict": (asdict(report.validation_verdict) if report.validation_verdict is not None else None),
-        "target": _serialize_target(report.target) if report.target is not None else None,
-        "passed_validation": report.passed_validation,
-        "error": report.error,
-    }
 
 
 def _serialize_signal_report(report: Any) -> dict:

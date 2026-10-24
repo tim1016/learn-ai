@@ -26,6 +26,7 @@ class StubEmitter:
         self.logs: list[tuple[str, str]] = []
         self.phases: list[str] = []
         self.failures: list[tuple[str, str]] = []
+        self.failure_results: list[Any] = []
 
     def log(self, message: str, *, level: str = "info") -> None:
         self.logs.append((level, message))
@@ -36,15 +37,21 @@ class StubEmitter:
     def progress(self, current: int, total: int, **_: Any) -> None:
         return None
 
-    def failed(self, code: str, message: str) -> None:
+    def failed(self, code: str, message: str, *, result: Any = None) -> None:
         self.failures.append((code, message))
+        self.failure_results.append(result)
 
 
 @dataclass
 class StubCancel:
-    """A cancellation check that raises ``JobCancelled`` once ``cancelled`` is set."""
+    """A cancellation check that raises ``JobCancelled`` once ``cancelled`` is set.
+
+    Like the real ``CancellationCheck`` it is a dataclass with ``check_every_n``: a lake study copies the check with
+    ``dataclasses.replace(cancel, check_every_n=1)`` for its phase boundaries.
+    """
 
     cancelled: bool = False
+    check_every_n: int = 1
 
     def raise_if_cancelled(self) -> None:
         if self.cancelled:

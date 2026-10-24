@@ -5,6 +5,7 @@ import type { components } from '../api/broker.types';
 import { environment } from '../../environments/environment';
 import { toSignalEngineResult } from './research-experiments.mappers';
 import { failureAsError, isPythonRefusal } from './python-http-failure';
+import type { LakeStudyDataSource } from '../shared/lake-study/lake-study';
 
 type Schema = components['schemas'];
 
@@ -226,6 +227,8 @@ export interface ResearchResult {
   /** Audit trail of what the target pipeline actually computed. */
   targetMetadata?: TargetMetadata | null;
   validationVerdict?: FeatureValidationVerdict | null;
+  /** The lake source and admission counts behind this result. */
+  dataSource?: LakeStudyDataSource | null;
   error?: string;
 }
 

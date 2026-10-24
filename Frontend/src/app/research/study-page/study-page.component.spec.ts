@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { StudyPageComponent } from './study-page.component';
 import { RESEARCH_STUDIES, type ResearchStudyId } from '../research-studies';
 import type { StudyPrefill } from '../stored-study/rerun';
+import type { DataSourceProvenance } from '../../shared/workspace/data-source-provenance';
 
 interface Page {
   readonly study: ResearchStudyId;
@@ -16,6 +17,8 @@ interface Page {
   readonly hasResult?: boolean;
   readonly previous?: boolean;
   readonly prefill?: StudyPrefill | null;
+  readonly dataSource?: DataSourceProvenance;
+  readonly dataSourceWindows?: 'et' | 'date-et';
 }
 
 async function renderPage(page: Page) {
@@ -32,6 +35,8 @@ async function renderPage(page: Page) {
        [previous]="previous"
        [captured]="captured"
        [prefill]="prefill"
+       [dataSource]="dataSource"
+       [dataSourceWindows]="dataSourceWindows"
        (run)="run()">
        <div studyInstrument>instrument picker</div>
        <div studyConfig>test configuration</div>
@@ -49,6 +54,8 @@ async function renderPage(page: Page) {
         hasResult: false,
         previous: false,
         prefill: null,
+        dataSource: undefined,
+        dataSourceWindows: 'et',
         captured: { key: 'k', facts: [{ label: 'Instrument', value: 'SPY' }] },
         ...page,
         run,
@@ -77,7 +84,7 @@ describe('StudyPageComponent', () => {
   });
 
   it.each([
-    ['feature', 'extended hours included, fixed'],
+    ['feature', '15 minutes, fixed'],
     ['signal', 'extended hours included, fixed'],
     ['indicator-reliability', 'regular trading hours, fixed'],
     ['cross-sectional', 'daily, fixed'],
@@ -88,7 +95,7 @@ describe('StudyPageComponent', () => {
   });
 
   it.each([
-    ['feature', 'Polygon'],
+    ['feature', 'Data lake, Polygon'],
     ['signal', 'Polygon'],
     ['indicator-reliability', 'Polygon'],
     ['cross-sectional', 'Polygon stock bars, Polygon option bars, FRED risk-free rate'],
@@ -102,6 +109,39 @@ describe('StudyPageComponent', () => {
       expect(screen.getAllByText('not recorded').length).toBeGreaterThan(0);
     },
   );
+
+  describe('a lake window handed over as the study\'s data source', () => {
+    // 2024-03-04 and 2024-03-15 at ET midnight: the bounds of a window of sessions.
+    const lakeSource: DataSourceProvenance = {
+      sources: ['Data lake', 'polygon'],
+      subject: 'SPY',
+      requestedWindow: { startMs: 1_709_528_400_000, endMs: 1_710_478_800_000 },
+      effectiveWindow: { startMs: 1_709_528_400_000, endMs: 1_710_478_800_000 },
+      warmup: 'none',
+      resolution: '5-minute bars, folded from 1-minute bars',
+      adjustment: 'polygon_split_adjusted',
+      sessionPolicy: 'extended',
+      dataIdentity: 'abc',
+      observedAtMs: null,
+      counts: { added: 3, reused: 7, missing: 0 },
+      limitations: [],
+    };
+    const lineText = () => screen.getByText('Data source').closest('summary')?.textContent ?? '';
+
+    it('replaces the study\'s own line, and writes a window of dates without a time of day', async () => {
+      await renderPage({ study: 'feature', dataSource: lakeSource, dataSourceWindows: 'date-et' });
+
+      expect(lineText()).toContain('Data lake, Polygon');
+      expect(lineText()).toContain('5-minute bars, folded from 1-minute bars');
+      expect(lineText()).not.toMatch(/\d{1,2}:\d{2}/);
+    });
+
+    it('writes the exchange-aligned instant unless the host says its windows are dates', async () => {
+      await renderPage({ study: 'feature', dataSource: lakeSource });
+
+      expect(lineText()).toMatch(/\d{1,2}:\d{2}/);
+    });
+  });
 
   it('has a data-source line for every registered study', () => {
     expect(RESEARCH_STUDIES.map((study) => study.id).sort()).toEqual(

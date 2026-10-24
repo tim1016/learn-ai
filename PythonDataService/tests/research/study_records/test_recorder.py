@@ -58,7 +58,7 @@ def test_a_completed_job_leaves_its_inputs_result_and_provenance_without_the_swi
         "to_date": "2024-03-28",
         "timespan": "minute",
         "multiplier": 1,
-        "session": "rth",
+        "session": "extended",
         "feature_name": "rsi_14",
     }, "job id, force and lineage say how it was started, not what it was asked"
     assert config.job_id == FEATURE_REQUEST["job_id"]
@@ -128,6 +128,33 @@ def test_a_failure_the_work_reports_itself_is_recorded_and_still_reaches_the_job
     assert config.status == "failed" and config.status_detail == "The lake lacks 3 sessions."
     assert stored.result is None
     assert emit.failures == [("DATA_NOT_ADMITTED", "The lake lacks 3 sessions.")], "the job's own terminal event is unchanged"
+
+
+def test_a_refusal_the_work_parks_beside_its_failure_is_recorded_with_its_data_source(tmp_path: Path) -> None:
+    """A lake study that is refused fails the job and parks the refusal as its result; the record keeps both."""
+    refusal = {
+        "success": False,
+        "status": "refused",
+        "error": "The lake cannot admit this window: 1 of 10 sessions is missing.",
+        "refusal": {"code": "data_missing", "reason": "1 of 10 sessions is missing.", "sessions_total": 1},
+        "data_source": {"kind": "lake", "snapshot_digest": None, "coverage": {"window": {"expected_sessions": 10, "missing": 1}}},
+    }
+
+    def work(emit: Any, cancel: Any) -> None:
+        emit.failed("data_missing", refusal["error"], result=refusal)
+
+    emit = StubEmitter()
+    recorded = keeps_job_record("feature-study", a_feature_request(), work, root=tmp_path)
+
+    assert recorded(emit, StubCancel()) is None
+
+    config, stored = only_record(tmp_path)
+    assert config.status == "failed" and config.status_detail == refusal["error"]
+    assert config.headline is None, "a run with no result has no headline"
+    assert config.data_source == refusal["data_source"], "the counts admission reached are the record's data source"
+    assert stored.result == refusal
+    assert emit.failures == [("data_missing", refusal["error"])]
+    assert emit.failure_results == [refusal], "the job still parks the refusal for the page to read"
 
 
 @pytest.mark.parametrize("method", ["log", "phase", "failed"])
