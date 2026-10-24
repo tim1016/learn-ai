@@ -73,7 +73,16 @@ and what it reads now, field by field:
   canonical calendar), completed sessions only: a window ending on a session that
   has not finished is refused, where the provider used to hand back the forming
   session's partial bars. The 70/30 train/test split is by bar index. Regime
-  labels and walk-forward months bucket by **UTC** date; both are unchanged.
+  labels, walk-forward months and the per-bar date labels bucket by the bar's
+  **New York** date (``app.research.signal.session_dates``, through the zone, so
+  daylight saving is right). In standard time 19:00-19:59 ET is already the next UTC
+  date, so a UTC date moved those extended-hours evening bars into the next session's
+  day (before a weekend, a holiday or the window's end, into a day made of them alone),
+  and a month's last session's evening into the next month. Regular-hours bars, and
+  extended bars in daylight time, sit on one UTC date, so for them nothing moves;
+  extended hours in standard time do move. ``signal-study/2`` is the calculation
+  version that carries the corrected bucketing, so no result computed under UTC dates
+  is read as it.
 * **Cache and result.** Before: Redis ``signal_engine``, keyed on ticker, feature,
   dates, size and the two switches, looked up before the fetch, 24 h, not shared
   across sources. Now: a new namespace keyed on the input identity, the admitted
@@ -115,7 +124,7 @@ from app.utils.timestamps import ny_datetime
 
 #: Bump when the signal, backtest, walk-forward, diagnostics or graduation math changes: a cached result is the
 #: product of the code that made it, and the cache key is the only thing that tells a new run apart from an old one.
-SIGNAL_STUDY_CALCULATION_VERSION = "signal-study/1"
+SIGNAL_STUDY_CALCULATION_VERSION = "signal-study/2"
 
 #: The lake-sourced cache namespace. Entries written when the provider was the source live under
 #: ``signal_engine`` and are never read by a lake request.

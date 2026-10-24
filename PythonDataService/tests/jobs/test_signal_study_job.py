@@ -25,13 +25,20 @@ from app.jobs import cache as result_cache
 from app.jobs.progress import ProgressEmitter
 from app.jobs.runner import run_in_thread
 from app.lean_sidecar.trading_calendar import expected_sessions
-from app.research.lake_study import SESSION_POLICY_FOR_REQUEST
+from app.research.lake_study import SESSION_POLICY_FOR_REQUEST, cache_key
+from app.research.study_inputs import admit_minute_inputs
 from app.research.study_records.models import StudyRecordConfig, StudyRecordResult
 from app.research.study_records.recorder import keeps_job_record
 from app.research.study_records.store import StudyRecordStore
 from app.routers.jobs import SignalEngineJobRequest, start_signal_engine_job
 from app.services import signal_study_service
-from app.services.signal_study_service import CACHE_NAMESPACE, SignalStudyParams, run_signal_study
+from app.services.signal_study_service import (
+    CACHE_NAMESPACE,
+    SignalStudyParams,
+    run_signal_study,
+    signal_study,
+    signal_study_identity,
+)
 from tests._helpers.fake_lake_catalog import FakeCatalog, install_fake_catalog, mock_launcher, point_lake_writer_at_tmp
 from tests._helpers.lake_study import commit_bars, corrected_day, lake_file
 from tests._helpers.pinned_vendor import VendorBar, VendorCalls, mock_vendor, vendor_history
@@ -422,6 +429,31 @@ def test_a_provider_era_cache_entry_is_neither_returned_nor_relabelled(harness):
     assert harness.fake.strings[old_key] == seeded, "the old entry is left exactly as it was written"
     assert harness.computed == 1
     assert any(key.startswith(f"result:{CACHE_NAMESPACE}:") for key in harness.cache_keys())
+
+
+def test_a_result_cached_under_the_utc_date_calculation_version_is_neither_returned_nor_relabelled(harness):
+    # signal-study/1 bucketed regime days and walk-forward months by UTC date. Its entry sits under the same
+    # namespace, identity and lake bytes as a new request, so only the calculation version keeps it from being found.
+    p = params()
+    harness.run(p, job_id="seed")
+    identity = signal_study_identity(p)
+    admitted = admit_minute_inputs(identity.inputs, requester="test", now_ms=NOW_MS)
+    old_key = cache_key(identity, admitted, calculation_version="signal-study/1", extra=signal_study(p).cache_extra)
+    old_hash = result_cache.store(CACHE_NAMESPACE, old_key, {"success": True, "ticker": "SPY", "best_threshold": 99.0, "from": "UTC dates"})
+    old_entry = f"result:{CACHE_NAMESPACE}:{old_hash}"
+    for key in harness.cache_keys():
+        if key != old_entry:
+            del harness.fake.strings[key]  # only the old version's entry remains for this identity and these bytes
+    seeded = harness.fake.strings[old_entry]
+
+    state = harness.run(p, job_id="fresh")
+
+    result = harness.result("fresh")
+    assert status_of(state) == "completed" and state.get("cached") != "1"
+    assert result["best_threshold"] != 99.0 and "from" not in result
+    assert result["data_source"]["calculation_version"] != "signal-study/1"
+    assert harness.fake.strings[old_entry] == seeded, "the old entry is left exactly as it was written"
+    assert harness.computed == 2
 
 
 def test_an_identical_repeat_is_served_from_the_cache_without_recomputing(harness):

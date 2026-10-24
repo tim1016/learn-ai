@@ -1,6 +1,6 @@
 """Walk-forward validation with rolling train/test windows.
 
-Formula: Rolling walk-forward: train [t_i, t_i+L), test [t_i+L, t_i+L+H), advance by H; OOS Sharpe aggregated over disjoint test windows.
+Formula: Rolling walk-forward over calendar months of New York session dates: train [t_i, t_i+L), test [t_i+L, t_i+L+H), advance by H; OOS Sharpe aggregated over disjoint test windows.
 Reference: Internal Signal Engine split policy, ADR 0073 decision 2 and 2026-10-23 amendment. No external walk-forward port claimed.
 Canonical implementation: app/research/signal/walk_forward.py
 Validated against: NONE — pending independent numerical fixture; window behavior in PythonDataService/tests/research/test_signal_engine.py::TestWalkForward.
@@ -20,6 +20,7 @@ from app.research.features.ta_features import TechnicalFeatures
 from app.research.signal.backtest import run_backtest, training_return_mask
 from app.research.signal.config import SignalConfig
 from app.research.signal.regime import compute_bar_regime_gate
+from app.research.signal.session_dates import ny_session_dates
 from app.research.signal.standardize import apply_threshold_filter
 from app.research.target import _infer_bar_minutes, compute_15min_forward_return
 
@@ -111,7 +112,7 @@ def run_walk_forward(
 ) -> WalkForwardResult:
     """Run walk-forward validation with rolling train/test windows."""
     df = pd.DataFrame(bars).sort_values("timestamp").reset_index(drop=True)
-    df["date"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.date
+    df["date"] = ny_session_dates(df["timestamp"])
 
     # Build month boundaries
     unique_dates = sorted(df["date"].unique())
@@ -380,7 +381,7 @@ def _compute_sharpe_trend_slope(sharpes: list[float]) -> AlphaDecayStats:
 
 
 def _get_month_boundaries(dates: list[date]) -> list[tuple[date, date]]:
-    """Group dates into (first_date, last_date) per calendar month."""
+    """Group New York session dates into (first_date, last_date) per calendar month."""
     months: dict[tuple[int, int], list[date]] = {}
     for d in dates:
         key = (d.year, d.month)

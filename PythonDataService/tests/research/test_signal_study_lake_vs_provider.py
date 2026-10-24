@@ -301,24 +301,26 @@ def test_a_bar_length_off_the_hour_regroups_the_same_minutes_into_other_buckets_
 #: more as the price falls. ``continuous`` outputs are pinned two-sided at the measured value, within the statistic's
 #: float accumulation error (``accumulation_atol``); ``discrete`` outputs (the chosen threshold and cost, counts) are
 #: pinned exactly, because a tolerance on a choice means nothing: the choice is stable because the sweep's winner leads
-#: its runner-up by far more than that error (asserted below; measured 0.047 at the least). Re-measure (print
-#: ``output_diffs`` per case) only when the pinned tape or the lake's encoding intentionally changes; never to make a
-#: failing test pass.
+#: its runner-up by far more than that error (asserted below; measured 0.41 at the least). Re-measure (print
+#: ``output_diffs`` per case) only when the pinned tape, the lake's encoding or the engine's numbers intentionally
+#: change; never to make a failing test pass. Re-measured once, for #3522's New York date bucketing, which moved the
+#: engine's regime days on this extended-hours tape: the tape, the cause (``data-quality``) and the unchanged outputs
+#: (``effective_n``, which reads no date) held, and the sweep's winner now leads by 0.41 where it led by 0.047.
 QUANTIZATION_MEASURED = {
     "price_150": (
         150.0, 5,
-        {"best_net_sharpe": 3.549102143018956e-05, "pct_time_active": 0.0, "effective_n": 7.707874244147206e-04, "mean_oos_sharpe": 0.0},
+        {"best_net_sharpe": 0.00012211634275161032, "pct_time_active": 0.0, "effective_n": 7.707874244147206e-04, "mean_oos_sharpe": 0.0},
         {"bars_used": 0.0, "best_threshold": 0.0, "best_cost_bps": 0.0, "oos_windows": 0.0},
     ),
     "price_12": (
         12.0, 5,
-        {"best_net_sharpe": 0.17226736646039598, "pct_time_active": 1.868809568305041e-04, "effective_n": 5.894916677220863e-03, "mean_oos_sharpe": 0.0},
-        {"bars_used": 0.0, "best_threshold": 1.5, "best_cost_bps": 0.0, "oos_windows": 0.0},
+        {"best_net_sharpe": 0.0041234023655203345, "pct_time_active": 0.0, "effective_n": 5.894916677220863e-03, "mean_oos_sharpe": 0.0},
+        {"bars_used": 0.0, "best_threshold": 0.0, "best_cost_bps": 0.0, "oos_windows": 0.0},
     ),
     "price_2": (
         2.0, 6,
-        {"best_net_sharpe": 0.49348158966829914, "pct_time_active": 5.606428704914984e-04, "effective_n": 1.8355161329623115e-02, "mean_oos_sharpe": 0.0},
-        {"bars_used": 0.0, "best_threshold": 1.5, "best_cost_bps": 0.0, "oos_windows": 0.0},
+        {"best_net_sharpe": 0.006679120983864806, "pct_time_active": 0.0001868809568305041, "effective_n": 1.8355161329623115e-02, "mean_oos_sharpe": 0.0},
+        {"bars_used": 0.0, "best_threshold": 0.0, "best_cost_bps": 0.0, "oos_windows": 0.0},
     ),
 }
 
@@ -335,9 +337,10 @@ def test_prices_finer_than_the_lake_grid_move_each_output_by_its_measured_amount
 
     This measures what a tape finer than the grid would do. The tape carries five and six decimals on purpose; real prices
     are already on the grid (``test_a_real_split_adjusted_tape...``), so these movements are the size of the effect and not
-    one a real run sees. On a $150 name nothing the reader acts on would move. On a $12 name the best net Sharpe would move
-    by 0.17 and the sweep pick another threshold (2.0 on the provider path, 0.5 on the lake); on a $2 name the Sharpe by
-    0.49. The graduation grade would not change at any level.
+    one a real run sees. On a $150 name nothing the reader acts on would move (the best net Sharpe by 0.0001). On a $12
+    name the best net Sharpe would move by 0.004 and on a $2 name by 0.007; the sweep picks the same threshold and cost on
+    both paths at every level, and the graduation grade would not change. (Before the engine bucketed days by New York
+    date, a $12 and a $2 tape each flipped the sweep's pick and moved the Sharpe by 0.17 and 0.49.)
     """
     tape = tape_for(LONG, start_price=start_price, decimals=decimals)
     mock_vendor("SPY", tape, adjusted=tape)
