@@ -9,8 +9,9 @@ import { WorkspaceStateBlockComponent } from '../../shared/workspace/workspace-s
 import { exploreTabRoute, parseRunId } from '../explore/explore-tabs';
 import { readStateOf } from '../read-state';
 import { parameterPairs } from '../signal-strategy-evidence';
+import { savedRunRoute } from '../signal-strategy-tabs';
 import { SignalStrategyWorkspaceStore } from '../signal-strategy-workspace.store';
-import { GOLDEN_RUN_PARAM, goldenTabRoute } from './golden-tabs';
+import { GOLDEN_RUN_PARAM } from './golden-tabs';
 
 /** What `?run=` is: not asked, being read, refused in words, or one of this strategy's own saved runs. */
 type RunState =
@@ -118,14 +119,7 @@ export class GoldenConfigurationComponent {
           happened: `Saved run #${id} belongs to ${found.strategyName}, not ${this.key()}.`,
           why: 'A run is selected as a baseline only for the strategy that produced it, so this page offers none of its configuration.',
           next: `Review it under ${found.strategyName}.`,
-          actions: [
-            {
-              id: 'owner',
-              label: `Open run #${id} under ${found.strategyName}`,
-              route: [...goldenTabRoute(found.strategyName, 'configuration')],
-              queryParams: { [GOLDEN_RUN_PARAM]: String(id) },
-            },
-          ],
+          actions: [{ id: 'owner', label: `Open run #${id} under ${found.strategyName}`, route: savedRunRoute(id) }],
         },
       };
     }

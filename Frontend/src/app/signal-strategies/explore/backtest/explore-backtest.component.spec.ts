@@ -122,10 +122,9 @@ function backtestPayload(): Record<string, unknown> {
 const STRATEGY_KEY = "ema_crossover_signal";
 
 /** The parts of the strategy's Explore session the workbench reads and writes. */
-function exploreSession(registered: readonly string[] = [STRATEGY_KEY, "rsi_mean_reversion"]) {
+function exploreSession() {
   return {
     key: signal(STRATEGY_KEY).asReadonly(),
-    registeredKeys: signal<ReadonlySet<string> | null>(new Set(registered)).asReadonly(),
     sweepCapability: signal({ supported: true, reason: null }).asReadonly(),
     goldenCapability: signal({ supported: true, reason: null }).asReadonly(),
     backtestRunId: signal<number | null>(null),
@@ -224,8 +223,6 @@ async function createLab(
     /** Makes the run-detail read surface a transport error, which is a
      *  different failure from the fetched run being unrestorable. */
     backtestRunQueryError?: Error;
-    /** The strategy keys the registry lists. */
-    registered?: readonly string[];
     /** The rows the strategy's History reads. */
     history?: BacktestRunSummary[];
   } = {},
@@ -276,7 +273,7 @@ async function createLab(
       { provide: RUN_DOCK_SOURCE, useExisting: EngineRunDockSource },
       { provide: RUN_DOCK_STORAGE_KEY, useValue: "run-dock-expanded:strategy-lab" },
       { provide: STRATEGY_LAB_PINNED_STRATEGY, useValue: signal(STRATEGY_KEY).asReadonly() },
-      { provide: ExploreSession, useValue: exploreSession(options.registered) },
+      { provide: ExploreSession, useValue: exploreSession() },
       {
         provide: JobsService,
         useValue: {
@@ -697,39 +694,25 @@ describe("Strategy Lab Workbench", () => {
     http.verify();
   });
 
-  it("shows a run another strategy produced as a refusal naming its owner, with none of its report", async () => {
-    const foreign = run({ id: 77, strategyName: "rsi_mean_reversion", totalTrades: 12 });
+  it.each([
+    ["a registered strategy", "rsi_mean_reversion"],
+    ["no strategy the registry lists", "user_provided"],
+  ])("shows a run %s produced as a refusal naming its owner, with none of its report, and opens it where its record places it", async (_name, owner) => {
+    const foreign = run({ id: 77, strategyName: owner, totalTrades: 12 });
     const { fixture, http, navigate } = await createLab({ activeRun: 77, backtestRun: foreign });
     http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
     await fixture.whenStable();
     fixture.detectChanges();
 
     const root = fixture.nativeElement as HTMLElement;
-    expect(root.textContent).toContain("Saved run #77 belongs to rsi_mean_reversion, not ema_crossover_signal.");
-    expect(within(root).getByRole("link", { name: "Open run #77 under rsi_mean_reversion" }).getAttribute("href")).toBe(
-      "/signal-strategies/rsi_mean_reversion/explore/backtest?run=77",
-    );
+    expect(root.textContent).toContain(`Saved run #77 belongs to ${owner}, not ema_crossover_signal.`);
+    // The saved-run address reads the owner from the record: Explore for a registered owner, the read-only report otherwise.
+    expect(within(root).getByRole("link", { name: `Open run #77 under ${owner}` }).getAttribute("href")).toBe("/signal-strategies/evidence/run/77");
+    expect(root.querySelector("a[href*='/user_provided/']")).toBeNull();
     // Nothing of the foreign run is drawn or taken over: no statistics, no next steps, and the rail keeps its own inputs.
     expect(root.querySelector("app-strategy-lab-run-stats")).toBeNull();
     expect(root.querySelector(".next-steps")).toBeNull();
     expect(TestBed.inject(StrategyLabConfigStore).initialCash()).toBe(100_000);
-    expect(navigate).not.toHaveBeenCalled();
-    http.verify();
-  });
-
-  it("opens a run no registered strategy holds read-only on its own page, and never links the strategy it stored", async () => {
-    const orphan = run({ id: 78, strategyName: "user_provided", requestedEngine: "lean", source: "lean-sidecar", engine: "LEAN" });
-    const { fixture, http, navigate } = await createLab({ activeRun: 78, backtestRun: orphan });
-    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
-    await fixture.whenStable();
-    fixture.detectChanges();
-
-    const root = fixture.nativeElement as HTMLElement;
-    expect(root.textContent).toContain("Saved run #78 belongs to user_provided, which the registry does not list.");
-    expect(within(root).getByRole("link", { name: "Open run #78 read-only" }).getAttribute("href")).toBe("/signal-strategies/evidence/run/78");
-    expect(within(root).queryByRole("link", { name: /under user_provided/ })).toBeNull();
-    expect(root.querySelector("a[href*='/user_provided/']")).toBeNull();
-    expect(root.querySelector("app-strategy-lab-run-stats")).toBeNull();
     expect(navigate).not.toHaveBeenCalled();
     http.verify();
   });

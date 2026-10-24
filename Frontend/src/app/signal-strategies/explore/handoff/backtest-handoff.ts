@@ -6,7 +6,8 @@ import { BacktestRunsService } from '../../../services/backtest-runs.service';
 import type { WorkspaceStateContent } from '../../../shared/workspace/workspace-state';
 import { readStateOf } from '../../read-state';
 import { ExploreSession } from '../explore-session';
-import { EXPLORE_RUN_PARAM, exploreTabRoute, parseRunId } from '../explore-tabs';
+import { savedRunRoute } from '../../signal-strategy-tabs';
+import { EXPLORE_RUN_PARAM, parseRunId } from '../explore-tabs';
 import { handoffFromBacktest, type ExploreHandoff, type HandoffDestination } from './explore-handoff';
 
 /** Where a handoff stands: reading its source, ready to fill a form, or refused with the reason. */
@@ -68,15 +69,8 @@ export function injectBacktestHandoff(
           kind: 'unavailable',
           happened: `Saved run #${id} belongs to ${run.strategyName}, not ${key}.`,
           why: 'A handoff carries a run only into the strategy that produced it.',
-          next: 'The form below starts empty. The run opens under its own strategy.',
-          actions: [
-            {
-              id: 'owner',
-              label: `Open run #${id} under ${run.strategyName}`,
-              route: exploreTabRoute(run.strategyName, 'backtest'),
-              queryParams: { [EXPLORE_RUN_PARAM]: String(id) },
-            },
-          ],
+          next: 'The form below starts empty. The run opens where its record places it.',
+          actions: [{ id: 'owner', label: `Open run #${id} under ${run.strategyName}`, route: savedRunRoute(id) }],
         },
       };
     }

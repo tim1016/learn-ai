@@ -128,12 +128,6 @@ export class SignalStrategyWorkspaceStore {
     return state.kind === 'found' && !state.entry.capabilities.golden.supported ? state.entry.capabilities.golden.reason : null;
   });
 
-  /** Every key the registry lists, once the registry has been read. */
-  readonly registeredKeys = computed<ReadonlySet<string> | null>(() => {
-    const state = readStateOf(this.registryRead);
-    return state.kind === 'ready' ? new Set(state.value.map((candidate) => candidate.strategy_key)) : null;
-  });
-
   /** The program-level proof record, or `null` when the proof catalog has none for this key. */
   readonly proof = computed<ReadState<StrategyValidationSummary | null>>(() =>
     mapRead(

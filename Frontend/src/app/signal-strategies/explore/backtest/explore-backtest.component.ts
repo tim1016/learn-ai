@@ -104,36 +104,20 @@ export class ExploreBacktestComponent {
 
   /**
    * A run the address names that another strategy produced: never drawn under this
-   * strategy's header. Its owner is linked only when the registry lists it; a run
-   * no registered strategy holds opens read-only on its own page.
+   * strategy's header. Its own address resolves the owner from the record itself, so
+   * an owner the registry no longer lists still opens, read-only.
    */
   protected readonly mismatch = computed<WorkspaceStateContent | null>(() => {
     const run = this.loadedRun();
     if (run === null || run.strategyName === this.key()) return null;
-    const ownerListed = this.session.registeredKeys()?.has(run.strategyName) === true;
-    const back = { id: "own", label: `Back to ${this.key()}`, route: exploreTabRoute(this.key(), "backtest") };
-    if (!ownerListed) {
-      return {
-        kind: "unavailable",
-        happened: `Saved run #${run.id} belongs to ${run.strategyName}, which the registry does not list.`,
-        why: "No strategy's Explore holds it, so this page shows none of its report.",
-        next: "Open the run by itself, read-only, or go back to this strategy's backtests.",
-        actions: [{ id: "report", label: `Open run #${run.id} read-only`, route: savedRunRoute(run.id) }, back],
-      };
-    }
     return {
       kind: "unavailable",
       happened: `Saved run #${run.id} belongs to ${run.strategyName}, not ${this.key()}.`,
       why: "A saved run opens only under the strategy that produced it, so this page shows none of its report.",
-      next: "Open it under its own strategy, or go back to this strategy's backtests.",
+      next: "Open it where its record places it, or go back to this strategy's backtests.",
       actions: [
-        {
-          id: "owner",
-          label: `Open run #${run.id} under ${run.strategyName}`,
-          route: exploreTabRoute(run.strategyName, "backtest"),
-          queryParams: { [EXPLORE_RUN_PARAM]: String(run.id) },
-        },
-        back,
+        { id: "owner", label: `Open run #${run.id} under ${run.strategyName}`, route: savedRunRoute(run.id) },
+        { id: "own", label: `Back to ${this.key()}`, route: exploreTabRoute(this.key(), "backtest") },
       ],
     };
   });

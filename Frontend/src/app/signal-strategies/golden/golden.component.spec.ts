@@ -211,7 +211,8 @@ describe('Golden → Configuration review', () => {
     await mine.harness.navigateByUrl(`/signal-strategies/${EMA}/golden/configuration?run=42`);
     expect(await screen.findByText(`Saved run #42 belongs to ${RSI}, not ${EMA}.`)).toBeTruthy();
     expect(screen.queryByRole('heading', { name: 'Select this Python run as the baseline run' })).toBeNull();
-    expect(screen.getByRole('link', { name: `Open run #42 under ${RSI}` }).getAttribute('href')).toBe(`/signal-strategies/${RSI}/golden/configuration?run=42`);
+    // The saved-run address reads the owner from the record, so the link names no strategy it has not checked.
+    expect(screen.getByRole('link', { name: `Open run #42 under ${RSI}` }).getAttribute('href')).toBe('/signal-strategies/evidence/run/42');
   });
 
   it.each([
@@ -428,6 +429,7 @@ describe('Explore → Golden (T12)', () => {
     })();
 
     expect(await screen.findByText(`Saved run #42 belongs to ${RSI}, not ${EMA}.`)).toBeTruthy();
+    expect(screen.getByRole('link', { name: `Open run #42 under ${RSI}` }).getAttribute('href')).toBe('/signal-strategies/evidence/run/42');
     await screen.findByRole('region', { name: 'Strategy, instrument and starting point' });
     expect(screen.queryByRole('region', { name: 'Started from' })).toBeNull();
     expect(golden.createStudy).not.toHaveBeenCalled();
