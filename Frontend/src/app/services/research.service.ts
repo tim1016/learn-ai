@@ -493,6 +493,8 @@ export interface SignalEngineResult {
   deflatedSharpe: DeflatedSharpe | null;
   methodology: Methodology | null;
   researchLog: string;
+  /** The lake source and admission counts behind this result; absent on a stored report. */
+  dataSource?: LakeStudyDataSource | null;
   error?: string;
 }
 

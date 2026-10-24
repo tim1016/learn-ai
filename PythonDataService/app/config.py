@@ -9,6 +9,8 @@ from uuid import UUID
 from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.utils.symbols import parse_symbol_list
+
 # Compose's own service-name shape: lowercase alphanumerics plus `_`, `.` and
 # `-`, starting with an alphanumeric. Anything else is a deployment mistake,
 # not a service this repo could restart.
@@ -434,10 +436,23 @@ class Settings(BaseSettings):
     # restore them after the lake moves on. Durable like the other artifact
     # stores; losing it leaves every qualification un-re-provable.
     GOLDEN_SEARCH_PROOF_ROOT: Path = _SERVICE_ARTIFACTS_ROOT / "golden_search" / "blobs"
-    # IV recorder JSONL store (ADR 0071 decision 8). The default is inside the
-    # container layer, so a recreate loses the history: point this at a mounted
-    # volume wherever the recorder is enabled.
-    IV_RECORDER_STORE_PATH: str = "/var/lib/iv-recorder"
+    # IV recorder JSONL store (ADR 0071 decision 8). Under the durable artifacts
+    # directory compose mounts, like the other artifact stores: the history is
+    # built forward from the day the recorder runs and cannot be bought back, so
+    # a container recreate must not lose it (#3525).
+    IV_RECORDER_STORE_PATH: str = str(_SERVICE_ARTIFACTS_ROOT / "iv_recorder")
+    # The underlyings whose IV30 the data plane records once a trading day, near
+    # the close (#3525). Comma-separated; empty turns the schedule off. The
+    # default is the option archive's underlyings.
+    IV_RECORDER_SYMBOLS: str = "SPY,QQQ,IWM"
+
+    @field_validator("IV_RECORDER_SYMBOLS")
+    @classmethod
+    def _iv_recorder_symbols_are_tickers(cls, value: str) -> str:
+        # A bad symbol fails here, when settings load, and not in the lifespan after the research authority was claimed
+        # (that claim must be the last startup step, #3042). The schedule reads the list again with the same rule.
+        parse_symbol_list(value, setting="IV_RECORDER_SYMBOLS")
+        return value
 
 settings = Settings(_env_file=None) if os.environ.get("RESEARCH_WORKER") == "1" else Settings()
 fleet_settings = FleetSettings(_env_file=None) if os.environ.get("RESEARCH_WORKER") == "1" else FleetSettings()

@@ -45,10 +45,8 @@ describe('storedFacts', () => {
       'realized-vs-iv',
       [
         ['Instrument', 'SPY'],
-        ['Bars sent as', '1d'],
-        ['Bars', '6'],
+        ['Bars', '1d'],
         ['Tenor', '30 days'],
-        ['HF session', 'ETH'],
       ],
     ],
   ] as const)('lists what a saved %s run was asked, in its study’s own words', (study, expected) => {

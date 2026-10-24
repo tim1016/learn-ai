@@ -38,7 +38,6 @@ import { createRerunPrefill } from '../../../research/stored-study/rerun';
 import { StoredInputsError, type StoredInputs } from '../../../research/stored-study/stored-inputs';
 import { createResultInputTracker } from '../../../shared/workspace/previous-result';
 import type { DataSourceProvenance } from '../../../shared/workspace/data-source-provenance';
-import { DataSourceComponent } from '../../../shared/data-source/data-source.component';
 import { LakeStudySourceComponent } from '../../../shared/lake-study/lake-study-source.component';
 import { toDataSourceProvenance } from '../../../shared/lake-study/lake-study';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
@@ -129,7 +128,6 @@ function riskFreeRateText(source: CrossSectionalDataSource | null): string {
     CrossSectionalReportComponent,
     CrossSectionalUniverseNoticeComponent,
     UniverseLakeHoldingComponent,
-    DataSourceComponent,
     LakeStudySourceComponent,
     TimestampDisplayComponent,
   ],

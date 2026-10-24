@@ -55,13 +55,15 @@ export function storedFacts(record: StoredStudyRecord): readonly StoredFact[] {
         { label: 'Slope IC', value: inputs.boolean('include_slope') ? 'included' : 'not included' },
       ];
     }
-    case 'realized-vs-iv':
+    case 'realized-vs-iv': {
+      const barSize = inputs.text('bar_size');
       return [
         { label: 'Instrument', value: inputs.text('symbol').toUpperCase() },
-        { label: 'Bars sent as', value: inputs.text('bar_size') },
-        { label: 'Bars', value: `${inputs.record('bars').number('count')}` },
+        { label: 'Bars', value: barSize },
         { label: 'Tenor', value: `${inputs.number('tenor_days')} days` },
-        { label: 'HF session', value: inputs.text('session') },
+        // Daily bars have no HF estimator: the request carries the default, which the run did not use.
+        ...(barSize === '15m' ? [{ label: 'HF session', value: inputs.text('hf_session') }] : []),
       ];
+    }
   }
 }

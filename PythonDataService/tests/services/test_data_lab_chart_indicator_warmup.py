@@ -805,6 +805,30 @@ def test_the_lead_in_never_reaches_past_the_providers_history_floor(timeframe: s
 
 
 @pytest.mark.parametrize(
+    ("from_date", "max_lookback", "bar_minutes", "fetch_from", "floor_limited"),
+    [
+        # The provider's history begins Friday 2024-03-08 on the clock below.
+        pytest.param("2024-03-11", 200, 1, "2024-03-08", True, id="the-sizing-wants-more-sessions-than-the-floor-leaves"),
+        pytest.param("2024-03-13", 200, 1, "2024-03-08", False, id="a-sizing-that-lands-exactly-on-the-floor-session-is-not-limited"),
+        pytest.param("2024-03-15", 14, 1, "2024-03-14", False, id="a-short-lookback-is-sized-well-inside-the-floor"),
+        pytest.param("2024-03-06", 14, 1, "2024-03-06", True, id="a-window-before-the-floor-has-no-lead-in-at-all"),
+        pytest.param("2024-03-11", 0, 1, "2024-03-11", False, id="no-indicators-are-never-limited"),
+        pytest.param("2024-03-20", 200, 390, "2024-03-08", True, id="daily-sessions-the-floor-cannot-supply"),
+    ],
+)
+def test_the_window_says_when_the_providers_floor_and_not_the_sizing_ended_the_lead_in(
+    from_date: str, max_lookback: int, bar_minutes: int, fetch_from: str, floor_limited: bool
+) -> None:
+    """The caller used to infer this from ``fetch_from <= floor``, which also held when the sizing landed on the floor."""
+    now = et_midnight_ms(date(2029, 3, 6))
+    assert polygon_history_floor(date(2029, 3, 6)) == date(2024, 3, 8)
+
+    window = resolve_indicator_window(from_date, max_lookback=max_lookback, bar_minutes=bar_minutes, now_ms=now)
+
+    assert (window.fetch_from, window.floor_limited) == (fetch_from, floor_limited)
+
+
+@pytest.mark.parametrize(
     ("timespan", "multiplier", "timeframe"),
     [
         ("minute", 1, "1m"),

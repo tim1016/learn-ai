@@ -47,8 +47,8 @@ Timespan = Literal["minute", "hour", "day"]
 Session = Literal["rth", "extended"]
 
 
-class _BarRange(BaseModel):
-    """Common shape for any request that pulls bars over a date range."""
+class _SessionFreeBarRange(BaseModel):
+    """The date and sampling block of a bars request, with no session: for a request the session cannot change."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -56,10 +56,9 @@ class _BarRange(BaseModel):
     to_date: str = Field(..., pattern=DATE_PATTERN)
     timespan: Timespan = "minute"
     multiplier: int = Field(1, ge=1)
-    session: Session = "rth"
 
     @model_validator(mode="after")
-    def _validate_dates(self) -> _BarRange:
+    def _validate_dates(self) -> _SessionFreeBarRange:
         # The pattern above only checks shape — "2025-13-99" passes the
         # regex but isn't a real date. Parse with date.fromisoformat to
         # verify calendar validity, then confirm from_date <= to_date.
@@ -73,6 +72,18 @@ class _BarRange(BaseModel):
                 f"to_date ({self.to_date}) must be >= from_date ({self.from_date})"
             )
         return self
+
+
+class _BarRange(_SessionFreeBarRange):
+    """Common shape for any request that pulls bars over a date range."""
+
+    session: Session = "rth"
+
+
+class SessionFreeTickerRequest(_SessionFreeBarRange):
+    """Single-symbol request that names no session: a body that sends one is refused (``extra_forbidden``)."""
+
+    symbol: _SymbolStr = Field(...)
 
 
 class TickerRequest(_BarRange):

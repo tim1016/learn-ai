@@ -1,5 +1,9 @@
 @let d = data();
 <span class="source-tag real" data-testid="rviv-source-tag">real data · {{ d.symbol }}</span>
+<span class="run-settings mono" data-testid="rviv-run-settings">
+  {{ d.run.barSize }} bars · {{ d.run.tenorDays }}D tenor
+  @if (d.run.hfSession) { · HF {{ d.run.hfSession }} }
+</span>
 <!-- Polygon Starter spread-synthesis caveat -->
 <div class="coverage-banner banner-data-source">
   <i class="pi pi-info-circle"></i>
@@ -26,10 +30,10 @@
     <div class="coverage-body">
       <div class="coverage-title">No IV30 at these bars — RV-only view</div>
       <div class="coverage-meta">
-        No recorded IV30 falls on these bars' timestamps, so the IV30 line,
-        RV-vs-IV bands, VRP histogram and long/short-vol signal triangles
-        cannot be drawn. Realized vol ({{ rvLastValue() }} latest) renders
-        against the right axis labelled <code>RV YZ</code>.
+        <span data-testid="iv-missing-reason">{{ ivMissingReason() }}</span>
+        The IV30 line, RV-vs-IV bands, VRP histogram and long/short-vol
+        signal triangles cannot be drawn. Realized vol ({{ rvLastValue() }}
+        latest) renders against the right axis labelled <code>RV YZ</code>.
       </div>
     </div>
   </div>
@@ -42,6 +46,12 @@
         VRP signals after <code>{{ blindStartMs() | timestampDisplay:'date-et' }}</code> are blind to the future — rendered as a
         hatched band on the chart. IV30 series begins
         <code>{{ d.coverage.ivFirstTsMs | timestampDisplay:'date-et' }}</code>.
+        <span data-testid="iv-alignment">
+          {{ d.ivAlignment.barsWithIv }} of {{ d.N }} bars hold an IV30:
+          {{ d.ivAlignment.snapshotsRead }} snapshot{{ d.ivAlignment.snapshotsRead === 1 ? '' : 's' }} read,
+          {{ d.ivAlignment.superseded }} superseded by a later one in the same bar,
+          {{ d.ivAlignment.outsideBars }} inside no bar. Bars with none have no IV30; nothing is carried forward.
+        </span>
       </div>
     </div>
   </div>
@@ -84,7 +94,7 @@
           <strong data-testid="iv-gated-now">Latest bar gated</strong> — confidence below floor;
           VRP signals forced to 0.
         } @else if (ivc.gatedNow === false) {
-          Latest bar above floor — VRP signal active.
+          Latest bar above floor{{ signalUnavailableReason() ? '' : ' — VRP signal active' }}.
         } @else {
           Confidence not computed for this run (no
           <code>variance_contribution_synthetic</code> in the IV series).
@@ -97,6 +107,24 @@
     </div>
   </div>
 }
+
+<!-- Where the IV came from, which is not the lake (the bars' own source is the page's data-source line) -->
+<p class="iv-input-note" data-testid="rviv-iv-input">
+  <strong>IV30 input, not from the lake:</strong>
+  @switch (d.ivInput.source) {
+    @case ('recorder') {
+      read from the IV recorder's file store, {{ d.ivInput.snapshots }} snapshot{{ d.ivInput.snapshots === 1 ? '' : 's' }} in the window ·
+      fingerprint <code>{{ d.ivInput.digest.slice(0, 12) }}</code>
+    }
+    @case ('caller_supplied') {
+      supplied with the request, {{ d.ivInput.snapshots }} point{{ d.ivInput.snapshots === 1 ? '' : 's' }} ·
+      fingerprint <code>{{ d.ivInput.digest.slice(0, 12) }}</code>
+    }
+    @case ('absent') {
+      none: nothing recorded for this window and none supplied.
+    }
+  }
+</p>
 
 <!-- Main chart -->
 <div class="chart-card">
@@ -128,12 +156,17 @@
   <p class="unavailable-note" data-testid="rviv-unavailable-note">
     Edge Score strip and Oracle (ex-post) signals: unavailable. This study does not compute them.
   </p>
+  @if (signalUnavailableReason(); as why) {
+    <p class="unavailable-note" data-testid="rviv-signal-unavailable">
+      VRP signals (the long-vol and short-vol markers, the Realtime toggle and vrp_z): none in this window. {{ why }}
+    </p>
+  }
   <app-edge-price-iv-chart
     [width]="1340" [height]="420"
     [data]="d"
     [showRealtime]="showRealtime()"
     [rvBands]="rvBands()"
-    [barSize]="barSize()"
+    [barSize]="d.run.barSize"
     [hoverIdx]="hoverIdx()"
     (hover)="hoverIdx.set($event)" />
 </div>
@@ -168,7 +201,7 @@
       <span class="r-val">{{ fmtPct(r.iv30) }}</span>
       <span class="r-key" title="IV30 converted to TRD/252 basis (NYSE calendar). Used for VRP.">iv30_trd252</span>
       <span class="r-val">{{ fmtPct(r.iv30Trd252) }}</span>
-      <span class="r-key" title="Trailing 30-bar Yang-Zhang (the yz_30 series) on daily bars. NOT VRP-driving.">rv_yz_30_daily</span>
+      <span class="r-key" title="Trailing 30-bar Yang-Zhang (the yz_30 series) over this run's bars. NOT VRP-driving.">{{ rvReadoutKey() }}</span>
       <span class="r-val">{{ fmtPct(r.rvYzDaily) }}</span>
       <span class="r-key" title="HF two-component estimator over 21 trading days. Drives VRP. Session-aware.">rv_hf_21d</span>
       @if (r.rvHf21d !== r.rvHf21d) {
@@ -180,17 +213,27 @@
       <span class="r-val">{{ fmtPct(r.vrpForward, 2) }}</span>
       <span class="r-key">edge_score</span>
       <span class="r-val r-unavailable" data-testid="rviv-edge-score-unavailable">unavailable</span>
-      @let live = liveIv30();
+      @let live = liveMarker();
       @if (live) {
         <span class="r-key"
-              title="Live IV30 from /api/edge/iv30/{vix-style,parametric}, captured alongside the realized series. Marker is drawn on the chart at the rightmost x.">
+              title="Live IV30 from /api/edge/iv30/{vix-style,parametric}, captured alongside the realized series. A reading taken now: never a value on a past date, and not part of the IV30 series above. The chart draws it at the rightmost x.">
           live_iv30
         </span>
         <span class="r-val" data-testid="live-iv30-readout">
           {{ fmtPct(live.iv30Act365) }}
           <span class="r-meta" data-testid="live-iv30-method">· {{ live.method === 'vix_style' ? 'vix-style' : 'parametric' }}</span>
           <span class="r-meta" data-testid="live-iv30-synth">· synth {{ (live.varianceContributionSynthetic * 100).toFixed(0) }}%</span>
+          <span class="r-meta" data-testid="live-iv30-asof">· as of {{ live.snapshotTsMs | timestampDisplay }}</span>
         </span>
+      } @else {
+        @let why = liveUnavailableReason();
+        @if (why) {
+          <span class="r-key" title="Live IV30 from /api/edge/iv30/{vix-style,parametric}.">live_iv30</span>
+          <span class="r-val r-unavailable">
+            <span data-testid="live-iv30-unavailable">unavailable</span>
+            <span class="r-meta r-reason" data-testid="live-iv30-reason">{{ why }}</span>
+          </span>
+        }
       }
     </div>
   </div>

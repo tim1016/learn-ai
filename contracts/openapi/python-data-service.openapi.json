@@ -4083,46 +4083,6 @@
         "title": "BacktestRunViewRefusalBody",
         "type": "object"
       },
-      "BarPayload": {
-        "description": "Inline OHLCV bar.",
-        "properties": {
-          "close": {
-            "title": "Close",
-            "type": "number"
-          },
-          "high": {
-            "title": "High",
-            "type": "number"
-          },
-          "low": {
-            "title": "Low",
-            "type": "number"
-          },
-          "open": {
-            "title": "Open",
-            "type": "number"
-          },
-          "ts": {
-            "description": "int64 ms UTC",
-            "title": "Ts",
-            "type": "integer"
-          },
-          "volume": {
-            "default": 0.0,
-            "title": "Volume",
-            "type": "number"
-          }
-        },
-        "required": [
-          "ts",
-          "open",
-          "high",
-          "low",
-          "close"
-        ],
-        "title": "BarPayload",
-        "type": "object"
-      },
       "BarProperty": {
         "additionalProperties": false,
         "description": "Compares a bar-derived property to a threshold. Stateless.\n\nProperties:\n  * ``range`` \u2014 high - low (price points)\n  * ``body`` \u2014 abs(close - open) (price points)\n  * ``range_pct`` \u2014 (high - low) / close (unitless fraction)\n  * ``body_pct`` \u2014 abs(close - open) / close (unitless fraction)",
@@ -33900,6 +33860,16 @@
             "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
             "title": "To Date",
             "type": "string"
+          },
+          "warmup_policy": {
+            "default": "allow_shortened",
+            "description": "What to do when the lake cannot supply the whole warmup lead-in the sizing asks for (history floor, symbol listing, sparse bars). 'allow_shortened' computes on the lead-in that exists and reports the shortfall in data_source.warmup; 'require_full' refuses with code 'warmup_shortened'. A lead-in session the vendor failed to supply (rather than answered with no bars) refuses under either policy.",
+            "enum": [
+              "allow_shortened",
+              "require_full"
+            ],
+            "title": "Warmup Policy",
+            "type": "string"
           }
         },
         "required": [
@@ -33968,6 +33938,14 @@
             },
             "title": "Daily Ic Values",
             "type": "array"
+          },
+          "data_source": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ReliabilityDataSource-Output"
+              }
+            ],
+            "description": "The lake input behind this result: identity, admitted snapshot, coverage and warmup"
           },
           "decay_curve": {
             "description": "IC at every integer horizon 1..N on the in-sample period",
@@ -34188,7 +34166,8 @@
           "display_name",
           "start_date",
           "end_date",
-          "bar_count"
+          "bar_count",
+          "data_source"
         ],
         "title": "IndicatorReliabilityResponse",
         "type": "object"
@@ -34616,6 +34595,52 @@
         "title": "Iv30LiveResponse",
         "type": "object"
       },
+      "IvPointPayload": {
+        "additionalProperties": false,
+        "description": "One caller-supplied IV point, stamped as the snapshot was taken (the study aligns it to a bar).\n\n``iv30`` is ACT/365, the solver's native basis; the study converts it to TRD/252 before VRP. A\n``health_score`` or ``variance_contribution_synthetic`` that is present, even as ``null``, turns the confidence\npath on (``null`` means no evidence and drops that factor), so what the caller set is kept apart from what it left out.",
+        "properties": {
+          "healthScore": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Healthscore"
+          },
+          "iv30": {
+            "minimum": 0.0,
+            "title": "Iv30",
+            "type": "number"
+          },
+          "ts": {
+            "description": "int64 ms UTC",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Ts",
+            "type": "integer"
+          },
+          "varianceContributionSynthetic": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Variancecontributionsynthetic"
+          }
+        },
+        "required": [
+          "ts",
+          "iv30"
+        ],
+        "title": "IvPointPayload",
+        "type": "object"
+      },
       "IvProvenancePayload": {
         "description": "Snake-case JSON projection of ``IvProvenance``.",
         "properties": {
@@ -34965,6 +34990,57 @@
           "help"
         ],
         "title": "KnobDeclaration",
+        "type": "object"
+      },
+      "LakeCacheState": {
+        "properties": {
+          "cached_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the cache stored the result; null when not recorded",
+            "title": "Cached At Ms"
+          },
+          "hit": {
+            "title": "Hit",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "hit",
+          "cached_at_ms"
+        ],
+        "title": "LakeCacheState",
+        "type": "object"
+      },
+      "LakeEffectiveWindow": {
+        "description": "The first and last session admitted (ET midnight, int64 ms UTC), unlike the requested bounds in the identity.",
+        "properties": {
+          "end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Start Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start_ms",
+          "end_ms"
+        ],
+        "title": "LakeEffectiveWindow",
         "type": "object"
       },
       "LaneAccountQuietRead": {
@@ -54545,44 +54621,62 @@
         "title": "ReadinessCheckView",
         "type": "object"
       },
-      "RealizedVsIvSeriesRequest": {
+      "RealizedVsIvJobRequest": {
+        "additionalProperties": false,
+        "description": "Body of POST /api/jobs-internal/realized-vs-iv.\n\nThe worker reads the study's bars from the data lake itself, materializing what the lake lacks: the browser\nsends the symbol and the study's settings, never bars. Unless ``window_start_ms`` and ``window_end_ms`` (ET\nmidnight of the first and last session, ``int64 ms UTC``) name a window, it is the fewest sessions whose bars let a\nVRP z-score exist, ending at the last session the study can read (``GET /api/edge/realized-vs-iv/window`` says which);\nsee ``app.services.realized_vs_iv_study_service``.\n\n``bar_size`` is ``15m`` or ``1d``. Anything else is accepted here and refused by the job with\n``resolution_unsupported`` and a reason, so the answer is a typed refusal a page can show rather than a 422.\n\n``session`` is which bars the study folds from: ``extended`` (04:00-20:00 ET) or ``rth``. Omitted, it is the session\neach bar size has always read (``extended`` for ``15m``, ``rth`` for ``1d``; #3525). ``hf_session`` is the HF\nestimator's own ETH/RTH filter and follows the session (``rth`` is RTH, ``extended`` is ETH): omitted, it is derived\nfor ``15m`` bars and recorded as derived, and one that disagrees with the session, or ``extended`` with ``1d``,\nfails the job with ``resolution_unsupported`` and the reason (``resolve_session_choice``).",
         "properties": {
-          "bar_size": {
+          "barSize": {
             "default": "1d",
-            "enum": [
-              "15m",
-              "1d"
-            ],
-            "title": "Bar Size",
+            "maxLength": 16,
+            "title": "Barsize",
             "type": "string"
           },
-          "bars": {
-            "items": {
-              "$ref": "#/components/schemas/BarPayload"
-            },
-            "title": "Bars",
-            "type": "array"
-          },
-          "confidence_floor": {
+          "confidenceFloor": {
             "default": 0.1,
-            "description": "Hard-gate floor: signals are forced to 0 where confidence < floor.",
             "maximum": 1.0,
             "minimum": 0.0,
-            "title": "Confidence Floor",
+            "title": "Confidencefloor",
             "type": "number"
           },
           "estimators": {
             "items": {
+              "enum": [
+                "ctc",
+                "parkinson",
+                "gk",
+                "yz"
+              ],
               "type": "string"
             },
+            "minItems": 1,
             "title": "Estimators",
             "type": "array"
           },
-          "iv_series": {
+          "force": {
+            "default": false,
+            "title": "Force",
+            "type": "boolean"
+          },
+          "hfSession": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ETH",
+                  "RTH"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hfsession"
+          },
+          "ivSeries": {
             "anyOf": [
               {
                 "items": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/IvPointPayload"
                 },
                 "type": "array"
               },
@@ -54590,10 +54684,14 @@
                 "type": "null"
               }
             ],
-            "description": "Optional [{ts, iv30, health_score?, variance_contribution_synthetic?}] history. iv30 must be ACT/365 (the solver's native basis); the router converts to TRD/252 before VRP. When health_score and variance_contribution_synthetic are supplied, the response includes per-bar confidence and the VRP signal is gated by it (Step E of IV-ownership plan).",
-            "title": "Iv Series"
+            "title": "Ivseries"
           },
-          "rerun_of": {
+          "jobId": {
+            "minLength": 1,
+            "title": "Jobid",
+            "type": "string"
+          },
+          "rerunOf": {
             "anyOf": [
               {
                 "pattern": "^[0-9a-f]{32}$",
@@ -54603,267 +54701,129 @@
                 "type": "null"
               }
             ],
-            "description": "The saved run this one was prefilled from (the History's Rerun); lineage only, never an input.",
-            "title": "Rerun Of"
+            "title": "Rerunof"
           },
           "session": {
-            "default": "ETH",
-            "description": "Session for the HF RV estimator. ETH = 04:00-20:00 ET (default), RTH = 09:30-16:00 ET.",
-            "enum": [
-              "ETH",
-              "RTH"
+            "anyOf": [
+              {
+                "enum": [
+                  "rth",
+                  "extended"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "title": "Session",
-            "type": "string"
+            "title": "Session"
           },
           "symbol": {
+            "maxLength": 20,
+            "minLength": 1,
             "title": "Symbol",
             "type": "string"
           },
-          "tenor_days": {
+          "tenorDays": {
             "default": 30,
             "maximum": 365.0,
             "minimum": 1.0,
-            "title": "Tenor Days",
+            "title": "Tenordays",
             "type": "integer"
+          },
+          "windowEndMs": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ET midnight of the last session, int64 ms UTC",
+            "title": "Windowendms"
+          },
+          "windowStartMs": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ET midnight of the first session, int64 ms UTC",
+            "title": "Windowstartms"
           },
           "windows": {
             "items": {
+              "maximum": 500.0,
+              "minimum": 2.0,
               "type": "integer"
             },
+            "minItems": 1,
             "title": "Windows",
             "type": "array"
           }
         },
         "required": [
-          "symbol",
-          "bars"
+          "jobId",
+          "symbol"
         ],
-        "title": "RealizedVsIvSeriesRequest",
+        "title": "RealizedVsIvJobRequest",
         "type": "object"
       },
-      "RealizedVsIvSeriesResponse": {
+      "RealizedVsIvWindow": {
+        "description": "The window a Realized vs IV run reads when its request names none.\n\n``window_start_ms`` and ``window_end_ms`` are ET midnight of the first and last session, ``int64 ms UTC``: the values the\njob request takes, so a page can send back exactly the window it showed. The window holds the fewest sessions whose\nbars let a VRP z-score exist (``resolve_window``), and ends on the last session the study can read or capture now.",
         "properties": {
-          "confidence": {
-            "anyOf": [
-              {
-                "items": {
-                  "anyOf": [
-                    {
-                      "type": "number"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
+          "bar_size": {
+            "enum": [
+              "15m",
+              "1d"
             ],
-            "title": "Confidence"
-          },
-          "coverage": {
-            "title": "Coverage",
-            "type": "object"
-          },
-          "explanation": {
-            "anyOf": [
-              {
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Explanation"
-          },
-          "floor_gated": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "boolean"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Floor Gated"
-          },
-          "iv30": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "title": "Iv30",
-            "type": "array"
-          },
-          "iv30_trd252": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "title": "Iv30 Trd252",
-            "type": "array"
-          },
-          "iv_source": {
-            "default": "caller_supplied",
-            "title": "Iv Source",
+            "title": "Bar Size",
             "type": "string"
           },
-          "rv_forward": {
-            "additionalProperties": {
-              "items": {
-                "anyOf": [
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "type": "array"
-            },
-            "title": "Rv Forward",
-            "type": "object"
-          },
-          "rv_hf_forward": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "title": "Rv Hf Forward",
-            "type": "array"
-          },
-          "rv_hf_trailing": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "title": "Rv Hf Trailing",
-            "type": "array"
-          },
-          "rv_trailing": {
-            "additionalProperties": {
-              "items": {
-                "anyOf": [
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "type": "array"
-            },
-            "title": "Rv Trailing",
-            "type": "object"
-          },
-          "symbol": {
-            "title": "Symbol",
+          "session": {
+            "enum": [
+              "rth",
+              "extended"
+            ],
+            "title": "Session",
             "type": "string"
           },
-          "ts": {
-            "items": {
-              "type": "integer"
-            },
-            "title": "Ts",
-            "type": "array"
+          "sessions": {
+            "minimum": 1.0,
+            "title": "Sessions",
+            "type": "integer"
           },
-          "vrp_forward": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "title": "Vrp Forward",
-            "type": "array"
+          "window_end_ms": {
+            "description": "ET midnight of the last session, int64 ms UTC",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Window End Ms",
+            "type": "integer"
           },
-          "vrp_z": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "title": "Vrp Z",
-            "type": "array"
-          },
-          "vrp_z_scaled": {
-            "anyOf": [
-              {
-                "items": {
-                  "anyOf": [
-                    {
-                      "type": "number"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Vrp Z Scaled"
+          "window_start_ms": {
+            "description": "ET midnight of the first session, int64 ms UTC",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Window Start Ms",
+            "type": "integer"
           }
         },
         "required": [
-          "symbol",
-          "ts",
-          "rv_trailing",
-          "rv_forward",
-          "iv30",
-          "iv30_trd252",
-          "rv_hf_trailing",
-          "rv_hf_forward",
-          "vrp_forward",
-          "vrp_z",
-          "coverage"
+          "bar_size",
+          "session",
+          "window_start_ms",
+          "window_end_ms",
+          "sessions"
         ],
-        "title": "RealizedVsIvSeriesResponse",
+        "title": "RealizedVsIvWindow",
         "type": "object"
       },
       "RecencyChartJobRequest": {
@@ -55581,6 +55541,20 @@
       },
       "RecordedSnapshotItem": {
         "properties": {
+          "asked_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the vendor was asked, int64 ms UTC",
+            "title": "Asked At Ms"
+          },
           "dividend_source": {
             "title": "Dividend Source",
             "type": "string"
@@ -55637,6 +55611,12 @@
             "title": "Iv Provenance",
             "type": "object"
           },
+          "quote_ts_derived": {
+            "default": false,
+            "description": "True when the chain carried no quote time and the asking time less the vendor's delay stands in",
+            "title": "Quote Ts Derived",
+            "type": "boolean"
+          },
           "rate": {
             "title": "Rate",
             "type": "number"
@@ -55650,6 +55630,9 @@
             "type": "string"
           },
           "snapshot_ts_ms": {
+            "description": "The quote time: the instant the chain's quotes describe, int64 ms UTC",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
             "title": "Snapshot Ts Ms",
             "type": "integer"
           },
@@ -56415,6 +56398,615 @@
           "kind"
         ],
         "title": "RegularSessionFlattenPricing",
+        "type": "object"
+      },
+      "ReliabilityDataSource-Input": {
+        "description": "The lake data source of a reliability run, plus its warmup report and the identity a stored result would key on.",
+        "properties": {
+          "aggregation": {
+            "title": "Aggregation",
+            "type": "string"
+          },
+          "bar_minutes": {
+            "title": "Bar Minutes",
+            "type": "integer"
+          },
+          "bars_used": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Bars the statistics ran on, after the folding and the warmup trim",
+            "title": "Bars Used"
+          },
+          "cache": {
+            "$ref": "#/components/schemas/LakeCacheState"
+          },
+          "calculation_version": {
+            "title": "Calculation Version",
+            "type": "string"
+          },
+          "corporate_action_versions": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Corporate Action Versions",
+            "type": "object"
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StudyCoverage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "data_root_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Root Id"
+          },
+          "effective_window": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LakeEffectiveWindow"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null until admission succeeds"
+          },
+          "identity_digest": {
+            "description": "Hash of every input that decides the numbers",
+            "title": "Identity Digest",
+            "type": "string"
+          },
+          "kind": {
+            "const": "lake",
+            "title": "Kind"
+          },
+          "minute_bars_read": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "One-minute bars read, warmup lead-in included",
+            "title": "Minute Bars Read"
+          },
+          "price_adjustment_mode": {
+            "enum": [
+              "raw",
+              "polygon_split_adjusted"
+            ],
+            "title": "Price Adjustment Mode",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "result_identity_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "identity + admitted snapshot + calculation version; null when nothing was admitted",
+            "title": "Result Identity Digest"
+          },
+          "session_policy": {
+            "enum": [
+              "regular",
+              "extended"
+            ],
+            "title": "Session Policy",
+            "type": "string"
+          },
+          "snapshot_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "sha256 of every byte admitted; null when nothing was admitted",
+            "title": "Snapshot Digest"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "warmup": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReliabilityWarmup"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Requested against admitted lead-in; null when a refusal came before any bar was read"
+          },
+          "warmup_sessions": {
+            "description": "Lead-in sessions the run read (after any unsupplied prefix was dropped)",
+            "title": "Warmup Sessions",
+            "type": "integer"
+          },
+          "window_end_ms": {
+            "description": "Requested last date, ET midnight, int64 ms UTC",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Window End Ms",
+            "type": "integer"
+          },
+          "window_start_ms": {
+            "description": "Requested first date, ET midnight, int64 ms UTC",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Window Start Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "provider",
+          "symbol",
+          "price_adjustment_mode",
+          "session_policy",
+          "window_start_ms",
+          "window_end_ms",
+          "effective_window",
+          "warmup_sessions",
+          "bar_minutes",
+          "aggregation",
+          "identity_digest",
+          "calculation_version",
+          "data_root_id",
+          "snapshot_digest",
+          "corporate_action_versions",
+          "coverage",
+          "minute_bars_read",
+          "bars_used",
+          "cache",
+          "warmup",
+          "result_identity_digest"
+        ],
+        "title": "ReliabilityDataSource",
+        "type": "object"
+      },
+      "ReliabilityDataSource-Output": {
+        "description": "The lake data source of a reliability run, plus its warmup report and the identity a stored result would key on.",
+        "properties": {
+          "aggregation": {
+            "title": "Aggregation",
+            "type": "string"
+          },
+          "bar_minutes": {
+            "title": "Bar Minutes",
+            "type": "integer"
+          },
+          "bars_used": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Bars the statistics ran on, after the folding and the warmup trim",
+            "title": "Bars Used"
+          },
+          "cache": {
+            "$ref": "#/components/schemas/LakeCacheState"
+          },
+          "calculation_version": {
+            "title": "Calculation Version",
+            "type": "string"
+          },
+          "corporate_action_versions": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Corporate Action Versions",
+            "type": "object"
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StudyCoverage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "data_root_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Root Id"
+          },
+          "effective_window": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LakeEffectiveWindow"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null until admission succeeds"
+          },
+          "identity_digest": {
+            "description": "Hash of every input that decides the numbers",
+            "title": "Identity Digest",
+            "type": "string"
+          },
+          "kind": {
+            "const": "lake",
+            "title": "Kind"
+          },
+          "minute_bars_read": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "One-minute bars read, warmup lead-in included",
+            "title": "Minute Bars Read"
+          },
+          "price_adjustment_mode": {
+            "enum": [
+              "raw",
+              "polygon_split_adjusted"
+            ],
+            "title": "Price Adjustment Mode",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "result_identity_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "identity + admitted snapshot + calculation version; null when nothing was admitted",
+            "title": "Result Identity Digest"
+          },
+          "session_policy": {
+            "enum": [
+              "regular",
+              "extended"
+            ],
+            "title": "Session Policy",
+            "type": "string"
+          },
+          "snapshot_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "sha256 of every byte admitted; null when nothing was admitted",
+            "title": "Snapshot Digest"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "warmup": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReliabilityWarmup"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Requested against admitted lead-in; null when a refusal came before any bar was read"
+          },
+          "warmup_sessions": {
+            "description": "Lead-in sessions the run read (after any unsupplied prefix was dropped)",
+            "title": "Warmup Sessions",
+            "type": "integer"
+          },
+          "window_end_ms": {
+            "description": "Requested last date, ET midnight, int64 ms UTC",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Window End Ms",
+            "type": "integer"
+          },
+          "window_start_ms": {
+            "description": "Requested first date, ET midnight, int64 ms UTC",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Window Start Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "provider",
+          "symbol",
+          "price_adjustment_mode",
+          "session_policy",
+          "window_start_ms",
+          "window_end_ms",
+          "effective_window",
+          "warmup_sessions",
+          "bar_minutes",
+          "aggregation",
+          "identity_digest",
+          "calculation_version",
+          "data_root_id",
+          "snapshot_digest",
+          "corporate_action_versions",
+          "coverage",
+          "minute_bars_read",
+          "bars_used",
+          "cache",
+          "warmup",
+          "result_identity_digest"
+        ],
+        "title": "ReliabilityDataSource",
+        "type": "object"
+      },
+      "ReliabilityRefusedResult": {
+        "description": "The body of a refused run (409, or 503 when the lake cannot be asked): the shared refusal for this study.",
+        "properties": {
+          "data_source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReliabilityDataSource-Input"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when the refusal came before anything was read"
+          },
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "refusal": {
+            "$ref": "#/components/schemas/StudyRefusal"
+          },
+          "status": {
+            "const": "refused",
+            "title": "Status"
+          },
+          "success": {
+            "const": false,
+            "title": "Success"
+          },
+          "ticker": {
+            "title": "Ticker",
+            "type": "string"
+          }
+        },
+        "required": [
+          "success",
+          "status",
+          "error",
+          "refusal",
+          "data_source",
+          "ticker"
+        ],
+        "title": "ReliabilityRefusedResult",
+        "type": "object"
+      },
+      "ReliabilitySpan": {
+        "description": "The scheduled sessions a run of this request asks the lake for: the warmup lead-in and the window.\n\nAnswered from the calendar and the warmup sizing alone; no bar and no lake row is read. ``start_ms`` and ``end_ms``\nare ET midnights (``int64 ms UTC``), like the ``data_source`` block's requested bounds. The lead-in is sized before\nthe lake is asked, so a symbol that lists inside it shortens it later: this is the span the run *asks* for.",
+        "properties": {
+          "end_ms": {
+            "description": "ET midnight of the window's last date",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "start_ms": {
+            "description": "ET midnight of the first session the run admits: the lead-in's first, or the window's start when there is none",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Start Ms",
+            "type": "integer"
+          },
+          "warmup_sessions": {
+            "description": "Lead-in sessions the sizing asks for, never before the provider's history floor",
+            "title": "Warmup Sessions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start_ms",
+          "end_ms",
+          "warmup_sessions"
+        ],
+        "title": "ReliabilitySpan",
+        "type": "object"
+      },
+      "ReliabilitySpanRequest": {
+        "additionalProperties": false,
+        "description": "The part of a reliability request that decides which sessions a run asks the lake for.\n\nIt carries no ``session``: the sessions a run asks the lake for are the same for ``rth`` and ``extended``, and a\nfield that cannot change the answer would be accepted and ignored. A body that sends one is refused (422).",
+        "properties": {
+          "from_date": {
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "title": "From Date",
+            "type": "string"
+          },
+          "indicator_name": {
+            "description": "pandas-ta indicator name (e.g., 'rsi', 'ema')",
+            "title": "Indicator Name",
+            "type": "string"
+          },
+          "indicator_params": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            "description": "Indicator parameters (e.g., {'length': 14}); the lookback they imply sizes the warmup lead-in",
+            "title": "Indicator Params",
+            "type": "object"
+          },
+          "multiplier": {
+            "default": 1,
+            "minimum": 1.0,
+            "title": "Multiplier",
+            "type": "integer"
+          },
+          "symbol": {
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Symbol",
+            "type": "string"
+          },
+          "timespan": {
+            "default": "minute",
+            "enum": [
+              "minute",
+              "hour",
+              "day"
+            ],
+            "title": "Timespan",
+            "type": "string"
+          },
+          "to_date": {
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "title": "To Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from_date",
+          "to_date",
+          "symbol",
+          "indicator_name"
+        ],
+        "title": "ReliabilitySpanRequest",
+        "type": "object"
+      },
+      "ReliabilityWarmup": {
+        "description": "The warmup lead-in the sizing asked for against the one the lake supplied.\n\nBefore the lake, a lead-in cut short by the provider's history floor, the symbol's listing date or sparse\nsessions was computed on without a word. ``shortened`` and ``cause`` say it, ``notice`` says it in a sentence,\nand ``policy`` is the request's ``warmup_policy``: what the run was allowed to do about it.",
+        "properties": {
+          "admitted_bars": {
+            "description": "Bars at the study's resolution before the window's first session",
+            "title": "Admitted Bars",
+            "type": "integer"
+          },
+          "admitted_sessions": {
+            "title": "Admitted Sessions",
+            "type": "integer"
+          },
+          "cause": {
+            "enum": [
+              "none",
+              "provider_history_floor",
+              "symbol_history_starts",
+              "sparse_session_bars"
+            ],
+            "title": "Cause",
+            "type": "string"
+          },
+          "notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The shortfall in a sentence; null when there is none",
+            "title": "Notice"
+          },
+          "policy": {
+            "enum": [
+              "allow_shortened",
+              "require_full"
+            ],
+            "title": "Policy",
+            "type": "string"
+          },
+          "requested_bars": {
+            "description": "Warmup bars the sizing asks for: indicator lookback x the warmup multiplier",
+            "title": "Requested Bars",
+            "type": "integer"
+          },
+          "requested_sessions": {
+            "description": "Lead-in sessions the sizing asks for, never before the provider floor",
+            "title": "Requested Sessions",
+            "type": "integer"
+          },
+          "shortened": {
+            "title": "Shortened",
+            "type": "boolean"
+          },
+          "shortfall_bars": {
+            "title": "Shortfall Bars",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "policy",
+          "requested_bars",
+          "requested_sessions",
+          "admitted_sessions",
+          "admitted_bars",
+          "shortened",
+          "shortfall_bars",
+          "cause",
+          "notice"
+        ],
+        "title": "ReliabilityWarmup",
         "type": "object"
       },
       "RemoveAction": {
@@ -60437,7 +61029,7 @@
       },
       "SignalEngineJobRequest": {
         "additionalProperties": false,
-        "description": "Body of POST /api/jobs-internal/signal-engine.\n\n**Default override**: ``multiplier=15`` to preserve the\npre-migration default. Signal-engine processing operates on\n15-minute bars by default; the inherited base default of 1 would\nsilently switch every caller to 1-minute bars.",
+        "description": "Body of POST /api/jobs-internal/signal-engine.\n\n**Default override**: ``multiplier=15`` to preserve the\npre-migration default. Signal-engine processing operates on\n15-minute bars by default; the inherited base default of 1 would\nsilently switch every caller to 1-minute bars.\n\nThe worker reads the study's bars from the data lake itself, materializing\nwhat the lake lacks (``app.services.signal_study_service``). Only minute\nbars that divide the hour and are short enough to reach the study's\nvalidity gate for the session are accepted; other sizes are refused with a\nreason before the lake is touched.\n\n**Default override**: ``session=\"extended\"``. ``session`` is the one\ncontrol for which bars the study computes on: ``extended`` is every bar the\nprovider served, 04:00-20:00 ET, which is what the study has always read;\n``rth`` is the scheduled session, and the page offers both. The base default\n(``rth``) would have silently moved every caller that omits it onto a\ndifferent sample (#3522).",
         "properties": {
           "featureName": {
             "minLength": 1,
@@ -60488,7 +61080,7 @@
             "title": "Rerunof"
           },
           "session": {
-            "default": "rth",
+            "default": "extended",
             "enum": [
               "rth",
               "extended"
@@ -65730,6 +66322,109 @@
         "title": "StrategyViewValueSpec",
         "type": "object"
       },
+      "StudyArtifactCounts": {
+        "description": "Artifact counts, kept apart from session counts (a session is one minute artifact plus metadata).",
+        "properties": {
+          "fetched": {
+            "title": "Fetched",
+            "type": "integer"
+          },
+          "refreshed": {
+            "title": "Refreshed",
+            "type": "integer"
+          },
+          "reused": {
+            "title": "Reused",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fetched",
+          "reused",
+          "refreshed"
+        ],
+        "title": "StudyArtifactCounts",
+        "type": "object"
+      },
+      "StudyCoverage": {
+        "properties": {
+          "artifacts": {
+            "$ref": "#/components/schemas/StudyArtifactCounts"
+          },
+          "warmup": {
+            "$ref": "#/components/schemas/StudyCoverageGroup"
+          },
+          "window": {
+            "$ref": "#/components/schemas/StudyCoverageGroup"
+          }
+        },
+        "required": [
+          "window",
+          "warmup",
+          "artifacts"
+        ],
+        "title": "StudyCoverage",
+        "type": "object"
+      },
+      "StudyCoverageGroup": {
+        "description": "Distinct-session counts from lake admission for the window or its warmup lead-in.",
+        "properties": {
+          "added": {
+            "description": "Sessions this run made ready",
+            "title": "Added",
+            "type": "integer"
+          },
+          "building": {
+            "title": "Building",
+            "type": "integer"
+          },
+          "captured_before_final": {
+            "description": "Held, but captured before the session's data stopped forming",
+            "title": "Captured Before Final",
+            "type": "integer"
+          },
+          "corrupt": {
+            "title": "Corrupt",
+            "type": "integer"
+          },
+          "expected_sessions": {
+            "title": "Expected Sessions",
+            "type": "integer"
+          },
+          "failed": {
+            "description": "building + corrupt + captured_before_final + unavailable_from_provider",
+            "title": "Failed",
+            "type": "integer"
+          },
+          "missing": {
+            "description": "Sessions not held and not fetched",
+            "title": "Missing",
+            "type": "integer"
+          },
+          "reused": {
+            "description": "Sessions ready before this run began",
+            "title": "Reused",
+            "type": "integer"
+          },
+          "unavailable_from_provider": {
+            "title": "Unavailable From Provider",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_sessions",
+          "reused",
+          "added",
+          "missing",
+          "failed",
+          "building",
+          "corrupt",
+          "captured_before_final",
+          "unavailable_from_provider"
+        ],
+        "title": "StudyCoverageGroup",
+        "type": "object"
+      },
       "StudyDetail": {
         "additionalProperties": false,
         "properties": {
@@ -65916,6 +66611,119 @@
           "detail"
         ],
         "title": "StudyRecordRefusalBody",
+        "type": "object"
+      },
+      "StudyRefusal": {
+        "properties": {
+          "code": {
+            "enum": [
+              "resolution_unsupported",
+              "symbol_not_addressable",
+              "no_sessions_in_window",
+              "window_not_complete",
+              "data_unavailable_from_provider",
+              "data_corrupt",
+              "captured_before_final",
+              "data_building",
+              "data_missing",
+              "lake_unavailable",
+              "warmup_shortened"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StudyCoverage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when admission never started"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "sessions": {
+            "description": "The sessions that could not be made ready; the first of sessions_total",
+            "items": {
+              "$ref": "#/components/schemas/StudySessionIssue"
+            },
+            "title": "Sessions",
+            "type": "array"
+          },
+          "sessions_total": {
+            "title": "Sessions Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "code",
+          "reason",
+          "sessions",
+          "sessions_total",
+          "coverage"
+        ],
+        "title": "StudyRefusal",
+        "type": "object"
+      },
+      "StudySessionIssue": {
+        "description": "One required session admission could not make ready, and why.",
+        "properties": {
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The materializer's own reason code for the session, when it gave one",
+            "title": "Failure Reason"
+          },
+          "group": {
+            "enum": [
+              "window",
+              "warmup"
+            ],
+            "title": "Group",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "missing",
+              "building",
+              "corrupt",
+              "captured_before_final",
+              "unavailable_from_provider"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "trading_date_ms": {
+            "description": "The session's canonical open, int64 ms UTC",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Trading Date Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "group",
+          "trading_date_ms",
+          "outcome",
+          "reason",
+          "failure_reason"
+        ],
+        "title": "StudySessionIssue",
         "type": "object"
       },
       "Subtract-Input": {
@@ -89436,26 +90244,55 @@
         ]
       }
     },
-    "/api/edge/realized-vs-iv/series": {
-      "post": {
-        "description": "Compute trailing + forward RV for the requested estimators and windows;\nalign IV30 series; emit VRP forward + z-score.",
-        "operationId": "realized_vs_iv_series_api_edge_realized_vs_iv_series_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RealizedVsIvSeriesRequest"
-              }
+    "/api/edge/realized-vs-iv/window": {
+      "get": {
+        "description": "The window a run of ``bar_size`` reads when it names none, and the session it reads it in.\n\nA bar size and session the study does not offer (extended-hours daily bars) is a 422 whose detail carries the\nrefusal's ``code`` and ``reason``, the answer a run of the same inputs would give.",
+        "operationId": "get_default_window_api_edge_realized_vs_iv_window_get",
+        "parameters": [
+          {
+            "description": "The study's bar size.",
+            "in": "query",
+            "name": "bar_size",
+            "required": true,
+            "schema": {
+              "description": "The study's bar size.",
+              "enum": [
+                "15m",
+                "1d"
+              ],
+              "title": "Bar Size",
+              "type": "string"
             }
           },
-          "required": true
-        },
+          {
+            "description": "The session the run reads; omitted, it is the session the bar size reads by default.",
+            "in": "query",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "rth",
+                    "extended"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The session the run reads; omitted, it is the session the bar size reads by default.",
+              "title": "Session"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RealizedVsIvSeriesResponse"
+                  "$ref": "#/components/schemas/RealizedVsIvWindow"
                 }
               }
             },
@@ -89472,9 +90309,9 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Realized Vs Iv Series",
+        "summary": "Get Default Window",
         "tags": [
-          "edge"
+          "edge-realized-vs-iv"
         ]
       }
     },
@@ -89777,7 +90614,7 @@
     },
     "/api/jobs-internal/cross-sectional": {
       "post": {
-        "description": "Kick off a cross-sectional study in a worker thread. Returns 202.\n\nThe worker admits each member's daily stock bars from the data lake\n(materializing what it lacks), then runs the members one after another \u2014\n~30\u201390 seconds each on the provider's option endpoints \u2014 wiring\n``ProgressEmitter`` into the runner's ``on_phase`` / ``on_log`` /\n``on_progress`` callbacks so the run-dock shows each ticker as it lands.\nA member the lake cannot admit is excluded with its reason; when none can\nbe the job fails with a typed refusal and computes nothing.\n\nA prior run over the same admitted data with nothing failed in it is served\nfrom cache (the lookup follows admission \u2014 see\n``app.services.cross_sectional_study_service``). Pass ``force=true`` to bypass.",
+        "description": "Kick off a cross-sectional study in a worker thread. Returns 202.\n\nThe worker admits each member's daily stock bars from the data lake\n(materializing what it lacks) and then its option inputs (saving what the\nlake lacks), then runs the members one after another, wiring\n``ProgressEmitter`` into the runner's ``on_phase`` / ``on_log`` /\n``on_progress`` callbacks so the run-dock shows each ticker as it lands.\nA member the lake cannot admit is excluded with its reason; when none can\nbe the job fails with a typed refusal and computes nothing.\n\nA prior run over the same admitted data with nothing failed in it is served\nfrom cache (the lookup follows admission \u2014 see\n``app.services.cross_sectional_study_service``). Pass ``force=true`` to bypass.",
         "operationId": "start_cross_sectional_job_api_jobs_internal_cross_sectional_post",
         "requestBody": {
           "content": {
@@ -90514,6 +91351,49 @@
         ]
       }
     },
+    "/api/jobs-internal/realized-vs-iv": {
+      "post": {
+        "description": "Kick off a Realized vs IV study in a worker thread.\n\nThe worker admits the study's bars from the data lake (materializing what is missing), aligns the recorded or\ncaller-supplied IV to them, and computes the realized-vol series and the variance premium. A window the lake\ncannot admit, or a bar size the study is not defined for, fails the job with a typed refusal and its coverage\ncounts; no result is computed. A successful prior run over the same admitted data and the same IV is served from\ncache (the lookup follows admission). Pass ``force=true`` to bypass.",
+        "operationId": "start_realized_vs_iv_job_api_jobs_internal_realized_vs_iv_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RealizedVsIvJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Start Realized Vs Iv Job Api Jobs Internal Realized Vs Iv Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Realized Vs Iv Job",
+        "tags": [
+          "jobs-internal"
+        ]
+      }
+    },
     "/api/jobs-internal/recency-chart": {
       "post": {
         "description": "Validate, make the launch durable, and run the Recency Chart sweep. Returns 202.\n\nIn research mode the API forwards the dispatch and never creates,\nstamps or starts a thread (#3051): the runtime does, and runs the\nlaunch's independent runs through the shared research workers. Here \u2014\nthe local mode, or this process being the runtime \u2014 the launch runs on\na worker thread, in this process at the local mode.\n\nA malformed or oversized grid (D11) is refused before anything is\nwritten; the launch row exists before the worker starts (D20); a\nredelivered ``job_id`` is acknowledged without a second worker while\nthe first still holds the job, and refused (409) once that job is\nclosed or if the configuration differs. A resume (#1938) instead names\nan existing launch: the new job id is bound to the durable record by\nthe worker's claim, the recorded cells are skipped, and the spec\nfields are ignored \u2014 the stored configuration governs.\nEverything after the HTTP boundary is ``app.research.recency.service``.",
@@ -90589,7 +91469,7 @@
     },
     "/api/jobs-internal/signal-engine": {
       "post": {
-        "description": "Kick off a signal-engine run in a worker thread.\n\nEight phases (load bars \u2192 graduation). Long phases (backtest grid,\nwalk-forward) emit fine-grained ``on_progress`` so the bar moves\nwhile the worker is mid-sweep.",
+        "description": "Kick off a signal-engine run in a worker thread.\n\nThe worker admits the study's bars from the data lake (materializing what\nis missing), then runs the signal pipeline: nine phases (admit and load\nbars through graduation). Long phases (backtest grid, walk-forward) emit\nfine-grained ``on_progress`` so the bar moves while the worker is\nmid-sweep. A window the lake cannot admit, or a bar size the study can\nnever run on, fails the job with a typed refusal; no result is computed.\n\nA successful prior run over the same admitted data is served from cache\n(the lookup follows admission \u2014 see ``signal_study_service``). Pass\n``force=true`` to bypass.",
         "operationId": "start_signal_engine_job_api_jobs_internal_signal_engine_post",
         "requestBody": {
           "content": {
@@ -95443,7 +96323,7 @@
     },
     "/api/research/indicator-reliability": {
       "post": {
-        "description": "Analyze indicator reliability using IC with OOS validation.\n\nThis endpoint:\n1. Fetches OHLCV bars for the ticker and date range\n2. Calculates the specified indicator using pandas-ta\n3. Splits data into 70% train / 30% test\n4. Computes IC on both splits for each horizon\n5. Applies Bonferroni and FDR multiple testing corrections\n6. Compares against random baseline (100 shuffled signals)\n7. Returns warnings about overfit risk and data issues\n\nIMPORTANT: This is time-series IC for a single asset, NOT cross-sectional factor IC.",
+        "description": "Analyze indicator reliability using IC with OOS validation.\n\nThis endpoint:\n1. Admits OHLCV bars of the requested session (regular hours by default, or extended) for the ticker and\n   date range (warmup lead-in included) from the data lake, materializing what it lacks; a window the lake\n   cannot admit is refused with a typed code and the coverage counts (409, or 503 when the lake cannot be\n   asked), never computed on a shorter series\n2. Calculates the specified indicator using pandas-ta\n3. Splits data into 70% train / 30% test\n4. Computes IC on both splits for each horizon\n5. Applies Bonferroni and FDR multiple testing corrections\n6. Compares against random baseline (100 shuffled signals)\n7. Returns warnings about overfit risk and data issues\n\nIMPORTANT: This is time-series IC for a single asset, NOT cross-sectional factor IC.",
         "operationId": "calculate_indicator_reliability_api_research_indicator_reliability_post",
         "requestBody": {
           "content": {
@@ -95466,6 +96346,78 @@
             },
             "description": "Successful Response"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReliabilityRefusedResult"
+                }
+              }
+            },
+            "description": "The study did not run: the request names an input it cannot read (a bar size the lake cannot form, a symbol it cannot hold, a window with no session or one still forming), the lake cannot admit the window, or the warmup policy refuses a shortened lead-in. The refusal carries a typed code, the reason, the sessions that could not be made ready and the counts admission reached."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReliabilityRefusedResult"
+                }
+              }
+            },
+            "description": "The data lake's catalog is unavailable; same body as 409."
+          }
+        },
+        "summary": "Calculate Indicator Reliability",
+        "tags": [
+          "research"
+        ]
+      }
+    },
+    "/api/research/indicator-reliability/span": {
+      "post": {
+        "description": "The scheduled sessions a run of this request asks the lake for: the warmup lead-in and the window.\n\nA read: it answers from the calendar and the warmup sizing and touches neither a bar nor the lake. The page counts\nthe sessions of this span that the lake does not hold yet, so its slow-first-run warning covers the lead-in the\nrun admits with the window, which the browser has no calendar to derive.",
+        "operationId": "read_indicator_reliability_span_api_research_indicator_reliability_span_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReliabilitySpanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReliabilitySpan"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReliabilityRefusedResult"
+                }
+              }
+            },
+            "description": "The request names a bar size the lake cannot form, so no span is asked of it; same body as a refused run."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -95477,7 +96429,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Calculate Indicator Reliability",
+        "summary": "Read Indicator Reliability Span",
         "tags": [
           "research"
         ]

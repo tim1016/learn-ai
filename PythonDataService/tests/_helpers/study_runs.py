@@ -72,11 +72,12 @@ class CapturedJobs:
 def captured_jobs(monkeypatch: pytest.MonkeyPatch) -> CapturedJobs:
     """Make the job routes' ``run_in_thread`` keep the work instead of starting a thread, and the result cache miss."""
     import app.routers.jobs as jobs
+    from app.jobs import cache as result_cache
 
     taken = CapturedJobs()
     monkeypatch.setattr(jobs, "run_in_thread", lambda job_id, work, **_: taken.works.append(work))
-    monkeypatch.setattr(jobs.result_cache, "lookup", lambda *_: None)
-    monkeypatch.setattr(jobs.result_cache, "store", lambda *_: "stored")
+    monkeypatch.setattr(result_cache, "lookup", lambda *_: None)
+    monkeypatch.setattr(result_cache, "store", lambda *_: "stored")
     return taken
 
 

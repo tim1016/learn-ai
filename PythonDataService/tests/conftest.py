@@ -165,6 +165,26 @@ def _isolate_research_artifacts_root(
 
 
 @pytest.fixture(autouse=True)
+def _isolate_iv_recorder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start no IV recorder clock in a test, and keep a developer's recorded IV history out of every test.
+
+    ``IV_RECORDER_SYMBOLS`` defaults to the underlyings the data plane records, so a test that drives the real lifespan
+    would otherwise start the clock on the real calendar and, in the hour after a close, ask the vendor. The store's
+    default sits under the artifacts directory a developer's own recorded history lives in, which the Realized vs IV
+    study reads. A test that wants a clock or a store builds its own; later settings win.
+    """
+    import sys
+
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "IV_RECORDER_SYMBOLS", "")
+    monkeypatch.setattr(settings, "IV_RECORDER_STORE_PATH", str(tmp_path / "iv-recorder"))
+    recorder = sys.modules.get("app.services.iv_recorder")
+    if recorder is not None:
+        monkeypatch.setattr(recorder, "_default_store", recorder.InMemoryIvSnapshotStore())
+
+
+@pytest.fixture(autouse=True)
 def _isolate_canary_admission_ledger(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

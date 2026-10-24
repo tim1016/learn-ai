@@ -12,12 +12,18 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 
-from app.research.validation.ic import ICResult, compute_information_coefficient
+from app.research.validation.ic import (
+    ICResult,
+    compute_daily_information_coefficient,
+    compute_information_coefficient,
+    new_york_dates,
+)
+from app.utils.session_anchors import et_date_at_ms
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +41,6 @@ to ``outside N-shuffle null; diagnostic only`` whenever
 ``random_simulations < 1000``, so this default keeps the literal-σ
 language available."""
 MIN_OOS_OBSERVATIONS = 10
-SESSION_TZ = "America/New_York"
 
 
 @dataclass
@@ -335,9 +340,9 @@ def compute_random_baseline_ic(
     if rng is None:
         rng = np.random.default_rng()
 
-    # Resolve the feature series and session-date array up front.
+    # Resolve the feature series up front, and the New York dates once: every shuffle scores the same bars.
     feature_series: pd.Series | None = None
-    session_dates: np.ndarray | None = None
+    session_dates = new_york_dates(df["timestamp"])
 
     if feature_column is None or feature_column not in df.columns:
         logger.warning(
@@ -348,13 +353,11 @@ def compute_random_baseline_ic(
         )
     else:
         feature_series = df[feature_column]
-        ts_utc = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
-        session_dates = ts_utc.dt.tz_convert(SESSION_TZ).dt.date.to_numpy()
 
     random_ics: list[float] = []
 
     for _ in range(n_simulations):
-        if feature_series is not None and session_dates is not None:
+        if feature_series is not None:
             shuffled_values = _day_block_circular_shift(
                 feature_values=feature_series.to_numpy(),
                 session_dates=session_dates,
@@ -367,10 +370,10 @@ def compute_random_baseline_ic(
                 index=df.index,
             )
 
-        ic_result = compute_information_coefficient(
+        ic_result = compute_daily_information_coefficient(
             feature_values=shuffled_signal,
             target_returns=fwd_returns,
-            timestamps_ms=df["timestamp"],
+            days=session_dates,
             correlation_method="spearman",
         )
         random_ics.append(ic_result.mean_ic)
@@ -429,6 +432,11 @@ def compute_forward_return(
 ) -> pd.Series:
     """Compute forward log returns with variable horizon.
 
+    Formula: r_t^(h) = ln(C_{t+h} / C_t), NaN where bars t and t+h fall on different New York dates (when ``mask_overnight``) or either close is not positive.
+    Reference: in-house definition of the h-bar forward log return, masked at the New York date so no return spans the overnight gap; the 04:00-20:00 ET tape of the extended session is one day.
+    Canonical implementation: this file.
+    Validated against: TestComputeForwardReturn in tests/research/test_indicator_reliability.py.
+
     Parameters
     ----------
     df : pd.DataFrame
@@ -436,17 +444,19 @@ def compute_forward_return(
     horizon : int
         Number of bars to look forward.
     mask_overnight : bool
-        If True, mask returns that span across trading days.
+        If True, mask returns that span across New York dates.
 
     Returns
     -------
     pd.Series
-        Forward log returns; NaN where horizon crosses day boundary.
+        Forward log returns; NaN where horizon crosses a New York date boundary. A regular-hours bar has the same UTC
+        and New York date, so the mask is the same for it as when it read the UTC date; an extended-hours bar after
+        19:00 ET falls on the next UTC date in standard time, which the New York date does not do (#3523).
     """
     df = df.sort_values("timestamp").reset_index(drop=True)
 
     if "date" not in df.columns:
-        df["date"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.date
+        df["date"] = new_york_dates(df["timestamp"])
 
     close = df["close"].values
     dates = df["date"].values
@@ -508,11 +518,11 @@ def compute_indicator_reliability_with_oos(
     train_df = df.iloc[:split_idx].reset_index(drop=True)
     test_df = df.iloc[split_idx:].reset_index(drop=True)
 
-    # Determine date ranges
-    train_start = str(pd.to_datetime(train_df["timestamp"].iloc[0], unit="ms", utc=True).date())
-    train_end = str(pd.to_datetime(train_df["timestamp"].iloc[-1], unit="ms", utc=True).date())
-    test_start = str(pd.to_datetime(test_df["timestamp"].iloc[0], unit="ms", utc=True).date()) if len(test_df) > 0 else None
-    test_end = str(pd.to_datetime(test_df["timestamp"].iloc[-1], unit="ms", utc=True).date()) if len(test_df) > 0 else None
+    # Determine date ranges: the New York date of the first and last bar, the day the daily IC counts them in (#3523)
+    train_start = str(et_date_at_ms(int(train_df["timestamp"].iloc[0])))
+    train_end = str(et_date_at_ms(int(train_df["timestamp"].iloc[-1])))
+    test_start = str(et_date_at_ms(int(test_df["timestamp"].iloc[0]))) if len(test_df) > 0 else None
+    test_end = str(et_date_at_ms(int(test_df["timestamp"].iloc[-1]))) if len(test_df) > 0 else None
 
     metadata = {
         "train_start": train_start,
@@ -1015,7 +1025,7 @@ def compute_regime_ic(
 
 # ─── Tranche 3: IR proxy, tradeability, next-steps ─────────────────────────
 
-# Equity markets: 252 trading days * 390 minutes/day = 98280 minute bars/year.
+# Regular hours: 252 trading days * 390 minutes/day = 98280 minute bars/year.
 _BARS_PER_TRADING_DAY = {
     "minute": 390,
     "hour": 6.5,
@@ -1023,12 +1033,23 @@ _BARS_PER_TRADING_DAY = {
     "week": 0.2,  # 1 bar per 5 trading days
     "month": 1 / 21,
 }
+# Extended hours: the 04:00 to 20:00 ET span, 16 hours, whether or not every minute traded (as 390 is for regular
+# hours). Only the intraday units depend on the session.
+_BARS_PER_TRADING_DAY_EXTENDED = {**_BARS_PER_TRADING_DAY, "minute": 960, "hour": 16}
 _TRADING_DAYS_PER_YEAR = 252
 
 
-def bars_per_year(timespan: str, multiplier: int) -> float:
-    """Approximate number of bars per trading year for the given timespan."""
-    per_day = _BARS_PER_TRADING_DAY.get(timespan.lower(), 1)
+def bars_per_year(timespan: str, multiplier: int, session: Literal["rth", "extended"] = "rth") -> float:
+    """Approximate number of bars per trading year for the given timespan, in the session the bars are drawn from.
+
+    Formula: bars_per_year = 252 · bars_per_day(timespan, session) / max(multiplier, 1), with 390 one-minute bars (6.5 hourly) a day in regular hours and 960 (16) over the 04:00-20:00 ET span of the extended session; day, week and month units do not depend on the session.
+    Reference: Grinold & Kahn, Active Portfolio Management (2nd ed., 2000), the breadth of the fundamental law; 252 trading days a year and the scheduled session length are in-house conventions.
+    Canonical implementation: this file.
+    Validated against: TestBarsPerYear in tests/research/test_indicator_reliability.py.
+    """
+    per_day = (_BARS_PER_TRADING_DAY_EXTENDED if session == "extended" else _BARS_PER_TRADING_DAY).get(
+        timespan.lower(), 1
+    )
     mult = max(int(multiplier), 1)
     return float(_TRADING_DAYS_PER_YEAR * per_day / mult)
 

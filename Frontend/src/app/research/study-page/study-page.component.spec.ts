@@ -85,8 +85,8 @@ describe('StudyPageComponent', () => {
 
   it.each([
     ['feature', '15 minutes, fixed'],
-    ['signal', 'extended hours included, fixed'],
-    ['indicator-reliability', 'regular trading hours, fixed'],
+    ['signal', '15 bars, fixed'],
+    ['indicator-reliability', '1 minute, fixed'],
     ['cross-sectional', 'daily, fixed'],
   ] as const)('says what %s fixes in place of a control: %s', async (study, fixed) => {
     await renderPage({ study });
@@ -96,10 +96,10 @@ describe('StudyPageComponent', () => {
 
   it.each([
     ['feature', 'Data lake, Polygon'],
-    ['signal', 'Polygon'],
-    ['indicator-reliability', 'Polygon'],
+    ['signal', 'Data lake, Polygon'],
+    ['indicator-reliability', 'Data lake, Polygon'],
     ['cross-sectional', 'Data lake, Polygon, Polygon option bars (live), FRED risk-free rate'],
-    ['realized-vs-iv', 'Polygon aggregates, IV recorder (recorded IV30), Polygon option snapshot (current IV marker)'],
+    ['realized-vs-iv', 'Data lake, Polygon, IV recorder (recorded IV30), Polygon option snapshot (current IV marker)'],
   ] as const)(
     'names the provider behind %s on its data-source line, and reads "not recorded" for what it does not record',
     async (study, sources) => {

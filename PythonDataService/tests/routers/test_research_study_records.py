@@ -11,7 +11,6 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
-import app.routers.edge as edge_router
 import app.routers.indicator_reliability as reliability_router
 import app.routers.jobs as jobs
 import app.services.feature_study_service as feature_study_service
@@ -103,12 +102,12 @@ async def test_opening_a_record_again_and_again_recomputes_nothing_and_writes_no
     for module, name in (
         (jobs, "run_feature_study"),
         (feature_study_service, "run_feature_research"),
-        (jobs, "run_signal_engine"),
+        (jobs, "run_signal_study"),
         (jobs, "run_cross_sectional_job"),
         (jobs, "run_in_thread"),
-        (reliability_router, "fetch_bars_chunked"),
+        (reliability_router, "admit_reliability_inputs"),
         (reliability_router, "compute_indicator_reliability_with_oos"),
-        (edge_router, "_bars_payload_to_df"),
+        (jobs, "run_realized_vs_iv_study"),
     ):
         monkeypatch.setattr(module, name, never)
     monkeypatch.setattr(jobs.polygon_client, "fetch_aggregates", never)

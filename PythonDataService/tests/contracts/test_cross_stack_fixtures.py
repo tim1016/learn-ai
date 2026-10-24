@@ -54,9 +54,9 @@ def test_spec_strategy_response_fixture_preserves_int64_trade_timestamps() -> No
 
 def test_signal_engine_job_result_fixture_is_what_the_job_serializer_writes() -> None:
     """The Angular runner's mapper reads this fixture; it must be the serializer's own output, field for field."""
-    from app.routers.jobs import _serialize_signal_report
+    from app.services.signal_study_service import serialize_signal_report
     from tests._helpers.stored_signal_report import a_busy_signal_report
 
-    written = json.loads(json.dumps(_serialize_signal_report(a_busy_signal_report())))
+    written = json.loads(json.dumps(serialize_signal_report(a_busy_signal_report())))
 
     assert _fixture("signal-engine-job-result-v1.json") == written

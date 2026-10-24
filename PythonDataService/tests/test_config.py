@@ -136,3 +136,14 @@ def test_fleet_compose_files_refuses_anything_but_a_repo_root_compose_file(decla
     be smuggled into the command."""
     with pytest.raises(ValidationError):
         FleetSettings(COMPOSE_FILES=declared)
+
+
+def test_a_recorder_symbol_that_is_not_a_ticker_fails_when_settings_load_and_names_the_setting() -> None:
+    """Checked here, in the settings, so a bad value stops the boot before the research authority is claimed (#3042)."""
+    with pytest.raises(ValidationError, match=r"IV_RECORDER_SYMBOLS names '9X'"):
+        Settings(IV_RECORDER_SYMBOLS="SPY,9X")
+
+
+@pytest.mark.parametrize("value", ["", " , ", "SPY", " spy , QQQ,spy,", "SPY,QQQ,IWM"])
+def test_a_recorder_symbol_list_that_names_tickers_or_none_loads(value: str) -> None:
+    assert value == Settings(IV_RECORDER_SYMBOLS=value).IV_RECORDER_SYMBOLS

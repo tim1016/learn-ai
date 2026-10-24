@@ -69,10 +69,10 @@
     }
     @if (failure(); as failed) {
       @if (failed.refused === null && failureOptionInputsLine(); as line) {
-        <app-data-source class="block mb-2" origin="Data lake" [method]="line" />
+        <p class="text-sm text-color-secondary mb-2"><strong>Data lake.</strong> {{ line }}</p>
       }
       @if (failed.refused === null && failureRiskFreeRateLine(); as rateLine) {
-        <app-data-source class="block mb-2" origin="FRED (live)" [method]="rateLine" />
+        <p class="text-sm text-color-secondary mb-2"><strong>FRED (live).</strong> {{ rateLine }}</p>
       }
       @if (failed.universe; as uni) {
         <app-cross-sectional-universe-notice [universe]="uni" kind="unevaluated" />
@@ -104,11 +104,11 @@
       <app-cross-sectional-report [result]="res" />
       <!-- The option inputs are the lake's, saved by this run or read from the archive: their own line, apart from the stock bars'. -->
       @if (optionInputsLine(); as line) {
-        <app-data-source class="block mb-2" origin="Data lake" [method]="line" />
+        <p class="text-sm text-color-secondary mb-2"><strong>Data lake.</strong> {{ line }}</p>
       }
       <!-- The risk-free rate is FRED's, asked live: the one input the lake does not hold. -->
       @if (riskFreeRateLine(); as rateLine) {
-        <app-data-source class="block mb-2" origin="FRED (live)" [method]="rateLine" />
+        <p class="text-sm text-color-secondary mb-2"><strong>FRED (live).</strong> {{ rateLine }}</p>
       }
     }
   </div>

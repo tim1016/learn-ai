@@ -1,7 +1,7 @@
 """A signal-engine report with every field set, as the engine would store it, and what the history route must serve of it.
 
 The report is built from the engine's own dataclasses and serialized by the engine's own serializer
-(``_serialize_signal_report``), so a field the engine adds shows up in ``stored_text`` and, unless the route's model
+(``serialize_signal_report``), so a field the engine adds shows up in ``stored_text`` and, unless the route's model
 carries it, in a failing comparison with ``served``.
 """
 
@@ -30,7 +30,7 @@ from app.research.signal.graduation import (
     StageAdvanceCriterion,
 )
 from app.research.signal.walk_forward import AlphaDecayStats, WalkForwardResult, WalkForwardWindow
-from app.routers.jobs import _serialize_signal_report
+from app.services.signal_study_service import serialize_signal_report
 
 # Stored by the engine but not served: the fold-concatenated bar returns the Sharpe interval is computed from. The
 # retired GraphQL report never carried it either, and no screen reads it.
@@ -230,7 +230,7 @@ def a_busy_signal_report() -> SignalEngineReport:
 
 def stored_text(report: SignalEngineReport) -> str:
     """The report as the JSON text a ``JsonReport`` column held."""
-    return json.dumps(_serialize_signal_report(report))
+    return json.dumps(serialize_signal_report(report))
 
 
 def served(report: SignalEngineReport) -> dict[str, Any]:

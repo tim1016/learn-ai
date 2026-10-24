@@ -22,6 +22,7 @@ import {
   RegimeBucket,
   Methodology,
 } from '../../../services/research.service';
+import { mapLakeStudyDataSource, type LakeDataSourceRaw } from '../../../shared/lake-study/lake-study';
 
 /** Snake-case shape returned by /api/jobs-internal/signal-engine worker. */
 export interface SignalEngineJobResultRaw {
@@ -49,6 +50,7 @@ export interface SignalEngineJobResultRaw {
   deflated_sharpe: unknown;
   methodology: unknown;
   research_log: string;
+  data_source?: LakeDataSourceRaw | null;
   error: string | null;
 }
 
@@ -100,6 +102,7 @@ export function toSignalEngineResultFromJob(raw: SignalEngineJobResultRaw): Sign
       ? mapMethodology(raw.methodology as Record<string, unknown>)
       : null,
     researchLog: raw.research_log ?? '',
+    dataSource: raw.data_source ? mapLakeStudyDataSource(raw.data_source) : null,
     error: raw.error ?? undefined,
   };
 }

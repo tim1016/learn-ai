@@ -22,13 +22,13 @@ from app.main import app
 from app.research.history.artifact_sources import Baselines, MonteCarlos, SpecRuns, WalkForwards
 from app.research.history.registry import default_history_sources
 from app.research.history.study_sources import study_record_sources
-from app.research.runs import list_runs
 from app.research.study_records.models import STUDY_TYPES, StudyType
 from app.research.study_records.recorder import RunCapture, RunRecorder
 from app.research.study_records.specs import STUDY_SPECS
 from app.research.study_records.store import StudyRecordStore
 from app.routers.research_history import get_history_sources
 from app.schemas.research_history import HISTORY_TYPES
+from tests._helpers.run_ledgers import run_ids
 from tests._helpers.study_runs import a_cross_sectional_result, a_feature_result
 from tests.research.history.test_artifact_sources import (
     SPY_END,
@@ -57,7 +57,9 @@ INPUTS: dict[StudyType, dict[str, Any]] = {
         "symbol": "SPY",
         "bar_size": "1d",
         "tenor_days": 30,
-        "bars": {"count": 60, "first_ts_ms": SPY_START, "last_ts_ms": SPY_END},
+        "window_start_ms": SPY_START,
+        "window_end_ms": SPY_END,
+        "iv_series_supplied": False,
     },
 }
 RESULTS: dict[StudyType, dict[str, Any]] = {
@@ -188,6 +190,21 @@ async def test_a_study_run_is_listed_with_the_question_instruments_window_and_he
     assert bars["headline"] == "60 bars; IV from none, so realized volatility alone; 21 without a forward window"
 
 
+async def test_a_run_that_named_no_window_shows_the_window_its_data_source_says_it_read(
+    client: httpx.AsyncClient, tmp_path: Path, clock: Clock
+) -> None:
+    named = {key: value for key, value in INPUTS["realized-vs-iv"].items() if key not in ("window_start_ms", "window_end_ms")}
+    read = {"effective_window": {"start_ms": SPY_START + 86_400_000, "end_ms": SPY_END - 86_400_000}}
+    record_run(tmp_path, "realized-vs-iv", instant=T0, clock=clock, inputs=named, result={**RESULTS["realized-vs-iv"], "data_source": read})
+    record_run(tmp_path, "realized-vs-iv", instant=T0 + 1, clock=clock, inputs=named)
+
+    body = (await client.get(URL, params={"type": "realized-vs-iv"})).json()
+
+    windows = {e["created_at_ms"]: e["window"] for e in body["entries"]}
+    assert windows[T0] == {"start_ms": SPY_START + 86_400_000, "end_ms": SPY_END - 86_400_000}
+    assert windows[T0 + 1] is None, "a run with neither a named window nor a source that read one has no window to show"
+
+
 async def test_a_listing_reads_only_the_small_config_never_a_result(
     client: httpx.AsyncClient, tmp_path: Path, clock: Clock
 ) -> None:
@@ -281,16 +298,16 @@ async def test_adding_the_study_records_changes_nothing_the_older_stores_list(
     save_a_run(tmp_path, a_run(1, "SPY", T0))
     save_a_run(tmp_path, a_run(2, "QQQ", T0 + 1, status="failed"))
     older = (await client.get(URL, params={"page_size": 100})).json()
-    runs_before = list_runs(root=tmp_path)
+    runs_before = run_ids(tmp_path)
 
     for study in STUDY_TYPES:
         record_run(tmp_path, study, instant=T0 + 10, clock=clock)
     with caplog.at_level(logging.WARNING):
         later = (await client.get(URL, params={"page_size": 100})).json()
-        runs_after = list_runs(root=tmp_path)
+        runs_after = run_ids(tmp_path)
 
     assert [e for e in later["entries"] if e["type"] in {"spec-run"}] == older["entries"]
-    assert [run.run_id for run in runs_after] == [run.run_id for run in runs_before]
+    assert runs_after == runs_before
     assert not [r for r in caplog.records if "skipping" in r.getMessage()], "the runs store did not mistake a study directory for debris"
 
 

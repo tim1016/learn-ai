@@ -8,8 +8,8 @@ and candidate-grid 4B share the same canonical runner.
 
 Each fold's test run is a normal ``RunLedger`` + ``BacktestRunResult``
 persisted under ``artifacts/runs/<fold_run_id>/`` with
-``parent_run_id = walk_forward_id`` so ``list_runs?parent_run_id=…``
-finds them. The walk-forward result itself is persisted under
+``parent_run_id = walk_forward_id`` so ``list_ids(parent_run_id=…)`` on the runs
+store finds them. The walk-forward result itself is persisted under
 ``artifacts/walk-forward/<walk_forward_id>/{config,result}.json``.
 
 See ADR 0073 decision 3 for the split-policy choices

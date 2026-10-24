@@ -1,8 +1,9 @@
 """A study run leaves one record when it ends, however it ends (#3520).
 
 These run a job's work through the recorder against a stand-in emitter and read the record back from a temporary
-artifact root. The job routes' own wiring is in ``test_job_routes.py``; the routes that answer a request are in
-``test_route_record.py``.
+artifact root. The job routes' own wiring is in ``test_job_routes.py``; Indicator reliability's lake route is in
+``tests/routers/test_indicator_reliability_endpoint.py`` and Realized vs IV's lake job is in
+``tests/jobs/test_realized_vs_iv_job.py``.
 """
 
 from __future__ import annotations

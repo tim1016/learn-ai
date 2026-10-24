@@ -1,40 +1,24 @@
-"""What a request says, for the study whose request carries its data.
+"""What a request says, for the study whose request carries an input too large to copy into every record.
 
-Realized vs IV is handed its bars in the request body, so its record keeps what the run saw: the bars (the chart
-draws them, and a stored result must show without fetching anything), a digest of them and of any IV history that came
-with the request (the run's data identity: a rerun on different bars has a different one), and a summary of both in
-the inputs, which stay small enough for the History to read for every record. The stored result is the series response
-with the bars added under ``bars``.
+Realized vs IV may be handed an IV history in its request body: thousands of points a caller measured elsewhere. Its
+record keeps whether one was supplied, not the points: the run's ``data_source`` already names the IV it used by
+count and digest, and the inputs stay small enough for the History to read for every record.
 """
 
 from __future__ import annotations
 
-from typing import Any
-
 from pydantic import BaseModel
 
-from app.research.runs.hashing import hash_payload
-from app.research.study_records.recorder import RunCapture
+from app.research.study_records.recorder import RunCapture, capture_request
 
-_NOT_AN_INPUT = {"bars", "iv_series", "rerun_of"}
+_LEFT_OUT = {"job_id", "force", "rerun_of", "iv_series"}
 
 
 def capture_realized_vs_iv(request: BaseModel) -> RunCapture:
-    """The capture of a Realized vs IV request (``RealizedVsIvSeriesRequest``): the bars in time order, as the series is."""
-    bars: list[dict[str, Any]] = sorted((bar.model_dump(mode="json") for bar in request.bars), key=lambda bar: bar["ts"])  # type: ignore[attr-defined]
-    iv_series = request.iv_series  # type: ignore[attr-defined]
-    inputs: dict[str, Any] = {
-        **request.model_dump(mode="json", exclude=_NOT_AN_INPUT),
-        "iv_series_supplied": bool(iv_series),
-        "bars": {
-            "count": len(bars),
-            "first_ts_ms": bars[0]["ts"] if bars else None,
-            "last_ts_ms": bars[-1]["ts"] if bars else None,
-        },
+    """The capture of a Realized vs IV job request (``RealizedVsIvJobRequest``): its settings, and whether it brought its own IV."""
+    kept = capture_request(request)
+    inputs = {
+        **{name: value for name, value in kept.inputs.items() if name not in _LEFT_OUT},
+        "iv_series_supplied": bool(getattr(request, "iv_series", None)),
     }
-    return RunCapture(
-        inputs=inputs,
-        rerun_of=getattr(request, "rerun_of", None),
-        data_identity=hash_payload({"bars": bars, "iv_series": iv_series}) if bars else None,
-        package=lambda series: {**series, "bars": bars},
-    )
+    return RunCapture(inputs=inputs, job_id=kept.job_id, rerun_of=kept.rerun_of)

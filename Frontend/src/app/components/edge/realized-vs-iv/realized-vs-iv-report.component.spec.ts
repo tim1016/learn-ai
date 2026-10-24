@@ -1,9 +1,11 @@
 import { render, screen } from "@testing-library/angular";
 import { describe, expect, it } from "vitest";
+import { mapLakeStudyDataSource } from "../../../shared/lake-study/lake-study";
 import type { RealizedVsIvData } from "../services/edge-data.model";
+import { lakeDataSource } from "../testing/edge-compute-world";
 import { RealizedVsIvReportComponent } from "./realized-vs-iv-report.component";
 
-/** A stored result: real-shaped, and without the live IV30 marker a fresh Compute attaches. */
+/** A stored result: real-shaped, and with no live IV30 marker, which only a fresh Compute reads. */
 function storedData(): RealizedVsIvData {
   const N = 12;
   const flat = (v: number) => Array.from({ length: N }, () => v);
@@ -22,9 +24,13 @@ function storedData(): RealizedVsIvData {
     vrpZ: flat(0),
     vrpHistogram: [],
     signals: [],
-    coverage: { forwardBlindTail: 2, ivFirstTsMs: Date.UTC(2026, 0, 6, 14) },
+    coverage: { forwardBlindTail: 2, vrpLookbackBars: N - 1, ivFirstTsMs: Date.UTC(2026, 0, 6, 14) },
     ivConfidence: null,
-    liveIv30: null,
+    ivAlignment: { rule: "snapshot_in_bar_latest", snapshotsRead: N, barsWithIv: N, superseded: 0, outsideBars: 0 },
+    ivInput: { source: "recorder", snapshots: N, digest: "c".repeat(64) },
+    run: { barSize: "1D", tenorDays: 30, hfSession: null },
+    dataSource: mapLakeStudyDataSource(lakeDataSource()),
+    liveIv30: { kind: "unavailable", reason: "A saved run does not keep the current-IV marker." },
   };
 }
 
@@ -37,6 +43,8 @@ describe("RealizedVsIvReportComponent", () => {
     expect.soft(readout, "IV30 from the data").toContain("21.0%");
     expect.soft(readout, "30-bar Yang-Zhang RV from the data").toContain("14.0%");
     expect(screen.queryByTestId("live-iv30-readout"), "a stored result has no live marker").toBeNull();
+    expect(screen.getByTestId("live-iv30-reason").textContent).toContain("does not keep the current-IV marker");
+    expect(screen.getByTestId("rviv-run-settings").textContent?.replace(/\s+/g, " ").trim()).toBe("1D bars · 30D tenor");
     expect(document.querySelectorAll("canvas"), "price chart and VRP histogram").toHaveLength(2);
   });
 });

@@ -2977,6 +2977,96 @@
       ]
     },
     {
+      "id": "lake-studies-spy-15min-fold-2025-01-13",
+      "name": "Lake studies: Polygon's own 15-minute SPY aggregates for 2025-01-13..17 against our fold of its minute bars",
+      "category": "lake-studies",
+      "canonical_module": "PythonDataService/app/research/study_inputs.py",
+      "canonical_callable": "fold_minute_bars",
+      "reference": {
+        "kind": "vendor_observed",
+        "oracle": "Polygon's own 15-minute aggregates for SPY (adjusted=false), recorded byte for byte. The vendor's aggregation is opaque, so what this proves is an observed equality with a fold of the repo's SPY minute capture, for one symbol, one week and one bar length, not a rule.",
+        "citation": "Polygon (Massive) REST API answer recorded 2026-10-24, see the fixture attribution; the call was approved by the owner on https://github.com/tim1016/learn-ai/issues/3522."
+      },
+      "market_input": {
+        "source": "polygon",
+        "vendor": "Polygon (Massive) REST API, recorded byte for byte",
+        "generated_by": "tests/fixtures/golden/lake-studies/regenerate.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 0.0,
+        "rtol": 0.0,
+        "note": "Exact. Prices are the vendor's decimals (two places or fewer) and volumes are whole shares, and the fold takes the first, the largest, the smallest, the last and the sum of the same decimal numbers; a tolerance would only hide a missing minute or a misplaced bucket."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "recording.json",
+          "output": "spy_15min_2025-01-13_2025-01-17.json",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "recording.json": "b27b68c88376869a7cc8236b328036f1d88aa5605b8ac2b31e8ffb7d2251d6a3",
+            "spy_15min_2025-01-13_2025-01-17.json": "f0e049c6af06004f4935aed1cb1b61adb45b87ef091d4c62b87a2be091f081a0",
+            "attribution.md": "3ae5bafe953f2972d738f1a1d2de845236beabb27af1e26e601effac2a80c8b5"
+          },
+          "file_sha256": {
+            "recording.json": "9532c81bc7eb07b7499df92f04c80131d5c7c5fa5871977e0c346559609fc721",
+            "spy_15min_2025-01-13_2025-01-17.json": "f53f6f23d94096d62b2d51115aa3ff3855467d76e8546c31871ab951897d5a51",
+            "attribution.md": "3ae5bafe953f2972d738f1a1d2de845236beabb27af1e26e601effac2a80c8b5"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/research/test_signal_study_lake_vs_provider.py"
+      ]
+    },
+    {
+      "id": "lake-studies-wmt-split-adjusted-grid-2024-02-20",
+      "name": "Lake studies: a real split-adjusted WMT minute tape (2024-02-20..23, the week before its 3:1 split) against the lake's 1/10,000 price grid",
+      "category": "lake-studies",
+      "canonical_module": "PythonDataService/app/data_lake/lean_writer.py, PythonDataService/app/research/study_inputs.py",
+      "canonical_callable": "to_deci_cent, admit_minute_inputs",
+      "reference": {
+        "kind": "vendor_observed",
+        "oracle": "The vendor's split-adjusted (adjusted=true) one-minute aggregates for WMT, recorded byte for byte. The claim is a fact about the tape (no price is finer than 1/10,000) and an equality between two paths of our own code on it (the provider path and the lake path give the Signal study the same bars, so the same outputs); no second implementation produced a number.",
+        "citation": "Polygon (Massive) REST API answer recorded 2026-10-24, see the fixture attribution; the call was approved by the owner on https://github.com/tim1016/learn-ai/issues/3522."
+      },
+      "market_input": {
+        "source": "polygon",
+        "vendor": "Polygon (Massive) REST API, recorded byte for byte",
+        "generated_by": "tests/fixtures/golden/lake-studies/regenerate.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-09,
+        "rtol": 0.0,
+        "note": "The repo's strict-float default for the study's outputs. Prices and volumes are compared exactly (the lake must hand back the vendor's own numbers), and the measured difference of every output is 0.0, because both paths run the same arithmetic on identical bars."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "recording.json",
+          "output": "wmt_minute_adjusted_2024-02-20_2024-02-23.json",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "recording.json": "26014d1da89ffa4d73bfa2162817f3636066aa986d55d45ba7310c8f89d421b5",
+            "wmt_minute_adjusted_2024-02-20_2024-02-23.json": "6374a16631fbc939d87c3978bc339b5a4c057dfdfbc5d5edc9d1024a1ea91821",
+            "attribution.md": "9a4efc59f7458678b0a0992065cb462b83b3bff336f57d9c1accbf2dd857a535"
+          },
+          "file_sha256": {
+            "recording.json": "74a7037b531ddfbbb70e44df583528658af92ce0a04975202126f81f65891b6b",
+            "wmt_minute_adjusted_2024-02-20_2024-02-23.json": "e36a5795fc4abcaf16d71021021c1bff3da868ce6d1f7aa1b7f44545e3f1dc26",
+            "attribution.md": "9a4efc59f7458678b0a0992065cb462b83b3bff336f57d9c1accbf2dd857a535"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/research/test_signal_study_lake_vs_provider.py"
+      ]
+    },
+    {
       "id": "SPY-DAILY-001",
       "name": "SPY daily bars 2025-01-13 to 17: the vendor's real answer against the Cross-sectional study's regular-session fold of the minute capture",
       "category": "market-data",

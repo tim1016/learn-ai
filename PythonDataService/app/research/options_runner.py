@@ -265,6 +265,7 @@ def run_options_feature_research(
                 daily_ic_values=ic_result.daily_ic_values,
                 daily_ic_dates=ic_result.daily_ic_dates,
                 bars=daily_bars,
+                date_zone="UTC",
             )
 
         # Step 7: Validation gate

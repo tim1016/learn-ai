@@ -22,10 +22,6 @@ export const STORED_STUDY_TYPES: Readonly<Record<StoredStudyType, true>> = {
 
 export const STORED_STUDY_TYPE_IDS = Object.keys(STORED_STUDY_TYPES) as StoredStudyType[];
 
-export function isStoredStudyType(value: unknown): value is StoredStudyType {
-  return typeof value === 'string' && value in STORED_STUDY_TYPES;
-}
-
 /** No run of this study is saved under the id. */
 export class StoredStudyNotFoundError extends Error {
   constructor(

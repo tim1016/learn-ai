@@ -31,7 +31,8 @@ export type LakeRefusalCode =
   | 'captured_before_final'
   | 'data_building'
   | 'data_missing'
-  | 'lake_unavailable';
+  | 'lake_unavailable'
+  | 'warmup_shortened';
 
 /**
  * The session a lake study reads: `regular` is the scheduled session, `extended` every bar the provider served.
@@ -205,6 +206,15 @@ export interface LakeStudyRefused {
   dataSource: LakeStudyDataSource | null;
 }
 
+/**
+ * A refusal as a study's page holds it to show: the refusal, and the session it judged. That is the session its source
+ * records, or the one the run asked for when nothing was read.
+ */
+export interface LakeStudyRefusalShown {
+  readonly refused: LakeStudyRefused;
+  readonly session: LakeSessionPolicy | null;
+}
+
 // ---------------------------------------------------------------------------
 // Mapping
 // ---------------------------------------------------------------------------
@@ -283,9 +293,13 @@ export function readLakeStudyRefusal(payload: unknown): LakeStudyRefused | null 
 // The shared data-source line
 // ---------------------------------------------------------------------------
 
+/** Minutes in the fold that makes a daily bar (`DAY_BAR_MINUTES` in the Realized vs IV study). */
+const DAILY_BAR_MINUTES = 24 * 60;
+
 function resolutionText(barMinutes: number | null): string {
-  if (barMinutes === null) return 'daily bars, folded from 1-minute bars';
-  return barMinutes === 1 ? '1-minute bars' : `${barMinutes}-minute bars, folded from 1-minute bars`;
+  if (barMinutes === 1) return '1-minute bars';
+  if (barMinutes === null || barMinutes === DAILY_BAR_MINUTES) return 'daily bars, folded from 1-minute bars';
+  return `${barMinutes}-minute bars, folded from 1-minute bars`;
 }
 
 function warmupText(sessions: number): string {

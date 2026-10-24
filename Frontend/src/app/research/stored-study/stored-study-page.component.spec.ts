@@ -174,7 +174,9 @@ describe('StoredStudyPageComponent', () => {
     await openRun('realized-vs-iv', storedRecord('realized-vs-iv', { result: { ...storedRecord('realized-vs-iv').result, bars: [] } as never }));
 
     expect(screen.getByText('The saved result could not be shown.')).toBeTruthy();
-    expect(screen.getByText('the saved run holds no bars')).toBeTruthy();
+    expect(
+      screen.getByText('this run was saved in a form from before the study read the data lake, which this page can no longer draw'),
+    ).toBeTruthy();
     expect(facts().getByText('SPY')).toBeTruthy();
   });
 });
