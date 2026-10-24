@@ -429,6 +429,11 @@ def compute_forward_return(
 ) -> pd.Series:
     """Compute forward log returns with variable horizon.
 
+    Formula: r_t^(h) = ln(C_{t+h} / C_t), NaN where bars t and t+h fall on different New York dates (when ``mask_overnight``) or either close is not positive.
+    Reference: in-house definition of the h-bar forward log return, masked at the New York date so no return spans the overnight gap; the 04:00-20:00 ET tape of the extended session is one day.
+    Canonical implementation: this file.
+    Validated against: TestComputeForwardReturn in tests/research/test_indicator_reliability.py.
+
     Parameters
     ----------
     df : pd.DataFrame
@@ -1032,7 +1037,13 @@ _TRADING_DAYS_PER_YEAR = 252
 
 
 def bars_per_year(timespan: str, multiplier: int, session: Literal["rth", "extended"] = "rth") -> float:
-    """Approximate number of bars per trading year for the given timespan, in the session the bars are drawn from."""
+    """Approximate number of bars per trading year for the given timespan, in the session the bars are drawn from.
+
+    Formula: bars_per_year = 252 · bars_per_day(timespan, session) / max(multiplier, 1), with 390 one-minute bars (6.5 hourly) a day in regular hours and 960 (16) over the 04:00-20:00 ET span of the extended session; day, week and month units do not depend on the session.
+    Reference: Grinold & Kahn, Active Portfolio Management (2nd ed., 2000), the breadth of the fundamental law; 252 trading days a year and the scheduled session length are in-house conventions.
+    Canonical implementation: this file.
+    Validated against: TestBarsPerYear in tests/research/test_indicator_reliability.py.
+    """
     per_day = (_BARS_PER_TRADING_DAY_EXTENDED if session == "extended" else _BARS_PER_TRADING_DAY).get(
         timespan.lower(), 1
     )
