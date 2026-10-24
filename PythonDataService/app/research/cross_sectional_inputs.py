@@ -23,10 +23,10 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.data_lake.derived_daily import aggregate_minute_to_daily
@@ -46,6 +46,7 @@ from app.research.study_inputs import (
     StudyInputRefusal,
     admit_minute_inputs,
 )
+from app.research.study_universe import MemberExclusion, members_summary
 from app.utils.session_anchors import et_midnight_ms
 
 logger = logging.getLogger(__name__)
@@ -57,9 +58,6 @@ DAILY_FOLD_RULE = "minute_fold_per_et_session_no_fill"
 
 #: What a daily row's ``timestamp`` is.
 BAR_TIMESTAMP_ANCHOR = "session_open"
-
-#: Where a member can be left out of the statistics.
-ExclusionStage = Literal["stock_bars", "iv_inputs", "iv_diagnostics", "computation"]
 
 #: Refusals no second attempt can change: the request itself cannot be served.
 _STRUCTURAL_CODES: frozenset[RefusalCode] = frozenset(
@@ -186,28 +184,6 @@ def daily_rows(bars: Iterable[TradeBar]) -> list[dict[str, float | int]]:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class MemberExclusion:
-    """A member left out of the statistics, with where, why and whether asking again could answer differently."""
-
-    ticker: str
-    stage: ExclusionStage
-    code: str
-    reason: str
-    retryable: bool
-    refusal: dict[str, Any] | None = None
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "ticker": self.ticker,
-            "stage": self.stage,
-            "code": self.code,
-            "reason": self.reason,
-            "retryable": self.retryable,
-            "refusal": self.refusal,
-        }
-
-
 def exclusion_from_refusal(ticker: str, refusal: StudyInputRefusal) -> MemberExclusion:
     return MemberExclusion(
         ticker=ticker,
@@ -261,18 +237,22 @@ def admit_universe(
     requester: str,
     now_ms: int | None = None,
     check_cancelled: Callable[[], None] = lambda: None,
+    on_member_start: Callable[[int, int, str], None] = lambda index, total, ticker: None,
     on_member: Callable[[int, int, str, str], None] = lambda index, total, ticker, outcome: None,
 ) -> UniverseAdmission:
     """Admit each member's stock bars in turn; a member the lake cannot admit is excluded with the reason, not dropped.
 
     Blocking: call from a worker thread. Members are admitted one after another — the materializer coordinates
     concurrent writers and the provider's budget, and a cold universe is many sessions per member. A cancellation
-    raised by ``check_cancelled`` propagates; only a typed refusal excludes a member.
+    raised by ``check_cancelled`` propagates; only a typed refusal excludes a member. ``on_member_start`` is called
+    before each member (a cold one can take minutes in the materializer, which a cancel does not interrupt) and
+    ``on_member`` after it with the outcome.
     """
     admission = UniverseAdmission()
     total = len(identity.symbols)
     for index, ticker in enumerate(identity.symbols):
         check_cancelled()
+        on_member_start(index, total, ticker)
         member_identity = identity.member(ticker)
         try:
             admitted = admit_minute_inputs(
@@ -318,20 +298,64 @@ def sum_groups(groups: Iterable[GroupCoverage]) -> GroupCoverage:
     )
 
 
-def stock_bars_block(identity: CrossSectionalIdentity, admission: UniverseAdmission) -> dict[str, Any]:
+def universe_coverage(admission: UniverseAdmission) -> StudyCoverage:
+    """What admission did for the whole universe, as the one :class:`StudyCoverage` the shared data-source line reads.
+
+    Each expected unit is one member-session. Every session a member could not make ready is kept, its reason led by
+    the member's ticker, so a refusal names whose session it was.
+    """
+    members = admission.coverage
+    return StudyCoverage(
+        window=sum_groups(c.window for c in members.values()),
+        warmup=sum_groups(c.warmup for c in members.values()),
+        artifacts_fetched=sum(c.artifacts_fetched for c in members.values()),
+        artifacts_reused=sum(c.artifacts_reused for c in members.values()),
+        artifacts_refreshed=sum(c.artifacts_refreshed for c in members.values()),
+        issues=tuple(
+            replace(issue, reason=f"{ticker}: {issue.reason}") for ticker, c in members.items() for issue in c.issues
+        ),
+    )
+
+
+def universe_refusal(identity: CrossSectionalIdentity, admission: UniverseAdmission) -> StudyInputRefusal:
+    """The refusal a universe with no admitted member ends with: the most specific code, and each member's reason."""
+    return StudyInputRefusal(
+        refusal_code_for(admission.excluded),
+        f"The lake cannot admit stock bars for any of the {len(identity.symbols)} requested members. "
+        f"{members_summary([(e.ticker, e.reason) for e in admission.excluded.values()])}",
+        coverage=universe_coverage(admission),
+    )
+
+
+def _universe_label(symbols: Sequence[str], *, shown: int = 5) -> str:
+    listed = ", ".join(symbols[:shown])
+    return listed if len(symbols) <= shown else f"{listed} and {len(symbols) - shown} more"
+
+
+def stock_bars_block(
+    identity: CrossSectionalIdentity,
+    admission: UniverseAdmission,
+    *,
+    calculation_version: str,
+    cache_hit: bool = False,
+    cached_at_ms: int | None = None,
+) -> dict[str, Any]:
     """The data-source entry for the stock bars: the lake, the identity read, and what admission did per member.
 
-    ``coverage`` adds the members' counts: each expected unit is one member-session. ``universe_snapshot_digest``
-    is the digest of the admitted members' snapshot digests, which changes when any one member's bytes do.
+    It carries every key of :func:`app.research.lake_study.data_source_block`, so the browser reads it with the same
+    mapper as any lake study's. What differs is that a universe has no single value for some of them: ``symbol`` is the
+    universe's label, ``bar_minutes`` is ``None`` (a daily bar is a session fold, not a number of minutes),
+    ``snapshot_digest`` is the digest of the admitted members' snapshot digests (it changes when any one member's bytes
+    do), ``effective_window`` spans the first and last session any member admitted, and ``coverage`` counts
+    member-sessions. ``members`` adds each member's own receipt or exclusion.
     """
-    coverage = admission.coverage
     members: list[dict[str, Any]] = []
     for ticker in identity.symbols:
         if ticker in admission.members:
             members.append(admission.members[ticker].as_dict())
         else:
             excluded = admission.excluded[ticker]
-            held = coverage.get(ticker)
+            held = admission.coverage.get(ticker)
             members.append(
                 {
                     "ticker": ticker,
@@ -343,21 +367,24 @@ def stock_bars_block(identity: CrossSectionalIdentity, admission: UniverseAdmiss
                     "sessions_total": excluded.refusal["sessions_total"] if excluded.refusal else 0,
                 }
             )
-    snapshots = sorted((ticker, member.admitted.snapshot_digest) for ticker, member in admission.members.items())
+    admitted = list(admission.members.values())
+    snapshots = sorted((m.ticker, m.admitted.snapshot_digest) for m in admitted)
+    sessions = sorted({day for m in admitted for day in m.admitted.window_sessions})
     return {
         "kind": "lake",
         **identity.as_dict(),
+        "symbol": _universe_label(identity.symbols),
+        "bar_minutes": None,
         "identity_digest": identity.digest(),
-        "universe_snapshot_digest": hash_payload(snapshots) if snapshots else None,
-        "coverage": {
-            "window": sum_groups(c.window for c in coverage.values()).as_dict(),
-            "warmup": sum_groups(c.warmup for c in coverage.values()).as_dict(),
-            "artifacts": {
-                "fetched": sum(c.artifacts_fetched for c in coverage.values()),
-                "reused": sum(c.artifacts_reused for c in coverage.values()),
-                "refreshed": sum(c.artifacts_refreshed for c in coverage.values()),
-            },
-        },
+        "calculation_version": calculation_version,
+        "snapshot_digest": hash_payload(snapshots) if snapshots else None,
+        "effective_window": (
+            {"start_ms": et_midnight_ms(sessions[0]), "end_ms": et_midnight_ms(sessions[-1])} if sessions else None
+        ),
+        "coverage": universe_coverage(admission).as_dict(),
+        "minute_bars_read": sum(len(m.admitted.window_bars) for m in admitted),
+        "bars_used": sum(len(m.rows) for m in admitted),
+        "cache": {"hit": cache_hit, "cached_at_ms": cached_at_ms},
         "members": members,
     }
 

@@ -80,7 +80,7 @@ previously tracked items (issues #1655, #1671, #1672, #1674, #1677, #1664,
   thematic paper citations. Behavior tests alone do not establish
   independent numerical equivalence. *(was F-0026)*
 - **Cross-sectional IV history raises once a month's expiry bracket goes stale
-  (high, 2026-10-23, #3484).** `contract_finder.find_bracket_contracts` looks the
+  (high, 2026-10-23, #3484; tracked in #3528).** `contract_finder.find_bracket_contracts` looks the
   two expiries bracketing 30 days up once per month and reuses them, so `k` days
   into the month both DTEs have fallen by `k`. Since #3484 replaced the local
   interpolation in `iv_builder._interpolate_iv` with `variance_interpolated_iv`,
@@ -93,7 +93,10 @@ previously tracked items (issues #1655, #1671, #1672, #1674, #1677, #1664,
   study avoids it. The repair is a per-day bracket (one wide expiry lookup per
   month, the bracket chosen per date), which changes the IVs and so is the owner's
   call. `tests/research/options/test_iv_builder_provider_inputs.py` stays inside
-  the span that does not raise.
+  the span that does not raise. Until it is repaired every member of a realistic
+  window is excluded as `iv_build_failed`, and the study fails with
+  `no_member_evaluated` and each member's reason instead of reporting a verdict
+  over zero members.
 - **Sharpe inference scope** — the measured-grid DSR does not account for
   prior feature/research searches or correct serial dependence in overlapping
   forward returns. HAC assumes zero covariance across separated OOS segments

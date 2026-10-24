@@ -48,9 +48,10 @@ Inferential machinery (added 2026-05-01 after methodology review):
 Inputs (#3524). The runner fetches no stock bars. The caller admits each
 member's daily bars from the data lake first
 (``app/research/cross_sectional_inputs.py``) and hands them in; a member the
-lake could not admit arrives as a typed exclusion and is carried through as an
-``invalid_data`` row with its reason, so the requested universe is always fully
-accounted for. The same rows set the IV spot and the ATM strike inside
+lake could not admit arrives as a typed exclusion (``app/research/study_universe.py``)
+and is carried through as an ``invalid_data`` row with its reason, so the requested
+universe is always fully accounted for. A member that fails later is excluded the same
+way, with the typed code the failing step returned (never read from error text). The same rows set the IV spot and the ATM strike inside
 ``build_iv_history``, which has no fetch of its own. The option inputs (expiries,
 contracts, option bars, the risk-free rate) are the provider's: each ticker's
 requests, failures and answers are recorded in an ``OptionInputLedger`` that
@@ -68,10 +69,10 @@ import numpy as np
 import pandas as pd
 from scipy import stats as scipy_stats
 
-from app.research.cross_sectional_inputs import ExclusionStage, MemberExclusion
 from app.research.options.iv_builder import build_iv_history
 from app.research.options.option_input_ledger import OptionInputLedger
 from app.research.options_runner import run_options_feature_research
+from app.research.study_universe import ExclusionStage, MemberExclusion
 from app.services.polygon_client import PolygonClientService
 
 logger = logging.getLogger(__name__)
@@ -320,10 +321,7 @@ def run_cross_sectional_study(
     # otherwise we fall back to per_ticker_returns.
     per_ticker_ic_series: dict[str, pd.Series] = {}
 
-    on_phase("starting")
-    on_log(f"Cross-sectional study: feature={feature_name}, target={target_type}, tickers={n}")
-    on_log(f"Date range: {start_date} → {end_date}")
-
+    # The caller owns the start (phase and log): it has already admitted the members' bars by now.
     for i, ticker in enumerate(tickers):
         # Raise-only: the return value is ignored, matching every other
         # research runner. See the module docstring (issue #1931).
@@ -334,7 +332,6 @@ def run_cross_sectional_study(
         phase_id = f"ticker_{i + 1}_{ticker}"
         on_phase(phase_id)
         on_progress(i, n, f"Processing {ticker} ({i + 1}/{n})")
-        on_log(f"[{i + 1}/{n}] {ticker}: building IV history...")
 
         result: dict[str, Any] = _empty_ticker_result(ticker)
 
@@ -348,6 +345,7 @@ def run_cross_sectional_study(
             on_progress(i + 1, n, f"{ticker}: invalid ({exclusion.code})")
             continue
 
+        on_log(f"[{i + 1}/{n}] {ticker}: building IV history...")
         ledger = ledgers[ticker] = OptionInputLedger()
         member_bars = stock_bars[ticker]
 
@@ -392,7 +390,7 @@ def run_cross_sectional_study(
                 exclusion = MemberExclusion(ticker, "iv_inputs", "iv_source_unavailable", reason, retryable=True)
             else:
                 reason = "No IV data could be derived"
-                exclusion = MemberExclusion(ticker, "iv_inputs", "no_iv_derived", reason, retryable=False)
+                exclusion = MemberExclusion(ticker, "iv_inputs", "no_iv_derived", reason, retryable=ledger.degraded)
             result["error"] = reason
             result["validity"] = "invalid_data"
             result["exclusion"] = exclusion.as_dict()
@@ -436,18 +434,17 @@ def run_cross_sectional_study(
                 # ran the IC computation, so the ticker is INVALID,
                 # not "FAIL".
                 result["error"] = research_report.error
-                is_iv_problem = (
-                    "diagnostic" in research_report.error.lower() or "iv" in research_report.error.lower()
-                )
+                code = research_report.failure_code or "computation_error"
+                is_iv_problem = code == "iv_failed_diagnostics"
                 result["validity"] = "invalid_iv" if is_iv_problem else "error"
                 result["exclusion"] = MemberExclusion(
                     ticker,
                     "iv_diagnostics" if is_iv_problem else "computation",
-                    "iv_failed_diagnostics" if is_iv_problem else "computation_error",
+                    code,
                     research_report.error,
-                    # Sparse IV from unanswered requests could pass on a second attempt; a failed
-                    # computation of unknown cause is not evidence either way.
-                    retryable=ledger.failure_count > 0 or not is_iv_problem,
+                    # Sparse IV from unanswered requests, or built at a rate FRED did not give, could pass on a
+                    # second attempt; a failed computation of unknown cause is not evidence either way.
+                    retryable=ledger.degraded or not is_iv_problem,
                 ).as_dict()
                 on_log(f"[{i + 1}/{n}] {ticker}: INVALID — {research_report.error}")
                 on_progress(i + 1, n, f"{ticker}: invalid")

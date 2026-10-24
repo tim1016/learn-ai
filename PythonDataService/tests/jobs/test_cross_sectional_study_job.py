@@ -9,6 +9,10 @@ chain can pass the IV diagnostics over a window long enough to compute an IC (``
 expiry bracket and ``_interpolate_iv`` raises once 30 days is no longer inside it; see ``docs/known-gaps.md``). The stand-in
 derives its IV from the stock rows it is handed, so these tests also prove which bars reach the IV build, and it records
 into the same ``OptionInputLedger`` the real builder does.
+
+What the stand-in cannot show is the production outcome while #3528 stands: the real builder raises for any window past the
+first fortnight of a month, so every member lands as ``iv_build_failed``. ``test_a_study_in_which_no_member_is_evaluated...``
+pins what the job does then: it fails with ``no_member_evaluated`` and each member's reason, and completes nothing.
 """
 
 from __future__ import annotations
@@ -25,11 +29,12 @@ import pytest
 import respx
 from pydantic import ValidationError
 
+from app.config import settings
 from app.jobs import cache as result_cache
 from app.jobs.progress import ProgressEmitter
 from app.jobs.runner import run_in_thread
 from app.lean_sidecar.trading_calendar import expected_sessions
-from app.research import batch_runner
+from app.research import batch_runner, options_runner
 from app.research.options.option_input_ledger import OptionInputLedger
 from app.routers.jobs import CrossSectionalJobRequest, start_cross_sectional_job
 from app.services import cross_sectional_study_service as service
@@ -74,6 +79,26 @@ class _Harness:
         return [key for key in self.fake.strings if key.startswith("result:")]
 
 
+def iv_frame(stock_bars: list[dict]) -> pd.DataFrame:
+    """An IV history a gentle function of the stock rows: it passes the IV diagnostics and aligns with the rows' dates."""
+    close = np.array([row["close"] for row in stock_bars])
+    move = np.abs(np.diff(np.log(close), prepend=np.log(close[0])))
+    iv = 0.2 + 2.0 * move + 0.003 * (np.arange(len(close)) % 5)
+    return pd.DataFrame(
+        {
+            "date": [pd.Timestamp(row["timestamp"], unit="ms", tz="UTC").strftime("%Y-%m-%d") for row in stock_bars],
+            "iv_30d_atm": iv,
+            "iv_30d_put": iv + 0.01,
+            "iv_30d_call": iv - 0.01,
+            "stock_close": close,
+            "dte_low": 25,
+            "dte_high": 35,
+            "price_source": "vwap",
+            "iv_quality": "medium",
+        }
+    )
+
+
 def stand_in_iv(harness: _Harness):
     """The provider-side IV build, derived from the stock rows it is handed, recording like the real one."""
 
@@ -88,22 +113,7 @@ def stand_in_iv(harness: _Harness):
             outcome = behaviour(ledger)
             if outcome is not None:
                 return outcome
-        close = np.array([row["close"] for row in stock_bars])
-        move = np.abs(np.diff(np.log(close), prepend=np.log(close[0])))
-        iv = 0.2 + 2.0 * move + 0.003 * (np.arange(len(close)) % 5)
-        return pd.DataFrame(
-            {
-                "date": [pd.Timestamp(row["timestamp"], unit="ms", tz="UTC").strftime("%Y-%m-%d") for row in stock_bars],
-                "iv_30d_atm": iv,
-                "iv_30d_put": iv + 0.01,
-                "iv_30d_call": iv - 0.01,
-                "stock_close": close,
-                "dte_low": 25,
-                "dte_high": 35,
-                "price_source": "vwap",
-                "iv_quality": "medium",
-            }
-        )
+        return iv_frame(stock_bars)
 
     return build_iv_history
 
@@ -132,6 +142,7 @@ def harness(fake: _FakeRedis, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         for symbol, seed, price in (("SPY", 11, 150.0), ("QQQ", 12, 300.0), ("IWM", 13, 90.0))
     }
     harness_ = _Harness(fake, catalog, lake, tapes)
+    monkeypatch.setattr(settings, "FRED_API_KEY", "", raising=False)
     real = batch_runner.run_options_feature_research
 
     def counting(*args: Any, **kwargs: Any):
@@ -172,14 +183,15 @@ def test_a_completed_study_names_the_lake_for_its_stock_bars_and_the_provider_fo
         "building": 0, "corrupt": 0, "unavailable_from_provider": 0,
     }
     assert [(m["ticker"], m["status"], m["daily_bars"]) for m in stock["members"]] == [(s, "admitted", len(WINDOW)) for s in SYMBOLS]
-    assert len(stock["universe_snapshot_digest"]) == 64 and len(stock["identity_digest"]) == 64
+    assert len(stock["snapshot_digest"]) == 64 and len(stock["identity_digest"]) == 64
+    assert stock["bar_minutes"] is None and stock["symbol"] == "SPY, QQQ" and stock["calculation_version"] == service.CROSS_SECTIONAL_CALCULATION_VERSION
     options = source["option_inputs"]
     assert {name: entry["kind"] for name, entry in options["inputs"].items()} == dict.fromkeys(
         ("option_expiries", "option_contracts", "option_bars"), "provider"
     )
     assert all(entry["reproducible"] is False and len(entry["observation_digest"]) == 64 for entry in options["inputs"].values())
     assert options["risk_free_rate"]["provider"] == "fred" and options["policy"] == service.OPTION_INPUT_POLICY
-    assert source["cache"] == {"hit": False, "cached_at_ms": None}
+    assert stock["cache"] == {"hit": False, "cached_at_ms": None} and "cache" not in source
 
 
 def test_the_iv_build_and_the_target_are_computed_from_the_same_admitted_rows(harness):
@@ -288,7 +300,7 @@ def test_a_member_built_on_unanswered_option_requests_is_counted_but_flagged_deg
 
     universe = harness.result("degraded")["universe"]
     assert universe["evaluated"] == ["SPY", "QQQ"] and universe["denominator"] == 2
-    assert universe["degraded"] == [{"ticker": "QQQ", "failures_total": 1}]
+    assert universe["degraded"] == [{"ticker": "QQQ", "failures_total": 1, "rate_days_fetch_failed": 0}]
     assert universe["complete"] is False and harness.result("degraded")["status"] == "partial"
     assert harness.cache_keys() == []
 
@@ -301,6 +313,167 @@ def test_a_no_iv_member_with_no_failed_request_is_excluded_as_a_deterministic_ou
     (excluded,) = harness.result("no-iv")["universe"]["excluded"]
     assert (excluded["code"], excluded["retryable"]) == ("no_iv_derived", False)
     assert len(harness.cache_keys()) == 1, "nothing in it could answer differently, so it may be reused"
+
+
+# ---------------------------------------------------------------------------
+# A study in which no member is evaluated completes nothing (#3524 review m2)
+# ---------------------------------------------------------------------------
+
+
+def builder_raises(ledger: OptionInputLedger) -> pd.DataFrame:
+    raise ValueError("30 days is outside the expiry bracket")
+
+
+def test_a_study_in_which_no_member_is_evaluated_fails_with_a_typed_code_and_each_members_reason(harness):
+    """While #3528 stands, the real IV builder raises for any window past a month's first fortnight: every member errors."""
+    harness.iv_behaviour["SPY"] = harness.iv_behaviour["QQQ"] = builder_raises
+
+    state = harness.run(params(), job_id="none")
+
+    payload = harness.result("none")
+    assert state["status"] == "failed" and state["error_code"] == "no_member_evaluated"
+    message = state["error_message"]
+    assert "None of the 2 requested members" in message and "SPY: " in message and "QQQ: " in message
+    assert "outside the expiry bracket" in message
+    assert payload["success"] is False and payload["status"] == "not_evaluated" and "refusal" not in payload
+    universe = payload["universe"]
+    assert (universe["requested_count"], universe["evaluated_count"], universe["excluded_count"], universe["complete"]) == (2, 0, 2, False)
+    assert [(e["ticker"], e["stage"], e["code"], e["retryable"]) for e in universe["excluded"]] == [
+        ("SPY", "iv_inputs", "iv_build_failed", True),
+        ("QQQ", "iv_inputs", "iv_build_failed", True),
+    ]
+    assert payload["data_source"]["stock_bars"]["coverage"]["window"]["added"] == 2 * len(WINDOW), "the lake did admit the bars"
+    assert payload["data_source"]["option_inputs"] is not None, "and the option inputs the run did make are still named"
+    assert harness.computed == 0 and harness.cache_keys() == []
+    assert harness.fake.events("none")[-1]["type"] == "job.failed"
+
+
+def test_members_left_out_at_admission_and_at_the_iv_build_together_still_leave_nothing_to_report(harness):
+    harness.tapes["SPY"].clear()
+    harness.iv_behaviour["QQQ"] = builder_raises
+
+    state = harness.run(params(), job_id="mixed")
+
+    excluded = harness.result("mixed")["universe"]["excluded"]
+    assert state["error_code"] == "no_member_evaluated"
+    assert [(e["ticker"], e["stage"]) for e in excluded] == [("SPY", "stock_bars"), ("QQQ", "iv_inputs")]
+
+
+# ---------------------------------------------------------------------------
+# A FRED outage is a degraded input, not a complete result (#3524 review m1)
+# ---------------------------------------------------------------------------
+
+
+def test_a_member_priced_at_the_default_rate_because_fred_did_not_answer_is_degraded_and_the_run_is_not_cached(harness):
+    def fred_down(ledger: OptionInputLedger) -> None:
+        ledger.risk_free_rate("default", fetch_failed=True)
+
+    harness.iv_behaviour["QQQ"] = fred_down
+
+    harness.run(params(), job_id="fred-down")
+
+    result = harness.result("fred-down")
+    assert result["universe"]["evaluated"] == ["SPY", "QQQ"], "the member stays in the statistics"
+    assert result["universe"]["degraded"] == [{"ticker": "QQQ", "failures_total": 0, "rate_days_fetch_failed": 1}]
+    assert result["status"] == "partial" and result["universe"]["complete"] is False
+    assert result["data_source"]["option_inputs"]["risk_free_rate"]["days_fetch_failed"] == 1
+    assert harness.cache_keys() == [], "IVs solved at a rate FRED did not give could answer differently next time"
+
+
+def test_a_default_rate_with_no_fred_key_is_a_stable_answer_and_the_cache_key_says_no_key_was_configured(harness, monkeypatch):
+    """The stand-in records the default for every day without a failed fetch, which is what a deployment with no key does."""
+    harness.run(params(), job_id="no-key")
+    computed_without_key = harness.computed
+    assert harness.result("no-key")["status"] == "complete" and len(harness.cache_keys()) == 1
+
+    monkeypatch.setattr(settings, "FRED_API_KEY", "a-configured-key", raising=False)
+    state = harness.run(params(), job_id="keyed")
+
+    assert state.get("cached") != "1" and harness.computed == 2 * computed_without_key, "a configured key is a different study"
+    assert len(harness.cache_keys()) == 2
+
+
+# ---------------------------------------------------------------------------
+# The retry flag comes from a typed failure, never from the error text (#3524 review m5)
+# ---------------------------------------------------------------------------
+
+
+def failing_iv_gate(harness: _Harness, *, unanswered_request: bool = False):
+    """An IV history 40 percent of whose days are missing: it fails the diagnostics gate for want of data."""
+
+    def behaviour(ledger: OptionInputLedger) -> pd.DataFrame:
+        if unanswered_request:
+            ledger.failed("option_bars", "O:QQQ240315C00300000", TimeoutError("read timed out"))
+        frame = iv_frame(harness.iv_received["QQQ"])
+        frame.loc[np.arange(len(frame)) % 5 < 2, "iv_30d_atm"] = np.nan
+        return frame
+
+    return behaviour
+
+
+def test_an_iv_history_that_fails_its_diagnostics_is_a_typed_deterministic_exclusion_and_the_run_is_cached(harness):
+    harness.iv_behaviour["QQQ"] = failing_iv_gate(harness)
+
+    harness.run(params(), job_id="gate")
+
+    result = harness.result("gate")
+    row = {r["ticker"]: r for r in result["ticker_results"]}["QQQ"]
+    assert row["validity"] == "invalid_iv"
+    assert (row["exclusion"]["stage"], row["exclusion"]["code"], row["exclusion"]["retryable"]) == ("iv_diagnostics", "iv_failed_diagnostics", False)
+    assert result["status"] == "partial" and len(harness.cache_keys()) == 1, "nothing in it could answer differently"
+
+
+def test_an_iv_history_that_fails_its_diagnostics_with_an_unanswered_request_may_pass_next_time_and_is_not_cached(harness):
+    harness.iv_behaviour["QQQ"] = failing_iv_gate(harness, unanswered_request=True)
+
+    harness.run(params(), job_id="gate-down")
+
+    row = {r["ticker"]: r for r in harness.result("gate-down")["ticker_results"]}["QQQ"]
+    assert (row["exclusion"]["code"], row["exclusion"]["retryable"]) == ("iv_failed_diagnostics", True)
+    assert harness.cache_keys() == []
+
+
+def test_a_computation_failure_whose_text_happens_to_contain_iv_is_not_an_iv_problem(harness, monkeypatch):
+    """Before: ``"iv" in error`` made "division by zero" an IV problem, hence deterministic, hence cached."""
+    real_ic = options_runner.compute_information_coefficient
+    calls = {"n": 0}
+
+    def second_member_divides_by_zero(*args: Any, **kwargs: Any):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise ZeroDivisionError("division by zero")
+        return real_ic(*args, **kwargs)
+
+    monkeypatch.setattr(options_runner, "compute_information_coefficient", second_member_divides_by_zero)
+
+    harness.run(params(), job_id="division")
+
+    result = harness.result("division")
+    row = {r["ticker"]: r for r in result["ticker_results"]}["QQQ"]
+    assert row["validity"] == "error" and "division by zero" in row["error"]
+    assert (row["exclusion"]["stage"], row["exclusion"]["code"], row["exclusion"]["retryable"]) == ("computation", "computation_error", True)
+    assert harness.cache_keys() == [], "a failure of unknown cause is not evidence either way"
+
+
+# ---------------------------------------------------------------------------
+# One start, phases in order, and a unit on every count (#3524 review m7)
+# ---------------------------------------------------------------------------
+
+
+def test_the_run_announces_each_phase_once_in_order_and_does_not_say_it_builds_an_iv_history_for_an_excluded_member(harness):
+    harness.tapes["IWM"].clear()
+
+    harness.run(params(symbols=("SPY", "QQQ", "IWM")), job_id="phases")
+
+    events = harness.fake.events("phases")
+    phases = [e["phase"] for e in events if e["type"] == "job.phase"]
+    assert phases == ["starting", "admitting_data", "ticker_1_SPY", "ticker_2_QQQ", "ticker_3_IWM", "aggregating", "completed"]
+    logs = [e["message"] for e in events if e["type"] == "job.log"]
+    assert any("SPY: building IV history" in m for m in logs) and not any("IWM: building IV history" in m for m in logs)
+    assert any("IWM: excluded (data_unavailable_from_provider)" in m for m in logs)
+    assert any(m.startswith("Lake coverage:") for m in logs) and any(m == "2 of 3 members admitted" for m in logs)
+    units = {e["unit"] for e in events if e["type"] == "job.progress"}
+    assert units and units <= {"members admitted", "tickers"}, "admission counts members and the compute counts tickers"
 
 
 # ---------------------------------------------------------------------------
@@ -360,7 +533,7 @@ def test_a_provider_era_cache_entry_is_neither_returned_nor_relabelled(harness):
     result = harness.result("fresh")
     assert state["status"] == "completed" and state.get("cached") != "1"
     assert result["aggregate_ic"] != 99.0 and "from" not in result
-    assert result["data_source"]["cache"]["hit"] is False
+    assert result["data_source"]["stock_bars"]["cache"]["hit"] is False
     assert harness.fake.strings[old_key] == seeded, "the old entry is left exactly as it was written"
     assert harness.computed == len(SYMBOLS)
     new_keys = [key for key in harness.cache_keys() if key != old_key]
@@ -382,12 +555,12 @@ def test_an_identical_repeat_is_served_from_the_cache_without_recomputing(harnes
     assert events[-1]["type"] == "job.completed" and events[-1]["cached"] is True
     scientific = lambda r: {k: v for k, v in r.items() if k != "data_source"}  # noqa: E731
     assert scientific(second) == scientific(first)
-    assert second["data_source"]["cache"]["hit"] is True and second["data_source"]["cache"]["cached_at_ms"] > 0
+    assert second["data_source"]["stock_bars"]["cache"]["hit"] is True and second["data_source"]["stock_bars"]["cache"]["cached_at_ms"] > 0
     # The repeat reports what admission did this time (every member session reused); the option inputs stay the ones the
     # stored run saw, because that is what its numbers were computed from.
     assert second["data_source"]["stock_bars"]["coverage"]["window"]["reused"] == 2 * len(WINDOW)
     assert second["data_source"]["stock_bars"]["coverage"]["window"]["added"] == 0
-    assert second["data_source"]["stock_bars"]["universe_snapshot_digest"] == first["data_source"]["stock_bars"]["universe_snapshot_digest"]
+    assert second["data_source"]["stock_bars"]["snapshot_digest"] == first["data_source"]["stock_bars"]["snapshot_digest"]
     assert second["data_source"]["option_inputs"] == first["data_source"]["option_inputs"]
 
 
@@ -428,7 +601,7 @@ def test_repaired_lake_data_under_the_same_request_is_a_new_identity(harness):
 
     before, after = harness.result("before")["data_source"]["stock_bars"], harness.result("after")["data_source"]["stock_bars"]
     assert state.get("cached") != "1" and harness.computed == computed_before + len(SYMBOLS)
-    assert after["universe_snapshot_digest"] != before["universe_snapshot_digest"]
+    assert after["snapshot_digest"] != before["snapshot_digest"]
     assert after["identity_digest"] == before["identity_digest"], "same request, new bytes"
     changed = {m["ticker"] for m, b in zip(after["members"], before["members"], strict=True) if m["snapshot_digest"] != b["snapshot_digest"]}
     assert changed == {"SPY"}, "only the member whose bytes were repaired has a new snapshot"
@@ -442,14 +615,14 @@ def test_repaired_lake_data_under_the_same_request_is_a_new_identity(harness):
 def test_a_saved_result_is_byte_for_byte_unchanged_after_the_lake_is_repaired(harness):
     harness.run(params(), job_id="saved")
     saved = harness.result_text("saved")
-    saved_digest = harness.result("saved")["data_source"]["stock_bars"]["universe_snapshot_digest"]
+    saved_digest = harness.result("saved")["data_source"]["stock_bars"]["snapshot_digest"]
     cached_before = {key: harness.fake.strings[key] for key in harness.cache_keys()}
 
     repair_day(harness)
     harness.run(params(), job_id="rerun")
 
     assert harness.result_text("saved") == saved, "a stored result is never rewritten from mutable lake data"
-    assert harness.result("rerun")["data_source"]["stock_bars"]["universe_snapshot_digest"] != saved_digest
+    assert harness.result("rerun")["data_source"]["stock_bars"]["snapshot_digest"] != saved_digest
     assert {key: harness.fake.strings[key] for key in cached_before} == cached_before, "the old identity keeps its entry"
     assert len(harness.cache_keys()) == len(cached_before) + 1
 
@@ -464,16 +637,13 @@ _BROWSER_BODY = {
 }
 
 
-def test_the_request_defaults_to_the_study_it_has_always_been_and_the_legacy_session_label_stays_inert():
+def test_the_request_defaults_to_the_study_it_has_always_been():
     request = CrossSectionalJobRequest.model_validate(_BROWSER_BODY)
 
-    assert request.session == "rth" and request.session_policy == "regular" and request.force is False
+    assert request.session == "rth" and request.force is False
     bare = {k: v for k, v in _BROWSER_BODY.items() if k not in ("timespan", "multiplier", "session")}
     assert CrossSectionalJobRequest.model_validate(bare).timespan == "day", "a caller that names no resolution gets daily bars"
-    camel = {"jobId": "j", "symbols": ["SPY"], "featureName": "iv_30d", "fromDate": "2024-01-02", "toDate": "2024-02-23", "sessionPolicy": "extended"}
-    assert CrossSectionalJobRequest.model_validate(camel).session_policy == "extended"
-    with pytest.raises(ValueError, match=r"session_policy"):
-        CrossSectionalJobRequest.model_validate({**_BROWSER_BODY, "session_policy": "rth"})
+    assert CrossSectionalJobRequest.model_validate(bare).session == "rth", "and the scheduled session, as the browser has always sent"
 
 
 @pytest.mark.parametrize("symbols", [["SPY", "spy"], ["SPY", "QQQ", "SPY"]])
@@ -505,3 +675,17 @@ async def test_the_route_hands_the_worker_the_study_it_was_asked_for(monkeypatch
     )
     assert captured["kwargs"]["force"] is True and captured["kwargs"]["job_id"] == "j1"
     assert captured["thread"]["cancel_check_every_n"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("session", "policy"), [("rth", "regular"), ("extended", "extended")])
+async def test_the_one_session_field_chooses_the_session_the_daily_bars_fold(monkeypatch: pytest.MonkeyPatch, session, policy):
+    """#3524 review m10: ``extended`` used to be accepted and silently computed on the regular session."""
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr("app.routers.jobs.run_in_thread", lambda job_id, work, **kwargs: captured.update(work=work))
+    monkeypatch.setattr("app.routers.jobs.run_cross_sectional_job", lambda study_params, **kwargs: captured.update(params=study_params))
+
+    await start_cross_sectional_job(CrossSectionalJobRequest.model_validate({**_BROWSER_BODY, "session": session}))
+    captured["work"]("emit", "cancel")
+
+    assert captured["params"].session_policy == policy

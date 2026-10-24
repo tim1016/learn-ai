@@ -35,8 +35,12 @@ from app.research.cross_sectional_inputs import (
     daily_rows,
     refusal_code_for,
     stock_bars_block,
+    universe_coverage,
+    universe_refusal,
 )
+from app.research.lake_study import FoldedStudyIdentity, data_source_block
 from app.research.study_inputs import StudyInputRefusal
+from app.utils.session_anchors import et_midnight_ms
 from tests._helpers.fake_lake_catalog import FakeCatalog, install_fake_catalog, mock_launcher, point_lake_writer_at_tmp
 from tests._helpers.lake_study import commit_bars, lake_file, minute_bar
 from tests._helpers.pinned_vendor import VendorBar, VendorCalls, mock_vendor, scaled, vendor_history
@@ -78,6 +82,10 @@ def admit(identity: CrossSectionalIdentity, *, now_ms: int = NOW_MS) -> Universe
     return admit_universe(identity, requester="test", now_ms=now_ms)
 
 
+def block_of(identity: CrossSectionalIdentity, admission: UniverseAdmission) -> dict:
+    return stock_bars_block(identity, admission, calculation_version="test/1")
+
+
 def member_counts(admission: UniverseAdmission, ticker: str) -> tuple[int, int, int, int]:
     """(reused, added, missing, failed) of the member's window."""
     group = admission.coverage[ticker].window
@@ -104,13 +112,55 @@ def test_a_cold_universe_is_fetched_per_member_and_each_member_session_counts_as
         assert member_counts(admission, symbol) == (0, len(MARCH), 0, 0)
         assert calls[symbol].days() == MARCH, "each missing session of each member costs exactly one vendor call"
         assert len(admission.members[symbol].rows) == len(MARCH), "one daily row per session"
-    block = stock_bars_block(identity_for(["SPY", "QQQ"], MARCH), admission)
+    block = block_of(identity_for(["SPY", "QQQ"], MARCH), admission)
     assert block["kind"] == "lake"
     assert block["coverage"]["window"] == {
         "expected_sessions": 2 * len(MARCH), "reused": 0, "added": 2 * len(MARCH), "missing": 0, "failed": 0,
         "building": 0, "corrupt": 0, "unavailable_from_provider": 0,
     }
     assert [m["status"] for m in block["members"]] == ["admitted", "admitted"]
+
+
+@respx.mock
+def test_the_stock_bars_block_carries_every_key_of_the_shared_lake_data_source_block_and_states_what_a_universe_changes(catalog, lake):
+    """The browser reads this block with the mapper every lake study shares, so it must hold the shared block's keys."""
+    mock_launcher()
+    for symbol, seed in (("SPY", 3), ("QQQ", 4)):
+        mock_vendor(symbol, vendor_history(MARCH, seed=seed))
+    identity = identity_for(["SPY", "QQQ"], MARCH)
+    admission = admit(identity)
+
+    block = block_of(identity, admission)
+    one = admission.members["SPY"].admitted
+    shared = data_source_block(FoldedStudyIdentity(identity.member("SPY"), 1), calculation_version="test/1", coverage=one.coverage, admitted=one)
+
+    assert set(shared) - set(block) == {"data_root_id", "corporate_action_versions"}, "all but the two a member's own receipt carries"
+    for member in block["members"]:
+        assert {"data_root_id", "corporate_action_versions"} <= set(member)
+    assert block["symbol"] == "SPY, QQQ" and block["bar_minutes"] is None and block["calculation_version"] == "test/1"
+    assert block["effective_window"] == {"start_ms": et_midnight_ms(MARCH[0]), "end_ms": et_midnight_ms(MARCH[-1])}
+    assert block["bars_used"] == 2 * len(MARCH) and block["minute_bars_read"] == sum(len(m.admitted.window_bars) for m in admission.members.values())
+    assert block["cache"] == {"hit": False, "cached_at_ms": None}
+
+
+@respx.mock
+def test_a_universe_refusal_is_the_shared_refusal_with_the_members_sessions_summed_and_named(catalog, lake):
+    mock_launcher()
+    mock_vendor("SPY", {day: bars for day, bars in vendor_history(MARCH, seed=3).items() if day != MARCH[1]})
+    mock_vendor("QQQ", {day: bars for day, bars in vendor_history(MARCH, seed=4).items() if day not in (MARCH[2], MARCH[3])})
+    identity = identity_for(["SPY", "QQQ"], MARCH)
+    admission = admit(identity)
+
+    refusal = universe_refusal(identity, admission)
+    payload = refusal.as_dict()
+
+    assert admission.members == {} and refusal.code == "data_unavailable_from_provider"
+    assert set(payload) == {"code", "reason", "sessions", "sessions_total", "coverage"}, "the shape every lake refusal has"
+    assert payload["sessions_total"] == 3 and payload["coverage"]["window"]["failed"] == 3
+    assert payload["coverage"]["window"]["expected_sessions"] == 2 * len(MARCH)
+    assert [s["reason"].split(":")[0] for s in payload["sessions"]] == ["SPY", "QQQ", "QQQ"], "each session names whose it is"
+    assert universe_coverage(admission).window.failed == 3
+    assert "any of the 2 requested members" in refusal.reason and "SPY: " in refusal.reason and "QQQ: " in refusal.reason
 
 
 @respx.mock
@@ -160,12 +210,12 @@ def test_a_member_the_vendor_cannot_fill_is_excluded_with_its_reason_and_the_oth
     assert MARCH[2].isoformat() in excluded.reason
     assert member_counts(admission, "QQQ") == (0, len(MARCH) - 1, 0, 1)
     assert [(s["outcome"], s["group"]) for s in excluded.refusal["sessions"]] == [("unavailable_from_provider", "window")]
-    block = stock_bars_block(identity_for(["SPY", "QQQ"], MARCH), admission)
+    block = block_of(identity_for(["SPY", "QQQ"], MARCH), admission)
     by_ticker = {m["ticker"]: m for m in block["members"]}
     assert by_ticker["SPY"]["status"] == "admitted" and by_ticker["QQQ"]["status"] == "excluded"
     assert by_ticker["QQQ"]["coverage"]["window"]["failed"] == 1
     assert block["coverage"]["window"]["failed"] == 1 and block["coverage"]["window"]["added"] == 2 * len(MARCH) - 1
-    assert block["universe_snapshot_digest"] is not None
+    assert block["snapshot_digest"] is not None
 
 
 @respx.mock
@@ -180,7 +230,8 @@ def test_a_universe_nothing_can_serve_admits_no_member_and_names_each_reason(cat
     assert set(admission.excluded) == {"SPY", "QQQ"}
     assert {e.code for e in admission.excluded.values()} == {"data_unavailable_from_provider"}
     assert refusal_code_for(admission.excluded) == "data_unavailable_from_provider"
-    assert stock_bars_block(identity_for(["SPY", "QQQ"], MARCH), admission)["universe_snapshot_digest"] is None
+    assert block_of(identity_for(["SPY", "QQQ"], MARCH), admission)["snapshot_digest"] is None
+    assert block_of(identity_for(["SPY", "QQQ"], MARCH), admission)["effective_window"] is None, "nothing admitted, no window read"
 
 
 @respx.mock

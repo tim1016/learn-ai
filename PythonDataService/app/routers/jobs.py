@@ -26,7 +26,7 @@ import asyncio
 import logging
 from dataclasses import asdict
 from datetime import date
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
 from fastapi.encoders import jsonable_encoder
@@ -191,10 +191,10 @@ class CrossSectionalJobRequest(_CamelCaseMultiTickerRequest):
     The study runs on daily bars (``app.research.cross_sectional_inputs``), so the
     inherited ``timespan`` default of ``minute`` is overridden to ``day``: a caller
     that names no resolution gets the study it always got, and any other resolution
-    is refused with a reason. ``session`` is the base request's legacy label (the
-    browser sends ``"rth"``) and has never been read; it stays inert.
-    ``session_policy`` is the real control: ``regular`` (default) folds each daily
-    bar from the scheduled session, ``extended`` from 04:00-20:00 ET.
+    is refused with a reason. ``session`` is the one control for which minutes each
+    daily bar folds: ``rth`` (the base default, which the browser sends) is the
+    scheduled session, ``extended`` is 04:00-20:00 ET. Which one the study should
+    use is an owner decision (D02); the default is the one the browser has always sent.
     """
 
     timespan: Timespan = "day"
@@ -204,7 +204,6 @@ class CrossSectionalJobRequest(_CamelCaseMultiTickerRequest):
     force: bool = False
     """Skip the result cache and always re-run. Default: serve from
     cache if a prior run over the same admitted data is still warm."""
-    session_policy: Literal["regular", "extended"] = "regular"
 
     @field_validator("symbols")
     @classmethod
@@ -622,7 +621,7 @@ async def start_cross_sectional_job(req: CrossSectionalJobRequest) -> dict:
         timespan=req.timespan,
         multiplier=req.multiplier,
         target_type=req.target_type,
-        session_policy=req.session_policy,
+        session_policy=SESSION_POLICY_FOR_REQUEST[req.session],
     )
 
     def work(emit: ProgressEmitter, cancel) -> dict | None:

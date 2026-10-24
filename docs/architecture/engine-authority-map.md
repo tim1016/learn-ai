@@ -58,7 +58,10 @@ cache on each member's admitted snapshot digest in a new namespace.
 The option inputs (expiries, contracts, option bars, the risk-free rate) stay
 provider-sourced and are named, counted and fingerprinted per run by
 `app/research/options/option_input_ledger.py`; a request the provider did not
-answer is a typed failure, and a result holding one is not cached. No calculation
+answer is a typed failure, a risk-free rate that is the default only because FRED
+did not answer (a key is configured) is a degraded input, and a result holding
+either is not cached. A study in which no member is evaluated fails with
+`no_member_evaluated` instead of completing. No calculation
 ownership changes: IV, IC, N_eff, binomial and graduation math is untouched. The
 session the daily bar folds from (`regular` by default, `extended` opt-in) is an
 owner decision (D02 of PRD #3490).
