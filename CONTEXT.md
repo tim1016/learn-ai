@@ -1667,6 +1667,17 @@ these are the others.
   settings makes a version whose content is not the saved content, so it is linked
   through its study and never matched to the draft. **Re-proof** replays a run's
   execution under the current rules and does not recertify statistical evidence.
+- **Deploy an options bot** — the setup header's action that takes one approved
+  version to Deploy. It lists the approved versions of the saved content (and those a
+  search that began from it made with changed settings), and a ready one links to the
+  account list under Deploy's own `options_setup` key by its own Golden Options id.
+  The owner chooses the version and then the account: nothing is pre-chosen, even when
+  one version is ready, and a stale, revoked or unreadable version is refused by name,
+  never replaced by another. Navigation sends no command; Deploy re-reads the version and
+  applies its own admission. A registered signal program that trades options is not
+  deployed this way: it stays in the signal workflow (`strategy`, `golden_qualification`),
+  because the split is the strategy model and not the asset traded.
+  _Avoid_: Use in Deploy (the signal Golden Search action).
 - **Operations** — the group for the machinery under the research: the data lake,
   the option archive, backups, math checks (the golden fixtures) and data checks
   (the TradingView comparison, data divergence and strategy pre-flight). It holds

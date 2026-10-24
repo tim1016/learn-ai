@@ -49,7 +49,7 @@ export const TRADER_MANUALS: Record<'options' | 'broker', TraderManual> = {
       { id: 'one-day', title: 'Follow one trade and day', description: 'Timeline, fills, stop levels, marks, events, filters and CSV export.', group: 'Run and understand' },
       { id: 'capital', title: 'Test costs and funding', description: 'Slippage tolerance, cash ladder, collateral and capital evidence.', group: 'Explore further' },
       { id: 'history', title: 'Compare and reuse runs', description: 'History, shared sessions, setting differences and saved results.', group: 'Explore further' },
-      { id: 'golden', title: 'Approve a run or start a golden search', description: 'Approve a tested run with a note, start a search, and read which path made each version.', group: 'Explore further' },
+      { id: 'golden', title: 'Approve a run or start a golden search', description: 'Approve a tested run with a note, start a search, read which path made each version, and take one to Deploy.', group: 'Explore further' },
       { id: 'past-chain', title: 'Explore the Past chain', description: 'Historical contracts, expiry series, prices and missing data.', group: 'Explore further' },
       { id: 'troubleshooting', title: 'Find out why it did not trade', description: 'Refusals, no starting price, missing bars and incomplete closes.', group: 'Keep nearby' },
       { id: 'glossary', title: 'Words and further reading', description: 'Plain-language definitions and links to related manuals.', group: 'Keep nearby' },

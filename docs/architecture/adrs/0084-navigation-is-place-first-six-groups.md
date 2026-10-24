@@ -70,3 +70,11 @@ An options setup's Golden is one address, `/options-setups/:name/golden`, and sa
 A golden search study is evidence, so it has no saved name in its address: `/options-setups/evidence/study/:studyId` is the study to work on (its research, the comparison and final test, and the approval), and `?view=lineage` its recorded lineage. It opens whether or not a saved setup still holds the content it started from, and says which do. `/options-golden-search/:studyId` ends there in one redirect.
 
 `/options-golden-search` ends at `/options-setups/:name/golden` when it names a setup (`?setup_name=`), carrying the study it forks, and otherwise at `/options-setups?then=golden`, where every saved setup opens on its Golden tab. No setup is chosen for a link that names none.
+
+## Amendment (#3515): Deploy an options bot
+
+An options setup's header offers **Deploy an options bot** for a saved setup that opens. It is a button that opens a choice, not a link: it lists the approved versions of the saved content, found by exact content as Golden finds them, then the versions a search that began from that content made with changed settings, each read by its own id. A ready version links to the account list under the key options Deploy already reads, `/brokers/alpaca?options_setup=<ogs_… id>`. There is no new key, and no default: one ready version is still the owner's click. A stale, revoked or unreadable version is listed with why and has no link, and no other version is offered in its place.
+
+The account list reads that version again by its own id while the owner chooses an account, and refuses it by name when it is stale, revoked, unreadable, or answered as another version. A refusal stays until the owner asks again; the cards keep carrying the chosen id unchanged, so Deploy refuses it by the same facts at its own boundary. Nothing in the handoff selects an account, a version or a lane, and navigation sends no command. Deploy's admission, eligibility and submission code are unchanged.
+
+The split between the two Deploy paths is the strategy model, not the traded asset. A registered signal program that uses option execution keeps its handoff (`strategy`, `golden_qualification`), its Deploy workflow, and its traded-asset warnings and admission; it is not offered here and is not reclassified as a saved timed setup.
