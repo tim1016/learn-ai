@@ -62,6 +62,7 @@ import type {
 } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
 import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
 import { tickerRangeToWire } from '../../../utils/ticker-wire';
+import { SignalStudyDataSourceRaw, toSignalStudyDataSource } from './signal-study-data-source';
 
 /** Snake-case shape returned by /api/jobs-internal/signal-engine worker. */
 interface SignalEngineJobResultRaw {
@@ -89,6 +90,7 @@ interface SignalEngineJobResultRaw {
   deflated_sharpe: unknown;
   methodology: unknown;
   research_log: string;
+  data_source?: SignalStudyDataSourceRaw | null;
   error: string | null;
 }
 
@@ -115,7 +117,7 @@ interface SignalEngineJobResultRaw {
 })
 export class SignalRunnerComponent {
   protected readonly signalEngineRail: readonly PhaseRailStop[] = [
-    { label: 'Fetch',        ids: ['loading_bars'] },
+    { label: 'Fetch',        ids: ['admitting_data', 'loading_bars'] },
     { label: 'Walk-forward', ids: ['compute_feature', 'diagnostics', 'regime_coverage', 'backtest_grid', 'walk_forward'] },
     { label: 'Stability',    ids: ['effective_sample'] },
     { label: 'Graduation',   ids: ['graduation'] },
@@ -436,6 +438,7 @@ export class SignalRunnerComponent {
         ? this.mapMethodology(raw.methodology as Record<string, unknown>)
         : null,
       researchLog: raw.research_log ?? '',
+      dataSource: raw.data_source ? toSignalStudyDataSource(raw.data_source) : null,
       error: raw.error ?? undefined,
     };
   }

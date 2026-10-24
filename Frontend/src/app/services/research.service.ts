@@ -523,6 +523,33 @@ export interface Methodology {
   costBpsOptions?: number[] | null;
 }
 
+/** Where a Signal study's bars came from and what admission did to get them (#3522). */
+export interface SignalStudyDataSource {
+  kind: 'lake';
+  provider: string;
+  priceAdjustmentMode: string;
+  barMinutes: number;
+  /** `extended` is every bar the provider served for the day; `regular` is the scheduled session. */
+  sessionPolicy: 'extended' | 'regular';
+  /** The requested window's bounds, `int64 ms UTC` at ET midnight. */
+  windowStartMs: number;
+  windowEndMs: number;
+  warmupSessions: number;
+  /** The target looks this many bars ahead (bars, not minutes). */
+  lookForwardBars: number;
+  /** sha256 of every byte read; changes when the lake is repaired under the same request. */
+  snapshotDigest: string | null;
+  identityDigest: string | null;
+  calculationVersion: string;
+  coverage: {
+    window: StudyCoverageGroup;
+    warmup: StudyCoverageGroup;
+    artifacts: { fetched: number; reused: number; refreshed: number };
+  } | null;
+  barsUsed: number | null;
+  cache: { hit: boolean; cachedAtMs: number | null };
+}
+
 export interface SignalEngineResult {
   success: boolean;
   ticker: string;
@@ -552,6 +579,8 @@ export interface SignalEngineResult {
   deflatedSharpe: DeflatedSharpe | null;
   methodology: Methodology | null;
   researchLog: string;
+  /** The lake source and admission counts behind this result; absent on a stored report. */
+  dataSource?: SignalStudyDataSource | null;
   error?: string;
 }
 
