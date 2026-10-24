@@ -999,6 +999,30 @@ def test_the_oldest_lead_in_sessions_the_vendor_has_no_bars_for_are_dropped_and_
 
 
 @respx.mock
+@pytest.mark.parametrize("missing_sessions", [1, 3])
+@pytest.mark.parametrize("mode", ["raw", "polygon_split_adjusted"])
+def test_repeated_shortened_warmup_reuses_the_empty_prefix_without_spending_its_retry_budget(
+    catalog, lake, missing_sessions, mode
+):
+    mock_launcher()
+    lead = lead_in_sessions(LEAD_WINDOW[0], 3)
+    calls = VendorCalls()
+    mock_vendor("SPY", vendor_history([*lead[missing_sessions:], *LEAD_WINDOW]), calls=calls)
+    ident = identity(LEAD_WINDOW, warmup=3, mode=mode)
+    first = admit(ident, **TRIM)
+    calls.requests.clear()
+
+    for _ in range(4):
+        repeated = admit(ident, **TRIM)
+        assert repeated.snapshot_digest == first.snapshot_digest
+        assert repeated.identity == first.identity
+        assert repeated.coverage.dropped == tuple(lead[:missing_sessions])
+        assert repeated.coverage.warmup.unavailable_from_provider == missing_sessions
+        assert repeated.coverage.blocking == ()
+    assert calls.count == 0, "the stored empty prefix is evidence, not a failed fetch to retry"
+
+
+@respx.mock
 def test_a_symbol_with_no_bars_before_its_window_gets_an_empty_lead_in(catalog, lake):
     mock_launcher()
     mock_vendor("SPY", vendor_history(LEAD_WINDOW))

@@ -51,6 +51,9 @@ traded, so it still refuses, and so does a hole after a session that has bars. T
 dropped sessions stay in the counts (``unavailable_from_provider``) and in
 :attr:`StudyCoverage.dropped`; the admitted identity carries the lead-in that was
 read.
+Repeated admissions reuse the catalog's empty-answer evidence for that prefix;
+they do not spend its fetch retry budget and turn an accepted shortened lead-in
+into a refusal. A subsequently captured file is still read first and wins.
 
 Fold. The lake holds minute bars; a coarser study resolution is folded from
 them by :func:`fold_minute_bars` — never by the chart's resampler, which fills
@@ -500,6 +503,38 @@ def _describe_failure(failure: ArtifactFailure) -> str:
     return f"{failure.reason}" + (f": {failure.detail}" if failure.detail else "")
 
 
+def _recorded_empty_prefix(
+    identity: MinuteWindowIdentity, lead: Sequence[date], reads: Mapping[date, _SessionRead]
+) -> dict[date, ArtifactFailure]:
+    """Reuse only failed empty-answer evidence at the front of an absent lead-in."""
+    if not lead or reads[lead[0]].state != "absent":
+        return {}
+
+    async def _coverage() -> list[catalog_client.ArtifactCoverageRow]:
+        await catalog_client.init_pool()
+        return await catalog_client.select_artifact_coverage(
+            market="usa", symbol=identity.symbol, data_type="trade", provider="polygon",
+            price_adjustment_mode=identity.price_adjustment_mode,
+            start_trading_date=lead[0], end_trading_date=lead[-1],
+        )
+
+    try:
+        rows = run_on_background_loop(_coverage(), timeout=35)
+    except (asyncpg.PostgresError, OSError, TimeoutError, CallerStoppedWaitingError) as exc:
+        raise CatalogUnavailableError(f"cannot read lead-in evidence from the catalog ({type(exc).__name__})") from exc
+    by_day = {row.trading_date: row for row in rows}
+    failures: dict[date, ArtifactFailure] = {}
+    for day in lead:
+        row = by_day.get(day)
+        if reads[day].state != "absent" or row is None or row.status != "failed" or row.last_error != "provider_no_data":
+            break
+        failures[day] = ArtifactFailure(
+            artifact_kind="time_series_bars", symbol=identity.symbol, trading_date=day,
+            data_type="trade", reason="provider_no_data",
+        )
+    return failures
+
+
 def _summarise(issues: Sequence[SessionIssue], total: int) -> str:
     """One plain sentence per outcome, naming up to three sessions each."""
     by_outcome: dict[SessionOutcome, list[SessionIssue]] = {}
@@ -675,7 +710,11 @@ def admit_minute_inputs(
         )
     check_cancelled()
 
-    needs_work = [day for day in required if first_read[day].state != "ready"]
+    try:
+        failures = _recorded_empty_prefix(identity, lead, first_read) if lead_in == "trim_unsupplied_prefix" else {}
+    except CatalogUnavailableError as exc:
+        raise StudyInputRefusal("lake_unavailable", f"The data lake's catalog is unavailable ({exc}).") from exc
+    needs_work = [day for day in required if first_read[day].state != "ready" and day not in failures]
     fixable = [day for day in needs_work if day >= floor and first_read[day].repairable]
     materialization: MinuteWindowMaterialization | None = None
     if fixable and len(fixable) == len(needs_work):
@@ -710,10 +749,9 @@ def admit_minute_inputs(
             )
     check_cancelled()
 
-    failures: dict[date, ArtifactFailure] = {}
     reads = dict(first_read)
     if materialization is not None:
-        failures = {f.trading_date: f for f in materialization.withheld if f.trading_date is not None}
+        failures.update({f.trading_date: f for f in materialization.withheld if f.trading_date is not None})
         # A capture of an adjusted symbol can move the basis of every day the lake holds for it, including days that
         # read ready before it. The reader pins the first basis it sees, so the days read again are read with a reader
         # of their own, and every required day is read again: one read on the old basis and one on the new would
