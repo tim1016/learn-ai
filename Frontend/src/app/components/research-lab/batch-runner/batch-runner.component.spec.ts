@@ -3,7 +3,7 @@ import { HttpClientTestingModule, HttpTestingController } from '@angular/common/
 import { HttpErrorResponse } from '@angular/common/http';
 import { computed, signal, type Signal } from '@angular/core';
 import { provideRouter } from '@angular/router';
-import { render, screen, waitFor } from '@testing-library/angular';
+import { render, screen, waitFor, within } from '@testing-library/angular';
 import { userEvent } from '@testing-library/user-event';
 import { vi } from 'vitest';
 
@@ -21,6 +21,9 @@ import {
   provideFakeVendorCatalog,
 } from '../../../shared/symbol-catalog/testing/fake-symbol-catalog';
 import { RECORD_ID, storedRecord } from '../../../research/stored-study/testing/stored-study-fixtures';
+import { DataLakeService, type DataLakeRead, type InstrumentDataReport } from '../../../shared/data-lake';
+import { TradeBackfillRunner } from '../../../shared/data-lake/trade-backfill-runner';
+import { heldReport } from '../../../shared/data-lake/testing/instrument-data-report';
 import { BatchRunnerComponent } from './batch-runner.component';
 
 /**
@@ -66,6 +69,18 @@ function member(ticker: string, validity: string, passed: boolean, error: string
   };
 }
 
+/**
+ * The lake's count of the sessions a member's window needs (`GET /api/data-lake/instrument-data`), and the shared
+ * capture runner. Left alone, the lake holds every session of every member, so only the specs about the count see a
+ * warning.
+ */
+function lakeHoldsEverything(): { provide: unknown; useValue: unknown }[] {
+  return [
+    { provide: DataLakeService, useValue: { instrumentData: vi.fn().mockResolvedValue({ kind: 'ok', value: heldReport({ sessions: 60 }) }) } },
+    { provide: TradeBackfillRunner, useValue: { run: vi.fn() } },
+  ];
+}
+
 describe('BatchRunnerComponent (Cross-sectional study)', () => {
   let fixture: ComponentFixture<BatchRunnerComponent>;
   let component: BatchRunnerComponent;
@@ -96,6 +111,7 @@ describe('BatchRunnerComponent (Cross-sectional study)', () => {
       imports: [BatchRunnerComponent, HttpClientTestingModule],
       providers: [
         { provide: JobsService, useValue: jobsMock },
+        ...lakeHoldsEverything(),
         provideRouter([]),
         provideFakeTickerCatalog(
           fakeTickerCatalog([
@@ -313,7 +329,13 @@ interface JobsServiceMock {
   dismiss: ReturnType<typeof vi.fn>;
 }
 
-async function renderPage(result?: Record<string, unknown>) {
+/** What the lake holds of one member's window: every session, unless a spec says some are missing. */
+type LakeReading = (symbol: string) => DataLakeRead<InstrumentDataReport>;
+const lakeHolds: LakeReading = () => ({ kind: 'ok', value: heldReport({ sessions: 60 }) });
+
+async function renderPage(result?: Record<string, unknown>, lake: LakeReading = lakeHolds) {
+  const instrumentData = vi.fn(async (query: { symbol: string }) => lake(query.symbol));
+  const captureRun = vi.fn();
   const jobsById = signal<Map<string, JobState>>(new Map());
   const jobs: JobsServiceMock = {
     jobs: computed(() => Array.from(jobsById().values())),
@@ -326,6 +348,8 @@ async function renderPage(result?: Record<string, unknown>) {
   const view = await render(BatchRunnerComponent, {
     providers: [
       { provide: JobsService, useValue: jobs },
+      { provide: DataLakeService, useValue: { instrumentData } },
+      { provide: TradeBackfillRunner, useValue: { run: captureRun } },
       provideRouter([]),
       provideFakeTickerCatalog(
         fakeTickerCatalog([
@@ -341,7 +365,7 @@ async function renderPage(result?: Record<string, unknown>) {
   });
   const finish = (status: JobState['status'], extra: Partial<JobState> = {}) =>
     jobsById.set(new Map([['job-1', { id: 'job-1', type: 'cross_sectional', status, recentLogs: [], logSeq: 0, ...extra }]]));
-  return { view, jobs, finish, user: userEvent.setup() };
+  return { view, jobs, finish, instrumentData, captureRun, user: userEvent.setup() };
 }
 
 const runButton = () => screen.getByRole('button', { name: /run study/i });
@@ -403,6 +427,33 @@ describe('BatchRunnerComponent: where the inputs came from, and why a run has no
     expect(banner.textContent).toContain('every statistic divides by 2');
     expect(banner.textContent).toMatch(/IWM\s*— The lake cannot admit this window/);
     expect(banner.textContent).toContain('Statistics count only valid members.');
+  });
+
+  it('puts the members left out above the verdict, which is about the members that remain', async () => {
+    const { user, finish } = await renderPage(
+      rawResult({
+        status: 'partial',
+        tickers_tested_raw: 3, tickers_valid: 2,
+        ticker_results: [tickerRow('SPY'), tickerRow('QQQ'), tickerRow('IWM', { validity: 'invalid_data', error: 'No bars before 2025-10-09.' })],
+        universe: universe({
+          requested: ['SPY', 'QQQ', 'IWM'], requested_count: 3, complete: false,
+          excluded: [{ ticker: 'IWM', stage: 'stock_bars', code: 'data_unavailable_from_provider', reason: 'No bars before 2025-10-09.', retryable: true }],
+          excluded_count: 1,
+        }),
+        stage_info: {
+          stage: 1, label: 'Stage 1', description: 'Some signal.', next_stage_label: 'Stage 2', failed_criteria: [],
+          advance_criteria: [{ name: 'Aggregate IC', description: 'Needs more.', current_value: 0.02, required_repr: '>= 0.03', met: false }],
+        },
+      }),
+    );
+    await user.click(runButton());
+    finish('completed');
+
+    const banner = await screen.findByTestId('partial-universe');
+
+    const verdict = document.querySelector('.verdict-card');
+    expect(verdict, 'the verdict is on the page').not.toBeNull();
+    expect(banner.compareDocumentPosition(verdict as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('flags a member that is in the statistics but was built on unanswered option requests', async () => {
@@ -580,5 +631,86 @@ describe('BatchRunnerComponent: where the inputs came from, and why a run has no
 
       expect(await screen.findByText(/the worker crashed\. The lake's reason could not be loaded: /)).not.toBeNull();
     });
+  });
+});
+
+describe('BatchRunnerComponent: the stock bars the lake lacks, before Run (#3524)', () => {
+  /** QQQ lacks 12 of 60 sessions and AAPL 30; SPY and everything else is held. */
+  const lacking: LakeReading = (symbol) => ({
+    kind: 'ok',
+    value: heldReport({ sessions: 60, missing: symbol === 'QQQ' ? 12 : symbol === 'AAPL' ? 30 : 0 }),
+  });
+
+  it('counts each member once for the entered window, in the split-adjusted tree, and says nothing when the lake holds it all', async () => {
+    const { instrumentData } = await renderPage();
+
+    await vi.waitFor(() => expect(instrumentData).toHaveBeenCalledTimes(3));
+
+    for (const symbol of ['SPY', 'QQQ', 'AAPL']) {
+      expect(instrumentData).toHaveBeenCalledWith({ symbol, from: '2025-09-02', to: '2025-12-01', tree: 'polygon_split_adjusted' });
+    }
+    expect(screen.queryByText(/in the lake yet/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Capture / })).toBeNull();
+  });
+
+  it('adds up the member-sessions the lake lacks and lists only the members that lack some, each with its own capture', async () => {
+    await renderPage(undefined, lacking);
+
+    expect(await screen.findByText(/42 member-sessions of stock bars aren’t in the lake yet, across 2 of 3 members\./)).toBeTruthy();
+    expect(screen.getByText(/about one vendor call per member-session, so a cold universe is slow/)).toBeTruthy();
+    expect(within(screen.getByTestId('holding-QQQ')).getByRole('button', { name: 'Capture 12 sessions' })).toBeTruthy();
+    expect(within(screen.getByTestId('holding-AAPL')).getByRole('button', { name: 'Capture 30 sessions' })).toBeTruthy();
+    expect(screen.queryByTestId('holding-SPY'), 'SPY is held in full').toBeNull();
+  });
+
+  it('starts no capture by itself and does not hold up Run study', async () => {
+    const { captureRun, jobs, user } = await renderPage(undefined, lacking);
+    await screen.findByText(/42 member-sessions/);
+
+    expect(captureRun).not.toHaveBeenCalled();
+    expect((runButton() as HTMLButtonElement).disabled).toBe(false);
+    await user.click(runButton());
+    expect(jobs.startJob).toHaveBeenCalledOnce();
+  });
+
+  it('captures the span the lake named for that member, through the shared runner, and counts that member again', async () => {
+    const { captureRun, instrumentData, user } = await renderPage(undefined, lacking);
+    let asked: unknown = null;
+    captureRun.mockImplementation(async (select: (defaults: never) => unknown) => {
+      asked = select(undefined as never);
+      return { kind: 'completed', failure: null };
+    });
+    const counted = lacking('QQQ');
+    await screen.findByText(/42 member-sessions/);
+
+    await user.click(within(screen.getByTestId('holding-QQQ')).getByRole('button', { name: 'Capture 12 sessions' }));
+
+    await vi.waitFor(() => expect(instrumentData).toHaveBeenCalledTimes(4));
+    expect(asked).toEqual({
+      symbol: 'QQQ', price_adjustment_mode: 'polygon_split_adjusted',
+      start_trading_date_ms: counted.kind === 'ok' ? counted.value.fill_window?.start_trading_date_ms : undefined,
+      end_trading_date_ms: counted.kind === 'ok' ? counted.value.fill_window?.end_trading_date_ms : undefined,
+    });
+    expect(instrumentData).toHaveBeenLastCalledWith(expect.objectContaining({ symbol: 'QQQ' }));
+  });
+
+  it('counts every member again once its own run ends, because the run filled the lake', async () => {
+    const { instrumentData, user, finish } = await renderPage(undefined, lacking);
+    await screen.findByText(/42 member-sessions/);
+    await user.click(runButton());
+
+    finish('completed');
+
+    await vi.waitFor(() => expect(instrumentData).toHaveBeenCalledTimes(6));
+  });
+
+  it('says which count could not be read, and does not read it as nothing missing', async () => {
+    await renderPage(undefined, (symbol) =>
+      symbol === 'AAPL' ? { kind: 'unavailable', message: 'The data plane did not respond.' } : lakeHolds(symbol),
+    );
+
+    expect(await screen.findByText('Could not check which of this run’s sessions the lake holds.')).toBeTruthy();
+    expect(within(screen.getByTestId('holding-AAPL')).getByText(/The data plane did not respond\./)).toBeTruthy();
+    expect(screen.queryByText(/member-sessions of stock bars/)).toBeNull();
   });
 });

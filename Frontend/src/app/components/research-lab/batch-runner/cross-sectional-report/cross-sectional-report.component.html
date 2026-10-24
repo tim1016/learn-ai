@@ -1,5 +1,10 @@
 @let res = result();
 
+<!-- Members left out of the statistics come first: the verdict below is about the members that remain. -->
+@if (res.status === 'partial' && res.universe; as uni) {
+  <app-cross-sectional-universe-notice [universe]="uni" kind="partial" />
+}
+
 <!-- Verdict block — Stage 0/1/2/3 -->
 @if (stageInfo(); as stage) {
   <div class="verdict-card mb-4" [attr.data-band]="stageBand()">
@@ -102,11 +107,6 @@
       </div>
     }
   </div>
-}
-
-<!-- A universe that is not fully evaluated says so right under the verdict it qualifies, member by member. -->
-@if (res.status === 'partial' && res.universe; as uni) {
-  <app-cross-sectional-universe-notice [universe]="uni" kind="partial" />
 }
 
 <!-- Aggregate metric cards -->

@@ -6,6 +6,8 @@ import {
   inject,
   input,
   signal,
+  untracked,
+  viewChild,
 } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { FormsModule } from '@angular/forms';
@@ -46,6 +48,7 @@ import {
   toBatchResearchResult,
   toCrossSectionalFailure,
 } from './cross-sectional-result.mapper';
+import { UniverseLakeHoldingComponent } from './universe-holding/universe-lake-holding.component';
 import { CrossSectionalUniverseNoticeComponent } from './universe-notice/universe-notice.component';
 
 const DEFAULT_TICKERS = ['SPY', 'QQQ', 'AAPL'];
@@ -96,6 +99,7 @@ function optionInputsText(source: CrossSectionalDataSource | null): string {
     StudyPageComponent,
     CrossSectionalReportComponent,
     CrossSectionalUniverseNoticeComponent,
+    UniverseLakeHoldingComponent,
     DataSourceComponent,
     LakeStudySourceComponent,
     TimestampDisplayComponent,
@@ -192,6 +196,14 @@ export class BatchRunnerComponent {
   readonly features = OPTIONS_FEATURES;
   readonly targetTypes = TARGET_TYPES;
 
+  /** The members' lake holdings (the count of sessions each lacks, and its capture), counted again once a run ends. */
+  private readonly universeHolding = viewChild(UniverseLakeHoldingComponent);
+
+  /** The universe as a run takes it: upper-case symbols, each once, in the order entered. */
+  readonly universeSymbols = computed<readonly string[]>(() => [
+    ...new Set(this.range().symbols.map((symbol) => symbol.trim().toUpperCase()).filter((symbol) => symbol !== '')),
+  ]);
+
   /** One press starts one run: a second click before the job is accepted is dropped. */
   private readonly gate = createRunGate();
   readonly starting = this.gate.starting;
@@ -277,14 +289,21 @@ export class BatchRunnerComponent {
         resultFetchedFor = id;
         this.error.set(j.errorMessage ?? 'Cross-sectional run failed');
         void this.loadFailure(id);
+        this.countLakeAgain();
       } else if (j.status === 'cancelled' && resultFetchedFor !== id) {
         resultFetchedFor = id;
         this.error.set(j.message ?? 'Run cancelled');
+        this.countLakeAgain();
       } else if (j.status === 'completed' && resultFetchedFor !== id) {
         resultFetchedFor = id;
         void this.handleCompleted(id);
       }
     });
+  }
+
+  /** A run fills the lake with whatever it lacked, so the count of what each member lacks is read again. */
+  private countLakeAgain(): void {
+    untracked(() => this.universeHolding()?.reread());
   }
 
   // Note: ticker selection (toggle / All / None) now lives inside
@@ -417,6 +436,7 @@ export class BatchRunnerComponent {
       const raw = await this.jobsService.fetchResult<CrossSectionalJobResultRaw>(id);
       this.result.set(toBatchResearchResult(raw));
       if (this.submitted !== null) this.inputs.capture(this.submitted);
+      this.countLakeAgain();
     } catch (err: unknown) {
       const msg =
         err && typeof err === 'object' && 'message' in err

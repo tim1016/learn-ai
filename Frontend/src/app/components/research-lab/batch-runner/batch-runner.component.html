@@ -13,15 +13,18 @@
   dataSourceWindows="date-et"
   (run)="runBatch()"
 >
-  <!-- The universe, its window and nothing else: the picker's own sampling
-       card is hidden because bars are daily by construction (#3527). -->
-  <app-multi-ticker-range-picker
-    studyInstrument
-    [(value)]="range"
-    [hideSampling]="true"
-    [showAutoFetch]="false"
-    title="Cross-sectional data"
-  />
+  <div studyInstrument class="universe-input">
+    <!-- The universe, its window and nothing else: the picker's own sampling
+         card is hidden because bars are daily by construction (#3527). -->
+    <app-multi-ticker-range-picker
+      [(value)]="range"
+      [hideSampling]="true"
+      [showAutoFetch]="false"
+      title="Cross-sectional data"
+    />
+    <!-- How many member-sessions of stock bars the lake lacks, with each member's capture. It warns; Run study is never held up by it. -->
+    <app-universe-lake-holding [symbols]="universeSymbols()" [from]="range().from" [to]="range().to" />
+  </div>
 
   <div studyConfig class="study-config">
     <div class="config-field">
