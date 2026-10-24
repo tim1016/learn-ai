@@ -171,6 +171,14 @@
     <p-message severity="error" class="mb-4">{{ error()! }}</p-message>
   }
 
+  <!-- Where the bars came from: the lake, and what admission did to get them -->
+  @if (sourceLine(); as line) {
+    @if (line.notice) {
+      <p-message severity="warn" class="mb-2">{{ line.notice }}</p-message>
+    }
+    <app-data-source origin="Lake" [method]="line.method" [freshness]="line.freshness" />
+  }
+
   <!-- Results (Mission-control) -->
   @if (result() && result()!.success && !loading()) {
     @let res = result()!;

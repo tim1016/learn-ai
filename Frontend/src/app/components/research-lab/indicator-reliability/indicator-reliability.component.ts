@@ -36,7 +36,14 @@ import {
 } from '../../../shared/indicator-verdict-hero';
 import { TickerRangePickerComponent } from '../../../shared/ticker-range-picker/ticker-range-picker.component';
 import type { TickerRange } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
+import { DataSourceComponent } from '../../../shared/data-source/data-source.component';
+import { refusalProse } from '../../../shared/errors/refusal-body';
 import { tickerRangeToWire } from '../../../utils/ticker-wire';
+import {
+  describeReliabilitySource,
+  refusalDataSource,
+  type ReliabilityDataSource,
+} from './indicator-reliability-data-source';
 
 Chart.register(...registerables);
 
@@ -163,6 +170,8 @@ interface IndicatorReliabilityResponse {
   info_footnotes: string[];
   // Warnings
   warnings: string[];
+  /** The lake input behind this result: identity, admitted snapshot, coverage, warmup (#3523). */
+  data_source?: ReliabilityDataSource | null;
   error: string | null;
 }
 
@@ -216,6 +225,7 @@ interface HorizonOption {
     AssetIdentityComponent,
     IndicatorVerdictHeroComponent,
     TickerRangePickerComponent,
+    DataSourceComponent,
   ],
 })
 export class IndicatorReliabilityComponent {
@@ -271,6 +281,12 @@ export class IndicatorReliabilityComponent {
   loadingIndicators = signal(false);
   result = signal<IndicatorReliabilityResponse | null>(null);
   error = signal<string | null>(null);
+  /** The lake source of the last run: from its result, or from the refusal that stopped it. */
+  dataSource = signal<ReliabilityDataSource | null>(null);
+  readonly sourceLine = computed(() => {
+    const source = this.dataSource();
+    return source ? describeReliabilitySource(source) : null;
+  });
   formCollapsed = signal(false);
   selectedHorizon = signal<number | null>(null);
 
@@ -465,6 +481,7 @@ export class IndicatorReliabilityComponent {
     this.loading.set(true);
     this.error.set(null);
     this.result.set(null);
+    this.dataSource.set(null);
 
     // Wire the canonical TickerRange shape into the request body via the
     // shared adapter. Python's IndicatorReliabilityRequest now inherits
@@ -491,8 +508,10 @@ export class IndicatorReliabilityComponent {
       .pipe(
         takeUntilDestroyed(this.destroyRef),
         catchError(err => {
-          const msg = err?.error?.detail ?? err?.message ?? 'An unexpected error occurred';
+          // A lake refusal carries its reason in `detail.message` and what admission reached in `detail.data_source`.
+          const msg = refusalProse(err)?.message ?? err?.error?.detail ?? err?.message ?? 'An unexpected error occurred';
           this.error.set(msg);
+          this.dataSource.set(refusalDataSource(err));
           return of(null);
         }),
         finalize(() => this.loading.set(false)),
@@ -500,6 +519,7 @@ export class IndicatorReliabilityComponent {
       .subscribe(res => {
         if (res) {
           this.result.set(res);
+          this.dataSource.set(res.data_source ?? null);
           if (!res.success && res.error) {
             this.error.set(res.error);
           } else if (res.success) {
