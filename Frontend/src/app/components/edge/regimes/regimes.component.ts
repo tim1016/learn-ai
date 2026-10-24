@@ -11,7 +11,6 @@ import { EdgeScoreDrawerComponent } from "../drawers/edge-score-drawer.component
 import { TradeSimDrawerComponent } from "../drawers/trade-sim-drawer.component";
 import { EdgeMockDataService } from "../services/edge-mock-data.service";
 
-type AlgoMode = "hmm" | "kmeans" | "compare";
 type ViewMode = "viterbi" | "posterior";
 
 @Component({
@@ -36,7 +35,6 @@ export class RegimesComponent {
   readonly data = this.mockData.get();
   readonly hoverIdx = signal<number | null>(null);
   readonly viewMode = signal<ViewMode>("viterbi");
-  readonly algo = signal<AlgoMode>("hmm");
   readonly scoreOpen = signal(false);
   readonly tradeSimOpen = signal(false);
 
@@ -59,9 +57,6 @@ export class RegimesComponent {
     this.data.edgeScore[Math.floor(this.data.N / 2)] >= 0 ? this.TOK.bull : this.TOK.bear
   );
 
-  readonly priceChartHeight = computed(() => this.algo() === "compare" ? 320 : 260);
-
-  protected setAlgo(a: AlgoMode): void { this.algo.set(a); }
   protected setView(v: ViewMode): void { this.viewMode.set(v); }
 
   protected sharpeColor(s: number): string {

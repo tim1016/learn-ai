@@ -19,6 +19,14 @@ describe("CrossAssetComponent — sample labeling", () => {
     expect(screen.getAllByTestId("sample-data-banner")).toHaveLength(1);
   });
 
+  it("offers no split or vol-weighted switch, since the sample draws neither", async () => {
+    await render(CrossAssetComponent);
+
+    for (const name of ["rolling", "calendar", "walk-forward", "Vol-weighted parity"]) {
+      expect(screen.queryByRole("button", { name }), name).toBeNull();
+    }
+  });
+
   it("labels each drawer it opens as sample data too", async () => {
     const user = userEvent.setup();
     await render(CrossAssetComponent);

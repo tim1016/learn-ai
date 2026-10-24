@@ -96,20 +96,6 @@
   margin-bottom: 12px;
   display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
 }
-.split-toggle { display: flex; gap: 4px; }
-.split-btn {
-  padding: 6px 12px; border-radius: 4px;
-  background: transparent; border: 1px solid $border-light;
-  color: $text-secondary; font-size: 11px; font-family: $font-mono;
-  cursor: pointer; text-transform: uppercase;
-
-  &.on {
-    background: var(--ind-cat-trend-soft);
-    border-color: var(--ind-cat-trend);
-    color: var(--ind-cat-trend);
-  }
-}
-.divider { width: 1px; height: 22px; background: $border; }
 .strategy-fixed {
   color: $text-primary; font-size: 12px; font-family: $font-mono;
 }

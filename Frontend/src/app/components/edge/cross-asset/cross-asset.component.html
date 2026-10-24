@@ -43,19 +43,11 @@
 
   <!-- Form -->
   <div class="form-card">
-    <div class="split-toggle">
-      @for (m of splitModes; track m) {
-        <button type="button" class="split-btn"
-                [class.on]="splitMode() === m"
-                (click)="setSplitMode(m)">{{ m }}</button>
-      }
-    </div>
-    <span class="divider"></span>
     <span class="eyebrow">STRATEGY</span>
     <span class="strategy-fixed">vrp_short_vol</span>
     <div class="form-spacer"></div>
     <span class="form-meta">
-      {{ data.assets.length }} assets × {{ data.periods.length }} periods · 1 split
+      {{ data.assets.length }} assets × {{ data.periods.length }} periods
     </span>
   </div>
 
@@ -120,7 +112,7 @@
     } @else {
       <div class="curve-cell">
         <div class="curve-head">
-          <span class="curve-tkr">{{ composite() === 'equal-weight' ? 'EW' : 'IVOL' }} · composite</span>
+          <span class="curve-tkr">EW · composite</span>
           <span class="curve-pct" [style.color]="curveColor(compositeSeries())">{{ fmtPct(curveDelta(compositeSeries())) }}</span>
         </div>
         <app-edge-mini-line [width]="1300" [height]="120"

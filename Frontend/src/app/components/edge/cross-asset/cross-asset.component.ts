@@ -10,8 +10,7 @@ import { EdgeScoreDrawerComponent } from "../drawers/edge-score-drawer.component
 import { TradeSimDrawerComponent } from "../drawers/trade-sim-drawer.component";
 import { EdgeMockDataService } from "../services/edge-mock-data.service";
 
-type SplitMode = "rolling" | "calendar" | "walk-forward";
-type Composite = "per-asset" | "equal-weight" | "vol-weighted";
+type Composite = "per-asset" | "equal-weight";
 
 @Component({
   selector: "app-edge-cross-asset",
@@ -32,17 +31,14 @@ export class CrossAssetComponent {
 
   readonly data = this.mockData.get();
 
-  readonly splitMode = signal<SplitMode>("rolling");
   readonly composite = signal<Composite>("per-asset");
   readonly hoverCell = signal<HeatmapHover | null>(null);
   readonly scoreOpen = signal(false);
   readonly tradeSimOpen = signal(false);
 
-  readonly splitModes: readonly SplitMode[] = ["rolling", "calendar", "walk-forward"];
   readonly composites: readonly { k: Composite; l: string }[] = [
     { k: "per-asset", l: "Per-asset (small mult.)" },
     { k: "equal-weight", l: "Equal-weight composite" },
-    { k: "vol-weighted", l: "Vol-weighted parity" },
   ];
 
   readonly compositeSeries = computed<readonly number[]>(() => {
@@ -71,7 +67,6 @@ export class CrossAssetComponent {
     this.data.edgeScore[Math.floor(this.data.N / 2)] >= 0 ? this.TOK.bull : this.TOK.bear
   );
 
-  protected setSplitMode(m: SplitMode): void { this.splitMode.set(m); }
   protected setComposite(c: Composite): void { this.composite.set(c); }
 
   protected curveDelta(curve: readonly number[]): number {

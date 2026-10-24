@@ -68,7 +68,7 @@ export class MultiTickerRangePickerComponent {
   ]);
   readonly availableMultipliers = input<readonly number[]>([]);
   readonly hideSampling = input(false);
-  readonly sessionMode = input<SessionMode>('preview');
+  readonly sessionMode = input<SessionMode>('disabled');
   readonly showAutoFetch = input(true);
   readonly title = input('Cross-sectional data');
 
