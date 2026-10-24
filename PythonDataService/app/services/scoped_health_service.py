@@ -21,17 +21,15 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
-from typing import Final
-
-from fastapi import FastAPI, Request
+from typing import TYPE_CHECKING, Final
 
 from app.broker.ibkr.health import current_broker_health
 from app.broker.ibkr.models import IbkrConnectionHealth
 from app.config import fleet_settings
 from app.data_lake import catalog_client
-from app.data_lake.polygon_fetcher import polygon_history_floor
+from app.data_lake.polygon_fetcher import current_polygon_history_floor
 from app.data_lake.run_readiness import read_run_readiness
-from app.data_lake.types import RunReadinessResponse, trading_date_at_ms
+from app.data_lake.types import RunReadinessResponse
 from app.schemas.option_archive import OptionArchiveHealth
 from app.schemas.scoped_health import AffectedOperation, ScopedHealthResponse
 from app.services.scoped_health_items import (
@@ -48,6 +46,9 @@ from app.services.scoped_health_items import (
     worst_first,
 )
 from app.utils.timestamps import Clock, now_ms_utc
+
+if TYPE_CHECKING:
+    from app.option_archive.service import OptionArchiveService
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,7 @@ class SourceUnreadable(Exception):
 
 @dataclass(frozen=True)
 class HealthReaders:
-    """How each source is read. Tests substitute these; the app builds the real ones in ``get_scoped_health_service``."""
+    """How each source is read. Tests substitute these; the app builds the real ones with ``default_readers``."""
 
     lake: Read[RunReadinessResponse]
     archive: Read[OptionArchiveHealth]
@@ -142,13 +143,16 @@ class ScopedHealthService:
 async def _read_lake() -> RunReadinessResponse:
     # The route's own dependency: a fresh process has no catalog pool until something asks for one.
     await catalog_client.init_pool()
-    floor = polygon_history_floor(trading_date_at_ms(now_ms_utc()))
-    return await read_run_readiness(market="usa", data_type=LAKE_DATA_TYPE, price_adjustment_mode=LAKE_MODE, floor=floor)
+    return await read_run_readiness(
+        market="usa", data_type=LAKE_DATA_TYPE, price_adjustment_mode=LAKE_MODE, floor=current_polygon_history_floor()
+    )
 
 
-def _archive_reader(app: FastAPI) -> Read[OptionArchiveHealth]:
+def _archive_reader(find_service: Callable[[], OptionArchiveService | None]) -> Read[OptionArchiveHealth]:
+    """Looked up at each read: the archive service starts after the projection can be asked for."""
+
     async def read() -> OptionArchiveHealth:
-        service = getattr(app.state, "option_archive_service", None)
+        service = find_service()
         if service is None:
             raise SourceUnreadable("The option archive is not running in this data service, so its status cannot be read.")
         return await asyncio.to_thread(service.health)
@@ -165,14 +169,6 @@ async def _read_ibkr() -> IbkrConnectionHealth:
     return current_broker_health()
 
 
-async def get_scoped_health_service(request: Request) -> ScopedHealthService:
-    """The process's one projection, built on first use so it can see the running app's archive service.
-
-    ``async`` so the check-and-build runs on the event loop, never on two pool threads at once.
-    """
-    app = request.app
-    service = getattr(app.state, "scoped_health_service", None)
-    if service is None:
-        service = ScopedHealthService(HealthReaders(lake=_read_lake, archive=_archive_reader(app), ibkr=_read_ibkr))
-        app.state.scoped_health_service = service
-    return service
+def default_readers(find_archive_service: Callable[[], OptionArchiveService | None]) -> HealthReaders:
+    """The sources as the data plane already answers for them; the app supplies where its archive service is."""
+    return HealthReaders(lake=_read_lake, archive=_archive_reader(find_archive_service), ibkr=_read_ibkr)

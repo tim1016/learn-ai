@@ -9,6 +9,7 @@ import pytest
 from fastapi import FastAPI
 from starlette.requests import Request
 
+from app.routers.scoped_health import get_scoped_health_service
 from app.schemas.option_archive import ArchiveSeverity
 from app.schemas.scoped_health import HealthItem
 from app.services.scoped_health_items import REASON_LIMIT
@@ -18,7 +19,6 @@ from app.services.scoped_health_service import (
     HealthReaders,
     ScopedHealthService,
     SourceUnreadable,
-    get_scoped_health_service,
 )
 from tests._helpers.scoped_health import (
     FakeClock,

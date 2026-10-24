@@ -27,8 +27,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
-from datetime import date
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -45,7 +43,7 @@ from app.data_lake.backfill import (
 )
 from app.data_lake.catalog_client import MinuteBarLeaseStatus, select_minute_bar_lease_status
 from app.data_lake.ensure_data import ensure_data, provider_for_data_type
-from app.data_lake.polygon_fetcher import polygon_history_floor
+from app.data_lake.polygon_fetcher import current_polygon_history_floor
 from app.data_lake.run_readiness import coverage_gaps, read_run_readiness
 from app.data_lake.types import (
     MAX_SYMBOL_LENGTH,
@@ -74,11 +72,6 @@ from app.lean_sidecar.trading_calendar import session_open_ms_utc, session_windo
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/data-lake", tags=["data-lake"])
-
-
-def _provider_history_floor() -> date:
-    """The oldest trading date the provider serves, as of today in ET."""
-    return polygon_history_floor(trading_date_at_ms(int(time.time() * 1000)))
 
 
 async def _ensure_catalog_pool() -> None:
@@ -344,7 +337,7 @@ async def get_run_readiness(
         market=market,
         data_type=data_type,
         price_adjustment_mode=price_adjustment_mode,
-        floor=_provider_history_floor(),
+        floor=current_polygon_history_floor(),
     )
 
 
@@ -391,7 +384,7 @@ async def get_backfill_defaults(market: Literal["usa"] = "usa") -> BackfillDefau
         lean_image_digest=PINNED_LEAN_IMAGE_DIGEST,
         max_trading_range_days=MAX_TRADING_RANGE_DAYS,
         max_symbol_length=MAX_SYMBOL_LENGTH,
-        provider_history_start_ms=trading_date_to_calendar_anchor_ms(_provider_history_floor()),
+        provider_history_start_ms=trading_date_to_calendar_anchor_ms(current_polygon_history_floor()),
     )
 
 
@@ -561,7 +554,7 @@ async def start_backfill_job(req: BackfillJobRequest) -> dict:
     # (#2241). Only this side holds the credential, so only this side can
     # refuse it — and refusing here covers the operator typing a date into
     # the Observatory panel exactly as it covers the picker's gate.
-    floor = _provider_history_floor()
+    floor = current_polygon_history_floor()
     if spec.start_trading_date < floor:
         raise HTTPException(
             status_code=422,

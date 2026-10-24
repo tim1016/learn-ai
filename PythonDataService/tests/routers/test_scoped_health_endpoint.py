@@ -15,9 +15,9 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from app.routers.scoped_health import router
+from app.routers.scoped_health import get_scoped_health_service, router
 from app.services import scoped_health_service
-from app.services.scoped_health_service import HealthReaders, ScopedHealthService, get_scoped_health_service
+from app.services.scoped_health_service import HealthReaders, ScopedHealthService
 from tests._helpers.scoped_health import (
     EARLIER_SESSION_OPEN_MS,
     NOW_MS,
