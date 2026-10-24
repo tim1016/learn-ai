@@ -80,7 +80,6 @@ const ROWS: Readonly<Record<string, Row>> = {
   // The chain moved into the instrument's Options tab; with no instrument named, an old address asks for one.
   'options-lab': { group: MARKETS, lands: '/markets?then=options' },
   'options-lab/chain': { group: MARKETS, lands: '/markets?then=options' },
-  'options-lab/strategy-finder': { group: MARKETS },
   // This page was the IBKR feed, so with no instrument named the list is asked to open the chain on Now · Live IBKR.
   'broker/options-chain': { group: MARKETS, lands: '/markets?source=live&then=options' },
   // Surface and Pricing moved under the instrument; with no instrument named, an old address leads to the list.
@@ -164,12 +163,25 @@ const ROWS: Readonly<Record<string, Row>> = {
   'research-lab/backtests/recency-chart': { group: SIGNAL },
 
   // ── Options setups ───────────────────────────────────────────────────────
-  'options-backtest': { group: OPTIONS },
-  'options-golden-search': { group: OPTIONS },
-  'options-golden-search/:studyId': { group: OPTIONS },
-  'options-evidence/:kind/:subjectId': { group: OPTIONS },
-  // The analytical builder is an Options Lab tab, filed under Options setups (R32).
-  'options-lab/strategy-builder': { group: OPTIONS },
+  'options-setups': { group: OPTIONS },
+  'options-setups/evidence/study/:studyId': { group: OPTIONS },
+  'options-setups/evidence/:kind/:subjectId': { group: OPTIONS },
+  // A setup's address always carries its tab, so a bare second segment names nothing (ADR 0084).
+  'options-setups/:name': { group: null, notFound: true },
+  'options-setups/:name/overview': { group: OPTIONS },
+  'options-setups/:name/define': { group: OPTIONS },
+  'options-setups/:name/explore': { group: OPTIONS },
+  'options-setups/:name/golden': { group: OPTIONS },
+  'options-backtest': { group: OPTIONS, lands: '/options-setups' },
+  'options-evidence/:kind/:subjectId': { group: OPTIONS, lands: '/options-setups/evidence/run/7' },
+  // A search or study link names no setup the old page chose for it: a plan asks which setup first, and a study opens by its own id.
+  'options-golden-search': { group: OPTIONS, lands: '/options-setups?then=golden' },
+  'options-golden-search/:studyId': { group: OPTIONS, lands: '/options-setups/evidence/study/7' },
+  // The analytical views, which are not setups (#3516), and the Options Lab addresses that now end at them.
+  'options-setups/analysis': { group: OPTIONS },
+  'options-setups/analysis/finder': { group: OPTIONS },
+  'options-lab/strategy-builder': { group: OPTIONS, lands: '/options-setups/analysis' },
+  'options-lab/strategy-finder': { group: OPTIONS, lands: '/options-setups/analysis/finder' },
 
   // ── Operations ───────────────────────────────────────────────────────────
   'data-lake': { group: OPERATIONS, lands: '/operations/lake' },
@@ -461,13 +473,13 @@ describe('the route inventory (T01)', () => {
       const location = TestBed.inject(Location);
       const nextEnd = () => firstValueFrom(router.events.pipe(filter((event) => event instanceof NavigationEnd)));
 
-      await router.navigateByUrl('/options-evidence/run/7?view=lineage');
+      await router.navigateByUrl('/options-setups/evidence/run/7?view=lineage');
       await router.navigateByUrl('/markets/SPY/chart?from=2026-01-02&to=2026-02-27');
 
       const back = nextEnd();
       location.back();
       await back;
-      expect(router.url).toBe('/options-evidence/run/7?view=lineage');
+      expect(router.url).toBe('/options-setups/evidence/run/7?view=lineage');
       expect(activeMenuNodeFor(router.url)?.group.title).toBe('Options setups');
 
       const forward = nextEnd();
@@ -475,6 +487,29 @@ describe('the route inventory (T01)', () => {
       await forward;
       expect(router.url).toBe('/markets/SPY/chart?from=2026-01-02&to=2026-02-27');
       expect(activeMenuNodeFor(router.url)?.group.title).toBe('Markets');
+    });
+
+    it.each([
+      ['an options backtest link that opened a saved setup', '/options-backtest?setup_name=Saved%20two-leg%20setup&probe=1#probe', '/options-setups/Saved%20two-leg%20setup/define?probe=1#probe'],
+      ['a name that is only a label', '/options-backtest?setup_name=SPY%2C%20Buy%201%20ATM%20call%20(0945)', '/options-setups/SPY,%20Buy%201%20ATM%20call%20%280945%29/define'],
+      ['an options backtest link with no setup', '/options-backtest?probe=1#probe', '/options-setups?probe=1#probe'],
+      ['an evidence link for a study, with the study it inspected', '/options-evidence/study/os_a?view=lineage&inspected_study_id=os_b#why', '/options-setups/evidence/study/os_a?view=lineage&inspected_study_id=os_b#why'],
+      ['an evidence link for a Golden version, from a bot', '/options-evidence/golden/ogs_a?bot_return=%2Fbrokers%2Falpaca', '/options-setups/evidence/golden/ogs_a?bot_return=%2Fbrokers%2Falpaca'],
+      // Options Golden Search (T01): a plan lands on the setup it named, a study on its own address, and neither is given a setup the link did not name.
+      ['an Options Golden Search link that named a saved setup', '/options-golden-search?setup_name=Saved%20two-leg%20setup&probe=1#probe', '/options-setups/Saved%20two-leg%20setup/golden?probe=1#probe'],
+      ['an Options Golden Search link that forked a study of a saved setup', '/options-golden-search?setup_name=Mine&parent_study_id=os_a#plan', '/options-setups/Mine/golden?parent_study_id=os_a#plan'],
+      ['an Options Golden Search link that named no setup', '/options-golden-search?parent_study_id=os_a&probe=1#probe', '/options-setups?parent_study_id=os_a&probe=1&then=golden#probe'],
+      ['an Options Golden Search link with nothing', '/options-golden-search', '/options-setups?then=golden'],
+      ['an Options Golden Search study link', '/options-golden-search/os_a?probe=1#probe', '/options-setups/evidence/study/os_a?probe=1#probe'],
+      ['an Options Golden Search study link that also carried a plan', '/options-golden-search/os_a?setup_name=Mine&parent_study_id=os_b&x=1', '/options-setups/evidence/study/os_a?x=1'],
+      ['an Options Lab Strategy Builder link', '/options-lab/strategy-builder?ticker=SPY&probe=1#legs', '/options-setups/analysis?ticker=SPY&probe=1#legs'],
+      ['an Options Lab Strategy Finder link', '/options-lab/strategy-finder?probe=1#why', '/options-setups/analysis/finder?probe=1#why'],
+    ])('lands %s on its new home in one navigation, with every other query key and the fragment', async (_name, url, landsOn) => {
+      const { router, ended, cancelled } = await load(url);
+
+      expect(router.url).toBe(landsOn);
+      expect(ended).toHaveLength(1);
+      expect(cancelled).toEqual([]);
     });
 
     it.each([

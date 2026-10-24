@@ -2,7 +2,6 @@ import { TestBed } from '@angular/core/testing';
 import { fireEvent, screen, within } from '@testing-library/angular';
 import { expect } from 'vitest';
 
-import { EXAMPLE_ONE_REENTRY } from './fixtures';
 
 /** What an owner does on the page, one helper each, so a spec reads as the story it tells. */
 
@@ -51,13 +50,6 @@ export function dateFields(): { from: string; to: string } {
     from: (screen.getByLabelText('Start date') as HTMLInputElement).value,
     to: (screen.getByLabelText('End date') as HTMLInputElement).value,
   };
-}
-
-/** Open a shipped example from the side list, which gives a complete setup with two legs. */
-export async function openExample(name = EXAMPLE_ONE_REENTRY): Promise<void> {
-  const list = screen.getByRole('complementary', { name: 'Saved setups' });
-  fireEvent.click(await within(list).findByRole('button', { name: new RegExp(`^${name}`) }));
-  await screen.findByRole('article', { name: 'Leg 2' });
 }
 
 export const checkButton = () => screen.getByRole<HTMLButtonElement>('button', { name: 'Check data' });

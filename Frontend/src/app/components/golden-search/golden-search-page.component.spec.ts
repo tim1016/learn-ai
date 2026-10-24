@@ -37,6 +37,15 @@ describe('GoldenSearchPageComponent', () => {
     expect(screen.queryByRole('tab', { name: /new study/i })).toBeNull();
   });
 
+  it('has no link into Options setups or Options golden search: a signal study and an options search are two procedures (#3514)', async () => {
+    await renderPage({});
+    await screen.findByRole('tab', { name: /new study/i });
+
+    const hrefs = [...document.querySelectorAll('a')].map((link) => link.getAttribute('href') ?? '');
+    expect(hrefs.filter((href) => href.startsWith('/options-setups') || href.startsWith('/options-golden-search'))).toEqual([]);
+    expect(screen.queryByRole('link', { name: /options/i })).toBeNull();
+  });
+
   it('starts a revision from the named study’s frozen plan', async () => {
     const { service } = await renderPage({ revise: 'study-0001-aaaa' });
 

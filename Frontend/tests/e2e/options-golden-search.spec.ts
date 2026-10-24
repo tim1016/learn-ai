@@ -2,10 +2,14 @@ import { expect, test } from '@playwright/test';
 
 import { exceptionOptionsStudy, installOptionsSearchWorld, lockedOptionsStudy, OPTIONS_CANDIDATE_HASH, OPTIONS_SEARCH_ID, SAVED_OPTION_SETUP } from './support/options-search-world';
 
+const STUDY_URL = `/options-setups/evidence/study/${OPTIONS_SEARCH_ID}`;
+
 test('retains the original when no candidate qualifies', async ({ page }) => {
   const world = await installOptionsSearchWorld(page, lockedOptionsStudy({ phase: 'compare', status: 'completed', allowed_commands: ['keep_original'] }));
+  // The old address lands straight on the study, at the address it has by its own id.
   await page.goto(`/options-golden-search/${OPTIONS_SEARCH_ID}`);
-  const workbench = page.locator('app-options-golden-search-page');
+  await expect(page).toHaveURL(STUDY_URL);
+  const workbench = page.locator('app-options-study-workbench');
   await expect(workbench.getByRole('heading', { name: 'Development and forward evidence' })).toBeVisible();
   await expect(workbench.getByRole('button', { name: 'Freeze shortlist and open final test' })).toBeDisabled();
   await workbench.getByRole('button', { name: 'Keep original' }).click();
@@ -17,8 +21,8 @@ test('retains the original when no candidate qualifies', async ({ page }) => {
 test('cancels a partial final batch, reloads it, then explicitly resumes the frozen batch', async ({ page }) => {
   const initial = exceptionOptionsStudy();
   const world = await installOptionsSearchWorld(page, { ...initial, phase: 'final', status: 'running', allowed_commands: ['cancel'], approval_reviews: {} });
-  await page.goto(`/options-golden-search/${OPTIONS_SEARCH_ID}`);
-  const workbench = page.locator('app-options-golden-search-page');
+  await page.goto(STUDY_URL);
+  const workbench = page.locator('app-options-study-workbench');
   await expect(workbench.getByRole('heading', { name: 'Final outcomes and approval' })).toBeVisible();
   await expect(workbench.getByRole('button', { name: 'Approve exact golden version' })).toBeDisabled();
   await workbench.getByRole('button', { name: 'Cancel', exact: true }).click();
@@ -37,49 +41,51 @@ test('locks a saved setup, resumes retained research, freezes final candidates a
   const world = await installOptionsSearchWorld(page);
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.goto('/options-golden-search');
-  const workbench = page.locator('app-options-golden-search-page');
-  await workbench.getByRole('combobox', { name: 'Saved setup', exact: true }).selectOption(SAVED_OPTION_SETUP.name);
-  await workbench.getByRole('button', { name: 'Use saved setup' }).click();
-  await expect(workbench.getByRole('heading', { name: 'Explore timing' })).toBeVisible();
-  await workbench.getByText('Additional settings to vary', { exact: true }).click();
-  const stop = workbench.getByRole('region', { name: 'Stop loss', exact: true });
+  // A golden search is started from the Golden tab of a saved setup, which the old address named by `?setup_name=`.
+  await page.goto(`/options-golden-search?setup_name=${encodeURIComponent(SAVED_OPTION_SETUP.name)}`);
+  await expect(page).toHaveURL(`/options-setups/${encodeURIComponent(SAVED_OPTION_SETUP.name)}/golden`);
+  await page.getByRole('button', { name: 'Set up a golden search' }).click();
+  const planner = page.locator('app-options-search-plan');
+  await expect(planner.getByRole('heading', { name: 'Explore timing' })).toBeVisible();
+  await planner.getByText('Additional settings to vary', { exact: true }).click();
+  const stop = planner.getByRole('region', { name: 'Stop loss', exact: true });
   await stop.getByRole('button', { name: 'Explore', exact: true }).click();
   await stop.getByLabel('Minimum', { exact: true }).fill('20');
   await stop.getByLabel('Maximum', { exact: true }).fill('25');
   await stop.getByLabel('Step', { exact: true }).fill('5');
-  await workbench.getByLabel('Start date', { exact: true }).fill('2024-01-02');
-  await workbench.getByLabel('Start date', { exact: true }).press('Tab');
-  await workbench.getByLabel('End date', { exact: true }).fill('2026-09-18');
-  await workbench.getByLabel('End date', { exact: true }).press('Tab');
-  await workbench.locator('app-options-search-knobs').screenshot({ path: 'test-results/options-rule-editor.png' });
+  await planner.getByLabel('Start date', { exact: true }).fill('2024-01-02');
+  await planner.getByLabel('Start date', { exact: true }).press('Tab');
+  await planner.getByLabel('End date', { exact: true }).fill('2026-09-18');
+  await planner.getByLabel('End date', { exact: true }).press('Tab');
+  await planner.locator('app-options-search-knobs').screenshot({ path: 'test-results/options-rule-editor.png' });
   await page.screenshot({ path: 'test-results/options-search-configuration-desktop.png', fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
-  expect(await workbench.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  expect(await planner.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
   await page.screenshot({ path: 'test-results/options-search-configuration-mobile.png', fullPage: true });
   await page.setViewportSize({ width: 1440, height: 1100 });
-  await workbench.getByRole('button', { name: 'Check plan', exact: true }).click();
-  await expect(workbench.getByText('Dollar limit: 2000 USD')).toBeVisible();
-  await workbench.getByRole('button', { name: 'Start search', exact: true }).click();
-  await expect(page).toHaveURL(`/options-golden-search/${OPTIONS_SEARCH_ID}`);
+  await planner.getByRole('button', { name: 'Check plan', exact: true }).click();
+  await expect(planner.getByText('Dollar limit: 2000 USD')).toBeVisible();
+  await planner.getByRole('button', { name: 'Start search', exact: true }).click();
+  await expect(page).toHaveURL(STUDY_URL);
   expect(world.preflights[0]).toMatchObject({ expected_setup_hash: 'a'.repeat(64), knobs: [{ path: 'all_legs.stop_loss', values: [{ call: { kind: 'percent', value: '20.0000' }, put: { kind: 'percent', value: '20.0000' } }, { call: { kind: 'percent', value: '25.0000' }, put: { kind: 'percent', value: '25.0000' } }], mode: 'search', priority: 5 }], history: { start_ms: 1704171600000, end_ms: 1789790400000 } });
   expect(world.locks[0]).toMatchObject({ request: world.preflights[0], preflight_hash: 'b'.repeat(64) });
   await expect.poll(() => world.commands.length).toBe(1);
   await expect.poll(() => world.jobStages).toContain('research-stage');
   await page.reload();
-  await expect(workbench.getByRole('heading', { name: 'Development and forward evidence' })).toBeVisible();
+  const study = page.locator('app-options-study-workbench');
+  await expect(study.getByRole('heading', { name: 'Development and forward evidence' })).toBeVisible();
   expect(world.commands).toHaveLength(1);
-  await workbench.getByRole('button', { name: 'Compare and final test', exact: true }).click();
-  await expect(workbench.getByRole('checkbox', { name: 'Include Candidate one in final test' })).toBeChecked();
-  await workbench.getByRole('button', { name: 'Freeze shortlist and open final test' }).click();
+  await study.getByRole('button', { name: 'Compare and final test', exact: true }).click();
+  await expect(study.getByRole('checkbox', { name: 'Include Candidate one in final test' })).toBeChecked();
+  await study.getByRole('button', { name: 'Freeze shortlist and open final test' }).click();
   await expect.poll(() => world.commands.length).toBe(2);
   expect(world.commands[1]).toMatchObject({ command: 'open_final', expected_revision: 3, candidate_hashes: [OPTIONS_CANDIDATE_HASH] });
   await expect.poll(() => world.jobStages).toContain('final-stage');
-  await workbench.getByRole('button', { name: 'Refresh study', exact: true }).click();
-  await expect(workbench.getByRole('heading', { name: 'Final outcomes and approval' })).toBeVisible();
-  await workbench.getByRole('combobox', { name: 'Exact candidate to approve', exact: true }).selectOption(OPTIONS_CANDIDATE_HASH);
-  await expect(workbench.getByRole('button', { name: 'Approve exact golden version' })).toBeEnabled();
-  const selected = workbench.locator('app-options-search-candidate').filter({ has: page.getByRole('heading', { name: 'Candidate one', exact: true }) });
+  await study.getByRole('button', { name: 'Refresh study', exact: true }).click();
+  await expect(study.getByRole('heading', { name: 'Final outcomes and approval' })).toBeVisible();
+  await study.getByRole('combobox', { name: 'Exact candidate to approve', exact: true }).selectOption(OPTIONS_CANDIDATE_HASH);
+  await expect(study.getByRole('button', { name: 'Approve exact golden version' })).toBeEnabled();
+  const selected = study.locator('app-options-search-candidate').filter({ has: page.getByRole('heading', { name: 'Candidate one', exact: true }) });
   await expect(selected.getByText('200.01234567890123456789 USD', { exact: true })).toBeVisible();
   expect(world.sessionReads).toHaveLength(0);
   await selected.getByText('Session, leg and attempt evidence', { exact: true }).click();
@@ -91,11 +97,11 @@ test('locks a saved setup, resumes retained research, freezes final candidates a
   await page.screenshot({ path: 'test-results/options-golden-search-approval-desktop.png', fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: 'test-results/options-golden-search-approval-mobile.png', fullPage: true });
-  expect(await workbench.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await expect(workbench.getByRole('button', { name: 'Approve exact golden version' })).toBeVisible();
-  await workbench.getByLabel('Owner review comment').fill('Reviewed the exact final candidate and retained evidence.');
-  await workbench.getByRole('button', { name: 'Approve exact golden version' }).click();
-  await expect(workbench.getByText(/^Golden version /)).toContainText('ogs_browser_approved');
+  expect(await study.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect(study.getByRole('button', { name: 'Approve exact golden version' })).toBeVisible();
+  await study.getByLabel('Owner review comment').fill('Reviewed the exact final candidate and retained evidence.');
+  await study.getByRole('button', { name: 'Approve exact golden version' }).click();
+  await expect(study.getByText(/^Golden version /)).toContainText('ogs_browser_approved');
   expect(world.commands[2]).toMatchObject({ command: 'approve', candidate_hash: OPTIONS_CANDIDATE_HASH, expected_revision: 5 });
   expect(world.unexpected).toEqual([]);
   expect(errors).toEqual([]);
@@ -103,8 +109,8 @@ test('locks a saved setup, resumes retained research, freezes final candidates a
 
 test('keeps failed performance rules visible and requires a deliberate owner exception', async ({ page }) => {
   const world = await installOptionsSearchWorld(page, exceptionOptionsStudy());
-  await page.goto(`/options-golden-search/${OPTIONS_SEARCH_ID}`);
-  const workbench = page.locator('app-options-golden-search-page');
+  await page.goto(STUDY_URL);
+  const workbench = page.locator('app-options-study-workbench');
   await expect(workbench.getByRole('button', { name: 'Approve exact golden version' })).toBeDisabled();
   const exception = workbench.getByRole('button', { name: 'Approve owner exception' });
   await expect(exception).toBeDisabled();
@@ -127,8 +133,8 @@ test('keeps failed performance rules visible and requires a deliberate owner exc
 
 test('shows unverifiable results without allowing a technical exception', async ({ page }) => {
   const world = await installOptionsSearchWorld(page, exceptionOptionsStudy(true));
-  await page.goto(`/options-golden-search/${OPTIONS_SEARCH_ID}`);
-  const workbench = page.locator('app-options-golden-search-page');
+  await page.goto(STUDY_URL);
+  const workbench = page.locator('app-options-study-workbench');
   await expect(workbench.locator('app-options-study-overview').getByRole('cell', { name: 'Could Not Evaluate' })).toBeVisible();
   await expect(workbench.getByRole('article').getByText('Could Not Evaluate', { exact: true })).toBeVisible();
   await workbench.getByLabel('Owner review comment').fill('This comment cannot override missing marks.');

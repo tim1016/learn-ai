@@ -6,6 +6,14 @@ import { EntryComponent } from "./components/entry/entry.component";
 import { brokerClerkRedirectGuard } from "./fleet/broker-clerk-redirect.guard";
 import { dataCheckRoute } from "./operations/data-checks/data-checks";
 import { operationsTabRoute } from "./operations/operations-tabs";
+import {
+  redirectOptionsBacktest,
+  redirectOptionsEvidence,
+  redirectOptionsGoldenSearch,
+  redirectOptionsGoldenStudy,
+  redirectOptionsStrategyBuilder,
+  redirectOptionsStrategyFinder,
+} from "./options-setups/options-setups.redirects";
 import { redirectKeepingState } from "./shell/route-redirects";
 import { redirectToOptionsView } from "./markets/options/options-address";
 
@@ -111,31 +119,26 @@ export const routes: Routes = [
       ),
   },
   {
+    path: "options-lab/strategy-builder",
+    redirectTo: redirectOptionsStrategyBuilder,
+    pathMatch: "full",
+  },
+  {
+    path: "options-lab/strategy-finder",
+    redirectTo: redirectOptionsStrategyFinder,
+    pathMatch: "full",
+  },
+  {
+    // The Options Lab is gone: its chain moved into an instrument's Options tab,
+    // and the symbol and the expiry go with the link.
     path: "options-lab",
-    data: { fullBleed: true },
-    loadComponent: () =>
-      import("./components/options-lab/options-lab.component").then(
-        (m) => m.OptionsLabComponent
-      ),
-    children: [
-      // The chain moved into an instrument's Options tab; the symbol and the expiry go with it.
-      { path: "", redirectTo: redirectToOptionsView("chain"), pathMatch: "full" },
-      { path: "chain", redirectTo: redirectToOptionsView("chain"), pathMatch: "full" },
-      {
-        path: "strategy-builder",
-        loadComponent: () =>
-          import(
-            "./components/strategy-builder/strategy-builder.component"
-          ).then((m) => m.StrategyBuilderComponent),
-      },
-      {
-        path: "strategy-finder",
-        loadComponent: () =>
-          import(
-            "./components/options-lab/strategy-finder-unavailable/strategy-finder-unavailable.component"
-          ).then((m) => m.StrategyFinderUnavailableComponent),
-      },
-    ],
+    redirectTo: redirectToOptionsView("chain"),
+    pathMatch: "full",
+  },
+  {
+    path: "options-lab/chain",
+    redirectTo: redirectToOptionsView("chain"),
+    pathMatch: "full",
   },
   {
     // The Strategy Spec builder became Research's Rule sandbox; its saved specs
@@ -257,25 +260,29 @@ export const routes: Routes = [
       ),
   },
   {
+    path: "options-setups",
+    loadChildren: () =>
+      import("./options-setups/options-setups.routes").then((m) => m.OPTIONS_SETUPS_ROUTES),
+  },
+  {
     path: "options-evidence/:kind/:subjectId",
-    loadComponent: () => import("./components/options-evidence/options-evidence-page.component").then((m) => m.OptionsEvidencePageComponent),
+    redirectTo: redirectOptionsEvidence,
+    pathMatch: "full",
   },
   {
     path: "options-golden-search",
-    loadComponent: () => import("./components/options-golden-search/options-golden-search-page.component").then((m) => m.OptionsGoldenSearchPageComponent),
+    redirectTo: redirectOptionsGoldenSearch,
+    pathMatch: "full",
   },
   {
     path: "options-golden-search/:studyId",
-    loadComponent: () => import("./components/options-golden-search/options-golden-search-page.component").then((m) => m.OptionsGoldenSearchPageComponent),
+    redirectTo: redirectOptionsGoldenStudy,
+    pathMatch: "full",
   },
   {
     path: "options-backtest",
-    loadComponent: () =>
-      import("./components/options-backtest/options-backtest-page.component").then(
-        (m) => m.OptionsBacktestPageComponent
-      ),
-    // The run rail stays in view beside the form while the page scrolls.
-    data: { stickyContent: true },
+    redirectTo: redirectOptionsBacktest,
+    pathMatch: "full",
   },
   {
     path: "strategy-validation",
