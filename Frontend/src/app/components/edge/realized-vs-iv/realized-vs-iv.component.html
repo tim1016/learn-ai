@@ -174,7 +174,7 @@
               <strong data-testid="iv-gated-now">Latest bar gated</strong> — confidence below floor;
               VRP signals forced to 0.
             } @else if (ivc.gatedNow === false) {
-              Latest bar above floor — VRP signal active.
+              Latest bar above floor{{ signalUnavailableReason() ? '' : ' — VRP signal active' }}.
             } @else {
               Confidence not computed for this run (no
               <code>variance_contribution_synthetic</code> in the IV series).
@@ -236,6 +236,11 @@
       <p class="unavailable-note" data-testid="rviv-unavailable-note">
         Edge Score strip and Oracle (ex-post) signals: unavailable. This study does not compute them.
       </p>
+      @if (signalUnavailableReason(); as why) {
+        <p class="unavailable-note" data-testid="rviv-signal-unavailable">
+          VRP signals (the long-vol and short-vol markers, the Realtime toggle and vrp_z): none in this window. {{ why }}
+        </p>
+      }
       <app-edge-price-iv-chart
         [width]="1340" [height]="420"
         [data]="d"

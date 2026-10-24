@@ -53,7 +53,7 @@ function realData(overrides: Partial<RealizedVsIvData> = {}): RealizedVsIvData {
     vrpZ: flat(0),
     vrpHistogram: [],
     signals: [],
-    coverage: { forwardBlindTail: 2, ivFirstTsMs: Date.UTC(2026, 0, 6, 14) },
+    coverage: { forwardBlindTail: 2, vrpLookbackBars: N - 1, ivFirstTsMs: Date.UTC(2026, 0, 6, 14) },
     ivConfidence: null,
     ivAlignment: { rule: "snapshot_in_bar_latest", snapshotsRead: N, barsWithIv: N, superseded: 0, outsideBars: 0 },
     ivInput: { source: "recorder", snapshots: N, digest: "c".repeat(64) },
@@ -357,6 +357,64 @@ describe("RealizedVsIvComponent — no IV at these bars", () => {
     expect(ivRow.nextElementSibling?.textContent?.trim(), "the series IV at the middle bar stays empty").toBe("—");
     expect(screen.getByTestId("live-iv30-readout").textContent).toContain("21.3%");
     expect(document.querySelector(".banner-iv-missing"), "and the page still says there is no IV30 at these bars").not.toBeNull();
+  });
+});
+
+describe("RealizedVsIvComponent — no VRP z-score in the window", () => {
+  const none = (n: number) => Array.from({ length: n }, () => Number.NaN);
+
+  async function show(overrides: Partial<RealizedVsIvData>): Promise<void> {
+    const { fixture } = await renderPage();
+    fixture.componentInstance.data.set(realData(overrides));
+    fixture.detectChanges();
+  }
+
+  const note = () => screen.queryByTestId("rviv-signal-unavailable")?.textContent?.replace(/\s+/g, " ") ?? null;
+
+  it("says the window is too short when too few of its bars have a forward realized volatility", async () => {
+    await show({ vrpZ: none(12), coverage: { forwardBlindTail: 3, vrpLookbackBars: 11, ivFirstTsMs: null } });
+
+    expect(note()).toContain("VRP signals (the long-vol and short-vol markers, the Realtime toggle and vrp_z): none in this window.");
+    expect(note()).toContain("measured over 11 bars in a row that each have a forward realized volatility");
+    expect(note()).toContain("This window has 9 of 12 (the last 3 are not realized yet)");
+    expect(note()).toContain("needs a longer window");
+  });
+
+  it("says IV30 must be on every bar of the z-score's window, and is not carried, when the window is long enough", async () => {
+    await show({
+      vrpZ: none(12),
+      coverage: { forwardBlindTail: 1, vrpLookbackBars: 11, ivFirstTsMs: null },
+      ivAlignment: { rule: "snapshot_in_bar_latest", snapshotsRead: 4, barsWithIv: 4, superseded: 0, outsideBars: 0 },
+    });
+
+    expect(note()).toContain("measured over 11 bars in a row that each have IV30, and IV30 is never carried from one bar to the next");
+    expect(note()).toContain("IV30 is on 4 of this window's 12 bars, and no 11 in a row have it");
+    expect(note()).not.toContain("forward realized volatility");
+  });
+
+  it("says nothing, and keeps the banner's claim that the signal is active, when the window has a z-score", async () => {
+    await show({
+      ivConfidence: {
+        ivSource: "recorder", latestConfidence: 0.9, floor: 0.1, gatedNow: false, nGated: 0, healthImputed: false,
+      },
+    });
+
+    expect(note()).toBeNull();
+    expect(screen.getByTestId("iv-confidence-banner").textContent).toContain("VRP signal active");
+  });
+
+  it("does not claim an active VRP signal in the confidence banner when the window has no z-score", async () => {
+    await show({
+      vrpZ: none(12),
+      coverage: { forwardBlindTail: 3, vrpLookbackBars: 11, ivFirstTsMs: null },
+      ivConfidence: {
+        ivSource: "recorder", latestConfidence: 0.9, floor: 0.1, gatedNow: false, nGated: 0, healthImputed: false,
+      },
+    });
+
+    const banner = screen.getByTestId("iv-confidence-banner").textContent ?? "";
+    expect(banner).toContain("Latest bar above floor.");
+    expect(banner).not.toContain("VRP signal active");
   });
 });
 

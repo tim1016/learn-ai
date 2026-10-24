@@ -54,6 +54,8 @@ interface RealizedVsIvResultRaw {
     iv_first_ts: number | null;
     iv_last_ts: number | null;
     forward_nan_bars: number;
+    /** The bars of the VRP z-score's rolling window: it needs a value on every one of them. */
+    vrp_lookback: number;
     session: string | null;
     vrp_basis?: string;
     has_confidence?: boolean;
@@ -304,6 +306,7 @@ export class EdgeApiService {
       signals,
       coverage: {
         forwardBlindTail: result.coverage.forward_nan_bars,
+        vrpLookbackBars: result.coverage.vrp_lookback,
         ivFirstTsMs: result.coverage.iv_first_ts,
       },
       ivConfidence: extractIvConfidence(result),

@@ -173,6 +173,7 @@ describe("EdgeApiService.computeRealizedVsIv", () => {
     expect.soft(result.iv30[0], "no IV before the first sample").toBeNaN();
     expect.soft(result.iv30[5]).toBeCloseTo(0.21, 12);
     expect.soft(result.coverage.forwardBlindTail).toBe(3);
+    expect.soft(result.coverage.vrpLookbackBars).toBe(39);
     expect.soft(result.coverage.ivFirstTsMs).toBe(result.dates[5].getTime());
     expect.soft(result.candles[0]).toEqual({ o: 500, h: 503, l: 498, c: 501, v: 1_000_000 });
     expect.soft(result.run).toEqual({ barSize: "1D", tenorDays: 30, hfSession: null });

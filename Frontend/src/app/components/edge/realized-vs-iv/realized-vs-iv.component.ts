@@ -114,6 +114,21 @@ export class RealizedVsIvComponent {
       : `The IV recorder holds ${read} snapshot${plural} for ${d.symbol} in this window, but none falls inside a bar.`;
   });
 
+  /** Why the page has no VRP z-score, hence no long-vol or short-vol markers and no `vrp_z` in the readout, when it has none
+   *  anywhere. The z-score is a rolling statistic over `vrpLookbackBars` bars and needs a value on every one of them: a bar
+   *  with a forward realized volatility (the last bars of a window have none yet) and IV30, which is never carried from
+   *  one bar to the next. The reason is read off the window's own counts. */
+  readonly signalUnavailableReason = computed<string | null>(() => {
+    const d = this.data();
+    if (d === null || d.vrpZ.some((z) => Number.isFinite(z))) return null;
+    const need = d.coverage.vrpLookbackBars;
+    const withForward = d.N - d.coverage.forwardBlindTail;
+    if (withForward < need) {
+      return `The z-score is measured over ${need} bars in a row that each have a forward realized volatility. This window has ${withForward} of ${d.N} (the last ${d.coverage.forwardBlindTail} are not realized yet), so it needs a longer window.`;
+    }
+    return `The z-score is measured over ${need} bars in a row that each have IV30, and IV30 is never carried from one bar to the next. IV30 is on ${d.ivAlignment.barsWithIv} of this window's ${d.N} bars, and no ${need} in a row have it.`;
+  });
+
   /** The current-IV marker, when a live endpoint answered. It is a reading taken now and is never part of the IV series. */
   readonly liveMarker = computed(() => {
     const live = this.data()?.liveIv30;

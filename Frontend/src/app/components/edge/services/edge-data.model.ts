@@ -157,7 +157,13 @@ export interface RealizedVsIvData {
   vrpZ: number[];
   vrpHistogram: VrpBin[];
   signals: SignalMark[];
-  coverage: { forwardBlindTail: number; ivFirstTsMs: number | null; };
+  coverage: {
+    forwardBlindTail: number;
+    /** The bars of the VRP z-score's rolling window, as the server used them. The z-score exists only on a bar whose whole
+     *  window has IV30 and a forward realized volatility. */
+    vrpLookbackBars: number;
+    ivFirstTsMs: number | null;
+  };
   /** Populated only when the response carried IV provenance; null on the
    *  legacy "absent" path. */
   ivConfidence: IvConfidenceSummary | null;

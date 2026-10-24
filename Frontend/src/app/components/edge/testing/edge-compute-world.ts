@@ -116,6 +116,7 @@ export function resultResponse(answer: ComputeAnswer = {}) {
       iv_first_ts: ivPresent ? ts[IV_FROM] : null,
       iv_last_ts: ivPresent ? ts[BARS - 1] : null,
       forward_nan_bars: BLIND_TAIL,
+      vrp_lookback: BARS - 1,
       session: run.hf_session,
       iv_alignment: {
         rule: "snapshot_in_bar_latest",

@@ -113,6 +113,13 @@ previously tracked items (issues #1655, #1671, #1672, #1674, #1677, #1664,
     fold the trailing lines from the regular session, which is what the annualization assumes, while the HF estimator
     keeps extended bars; or derive the bars per session from the calendar for the chosen session. Either changes the
     numbers, so it is the owner's call under D02 and not part of this change.
+  - *The default windows cannot produce a VRP z-score (P2, owner decision).* The z-score is a 252-bar rolling statistic
+    over bars that each have a forward realized volatility (and, since the IV fill went, recorded IV). The last 21 bars
+    of a daily window have no forward value, so a daily window needs at least 273 bars; the page's one-year default holds
+    about 251. A one-month 15-minute window holds about 2 sessions (128 bars) with a forward value, fewer than 252. So the
+    long/short-vol markers, the Realtime toggle and `vrp_z` are empty on both defaults. The page now says why, from the
+    window's counts. To decide: widen the defaults (a two-year daily window, a longer intraday one), or shorten the
+    z-score's lookback, which changes the numbers.
   - *Unverified assumptions:* Polygon's own 15-minute and day aggregates equal a fold of its minute aggregates, and a
     day bar is the regular session. Both are asserted against an independent stand-in, not live data.
 - **Temporal wire/storage contracts outside Alpaca V2 remain non-numeric
