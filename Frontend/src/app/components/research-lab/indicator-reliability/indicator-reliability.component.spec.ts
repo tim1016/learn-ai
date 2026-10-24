@@ -305,7 +305,8 @@ describe('IndicatorReliabilityComponent (Indicator reliability study)', () => {
       expect(warning(), 'the lake holds it all').toBeNull();
     });
 
-    it('asks about the window and bar size the run itself sends, from the same wire, and sends no session', () => {
+    it('asks about the window and bar size the run itself sends, from the same wire, with the instrument trimmed and upper-cased alike, and sends no session', () => {
+      component.range.update((r) => ({ ...r, symbol: ' aapl ' }));
       for (const request of paramReads()) request.flush(SCHEMA);
       fixture.detectChanges();
       const [span] = spanReads();
@@ -317,6 +318,7 @@ describe('IndicatorReliabilityComponent (Indicator reliability study)', () => {
       for (const key of ['symbol', 'from_date', 'to_date', 'timespan', 'multiplier', 'indicator_name', 'indicator_params']) {
         expect(spanBody[key], key).toEqual(runBody[key]);
       }
+      expect(spanBody['symbol']).toBe('AAPL');
       expect(Object.keys(spanBody)).not.toContain('session');
       span.flush(SPAN);
     });

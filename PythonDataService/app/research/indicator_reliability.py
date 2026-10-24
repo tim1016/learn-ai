@@ -17,7 +17,12 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
-from app.research.validation.ic import SESSION_TZ, ICResult, compute_information_coefficient
+from app.research.validation.ic import (
+    ICResult,
+    compute_daily_information_coefficient,
+    compute_information_coefficient,
+    new_york_dates,
+)
 from app.utils.session_anchors import et_date_at_ms
 
 logger = logging.getLogger(__name__)
@@ -335,9 +340,9 @@ def compute_random_baseline_ic(
     if rng is None:
         rng = np.random.default_rng()
 
-    # Resolve the feature series and session-date array up front.
+    # Resolve the feature series up front, and the New York dates once: every shuffle scores the same bars.
     feature_series: pd.Series | None = None
-    session_dates: np.ndarray | None = None
+    session_dates = new_york_dates(df["timestamp"])
 
     if feature_column is None or feature_column not in df.columns:
         logger.warning(
@@ -348,13 +353,11 @@ def compute_random_baseline_ic(
         )
     else:
         feature_series = df[feature_column]
-        ts_utc = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
-        session_dates = ts_utc.dt.tz_convert(SESSION_TZ).dt.date.to_numpy()
 
     random_ics: list[float] = []
 
     for _ in range(n_simulations):
-        if feature_series is not None and session_dates is not None:
+        if feature_series is not None:
             shuffled_values = _day_block_circular_shift(
                 feature_values=feature_series.to_numpy(),
                 session_dates=session_dates,
@@ -367,10 +370,10 @@ def compute_random_baseline_ic(
                 index=df.index,
             )
 
-        ic_result = compute_information_coefficient(
+        ic_result = compute_daily_information_coefficient(
             feature_values=shuffled_signal,
             target_returns=fwd_returns,
-            timestamps_ms=df["timestamp"],
+            days=session_dates,
             correlation_method="spearman",
         )
         random_ics.append(ic_result.mean_ic)
@@ -453,7 +456,7 @@ def compute_forward_return(
     df = df.sort_values("timestamp").reset_index(drop=True)
 
     if "date" not in df.columns:
-        df["date"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_convert(SESSION_TZ).dt.date
+        df["date"] = new_york_dates(df["timestamp"])
 
     close = df["close"].values
     dates = df["date"].values

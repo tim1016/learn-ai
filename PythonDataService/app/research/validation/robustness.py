@@ -268,7 +268,8 @@ def compute_regime_analysis(
     daily_ic_values: list[float],
     daily_ic_dates: list[str],
     bars: list[dict],
-    date_zone: str = "UTC",
+    *,
+    date_zone: str,
 ) -> tuple[list[RegimeICResult], list[RegimeICResult]]:
     """Split ICs by volatility and trend regimes.
 
@@ -568,7 +569,8 @@ def compute_robustness(
     daily_ic_values: list[float],
     daily_ic_dates: list[str],
     bars: list[dict],
-    date_zone: str = "UTC",
+    *,
+    date_zone: str,
 ) -> RobustnessResult:
     """Orchestrate all robustness computations.
 

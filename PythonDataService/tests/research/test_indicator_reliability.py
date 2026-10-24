@@ -29,6 +29,7 @@ from app.research.indicator_reliability import (
     generate_next_steps,
     split_by_volatility_regime,
 )
+from app.research.validation.ic import compute_information_coefficient
 
 
 def _create_test_df(n_bars: int = 500, seed: int = 42) -> pd.DataFrame:
@@ -582,6 +583,27 @@ class TestRandomBaselineReturnsDistribution:
         assert mean_a == pytest.approx(mean_b, abs=1e-12), "same rng seed gives the same mean"
         assert std_a == pytest.approx(std_b, abs=1e-12), "same rng seed gives the same std"
         assert dist_a == pytest.approx(dist_b, abs=1e-12), "same rng seed gives the same distribution"
+
+    def test_each_shuffle_scores_exactly_what_the_public_daily_ic_scores(self):
+        """The loop labels the bars with their New York dates once; every shuffle must equal the public per-call result (#3523)."""
+        from app.research.indicator_reliability import _day_block_circular_shift
+
+        df = _create_test_df(500)
+        horizon = 10
+        _, _, distribution = compute_random_baseline_ic(
+            df, horizon=horizon, feature_column="rsi_14", n_simulations=10, rng=np.random.default_rng(seed=3)
+        )
+
+        rng = np.random.default_rng(seed=3)
+        forward = compute_forward_return(df, horizon)
+        days = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_convert("America/New_York").dt.date.to_numpy()
+        expected = []
+        for _ in range(10):
+            shuffled = pd.Series(_day_block_circular_shift(df["rsi_14"].to_numpy(), days, rng), index=df.index)
+            expected.append(compute_information_coefficient(shuffled, forward, df["timestamp"], correlation_method="spearman").mean_ic)
+
+        assert len(distribution) == 10
+        np.testing.assert_allclose(distribution, expected, atol=0, rtol=0)
 
     @pytest.mark.parametrize(
         "seed",

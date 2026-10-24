@@ -363,11 +363,11 @@ def test_coarser_bars_fold_to_the_same_bars_as_the_vendor_side_aggregate(world, 
 #: price levels, as the largest absolute difference between the two paths' values at a shared bar, and the window's
 #: mean IC. Prices carry five or six decimals, finer than the grid. The movement of RSI and momentum grows as the price
 #: falls: a rounding of at most 5e-5 is a larger share of a bar-to-bar change on a $2 name than on a $150 one.
-#: Re-record (print ``feature_max_diff`` and ``abs(mean_ic[1] - mean_ic[0])`` per case) only when the pinned tape or the
-#: lake's encoding intentionally changes; never to make a failing test pass. Digits are kept to 1e-10 or finer, below
-#: ``FEATURE_ATOL``, so the recording adds no tolerance of its own. The mean IC was re-recorded once (#3523), when the
-#: daily IC moved from UTC to New York days: this tape holds extended hours in standard time, whose 19:00 to 20:00 ET
-#: bars changed day, and each path's mean IC equals an independent mean of per-New-York-date Spearman coefficients.
+#: Re-record (print ``feature_max_diff`` and ``abs(mean_ic[1] - mean_ic[0])`` per case) only when the pinned tape, the
+#: lake's encoding or the IC's definition intentionally changes; never to make a failing test pass. Digits are kept to
+#: 1e-10 or finer, below ``FEATURE_ATOL``, so the recording adds no tolerance of its own. The mean IC was re-recorded
+#: once (#3523), when the daily IC moved from UTC to New York days: this tape holds extended hours in standard time,
+#: whose 19:00 to 20:00 ET bars changed day. Which bars make a day is pinned in ``tests/research/test_ic.py``.
 QUANTIZATION_RECORDED = {
     "price_150": (150.0, 5, {"mean_ic": 2.343130e-6, "momentum_5m": 6.01537004e-7, "rsi_14": 1.108764307e-2, "realized_vol_30": 2.034791103e-7, "macd_signal": 8.521013899e-6}),
     "price_12": (12.0, 5, {"mean_ic": 2.674984e-5, "momentum_5m": 7.499870746e-6, "rsi_14": 1.118103039e-1, "realized_vol_30": 2.211433761e-6, "macd_signal": 8.492849363e-6}),

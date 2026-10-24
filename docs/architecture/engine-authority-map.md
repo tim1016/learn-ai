@@ -60,11 +60,12 @@ it neither reads nor waits on the derived daily rollup. It has never cached; the
 response carries the identity (input identity, admitted snapshot digest, calculation
 version) a cache or a saved result would key on. No calculation ownership changes: the
 IC, correction, baseline, regime and IR-proxy math stay in
-`app/research/indicator_reliability.py`. Two session-dependent inputs follow the
-session: a day is the New York date (the UTC date put late after-hours bars with the
+`app/research/indicator_reliability.py`. Two inputs differ once extended hours are
+in play: a day is the New York date (the UTC date put late after-hours bars with the
 next day, so the overnight mask, the daily IC and the reported train and test dates all
 read the New York date), and the IR proxy's bars a year count the extended span under
-`extended`. For regular hours both are what they were.
+`extended`. Regular-hours numbers are what they were: those bars' New York and UTC dates
+agree, and their bars a year are the regular session's.
 
 Committed lake-file admission (#2456) is owned by
 `PythonDataService/app/data_lake/admission.py`, backed by committed catalog

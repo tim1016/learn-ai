@@ -7,7 +7,7 @@ Validated against: RP-001 fixture (tests/fixtures/test_research_fixtures.py::Tes
 
 The IC measures the daily Spearman rank correlation between a feature
 and the 15-minute forward log return. A day is the New York calendar date
-of the bar's instant (``SESSION_TZ``, resolved through the zone, so
+of the bar's instant (``SESSION_TIMEZONE``, resolved through the zone, so
 daylight saving time moves nothing): a bar at 19:30 ET belongs to its own
 session's day in January, where its UTC date is already the next one.
 
@@ -30,10 +30,9 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-logger = logging.getLogger(__name__)
+from app.research.target import SESSION_TIMEZONE
 
-#: The zone whose calendar date names a day (a session), here and in the callers that report a day.
-SESSION_TZ = "America/New_York"
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -300,7 +299,7 @@ def compute_information_coefficient(
     Formula: IC_d = Spearman(feature, target) over the bars of New York date d (n_d >= 5 pairs, both standard deviations above 1e-12); mean_IC = (1/N)·Σ IC_d; t = mean_IC / (std_IC / sqrt(N)), with the Newey-West t and effective N of the module docstring.
     Reference: López de Prado, Advances in Financial Machine Learning (2018) §8 for the daily IC; in-house for the day, which is the New York date of the bar's instant (the zone resolves daylight saving time).
     Canonical implementation: this file.
-    Validated against: RP-001 and REL-001 in tests/fixtures/test_research_fixtures.py at atol=1e-9, rtol=0 (regular-hours bars, whose New York and UTC dates agree); tests/research/test_ic.py::TestDailyGroupingFollowsTheNewYorkDate for the day itself.
+    Validated against: RP-001 and REL-001 in tests/fixtures/test_research_fixtures.py at atol=1e-9, rtol=0 (bars whose New York and UTC dates agree); tests/research/test_ic.py::TestDailyGroupingFollowsTheNewYorkDate for the day itself.
 
     Parameters
     ----------
@@ -334,11 +333,38 @@ def compute_information_coefficient(
             min_nw_lag,
         )
 
+    return compute_daily_information_coefficient(
+        feature_values,
+        target_returns,
+        new_york_dates(timestamps_ms),
+        correlation_method,
+        min_nw_lag,
+    )
+
+
+def new_york_dates(timestamps_ms: pd.Series) -> np.ndarray:
+    """The New York calendar date of each bar's instant, as an object array of ``datetime.date``."""
+    return pd.to_datetime(timestamps_ms, unit="ms", utc=True).dt.tz_convert(SESSION_TIMEZONE).dt.date.to_numpy()
+
+
+def compute_daily_information_coefficient(
+    feature_values: pd.Series,
+    target_returns: pd.Series,
+    days: np.ndarray,
+    correlation_method: str = "spearman",
+    min_nw_lag: int = 0,
+) -> ICResult:
+    """Daily IC over bars already labelled with their day.
+
+    :func:`compute_information_coefficient` is this with ``days = new_york_dates(timestamps_ms)``. A caller that
+    scores many series on the same bars (the shuffled baseline) passes the days it computed once.
+    Provenance: that function's block; this is its daily-grouping body.
+    """
     df = pd.DataFrame(
         {
             "feature": feature_values.values,
             "target": target_returns.values,
-            "date": pd.to_datetime(timestamps_ms, unit="ms", utc=True).dt.tz_convert(SESSION_TZ).dt.date,
+            "date": days,
         }
     )
 

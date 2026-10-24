@@ -23,7 +23,7 @@ import { Checkbox } from 'primeng/checkbox';
 import { MultiSelect } from 'primeng/multiselect';
 import { TickerRangePickerComponent } from '../../../shared/ticker-range-picker/ticker-range-picker.component';
 import type { Session, TickerRange } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
-import { tickerRangeToWire, type TickerRequestPayload } from '../../../utils/ticker-wire';
+import { tickerRangeToWire } from '../../../utils/ticker-wire';
 import { StudyPageComponent } from '../../../research/study-page/study-page.component';
 import { createResultInputTracker } from '../../../shared/workspace/previous-result';
 import type { DataSourceProvenance } from '../../../shared/workspace/data-source-provenance';
@@ -47,7 +47,7 @@ import {
 import { storedSession } from '../../../shared/lake-study/stored-session';
 import { createRerunPrefill } from '../../../research/stored-study/rerun';
 import { StoredInputsError, type StoredInputs } from '../../../research/stored-study/stored-inputs';
-import type { IndicatorReliabilityRun, ReliabilitySpan } from './indicator-reliability.models';
+import type { IndicatorReliabilityRun, ReliabilitySpan, ReliabilitySpanRequest } from './indicator-reliability.models';
 import { IndicatorReliabilityReportComponent } from './indicator-reliability-report/indicator-reliability-report.component';
 
 // ─── Interfaces ────────────────────────────────────────────
@@ -83,19 +83,23 @@ interface HorizonOption {
 
 /**
  * The request that asks the server which sessions a run needs: the run's own window and bar size, from the same wire,
- * and the indicator that sizes the lead-in. Nothing a session changes, so it carries no session.
+ * and the indicator that sizes the lead-in. Nothing a session changes, so it carries no session. The run's body is this
+ * plus the session and the run's own fields, so the instrument is trimmed and upper-cased the same way in both.
  */
-type SpanRequest = Omit<TickerRequestPayload, 'session'> & {
-  readonly indicator_name: string;
-  readonly indicator_params: Record<string, number>;
-};
+function spanRequestOf(range: TickerRange, indicator: string, params: Record<string, number>): ReliabilitySpanRequest {
+  const { symbol, from_date, to_date, timespan, multiplier } = tickerRangeToWire({
+    ...range,
+    symbol: range.symbol.trim().toUpperCase(),
+  });
+  return { symbol, from_date, to_date, timespan, multiplier, indicator_name: indicator, indicator_params: params };
+}
 
 /** What the span read came to for one request. */
 type SpanRead =
-  | { readonly kind: 'span'; readonly asked: SpanRequest; readonly span: ReliabilitySpan }
+  | { readonly kind: 'span'; readonly asked: ReliabilitySpanRequest; readonly span: ReliabilitySpan }
   | { readonly kind: 'unreadable'; readonly message: string };
 
-function sameSpanRequest(a: SpanRequest | null, b: SpanRequest | null): boolean {
+function sameSpanRequest(a: ReliabilitySpanRequest | null, b: ReliabilitySpanRequest | null): boolean {
   return a === null || b === null ? a === b : JSON.stringify(a) === JSON.stringify(b);
 }
 
@@ -292,17 +296,13 @@ export class IndicatorReliabilityComponent {
    * The browser holds no calendar and derives none of it. Read once per instrument, window, indicator and parameters
    * (the session changes nothing in it), from the calendar alone: no bar is read.
    */
-  private readonly spanRequest = computed<SpanRequest | null>(
+  private readonly spanRequest = computed<ReliabilitySpanRequest | null>(
     () => {
       const range = this.range();
       const indicator = this.indicatorName();
       if (!this.paramsReady() || indicator.trim().length === 0) return null;
       if (range.symbol.trim().length === 0 || range.from.trim().length === 0 || range.to.trim().length === 0) return null;
-      const { symbol, from_date, to_date, timespan, multiplier } = tickerRangeToWire({
-        ...range,
-        symbol: range.symbol.trim().toUpperCase(),
-      });
-      return { symbol, from_date, to_date, timespan, multiplier, indicator_name: indicator, indicator_params: this.paramValues() };
+      return spanRequestOf(range, indicator, this.paramValues());
     },
     { equal: sameSpanRequest },
   );
@@ -332,20 +332,10 @@ export class IndicatorReliabilityComponent {
       return { symbol: read.asked.symbol, from: etIsoDate(read.span.start_ms), to: etIsoDate(read.span.end_ms), tree: LAKE_STUDY_TREE };
     }),
   );
-  /** What the span read is at, in the readings the lake count has: being read, not readable (with why), or nothing to say. */
+  /** The span read as a lake-count reading: not readable (with why), or nothing to say. A read being made says nothing. */
   private readonly spanReading = computed<LakeHoldingReading>(() => {
-    switch (this.spanRead.status()) {
-      case 'loading':
-      case 'reloading':
-        return { kind: 'checking' };
-      case 'resolved':
-      case 'local': {
-        const read = this.spanRead.value();
-        return read?.kind === 'unreadable' ? { kind: 'unreadable', message: read.message } : { kind: 'idle' };
-      }
-      default:
-        return { kind: 'idle' };
-    }
+    const read = this.spanRead.value();
+    return read?.kind === 'unreadable' ? { kind: 'unreadable', message: read.message } : { kind: 'idle' };
   });
   /** A span the server could not name is said, never read as nothing missing; the count's own notice follows a span that was named. */
   protected readonly spanNotice = computed(() => describeLakeHolding(this.spanReading(), { kind: 'idle' }, null));
@@ -505,15 +495,10 @@ export class IndicatorReliabilityComponent {
     // fields. The legacy aliases (ticker/start_date/end_date) still work
     // until PR (iii)'s alias-removal commit, but we send canonical now.
     // The run admits exactly the session the person chose from the lake, and the saved run records it.
-    const wire = tickerRangeToWire({
-      ...submitted.range,
-      symbol: submitted.range.symbol.toUpperCase(),
-    });
     const parent = this.prefill.parent();
     const payload = {
-      ...wire,
-      indicator_name: submitted.indicator,
-      indicator_params: submitted.params,
+      ...spanRequestOf(submitted.range, submitted.indicator, submitted.params),
+      session: submitted.range.session,
       horizons: submitted.horizons,
       include_slope: submitted.includeSlope,
       ...(parent === null ? {} : { rerun_of: parent }),
