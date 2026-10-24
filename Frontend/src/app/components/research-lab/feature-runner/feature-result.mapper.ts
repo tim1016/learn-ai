@@ -208,12 +208,29 @@ function mapScreen(r: Record<string, unknown>): ValidationScreen {
   };
 }
 
+function mapStageInfo(si: Record<string, unknown>): FeatureStageInfo {
+  const criteria = (si['advance_criteria'] as Record<string, unknown>[]) ?? [];
+  return {
+    stage: si['stage'] as 0 | 1 | 2 | 3,
+    label: si['label'] as string,
+    description: si['description'] as string,
+    nextStageLabel: si['next_stage_label'] as string,
+    advanceCriteria: criteria.map((c): FeatureStageCriterion => ({
+      name: c['name'] as string,
+      description: c['description'] as string,
+      currentValue: c['current_value'] as number,
+      requiredRepr: c['required_repr'] as string,
+      met: c['met'] as boolean,
+    })),
+    failedScreens: (si['failed_screens'] as string[]) ?? [],
+  };
+}
+
 function mapValidationVerdict(r: Record<string, unknown>): FeatureValidationVerdict {
   const mt = r['multiple_testing'] as Record<string, unknown>;
   const cv = r['cost_viability'] as Record<string, unknown>;
   const ci = r['ic_ci'] as Record<string, unknown>;
-  const si = r['stage_info'] as Record<string, unknown>;
-  const criteria = (si['advance_criteria'] as Record<string, unknown>[]) ?? [];
+  const si = r['stage_info'] as Record<string, unknown> | null | undefined;
 
   return {
     statisticalScreen: mapScreen(r['statistical_screen'] as Record<string, unknown>),
@@ -249,20 +266,7 @@ function mapValidationVerdict(r: Record<string, unknown>): FeatureValidationVerd
     } satisfies IcCi,
     directionMatchesSpec: r['direction_matches_spec'] as boolean,
     targetSignedAppropriate: r['target_signed_appropriate'] as boolean,
-    stageInfo: {
-      stage: si['stage'] as 0 | 1 | 2 | 3,
-      label: si['label'] as string,
-      description: si['description'] as string,
-      nextStageLabel: si['next_stage_label'] as string,
-      advanceCriteria: criteria.map((c): FeatureStageCriterion => ({
-        name: c['name'] as string,
-        description: c['description'] as string,
-        currentValue: c['current_value'] as number,
-        requiredRepr: c['required_repr'] as string,
-        met: c['met'] as boolean,
-      })),
-      failedScreens: (si['failed_screens'] as string[]) ?? [],
-    } satisfies FeatureStageInfo,
+    stageInfo: si ? mapStageInfo(si) : undefined,
     finalDecision: r['final_decision'] as string,
   };
 }

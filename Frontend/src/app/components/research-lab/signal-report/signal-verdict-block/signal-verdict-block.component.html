@@ -6,8 +6,10 @@
     <!-- Stage badge — left-side hero element, mirrors the readiness ring -->
     <div class="stage-badge" [attr.data-band]="band()">
       <span class="badge-label">Stage</span>
-      <span class="badge-value">{{ stage() }}</span>
-      <span class="badge-meta">/ 3</span>
+      <span class="badge-value">{{ stage() ?? '—' }}</span>
+      @if (stage() !== null) {
+        <span class="badge-meta">/ 3</span>
+      }
     </div>
 
     <!-- Headline column -->

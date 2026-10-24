@@ -27,6 +27,7 @@ import type {
   DecayCurvePoint,
   HorizonICResult,
   IndicatorReliabilityResponse,
+  TradeabilityLabel,
 } from '../indicator-reliability.models';
 
 Chart.register(...registerables);
@@ -254,6 +255,16 @@ export class IndicatorReliabilityReportComponent {
     const icOk = absIc > 0.10 ? 20 : absIc > 0 ? 10 : 0;
 
     return fdrOk + bonfOk + oosOk + randomOk + icOk;
+  }
+
+  /** Colour band of the server's tradeability call; "Unknown" is neither good nor bad. */
+  tradeabilityBand(label: TradeabilityLabel): 'good' | 'warn' | 'bad' | 'na' {
+    switch (label) {
+      case 'Likely tradeable': return 'good';
+      case 'Marginal': return 'warn';
+      case 'Unlikely': return 'bad';
+      default: return 'na';
+    }
   }
 
   /** Verdict bucket from the score — drives gauge color + headline verb. */

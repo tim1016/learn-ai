@@ -110,7 +110,47 @@ function strongResult(): IndicatorReliabilityResponse {
   };
 }
 
+const SERVER_VERDICT = {
+  direction: 'Momentum',
+  strength: 'Strong',
+  stability: 'Moderate',
+  tradeability: 'Marginal',
+  horizon: 5,
+  tradeability_caveat: 'Costs and turnover are not modelled.',
+} as const;
+
+const follows = (first: Element, second: Element) =>
+  Boolean(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
+
 describe('IndicatorReliabilityReportComponent', () => {
+  it('leads with the server’s own assessment and its tradeability caveat, ahead of the verdict this page computes', async () => {
+    const { container } = await render(IndicatorReliabilityReportComponent, {
+      inputs: { result: { ...strongResult(), verdict: { ...SERVER_VERDICT } } },
+    });
+
+    const assessment = container.querySelector('[data-testid="server-assessment"]');
+    const note = container.querySelector('[data-testid="page-computed-note"]');
+    if (assessment === null || note === null) throw new Error('assessment or note missing');
+    expect.soft(assessment.textContent).toContain('Marginal');
+    expect.soft(assessment.textContent).toContain('Costs and turnover are not modelled.');
+    expect.soft(assessment.textContent).toContain('Momentum');
+    expect.soft(assessment.textContent).toContain('5-bar');
+    expect.soft(note.textContent).toContain('Computed in this page, not by the server.');
+    expect.soft(follows(assessment, note), 'the note comes after the server’s assessment').toBe(true);
+    // The page's own call and its Confidence gauge both sit below the note, not above the server.
+    for (const computed of [screen.getByText('Ready to trade'), screen.getByText('Confidence')]) {
+      expect.soft(follows(note, computed)).toBe(true);
+    }
+  });
+
+  it('says “not recorded” when the result carries no server assessment, instead of showing none', async () => {
+    const { container } = await render(IndicatorReliabilityReportComponent, { inputs: { result: strongResult() } });
+
+    expect(container.querySelector('[data-testid="server-assessment"]')?.textContent).toContain(
+      'Not recorded: this result carries no assessment from the server.',
+    );
+  });
+
   it('shows the verdict and marks the best-horizon row in the horizon table', async () => {
     await render(IndicatorReliabilityReportComponent, { inputs: { result: strongResult() } });
 

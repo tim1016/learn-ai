@@ -194,7 +194,8 @@ export interface FeatureValidationVerdict {
   /** False when the spec marks signed forward return as the wrong
    *  target (e.g. realized_vol_30). Stage 0 fires immediately. */
   targetSignedAppropriate: boolean;
-  stageInfo: FeatureStageInfo;
+  /** Absent in a result stored before the stage was recorded; the page then says "not recorded". */
+  stageInfo?: FeatureStageInfo;
   finalDecision: string;
 }
 

@@ -31,12 +31,39 @@
     </div>
   </div>
 
-  <!-- Verdict hero — decide-for-me summary up top -->
-  @if (verdictAnalysis(); as va) {
-    <div class="verdict-hero-wrap mb-4">
-      <app-indicator-verdict-hero [analysis]="va" />
-    </div>
-  }
+  <!-- The server's own assessment leads. Nothing above the "computed in this page" note is worked out in the browser. -->
+  <section class="server-verdict" data-testid="server-assessment">
+    <h2 class="server-verdict-title">Assessment from the server</h2>
+    @if (res.verdict; as v) {
+      <p class="server-verdict-lead">
+        <span class="server-verdict-lead-label">Tradeability</span>
+        <strong class="server-verdict-lead-value" [attr.data-band]="tradeabilityBand(v.tradeability)">{{ v.tradeability }}</strong>
+      </p>
+      @if (v.tradeability_caveat; as caveat) {
+        <p class="server-verdict-caveat"><strong>Caveat:</strong> {{ caveat }}</p>
+      }
+      <dl class="server-verdict-facts">
+        <div class="server-verdict-fact">
+          <dt>Direction</dt>
+          <dd>{{ v.direction }}</dd>
+        </div>
+        <div class="server-verdict-fact">
+          <dt>Strength</dt>
+          <dd>{{ v.strength }}</dd>
+        </div>
+        <div class="server-verdict-fact">
+          <dt>Stability</dt>
+          <dd>{{ v.stability }}</dd>
+        </div>
+        <div class="server-verdict-fact">
+          <dt>Horizon</dt>
+          <dd>{{ v.horizon !== null ? v.horizon + '-bar' : 'not recorded' }}</dd>
+        </div>
+      </dl>
+    } @else {
+      <p class="server-verdict-missing">Not recorded: this result carries no assessment from the server.</p>
+    }
+  </section>
 
   <!-- Warnings (high-priority) -->
   @if (res.warnings.length > 0) {
@@ -44,6 +71,21 @@
       @for (warning of res.warnings; track warning) {
         <p-message severity="warn" class="mb-2">{{ warning }}</p-message>
       }
+    </div>
+  }
+
+  <!-- Everything from here to the decision cells is computed by this page, from the figures below. -->
+  <p class="page-computed-note" data-testid="page-computed-note">
+    <strong>Computed in this page, not by the server.</strong>
+    The verdict summary and the Confidence score, with its Trade / Investigate / Reject call, are worked out in your
+    browser from the figures below, using thresholds set in the page. Read them as a reading aid: the server's
+    assessment is the one above.
+  </p>
+
+  <!-- Verdict hero — the page's own summary -->
+  @if (verdictAnalysis(); as va) {
+    <div class="verdict-hero-wrap mb-4">
+      <app-indicator-verdict-hero [analysis]="va" />
     </div>
   }
 
