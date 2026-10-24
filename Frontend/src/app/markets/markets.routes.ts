@@ -1,13 +1,13 @@
 import { Routes } from '@angular/router';
 
+import { OPTIONS_ROUTES } from './options/options.routes';
+
 /**
  * The Markets place (ADR 0084): the list at `/markets`, and one instrument's
  * place at `/markets/:symbol/<tab>`.
  *
  * The instrument's shell owns the context its tabs share, so it stays mounted
- * while the tab or the instrument changes. A tab that is not routed yet has no
- * entry here and shows greyed in the strip (`UNAVAILABLE_INSTRUMENT_TABS`); a
- * tab leaves that list when its route is added below.
+ * while the tab or the instrument changes.
  */
 export const MARKETS_ROUTES: Routes = [
   {
@@ -48,6 +48,7 @@ export const MARKETS_ROUTES: Routes = [
         pathMatch: 'full',
         loadComponent: () => import('./data/dataset-builder/build-dataset.component').then((m) => m.BuildDatasetComponent),
       },
+      ...OPTIONS_ROUTES,
     ],
   },
 ];

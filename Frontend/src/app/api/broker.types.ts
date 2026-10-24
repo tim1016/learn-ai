@@ -26601,6 +26601,8 @@ export interface components {
             last_trade?: components["schemas"]["LastTradeSnapshot"] | null;
             /** Open Interest */
             open_interest?: number | null;
+            /** Standard */
+            standard?: boolean | null;
             /** Strike Price */
             strike_price?: number | null;
             /** Ticker */

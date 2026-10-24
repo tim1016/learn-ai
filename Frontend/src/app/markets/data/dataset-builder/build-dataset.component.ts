@@ -10,7 +10,6 @@ import {
 import { RouterLink } from '@angular/router';
 
 import { RunSessionService } from '../../../services/run-session.service';
-import { PastChainTabComponent } from '../../../components/options-backtest/past-chain/past-chain-tab.component';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
 
 import { DataLabWorkspaceStore } from '../../../components/data-lab/data-lab-workspace-store';
@@ -22,6 +21,7 @@ import {
   type OptionsCompanionWireConfig,
 } from '../../../components/data-lab/data-lab-request-mapper';
 import { instrumentCommands } from '../../instrument-address';
+import { archiveChainLink } from '../../options/options-address';
 import { DataLabPlanService, type DataLabPlanReceipt } from './data-lab-plan.service';
 import { ExportColumnPickerComponent } from './export-column-picker/export-column-picker.component';
 import { columnsForPayload } from '../../../components/data-lab/export-csv-options';
@@ -45,7 +45,6 @@ import { columnsForPayload } from '../../../components/data-lab/export-csv-optio
   selector: 'app-build-dataset',
   imports: [
     RouterLink,
-    PastChainTabComponent,
     AssetIdentityComponent,
     ExportColumnPickerComponent,
   ],
@@ -384,12 +383,15 @@ export class BuildDatasetComponent {
     { key: 'includeStockQuotes', label: 'stock_quotes.csv' },
   ];
 
-  /** Latest committed window date, `YYYY-MM-DD`: the day the options companion's Past chain opens on. */
+  /** Latest committed window date, `YYYY-MM-DD`: the session the past chain the options companion links to opens on. */
   readonly analysisDate = computed(() => {
     const window = this.store.committedWindow();
     if (!window) return '';
     return new Date(window.endMsUtc).toISOString().slice(0, 10);
   });
+
+  /** The instrument's Options tab, where the Past · Archive chain shows what the archive listed for the companion's ticker. */
+  readonly pastChain = computed(() => archiveChainLink(this.store.committedTicker(), this.analysisDate()));
 }
 
 type OptionsFlagKey =

@@ -15,6 +15,8 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { appConfig } from './app.config';
 import { routes } from './app.routes';
 import { TEST_ACCOUNT_ID, TEST_CLERK_ID, provideFleetDirectory } from './fleet/fleet-directory-testing';
+import { PICK_TAB_KEY, PICK_VIEW_KEY, keysForPick, openableTab } from './markets/instrument-address';
+import { optionsViewCommands } from './markets/options/options-address';
 import { activeMenuNodeFor, APP_MENU } from './shell/app-menu';
 import { routeTreeHasData } from './shell/current-url.service';
 import { HELP_DOCUMENTS } from './shared/help/help-documents';
@@ -66,17 +68,24 @@ const ROWS: Readonly<Record<string, Row>> = {
   'markets/:symbol/returns': { group: MARKETS },
   'markets/:symbol/data': { group: MARKETS },
   'markets/:symbol/data/build': { group: MARKETS },
+  'markets/:symbol/options': { group: MARKETS, lands: '/markets/SPY/options/chain' },
+  'markets/:symbol/options/chain': { group: MARKETS },
+  'markets/:symbol/options/surface': { group: MARKETS },
+  'markets/:symbol/options/pricing': { group: MARKETS },
   // The chart, the Returns study and the dataset builder moved under the instrument; with no instrument named, an old address leads to the list.
   'data-lab': { group: MARKETS, lands: '/markets' },
   'data-lab/explore': { group: MARKETS, lands: '/markets' },
   'data-lab/export': { group: MARKETS, lands: '/markets' },
   'data-lab/returns': { group: MARKETS, lands: '/markets' },
-  'options-lab': { group: MARKETS, lands: '/options-lab/chain' },
-  'options-lab/chain': { group: MARKETS },
+  // The chain moved into the instrument's Options tab; with no instrument named, an old address asks for one.
+  'options-lab': { group: MARKETS, lands: '/markets?then=options' },
+  'options-lab/chain': { group: MARKETS, lands: '/markets?then=options' },
   'options-lab/strategy-finder': { group: MARKETS },
-  'broker/options-chain': { group: MARKETS },
-  'broker/options-surface': { group: MARKETS },
-  'pricing-lab': { group: MARKETS },
+  // This page was the IBKR feed, so with no instrument named the list is asked to open the chain on Now · Live IBKR.
+  'broker/options-chain': { group: MARKETS, lands: '/markets?source=live&then=options' },
+  // Surface and Pricing moved under the instrument; with no instrument named, an old address leads to the list.
+  'broker/options-surface': { group: MARKETS, lands: '/markets?then=options&view=surface' },
+  'pricing-lab': { group: MARKETS, lands: '/markets?then=options&view=pricing' },
   'research-lab/market/news': { group: MARKETS, lands: '/markets' },
 
   // ── Research ─────────────────────────────────────────────────────────────
@@ -394,6 +403,21 @@ describe('the route inventory (T01)', () => {
     });
 
     it.each([
+      ['the Surface 3D address', '/broker/options-surface?ticker=spy&expiry=1790000000000#top', '/markets/SPY/options/surface?expiry=1790000000000#top'],
+      ['the Pricing Lab address', '/pricing-lab?symbol=qqq&expiry=1790000000000#top', '/markets/QQQ/options/pricing?expiry=1790000000000#top'],
+      ['the Pricing Lab address with an expiry and no instrument', '/pricing-lab?expiry=1790000000000#top', '/markets?expiry=1790000000000&then=options&view=pricing#top'],
+      ['the Pricing Lab address with no instrument and nothing else', '/pricing-lab', '/markets?then=options&view=pricing'],
+      ['the Surface 3D address with an expiry and no instrument', '/broker/options-surface?expiry=1790000000000#top', '/markets?expiry=1790000000000&then=options&view=surface#top'],
+    ])('takes %s straight to its view under the instrument, or to the list, with the expiry and fragment', async (_name, url, landsOn) => {
+      const { router, ended, cancelled, failed } = await load(url);
+
+      expect.soft(failed).toEqual([]);
+      expect.soft(cancelled, 'redirects within the one navigation').toEqual([]);
+      expect.soft(ended).toEqual([landsOn]);
+      expect(router.url).toBe(landsOn);
+    });
+
+    it.each([
       ['bots', '/brokers/alpaca?surface=bots&deploy=1&strategy=momentum&golden_qualification=abc#go'],
       ['gallery', '/brokers/alpaca?surface=gallery&deploy=1&strategy=momentum&golden_qualification=abc#go'],
     ])('keeps a deploy intent through the retired ?surface=%s hint, going straight to the account list', async (_name, url) => {
@@ -504,6 +528,47 @@ describe('the route inventory (T01)', () => {
       expect(router.url).toBe(landsOn);
       expect(ended).toHaveLength(1);
       expect(cancelled).toEqual([]);
+    });
+
+    // The chain moved into the instrument's Options tab: the old chain pages carry no symbol of their own, so one a bookmark
+    // adds in its query is the instrument, and with none the address asks for one rather than guessing SPY.
+    it.each([
+      ['/options-lab/chain?symbol=SPY&expiry=4070984400000&source=archive&date=2026-10-09&at=1791576000000#top', '/markets/SPY/options/chain?expiry=4070984400000&source=archive&date=2026-10-09&at=1791576000000#top'],
+      ['/options-lab/chain?ticker=qqq&source=snapshot', '/markets/QQQ/options/chain?source=snapshot'],
+      // The old Chain (Live) page was the IBKR feed: its address opens Now · Live IBKR unless it names a source.
+      ['/broker/options-chain?symbol=SPY&expiry=4070984400000', '/markets/SPY/options/chain?expiry=4070984400000&source=live'],
+      ['/broker/options-chain?symbol=SPY', '/markets/SPY/options/chain?source=live'],
+      ['/broker/options-chain?symbol=SPY&source=live', '/markets/SPY/options/chain?source=live'],
+      ['/broker/options-chain?symbol=SPY&source=archive&date=2026-10-09', '/markets/SPY/options/chain?source=archive&date=2026-10-09'],
+      ['/options-lab?ticker=SPY', '/markets/SPY/options/chain'],
+      ['/options-lab/chain', '/markets?then=options'],
+      ['/options-lab/chain?expiry=4070984400000&source=archive#top', '/markets?expiry=4070984400000&source=archive&then=options#top'],
+      ['/broker/options-chain', '/markets?source=live&then=options'],
+      ['/broker/options-chain?expiry=4070984400000#top', '/markets?expiry=4070984400000&source=live&then=options#top'],
+      ['/options-lab', '/markets?then=options'],
+    ])('lands the old chain address %s on %s in one navigation', async (url, landsOn) => {
+      const { router, ended, cancelled, failed } = await load(url);
+
+      expect(router.url).toBe(landsOn);
+      expect(ended).toHaveLength(1);
+      expect(cancelled).toEqual([]);
+      expect(failed).toEqual([]);
+    });
+
+    // The redirect writes what the Markets list reads: an old Pricing, Surface or Chain (Live) address with no instrument must
+    // reach the pick as the same view with the same keys, not as the Options tab's default.
+    it.each([
+      ['/pricing-lab?expiry=1790000000000&session=extended', ['/markets', 'SPY', 'options', 'pricing'], { expiry: '1790000000000', session: 'extended' }],
+      ['/broker/options-surface?expiry=1790000000000', ['/markets', 'SPY', 'options', 'surface'], { expiry: '1790000000000' }],
+      ['/broker/options-chain?expiry=1790000000000', ['/markets', 'SPY', 'options'], { expiry: '1790000000000', source: 'live' }],
+      ['/options-lab/chain?source=archive&date=2026-10-09', ['/markets', 'SPY', 'options'], { source: 'archive', date: '2026-10-09' }],
+    ])('hands the pick of %s its view and the keys it carried', async (url, commands, kept) => {
+      const { router } = await load(url);
+      const asked = router.parseUrl(router.url).queryParamMap;
+
+      expect(openableTab(asked.get(PICK_TAB_KEY))).toBe('options');
+      expect(optionsViewCommands('SPY', asked.get(PICK_VIEW_KEY))).toEqual(commands);
+      expect(keysForPick(asked)).toEqual(kept);
     });
 
     it('fails in place on a Data check it does not have, rather than opening the first', async () => {

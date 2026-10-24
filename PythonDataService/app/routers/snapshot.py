@@ -7,6 +7,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException, status
 
+from app.data_lake.option_listing import snapshot_contract_is_standard
 from app.models.requests import (
     OptionsChainSnapshotRequest,
     StockSnapshotRequest,
@@ -71,6 +72,15 @@ def _get_options_chain_snapshot(request: OptionsChainSnapshotRequest) -> Options
                     contract_type=c.get("contract_type"),
                     strike_price=c.get("strike_price"),
                     expiration_ms=c.get("expiration_ms"),
+                    standard=snapshot_contract_is_standard(
+                        underlying=request.underlying_ticker.upper(),
+                        ticker=c.get("ticker"),
+                        contract_type=c.get("contract_type"),
+                        strike=c.get("strike_price"),
+                        expiry_ms=c.get("expiration_ms"),
+                        exercise_style=c.get("exercise_style"),
+                        shares_per_contract=c.get("shares_per_contract"),
+                    ),
                     break_even_price=c.get("break_even_price"),
                     implied_volatility=c.get("implied_volatility"),
                     open_interest=c.get("open_interest"),

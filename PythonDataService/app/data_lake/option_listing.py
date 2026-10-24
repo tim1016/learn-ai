@@ -299,6 +299,47 @@ def _classify(
     return standard, named
 
 
+def snapshot_contract_is_standard(
+    *,
+    underlying: str,
+    ticker: str | None,
+    contract_type: str | None,
+    strike: float | None,
+    expiry_ms: int | None,
+    exercise_style: str | None,
+    shares_per_contract: float | None,
+) -> bool | None:
+    """Is a contract of the vendor's option-chain snapshot standard, by the rule a stored listing applies?
+
+    The snapshot carries the facts a listing row does, bar one: it does not say whether the contract
+    has additional underlyings. Every adjusted contract carries a digit in its root, which
+    :func:`_classify` refuses whatever that flag says, so the missing flag cannot make a contract
+    standard that its symbol does not already exclude. ``None`` when the snapshot left out a fact the
+    rule needs (the answer is unknown, and unknown is not non-standard).
+    """
+    if ticker is None or contract_type is None or strike is None or expiry_ms is None:
+        return None
+    if exercise_style is None or shares_per_contract is None:
+        return None
+    try:
+        strike_in_thousandths = strike_thousandths(strike)
+    except ValueError:
+        return False
+    shares_cell = _shares_cell(Decimal(str(shares_per_contract)))
+    shares = int(shares_cell) if shares_cell else None
+    standard, _named = _classify(
+        underlying=underlying,
+        ticker=ticker,
+        contract_type=contract_type.lower(),
+        strike=strike_in_thousandths,
+        expiry_ms=expiry_ms,
+        exercise_style=exercise_style.lower(),
+        shares=shares,
+        additional=False,
+    )
+    return standard
+
+
 def parse_option_listing_zip(payload: bytes, underlying: str, as_of: date) -> tuple[OptionListingRow, ...]:
     """The rows in one stored listing; strict, and standard-ness applied here, on read.
 

@@ -104,6 +104,19 @@ previously tracked items (issues #1655, #1671, #1672, #1674, #1677, #1664,
   or `str()` it, and both are exact for `Decimal`. But a future
   `bar.volume * <float>` raises `TypeError` only on lake bars. Fix the
   annotation, to `Decimal | int`, at the next seal re-qualification.
+- **The live option-chain cross-check computes its gap and its tolerance band in Angular (medium,
+  2026-10-24).** On an instrument's Options chain in Now · Live IBKR,
+  `Frontend/src/app/markets/options/chain/live/live-cross-check.ts` computes
+  `|Δ IBKR − Δ engine|` (`absDiff`) and judges it green, yellow or red
+  (`deltaAbsBand`, edges 0.005 and 0.02, in `Frontend/src/app/components/broker/format.ts`).
+  ADR 0068 decision 1 keeps every number a user compares, and every verdict, in Python;
+  this has no canonical, no parity test and no named exception. It came over unchanged
+  from the retired Chain (Live) page, which #2747 did not inventory. Fix: Python returns,
+  per contract, the engine delta, the gap, the band and the reason a contract was not
+  compared (in the chain stream or a batch pricing call), and Angular draws them. That
+  also retires the `POST /api/quantlib/price` per contract that
+  `live-engine-reads.service.ts` makes whenever a contract's spot, volatility or midpoint
+  moves. #3533
 - **Frontend naive `new Date(string)` — Tier 2 (medium).** Eighteen production
   calls still parse date-only or local-wall strings across validation,
   option-expiry, Options Lab, Strategy Builder, ticker ranges, Data Lab, Past

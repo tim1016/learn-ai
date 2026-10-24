@@ -1,0 +1,68 @@
+<section class="card" aria-labelledby="archive-controls-title">
+  <div class="card__head">
+    <h2 id="archive-controls-title">Past chain</h2>
+    <p class="hint">What the archive listed on a past trading date and what each contract last traded at. Times are New York time.</p>
+  </div>
+  <div class="fields">
+    <div class="field">
+      <label for="archive-chain-date">Trading date</label>
+      <app-date-field inputId="archive-chain-date" appearance="filled" [value]="date() ?? ''" (valueChange)="onDate($event)" [hostProblem]="dateProblem()" />
+    </div>
+    <div class="field">
+      <label for="archive-chain-time">Time of day (New York time)</label>
+      <input id="archive-chain-time" pInputText type="time" step="60" [value]="timeText()" (change)="onTime($event)" [attr.aria-invalid]="timeProblem() !== null" aria-describedby="archive-chain-time-note" />
+      <p id="archive-chain-time-note" class="words">
+        @if (timeProblem(); as message) {
+          <span class="problem" role="alert">{{ message }}</span>
+        } @else if (atMs() !== null) {
+          Read at this time, with no later observation.
+        } @else if (session(); as day) {
+          Until you type a time, the chain is read at the close, <app-timestamp-display [value]="day.closeMs" mode="et" granularity="minute" />
+        } @else {
+          Until you type a time, the chain is read at the close of the session.
+        }
+      </p>
+    </div>
+    <div class="field field--narrow">
+      <label for="archive-chain-strikes">Strikes each side of the money</label>
+      <input id="archive-chain-strikes" pInputText type="text" inputmode="numeric" autocomplete="off" [attr.placeholder]="strikesShown()" [formField]="controls.strikes" (keydown.enter)="commitStrikes()" [attr.aria-invalid]="strikesProblem() !== null" aria-describedby="archive-chain-strikes-note" />
+      <p id="archive-chain-strikes-note" class="words">
+        @if (strikesProblem(); as message) {
+          <span class="problem" role="alert">{{ message }}</span>
+        } @else {
+          Empty means the server's own number.@if (mostStrikes(); as most) { The most it takes: {{ most }}. }
+        }
+      </p>
+    </div>
+  </div>
+</section>
+
+<app-chain-download [plan]="plan()" [state]="downloadState()" (start)="startDownload()" />
+
+@if (refusal(); as why) {
+  <div class="refusal" role="status">
+    <p>{{ why.words }}</p>
+    <p class="code">{{ why.code }}</p>
+  </div>
+}
+@if (dayAgain()) {
+  <p class="muted" role="status">Reading the listing again. What is shown is the last answer.</p>
+}
+@if (dayState(); as state) {
+  <app-workspace-state-block [state]="state" (actionTriggered)="onAction($event)" />
+}
+@if (listing(); as day) {
+  <section class="listing" aria-label="Expiries listed that day">
+    <app-expiration-ribbon [expirations]="expiries()" [selectedExpiration]="expiryMs()" [titles]="expiryNotes()" (expirationSelected)="expiryPicked.emit($event)" />
+    <p class="words">The listing held {{ day.expiries.length }} {{ day.expiries.length === 1 ? 'expiry' : 'expiries' }} that day. None is opened for you.</p>
+    <ul class="words left-out" aria-label="Rows left out of the counts">
+      <li>{{ day.rows_left_out_unusable }} rows name no contract a backtest can use, or carry no share count.</li>
+      <li>{{ day.rows_left_out_expired }} are contracts that had already expired by this date.</li>
+    </ul>
+  </section>
+}
+@if (chainState(); as state) {
+  <app-workspace-state-block [state]="state" (actionTriggered)="onAction($event)" />
+} @else if (shown(); as chain) {
+  <app-chain-view [chain]="chain.presentation" [state]="chain.state" [again]="chainAgain()" />
+}

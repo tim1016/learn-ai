@@ -1,8 +1,8 @@
 import { inject } from '@angular/core';
-import { Router, type Params, type RedirectFunction } from '@angular/router';
+import { Router, type ParamMap, type Params, type RedirectFunction } from '@angular/router';
 
 import { routePathOf } from '../fleet/account-workspace';
-import { INSTRUMENT_TABS, UNAVAILABLE_INSTRUMENT_TABS, type InstrumentTab } from './instrument-tabs';
+import { INSTRUMENT_TABS, type InstrumentTab } from './instrument-tabs';
 
 /*
  * Where an instrument lives (ADR 0084): `/markets/:symbol/(chart|returns|options|data)`.
@@ -29,10 +29,28 @@ export function instrumentHeadlinesCommands(symbol: string): string[] {
   return instrumentCommands(symbol, 'chart', [HEADLINES_SEGMENT]);
 }
 
+/**
+ * The query keys by which an address that names no instrument asks the Markets list for one: `then`
+ * is the tab the pick opens, and `view` the view of that tab (Options has views). Every other key
+ * the address carried rides along to the pick.
+ */
+export const PICK_TAB_KEY = 'then';
+export const PICK_VIEW_KEY = 'view';
+
+/** The keys an address that named no instrument carried for it: every key but the two that ask for the pick, as they were. */
+export function keysForPick(query: ParamMap): Params {
+  const kept: Params = {};
+  for (const key of query.keys) {
+    if (key === PICK_TAB_KEY || key === PICK_VIEW_KEY) continue;
+    const values = query.getAll(key);
+    kept[key] = values.length === 1 ? values[0] : values;
+  }
+  return kept;
+}
+
 /** Where the Markets list sends a pick: the tab it was asked to open, else Chart. */
 export function openableTab(then: string | null | undefined): InstrumentTab {
-  const named = INSTRUMENT_TABS.tabs.find((tab) => tab.id === then);
-  return named !== undefined && UNAVAILABLE_INSTRUMENT_TABS[named.id] === undefined ? named.id : 'chart';
+  return INSTRUMENT_TABS.tabs.find((tab) => tab.id === then)?.id ?? 'chart';
 }
 
 function firstString(value: unknown): string | null {
