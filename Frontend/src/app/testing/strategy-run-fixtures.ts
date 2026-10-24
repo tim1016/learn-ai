@@ -20,8 +20,9 @@ export function makeRunLedger(overrides: Partial<RunLedger> = {}): RunLedger {
     engine_git_commit: 'unknown',
     symbol: 'SPY',
     resolution_minutes: 15,
-    start_ms: 1704160800000,
-    end_ms: 1735714800000,
+    // The window's ends as the engine stores them: ET midnight of 2024-01-02 and of 2024-12-31.
+    start_ms: 1704171600000,
+    end_ms: 1735621200000,
     initial_cash: 100000,
     fill_mode: 'signal_bar_close',
     commission_per_order: 0,
