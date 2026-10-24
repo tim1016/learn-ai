@@ -344,3 +344,48 @@ class TestTheUnrealizedForwardTailIsNotASignal:
         assert all(body["vrp_z"][i] is None for i in blind)
         assert any(z is not None for z in body["vrp_z"]), "earlier bars keep their z-score"
         assert body["coverage"]["forward_nan_bars"] == len(blind)
+
+
+class TestMissingIvStaysAbsentInTheZScore:
+    """No IV is carried from a bar that has some to a bar that has none, not even into the VRP z-score (R25; ADR 0071 decision 9).
+
+    The z-score is a rolling statistic over ``coverage.vrp_lookback`` bars that needs a VRP value on every one of them, so it
+    exists only where recorded IV covers the whole window. Until #3525's review (M1) the z-score's IV input was
+    forward-filled, which put a dense z-score and long/short-vol signals on bars that had no IV, built on a snapshot
+    taken hundreds of bars earlier.
+    """
+
+    def test_iv_recorded_on_the_first_40_of_500_bars_gives_no_z_score_or_signal_on_the_bars_without_iv(self):
+        bars = _bars(500)
+        iv_series = [{"ts": int(ts), "iv30": 0.20 + 0.01 * ((i * 7) % 5)} for i, ts in enumerate(bars.index[:40])]
+
+        body = _series(bars, iv_series, estimators=["ctc"], windows=[5])
+
+        without_iv = [i for i, iv in enumerate(body["iv30"]) if iv is None]
+        assert without_iv == list(range(40, 500)), "IV is on the first 40 bars and nowhere else"
+        assert all(body["vrp_z"][i] is None for i in without_iv), "a z-score on a bar with no IV is a carried IV"
+        # What the page turns a z-score into: past 1 sigma either way is a trade signal.
+        assert not [i for i in without_iv if body["vrp_z"][i] is not None and abs(body["vrp_z"][i]) > 1.0]
+        assert body["coverage"]["vrp_lookback"] == 252
+
+    def test_the_lookback_the_series_reports_is_the_window_the_z_score_needs(self):
+        assert _series(_bars(500), None)["coverage"]["vrp_lookback"] == 252
+        assert _series(_bars(60), None)["coverage"]["vrp_lookback"] == 59, "a short window shrinks it to its own length less one"
+
+    def test_a_gap_inside_dense_iv_blanks_every_window_it_touches_instead_of_being_filled(self):
+        bars = _bars(500)
+        gap = {300, 301, 302}
+        iv_series = [
+            {"ts": int(ts), "iv30": 0.20 + 0.01 * ((i * 7) % 5)} for i, ts in enumerate(bars.index) if i not in gap
+        ]
+
+        body = _series(bars, iv_series, estimators=["ctc"], windows=[5])
+
+        lookback = body["coverage"]["vrp_lookback"]
+        assert [i for i, iv in enumerate(body["iv30"]) if iv is None] == sorted(gap)
+        before = [i for i, z in enumerate(body["vrp_z"]) if z is not None and i < min(gap)]
+        assert before, "bars whose whole window has IV keep their z-score"
+        assert all(i >= lookback - 1 for i in before), "and only once the window is full"
+        touching = [i for i in range(min(gap), min(gap) + lookback + len(gap)) if i < len(bars)]
+        assert all(body["vrp_z"][i] is None for i in touching), "every window that contains a bar without IV has no z-score"
+

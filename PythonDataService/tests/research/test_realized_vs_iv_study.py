@@ -160,7 +160,7 @@ def reference_series(
     out["iv30"], out["iv30_trd252"] = iv30, trd
     out["vrp_forward"] = compute_vrp(pd.Series(trd), pd.Series(out["hf_forward"])).to_numpy()
     out["vrp_z"] = vrp_signal(
-        iv=pd.Series(trd).ffill(), rv=pd.Series(out["hf_forward"]), lookback=min(252, len(frame) - 1)
+        iv=pd.Series(trd), rv=pd.Series(out["hf_forward"]), lookback=min(252, len(frame) - 1)
     ).vrp_z.to_numpy()
     return out
 

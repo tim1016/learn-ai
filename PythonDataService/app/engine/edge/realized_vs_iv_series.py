@@ -9,16 +9,19 @@ Reference: Bollerslev, Tauchen, Zhou (2009) "Expected Stock Returns and Variance
   ``realized_vol.py``, ``hf_realized_vol.py``, ``app/volatility/basis.py`` and ``vrp.py``. This file composes them
   and adds no estimator of its own.
 Canonical implementation: this file for the composition; the pieces live in the modules named above. Until #3525 the
-  composition lived in ``app/routers/edge.py`` (``POST /api/edge/realized-vs-iv/series``) and was moved here without
-  a change to any step, so the same bars and IV give the same series.
+  composition lived in ``app/routers/edge.py`` (``POST /api/edge/realized-vs-iv/series``) and was moved here with one
+  change to a step: the VRP z-score no longer forward-fills IV (below). With IV on every bar the same bars and IV give
+  the same series as before.
 Validated against: tests/research/test_realized_vs_iv_study.py (the composition against the estimators called
   directly, on lake bars and on the vendor's own bars, at atol 1e-9, rtol 0). The pieces keep their own tests.
 
 IV in. ``iv_points`` are ``{ts, iv30, health_score?, variance_contribution_synthetic?}`` stamped at bar starts
 (``app.engine.edge.iv_alignment`` puts them there). A bar with no point has no IV, and IV30, ``vrp_forward`` and the
-VRP z-score are NaN there. One carry-forward exists, as it did before #3525: the z-score's IV input is forward-filled
-(``iv_trd252.ffill()``) so a sparse IV series does not blank the rolling window. It reaches ``vrp_z`` only; the IV30
-shown and ``vrp_forward`` are never filled. Whether the z-score should carry IV at all is an owner decision (D02).
+VRP z-score are NaN there. Missing IV stays absent everywhere (PRD #3490 R25; ADR 0071 decision 9): nothing is filled,
+carried or interpolated, the z-score's input included. The z-score is a rolling statistic over ``coverage.vrp_lookback``
+bars that needs a VRP value on every one of them, so it exists only on a bar whose whole window has recorded IV and a
+realized forward volatility. IV on a few bars gives an IV30 on those bars and a z-score on none; the z-score once
+forward-filled IV, which put a dense z-score and long/short-vol signals on bars with no IV (#3525 review M1).
 
 Warmup. Trailing Yang-Zhang over a window of ``w`` bars is NaN for the first ``w`` bars (it needs ``w`` overnight
 returns and the first bar has none), so it is valid from bar index ``w``. The YZ-21 fallback on daily bars is valid from
@@ -109,13 +112,15 @@ def compute_realized_vs_iv_series(
     iv_trd252 = _convert_iv_to_trd252(iv, tenor_days)
 
     vrp_fwd = compute_vrp(iv_trd252.fillna(np.nan), rv_hf_fwd)
-    # The forward RV of the last window's bars is not realized yet, so ``rv``
-    # is never filled: a z-score of an unrealized tail would read as a signal.
-    # ``vrp_z`` is NaN wherever the forward RV is, and the page shows "—".
+    # Neither input is filled. The forward RV of the last window's bars is not
+    # realized yet, so a z-score of an unrealized tail would read as a signal;
+    # and a bar with no IV has no VRP, so a window holding one has no z-score.
+    # ``vrp_z`` is NaN wherever either is, and the page shows "—".
+    lookback = min(252, len(bars) - 1)
     sig = vrp_signal(
-        iv=iv_trd252.ffill(),
+        iv=iv_trd252,
         rv=rv_hf_fwd,
-        lookback=min(252, len(bars) - 1),
+        lookback=lookback,
         confidence=confidence,
         confidence_floor=confidence_floor,
     )
@@ -165,6 +170,7 @@ def compute_realized_vs_iv_series(
         "iv_first_ts": int(iv.dropna().index.min()) if iv.notna().any() else None,
         "iv_last_ts": int(iv.dropna().index.max()) if iv.notna().any() else None,
         "forward_nan_bars": int(rv_hf_fwd.isna().sum()),
+        "vrp_lookback": lookback,
         "session": hf_session,
         "vrp_basis": "TRD/252 (IV converted from ACT/365 via NYSE calendar)",
         "has_confidence": confidence is not None,

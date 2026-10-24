@@ -96,7 +96,8 @@ previously tracked items (issues #1655, #1671, #1672, #1674, #1677, #1664,
     last minute (3 bps either way moves the payload's Yang-Zhang by 0.002). Folding the day from extended minutes moves
     it by up to 0.12. A 15-minute bar keeps `extended`, as it was.
   - *Recorded IV reaches a bar by containment (P2).* `snapshot_in_bar_latest` replaces timestamp equality, which almost
-    never held. The VRP z-score still reads `iv.ffill()`; nothing else is filled. Whether to keep either is undecided.
+    never held. Nothing is filled: the VRP z-score no longer forward-fills IV (it did, #3525 review M1), so it exists
+    only where recorded IV covers every bar of its 252-bar window. Whether the alignment rule is right is undecided.
   - *Nothing schedules the IV recorder (P2).* Until something calls `POST /api/iv-recorder/snapshot` at the slots the
     page reads "No IV30 at these bars", honestly. Recorded rows carry no tenor (the recorder defaults to 30 days), so
     the Tenor control converts a recorded 30-day IV as if it were the tenor chosen.

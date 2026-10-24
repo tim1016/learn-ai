@@ -63,5 +63,6 @@ superseded and one is reworded.
 - Decision 9 stands: nothing is forward-filled at the service layer. What changes is how a snapshot meets a bar. Equal
   timestamps almost never held, since a snapshot carries the moment it was taken. `app/engine/edge/iv_alignment.py` now
   puts each snapshot on the bar that contains it; the latest in a bar wins, a bar with none has no IV, and the response
-  counts the snapshots read, superseded, and inside no bar. Nothing is carried or interpolated. The one carry-forward
-  that exists is the VRP z-score's `iv.ffill()`, unchanged. **This alignment rule awaits the owner's confirmation (D02 of PRD #3490).**
+  counts the snapshots read, superseded, and inside no bar. Nothing is carried or interpolated, and that includes the VRP
+  z-score: it once forward-filled its IV input, which put a z-score and trade signals on bars with no IV, and no longer does.
+  It exists only where recorded IV covers every bar of its rolling window. **This alignment rule awaits the owner's confirmation (D02 of PRD #3490).**
