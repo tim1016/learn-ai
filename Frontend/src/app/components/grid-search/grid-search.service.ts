@@ -4,7 +4,6 @@ import { firstValueFrom } from 'rxjs';
 
 import { environment } from '../../../environments/environment';
 import { JobsService } from '../../services/jobs.service';
-import type { StrategyInfo } from '../strategy-lab/strategy-lab.models';
 import type {
   CellPageQuery,
   GridSearchCellCurves,
@@ -56,10 +55,6 @@ export class GridSearchService {
   private readonly http = inject(HttpClient);
   private readonly jobs = inject(JobsService);
   private readonly base = `${environment.pythonServiceUrl}/api/research/grid-search`;
-
-  async loadStrategies(): Promise<StrategyInfo[]> {
-    return firstValueFrom(this.http.get<StrategyInfo[]>(`${environment.pythonServiceUrl}/api/engine/strategies`));
-  }
 
   async preflight(spec: GridSearchSpecRequest): Promise<GridSearchPreflight> {
     try {

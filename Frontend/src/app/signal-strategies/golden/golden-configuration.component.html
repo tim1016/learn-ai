@@ -1,0 +1,35 @@
+<div class="config">
+  <section class="config__corpus" aria-labelledby="config-corpus-title">
+    <h2 id="config-corpus-title" class="config__title">Registry corpus point</h2>
+    <p class="config__scope">
+      The settings this strategy's program was validated at. It is the registry's declaration: it is not a selected baseline run,
+      not a Golden Search version and not an approval of any symbol.
+    </p>
+    @if (corpusPoint(); as point) {
+      @if (point.pairs; as pairs) {
+        <p class="config__scope">
+          Validated for {{ point.symbols.length > 0 ? point.symbols.join(', ') : 'no symbol named' }}:
+          <span class="config__mono">{{ pairs.join(' · ') }}</span>
+        </p>
+      } @else {
+        <p class="config__scope">This program declares no validated settings.</p>
+      }
+    }
+  </section>
+
+  @let source = runState();
+  @if (source.kind === 'loading') {
+    <p class="config__scope" role="status">Reading the run to select as the baseline run.</p>
+  } @else if (source.kind === 'refused') {
+    <app-workspace-state-block [state]="source.state" />
+  }
+
+  <p class="config__scope">
+    A baseline run is selected from this strategy's
+    <a [routerLink]="backtestRoute()" [queryParams]="historyQuery">Backtest history</a>. Selecting it freezes that run's exact
+    configuration; reviewing it records a decision on that configuration only, under Engine agreement, Reviewed deviations or
+    Manual override, with a required note.
+  </p>
+
+  <app-golden-validation-workbench [strategyKey]="key()" [sourceRunId]="sourceRunId()" [caseId]="caseId()" />
+</div>

@@ -6,6 +6,7 @@ import { goldenStateLabel } from "../../services/golden-validation.service";
 import type { GoldenValidation } from "../../services/golden-validation.types";
 import { AssetIdentityComponent } from "../../shared/asset-identity/asset-identity.component";
 import { ReceiptLabelPipe } from "../../shared/pipes/receipt-label.pipe";
+import { exploreTabRoute } from "../../signal-strategies/explore/explore-tabs";
 import { TimestampDisplayPipe } from "../../shared/timestamp";
 import { GoldenValidationScopeComponent } from "./golden-validation-scope.component";
 
@@ -19,4 +20,6 @@ import { GoldenValidationScopeComponent } from "./golden-validation-scope.compon
 export class GoldenValidationCaseComponent {
   readonly golden = input.required<GoldenValidation>();
   protected readonly stateLabel = computed(() => goldenStateLabel(this.golden().state, this.golden().review_is_current));
+  /** The saved configuration reopens in Backtest, under the strategy it was recorded for. */
+  protected readonly backtestRoute = computed(() => exploreTabRoute(this.golden().validation_case.strategy.name, "backtest"));
 }

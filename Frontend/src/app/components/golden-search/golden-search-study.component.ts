@@ -6,6 +6,7 @@ import { ButtonModule } from 'primeng/button';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { ConfirmDeleteComponent } from '../../shared/research-record/confirm-delete.component';
 import { RecordPoller } from '../../shared/research-record/record-poller';
+import { goldenTabRoute } from '../../signal-strategies/golden/golden-tabs';
 import { extractServerMessage } from '../broker/operation-error';
 import type { GridSearchRefusal } from '../grid-search/grid-search.types';
 import { GoldenSearchReviewTour, reviewStepText, reviewStops, type ReviewStop } from './charts/golden-search-review-tour';
@@ -82,6 +83,8 @@ export class GoldenSearchStudyComponent {
   private readonly destroyRef = inject(DestroyRef);
 
   readonly studyId = input.required<string>();
+  /** The strategy whose Golden tab hosts this study: where "All studies" leads back to. */
+  readonly strategyKey = input.required<string>();
   readonly step = input<string | undefined>(undefined);
   readonly report = input(false);
   readonly capabilities = input<readonly StrategyCapability[]>([]);
@@ -103,6 +106,7 @@ export class GoldenSearchStudyComponent {
   readonly announcement = signal('');
 
   protected readonly progressText = PROGRESS_TEXT;
+  protected readonly studiesRoute = computed(() => goldenTabRoute(this.strategyKey(), 'studies'));
   /** The study review's stops, fixed when it opens; null when it is closed. */
   protected readonly reviewing = signal<readonly ReviewStop[] | null>(null);
   protected readonly reviewSteps = computed(() => (this.reviewing() ?? []).map((stop) => ({ text: reviewStepText(stop) })));

@@ -74,6 +74,8 @@ export class GridSearchSpecEditorComponent {
   private readonly heldGaps = inject(HeldGapsService);
 
   readonly strategies = input.required<readonly StrategyInfo[]>();
+  /** The strategy is the host's, not the form's to change: it is named, not offered as a choice. */
+  readonly strategyLocked = input(false);
   /** A spec to start from (a stored request); applied once its strategy is in the catalogue. */
   readonly initial = input<GridSearchSpecRequest | null>(null);
   /** Debounce between an edit and its `specChanged`; tests set 0. */

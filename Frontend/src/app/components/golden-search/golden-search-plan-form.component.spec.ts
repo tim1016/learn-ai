@@ -12,6 +12,7 @@ import { REFUSAL_INPUTS, refusalTarget } from './golden-search-plan-problems';
 import { GoldenSearchRefusedError, GoldenSearchService, StudyConflictError, type CommandOutcome } from './golden-search.service';
 import { etMidnightMs } from '../../shared/date/et-midnight';
 import type { CreateStudyRequest, DefaultsLayout, GoldenSearchDefaults, GoldenSearchPreflight, ProtocolRequest, StrategyCapability, StudyCommandRequest, StudyDetail } from './golden-search.types';
+import type { GoldenHandoff } from '../../signal-strategies/golden/golden-handoff';
 import { defaults, emaCapability, frequencyProtocol, INCUMBENT_PARAMS, preflight as preflightFixture, protocol as protocolFixture, STUDY_POOL, studyDetail, unavailableCapability } from './testing/fixtures';
 
 /** The defaults laid out for a four-month final test: the development range ends where the final test starts. */
@@ -48,10 +49,16 @@ function fakeService(): FakeService {
 
 async function renderForm(
   service: FakeService,
-  options: { capabilities?: StrategyCapability[]; reviseFrom?: StudyDetail | null; debounceMs?: number; pool?: Parameters<typeof fakePickerWorld>[0]; providers?: Provider[] } = {},
+  options: { capabilities?: StrategyCapability[]; reviseFrom?: StudyDetail | null; debounceMs?: number; pool?: Parameters<typeof fakePickerWorld>[0]; providers?: Provider[]; pinnedStrategy?: string; handoff?: GoldenHandoff | null } = {},
 ) {
   const view = await render(GoldenSearchPlanFormComponent, {
-    inputs: { capabilities: options.capabilities ?? [emaCapability(), unavailableCapability()], reviseFrom: options.reviseFrom ?? null, preflightDebounceMs: options.debounceMs ?? 0 },
+    inputs: {
+      capabilities: options.capabilities ?? [emaCapability(), unavailableCapability()],
+      reviseFrom: options.reviseFrom ?? null,
+      pinnedStrategy: options.pinnedStrategy ?? 'ema_crossover_signal',
+      handoff: options.handoff ?? null,
+      preflightDebounceMs: options.debounceMs ?? 0,
+    },
     providers: [...fakePickerWorld(options.pool ?? STUDY_POOL).providers, { provide: GoldenSearchService, useValue: service }, ...(options.providers ?? [])],
   });
   const locked = vi.fn();
@@ -147,7 +154,65 @@ function runButton(): HTMLButtonElement {
   return screen.getByRole('button', { name: 'Run research' }) as HTMLButtonElement;
 }
 
+/** What Explore hands a plan: SPY, the fast EMA searched from 4 to 8, and a window it already viewed. */
+function handoff(overrides: Partial<GoldenHandoff> = {}): GoldenHandoff {
+  return {
+    lineage: { source: { kind: 'sweep', searchId: 'grid-1' }, strategyKey: 'ema_crossover_signal', programVersion: 'v2', from: '2025-01-02', to: '2025-06-30' },
+    destination: 'golden',
+    carried: [],
+    unsupported: [],
+    toChoose: [],
+    symbol: 'SPY',
+    edits: [
+      { kind: 'knob-number', name: 'fast_period', field: 'low', raw: '4' },
+      { kind: 'knob-number', name: 'fast_period', field: 'high', raw: '8' },
+    ],
+    viewed: { from: '2025-01-02', to: '2025-06-30', source: 'sweep grid-1' },
+    ...overrides,
+  };
+}
+
 describe('GoldenSearchPlanFormComponent', () => {
+  it('fills the plan from a handoff once the defaults for its symbol are read, and checks it like any edit, locking nothing', async () => {
+    const service = fakeService();
+    const { locked } = await renderForm(service, { handoff: handoff() });
+
+    await waitFor(() => expect((screen.getByLabelText('Fast EMA length low') as HTMLInputElement).value).toBe('4'));
+    expect((screen.getByLabelText('Fast EMA length high') as HTMLInputElement).value).toBe('8');
+    expect(service.defaults).toHaveBeenCalledWith('ema_crossover_signal', 'SPY');
+    await waitFor(() => expect(service.preflight.mock.lastCall?.[0].knobs.find((k) => k.name === 'fast_period')).toMatchObject({ low: 4, high: 8 }));
+    expect(service.createStudy).not.toHaveBeenCalled();
+    expect(locked).not.toHaveBeenCalled();
+  });
+
+  it('puts the handoff on the plan once, then leaves what the owner edits next as theirs', async () => {
+    const service = fakeService();
+    await renderForm(service, { handoff: handoff() });
+    await waitFor(() => expect((screen.getByLabelText('Fast EMA length low') as HTMLInputElement).value).toBe('4'));
+
+    fireEvent.input(screen.getByLabelText('Fast EMA length low'), { target: { value: '6' } });
+
+    await waitFor(() => expect(service.preflight.mock.lastCall?.[0].knobs.find((k) => k.name === 'fast_period')?.low).toBe(6));
+    expect((screen.getByLabelText('Fast EMA length low') as HTMLInputElement).value).toBe('6');
+    expect(service.defaults).toHaveBeenCalledTimes(1);
+  });
+
+  it('puts a handoff that arrives after the defaults on that plan, and not on another symbol’s', async () => {
+    const service = fakeService();
+    const { view } = await renderForm(service);
+    pickSymbol(view.fixture, 'SPY');
+    await waitFor(() => expect(screen.getByRole('table', { name: /knobs, in search order/i })).not.toBeNull());
+    expect((screen.getByLabelText('Fast EMA length low') as HTMLInputElement).value).not.toBe('4');
+
+    view.fixture.componentRef.setInput('handoff', handoff());
+
+    await waitFor(() => expect((screen.getByLabelText('Fast EMA length low') as HTMLInputElement).value).toBe('4'));
+    // Another symbol's defaults are that symbol's own: the handed-over ranges were for SPY.
+    pickSymbol(view.fixture, 'AAPL');
+    await waitFor(() => expect(service.defaults).toHaveBeenLastCalledWith('ema_crossover_signal', 'AAPL'));
+    await waitFor(() => expect((screen.getByLabelText('Fast EMA length low') as HTMLInputElement).value).not.toBe('4'));
+  });
+
   it('shows editable expected trade frequency and locks the selected annual policy with the server preview', async () => {
     const service = fakeService();
     const { policy, exam_min_trades, expected_trades_per_year } = frequencyProtocol();
@@ -174,20 +239,25 @@ describe('GoldenSearchPlanFormComponent', () => {
     expect(service.createStudy.mock.lastCall?.[0].protocol.expected_trades_per_year).toBe(100);
   });
 
-  it('opens the unpicked form with only declared strategies, the reason the others cannot be studied yet, and where the plan sits in the research process', async () => {
+  it('opens the unpicked form on its pinned strategy, with where the plan sits in the research process', async () => {
     await renderForm(fakeService());
 
-    const picker = screen.getByRole('combobox', { name: 'Strategy' }) as HTMLSelectElement;
-    const options = Array.from(picker.options);
-    expect.soft(options.filter((o) => !o.disabled).map((o) => o.value), 'offers only declared strategies').toEqual(['ema_crossover_signal']);
-    const unavailable = options.filter((o) => o.disabled).map((o) => o.textContent ?? '');
-    expect.soft(unavailable, 'lists one strategy that cannot be studied yet').toHaveLength(1);
-    expect.soft(unavailable[0], 'names the strategy that cannot be studied yet').toContain('SMA Crossover');
-    expect.soft(unavailable[0], 'names why it cannot be studied yet').toContain('No Golden Search declaration has shipped');
+    const setup = screen.getByRole('region', { name: 'Strategy, instrument and starting point' });
+    expect.soft(within(setup).queryByRole('combobox', { name: 'Strategy' }), 'offers no other strategy to plan for').toBeNull();
+    expect.soft(within(setup).getByText('EMA Crossover Signal'), 'names the strategy it plans for').not.toBeNull();
 
     const process = screen.getByRole('list', { name: 'Research process' });
     expect.soft(within(process).getAllByRole('listitem').map((item) => item.textContent?.trim()), 'shows the six steps of the research process in order').toEqual(['1 Plan', '2 Research', '3 Compare', '4 Final test', '5 Decision', '6 Deploy']);
     expect.soft(process.querySelector('[aria-current="step"]')?.textContent, 'marks Plan as where the plan sits in the research process').toContain('Plan');
+  });
+
+  it('says why a pinned strategy cannot be planned when its declaration has not shipped, and offers no plan', async () => {
+    const service = fakeService();
+    await renderForm(service, { pinnedStrategy: 'sma_crossover' });
+
+    expect(screen.getByText('No Golden Search declaration has shipped for this strategy yet.')).not.toBeNull();
+    expect(screen.queryByText(/Loading the study defaults/)).toBeNull();
+    expect(service.defaults).not.toHaveBeenCalled();
   });
 
   it('clears obsolete floor errors when a revised plan adopts expected trade frequency', async () => {
@@ -612,7 +682,6 @@ describe('GoldenSearchPlanFormComponent', () => {
 
     await waitFor(() => expect(service.defaults).toHaveBeenCalledWith('ema_crossover_signal', 'SPY'));
     await waitFor(() => expect(service.preflight.mock.lastCall?.[0].incumbent.source).toBe('registry'));
-    expect(screen.getByRole('combobox', { name: 'Strategy' })).not.toBeNull();
     expect(screen.getByRole('button', { name: 'Lock only' })).not.toBeNull();
   });
 

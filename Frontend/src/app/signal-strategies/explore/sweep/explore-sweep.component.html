@@ -1,0 +1,40 @@
+<section class="grid-search" aria-label="Sweep">
+  @if (blocked(); as state) {
+    <app-workspace-state-block [state]="state" (actionTriggered)="onAction($event)" />
+  } @else {
+    <p-tabs [value]="activeTab()" (valueChange)="setTab($event)">
+      <p-tablist>
+        <p-tab value="new"><i class="pi pi-sliders-h" aria-hidden="true"></i> New Search</p-tab>
+        <p-tab value="history"><i class="pi pi-history" aria-hidden="true"></i> History</p-tab>
+      </p-tablist>
+      <p-tabpanels>
+        <p-tabpanel value="new">
+          @if (handoff(); as source) {
+            @if (source.kind === 'loading') {
+              <p class="notice" role="status">Reading the run to start from.</p>
+            } @else if (source.kind === 'refused') {
+              <app-workspace-state-block [state]="source.state" />
+            } @else {
+              <app-explore-handoff-notice [handoff]="source.handoff" />
+            }
+          }
+          <app-grid-search-form [strategies]="strategies()" [strategyLocked]="true" [prefill]="seed()" (launched)="onLaunched($event)" />
+        </p-tabpanel>
+        <p-tabpanel value="history">
+          @if (lookupMessage(); as message) { <p class="notice" role="status">{{ message }}</p> }
+          @let state = searchState();
+          @if (state.kind === 'loading') {
+            <p class="notice" role="status">Reading the search.</p>
+          } @else if (state.kind === 'own') {
+            <app-grid-search-result [searchId]="state.id" [strategies]="strategies()" [walkForwardRoute]="walkForwardRoute()" [goldenRoute]="goldenRoute()" (closed)="closeSearch()" (deleted)="closeSearch()" />
+          } @else {
+            @if (state.kind === 'refused') {
+              <app-workspace-state-block [state]="state.state" />
+            }
+            <app-grid-search-history [strategies]="strategies()" [strategyKey]="key()" (opened)="openResult($event)" />
+          }
+        </p-tabpanel>
+      </p-tabpanels>
+    </p-tabs>
+  }
+</section>

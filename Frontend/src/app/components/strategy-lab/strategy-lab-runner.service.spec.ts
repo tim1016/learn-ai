@@ -1,7 +1,7 @@
 import { HttpErrorResponse, provideHttpClient } from "@angular/common/http";
 import { computed, signal } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
-import { ActivatedRoute, Router, convertToParamMap } from "@angular/router";
+import { ActivatedRoute, convertToParamMap } from "@angular/router";
 import { of } from "rxjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -93,7 +93,6 @@ describe("StrategyLab configuration and runner", () => {
   let refreshActive: ReturnType<typeof vi.fn>;
   let nextTradingDayOpen: ReturnType<typeof vi.fn>;
   let diagnose: ReturnType<typeof vi.fn>;
-  let navigate: ReturnType<typeof vi.fn>;
   let jobsById: ReturnType<typeof signal<Map<string, JobState>>>;
   let resumed: ReturnType<typeof signal<boolean>>;
 
@@ -121,7 +120,6 @@ describe("StrategyLab configuration and runner", () => {
         StrategyLabConfigStore,
         StrategyLabRunner,
         { provide: ActivatedRoute, useValue: { queryParamMap: of(convertToParamMap({})) } },
-        { provide: Router, useValue: { navigate } },
         {
           provide: JobsService,
           useValue: {
@@ -158,7 +156,6 @@ describe("StrategyLab configuration and runner", () => {
     fetchResult = vi.fn();
     listRuns = vi.fn(() => of([]));
     refreshActive = vi.fn(async () => undefined);
-    navigate = vi.fn(async () => true);
     jobsById = signal(new Map<string, JobState>());
     resumed = signal(false);
     diagnose = vi.fn(async () => ({
@@ -691,11 +688,11 @@ describe("StrategyLab configuration and runner", () => {
       expect(runner.running()).toBe(true);
 
       // … so when that second job completes, its study is not the one this
-      // runner navigates to.
+      // runner offers to open.
       putJob(makeJobState({ id: "resumed-2", type: "engine_backtest", status: "completed" }));
       TestBed.tick();
       await Promise.resolve();
-      expect(navigate).not.toHaveBeenCalled();
+      expect(runner.pendingOpenRunId()).toBeNull();
     });
 
     it("says a save that is still finishing is finishing, re-checks history, and opens the study when it lands (#2464)", async () => {
@@ -737,10 +734,7 @@ describe("StrategyLab configuration and runner", () => {
         // interleave with the waits.
         await vi.advanceTimersByTimeAsync(30_000);
         await vi.waitFor(() => {
-          expect(navigate).toHaveBeenCalledWith(
-            expect.anything(),
-            expect.objectContaining({ queryParams: expect.objectContaining({ run: 512 }) }),
-          );
+          expect(runner.pendingOpenRunId()).toBe(512);
         });
         expect(runner.runError()).toBe("");
       } finally {
@@ -809,17 +803,14 @@ describe("StrategyLab configuration and runner", () => {
       putJob(makeJobState({ id: "other-tab", type: "engine_backtest", status: "completed" }));
       TestBed.tick();
       await Promise.resolve();
-      expect(navigate).not.toHaveBeenCalled();
+      expect(runner.pendingOpenRunId()).toBeNull();
 
       fetchResult.mockResolvedValue({ success: true, study_id: 224, total_trades: 2, net_profit: 150 });
       putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "completed" }));
       TestBed.tick();
       await Promise.resolve();
       await Promise.resolve();
-      expect(navigate).toHaveBeenCalledWith(
-        ["/strategy-lab"],
-        expect.objectContaining({ queryParams: { run: 224 } }),
-      );
+      expect(runner.pendingOpenRunId()).toBe(224);
     });
 
     it("opens the study of a remembered job that finished during the reload", async () => {
@@ -841,7 +832,7 @@ describe("StrategyLab configuration and runner", () => {
       await Promise.resolve();
 
       expect(fetchResult).toHaveBeenCalledWith("job-9");
-      expect(navigate).toHaveBeenCalledWith(["/strategy-lab"], expect.objectContaining({ queryParams: { run: 321 } }));
+      expect(runner.pendingOpenRunId()).toBe(321);
       expect(runner.running()).toBe(false);
       expect(sessionStorage.getItem("strategyLab.ownJob")).toBeNull();
     });
@@ -855,7 +846,7 @@ describe("StrategyLab configuration and runner", () => {
       await Promise.resolve();
 
       expect(fetchResult).toHaveBeenCalledWith("job-9");
-      expect(navigate).not.toHaveBeenCalled();
+      expect(runner.pendingOpenRunId()).toBeNull();
       expect(runner.runError()).toBeNull();
       expect(sessionStorage.getItem("strategyLab.ownJob")).toBeNull();
     });
@@ -868,7 +859,7 @@ describe("StrategyLab configuration and runner", () => {
       await Promise.resolve();
       await Promise.resolve();
 
-      expect(navigate).not.toHaveBeenCalled();
+      expect(runner.pendingOpenRunId()).toBeNull();
       expect(runner.runError()).not.toBeNull();
       expect(sessionStorage.getItem("strategyLab.ownJob")).not.toBeNull();
     });
@@ -882,7 +873,7 @@ describe("StrategyLab configuration and runner", () => {
       await Promise.resolve();
 
       expect(fetchResult).toHaveBeenCalledWith("job-old");
-      expect(navigate).toHaveBeenCalledWith(["/strategy-lab"], expect.objectContaining({ queryParams: { run: 808 } }));
+      expect(runner.pendingOpenRunId()).toBe(808);
       expect(sessionStorage.getItem("strategyLab.ownJobId")).toBeNull();
       expect(sessionStorage.getItem("strategyLab.ownJob")).toBeNull();
     });
@@ -933,7 +924,7 @@ describe("StrategyLab configuration and runner", () => {
       expect(JSON.parse(sessionStorage.getItem("strategyLab.ownJob") ?? "{}").id).toBe("job-1");
       expect(runner.runPhase()).toBe(phase);
       expect(runner.runStatusBanner()).toBe(banner);
-      expect(navigate).not.toHaveBeenCalled();
+      expect(runner.pendingOpenRunId()).toBeNull();
     });
 
     it("does not report a superseded remembered result's read failure against the new run", async () => {
@@ -963,7 +954,7 @@ describe("StrategyLab configuration and runner", () => {
       await Promise.resolve();
       await Promise.resolve();
 
-      expect(navigate).not.toHaveBeenCalled();
+      expect(runner.pendingOpenRunId()).toBeNull();
       expect(runner.runError()).toBe("boom");
       expect(sessionStorage.getItem("strategyLab.ownJob")).toBeNull();
     });
@@ -980,7 +971,7 @@ describe("StrategyLab configuration and runner", () => {
       await Promise.resolve();
       await Promise.resolve();
 
-      expect(navigate).toHaveBeenCalledWith(["/strategy-lab"], expect.objectContaining({ queryParams: { run: 555 } }));
+      expect(runner.pendingOpenRunId()).toBe(555);
     });
 
     it("reports a remembered job the registry holds as failed, without probing its result", () => {
@@ -1039,7 +1030,7 @@ describe("StrategyLab configuration and runner", () => {
       await Promise.resolve();
       await Promise.resolve();
       expect(runner.running()).toBe(false);
-      expect(navigate).not.toHaveBeenCalled();
+      expect(runner.pendingOpenRunId()).toBeNull();
     });
 
     it("does not fall back to another tab's job while its own marker is stale", async () => {
@@ -1090,7 +1081,7 @@ describe("StrategyLab configuration and runner", () => {
       expect(reloaded.running()).toBe(true);
     });
 
-    it("navigates to the produced study once an adopted engine_backtest job completes", async () => {
+    it("offers the produced study once an adopted engine_backtest job completes", async () => {
       fetchResult.mockResolvedValue({ success: true, study_id: 224, total_trades: 2, net_profit: 150 });
       putJob(makeJobState({ id: "resumed-3", type: "engine_backtest", status: "running" }));
       TestBed.tick();
@@ -1101,10 +1092,7 @@ describe("StrategyLab configuration and runner", () => {
       await Promise.resolve();
       await Promise.resolve();
 
-      expect(navigate).toHaveBeenCalledWith(
-        ["/strategy-lab"],
-        expect.objectContaining({ queryParams: { run: 224 }, queryParamsHandling: "merge" }),
-      );
+      expect(runner.pendingOpenRunId()).toBe(224);
       expect(runner.running()).toBe(false);
     });
   });

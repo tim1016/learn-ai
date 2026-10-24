@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, ElementRef, inject, input, output, signal, untracked } from '@angular/core';
 
 import { AssetIdentityComponent } from '../../shared/asset-identity/asset-identity.component';
+import type { GoldenHandoff } from '../../signal-strategies/golden/golden-handoff';
 import { extractServerMessage } from '../broker/operation-error';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { SymbolPickerComponent } from '../../shared/symbol-picker/symbol-picker.component';
@@ -48,6 +49,13 @@ class RevisionRunError extends Error {
  * stays in view with the run bound, every problem linked to its field, and Lock.
  * A refusal for sessions the lake lacks carries the backfill that fetches
  * them: the footer runs it and the plan is checked again when it ends.
+ *
+ * A host that places the form inside one strategy's Golden tab pins that strategy
+ * (`pinnedStrategy`), so the form offers no other. A `handoff` from Explore is a
+ * plan to review: once the defaults for its symbol are read, its edits are applied
+ * as the form's own controls would apply them and the plan is preflighted like any
+ * edit. It locks nothing, starts nothing and never picks the final interval; the
+ * window Explore viewed is compared with the final test's dates in the time windows.
  */
 @Component({
   selector: 'app-golden-search-plan-form',
@@ -76,8 +84,12 @@ export class GoldenSearchPlanFormComponent {
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
 
   readonly capabilities = input.required<readonly StrategyCapability[]>();
+  /** The one strategy this form plans for: its host is that strategy's place. */
+  readonly pinnedStrategy = input.required<string>();
   /** A study whose frozen plan this form revises into a new study. */
   readonly reviseFrom = input<StudyDetail | null>(null);
+  /** A plan to review from Explore evidence: its symbol and the edits that fill the plan in. */
+  readonly handoff = input<GoldenHandoff | null>(null);
   /** Debounce between an edit and the server preflight; tests set 0. */
   readonly preflightDebounceMs = input(300);
   /** The id of the study the plan was locked into. */
@@ -101,8 +113,13 @@ export class GoldenSearchPlanFormComponent {
   readonly layingDates = signal(false);
   readonly datesError = signal<string | null>(null);
 
-  protected readonly available = computed(() => this.capabilities().filter((c) => c.available));
-  protected readonly unavailable = computed(() => this.capabilities().filter((c) => !c.available));
+  private readonly pinnedCapability = computed(() => this.capabilities().find((c) => c.strategy_key === this.pinnedStrategy()) ?? null);
+  /** Why the pinned strategy cannot be planned (no declaration, or one that has not shipped), or `null` when it can. */
+  protected readonly unusableReason = computed(() => {
+    const capability = this.pinnedCapability();
+    if (capability === null) return 'This strategy has no Golden Search declaration.';
+    return capability.available ? null : (capability.reason ?? 'This strategy has no Golden Search declaration.');
+  });
   protected readonly capability = computed(() => this.capabilities().find((c) => c.strategy_key === this.strategyKey()) ?? null);
   protected readonly revising = computed(() => this.reviseFrom() !== null);
   /** A revised legacy plan searched its knobs in its own order; the revision ranks them by importance instead. */
@@ -148,6 +165,10 @@ export class GoldenSearchPlanFormComponent {
   private datesGeneration = 0;
   private datesDebounce: ReturnType<typeof setTimeout> | null = null;
   private appliedRevision: StudyDetail | null = null;
+  /** The handoff whose symbol was last put in the picker. */
+  private handoffSymbolFor: GoldenHandoff | null = null;
+  /** The draft the defaults just made has not had a handoff's edits applied yet; any edit after that is the owner's. */
+  private handoffPending = false;
   private readonly keys = new IdempotencyKeys();
 
   constructor() {
@@ -165,8 +186,29 @@ export class GoldenSearchPlanFormComponent {
         });
         return;
       }
-      const available = this.available();
-      if (this.strategyKey() === null && available.length > 0) untracked(() => this.selectStrategy(available[0].strategy_key));
+      if (this.strategyKey() === null && this.unusableReason() === null) {
+        untracked(() => {
+          this.strategyKey.set(this.pinnedStrategy());
+          void this.loadDefaults();
+        });
+      }
+    });
+    // A handoff names a symbol: the picker starts on it once, and the owner may pick another. Its edits then go
+    // onto the defaults read for that symbol, once for each draft those defaults make.
+    effect(() => {
+      const handoff = this.handoff();
+      if (handoff === null) return;
+      untracked(() => {
+        if (this.handoffSymbolFor !== handoff && this.reviseFrom() === null) {
+          this.handoffSymbolFor = handoff;
+          if (this.symbol().toUpperCase() !== handoff.symbol.toUpperCase()) {
+            this.symbol.set(handoff.symbol);
+            void this.loadDefaults();
+            return;
+          }
+        }
+        this.applyHandoff();
+      });
     });
     this.destroyRef.onDestroy(() => {
       this.clearDebounce();
@@ -174,18 +216,9 @@ export class GoldenSearchPlanFormComponent {
     });
   }
 
-  selectStrategy(key: string): void {
-    this.strategyKey.set(key);
-    void this.loadDefaults();
-  }
-
   setSymbol(symbol: string): void {
     this.symbol.set(symbol);
     void this.loadDefaults();
-  }
-
-  onStrategyEvent(event: Event): void {
-    if (event.target instanceof HTMLSelectElement) this.selectStrategy(event.target.value);
   }
 
   onMethod(method: GoldenSearchMethod): void {
@@ -210,6 +243,20 @@ export class GoldenSearchPlanFormComponent {
 
   resetKnobs(): void {
     this.onEdit({ kind: 'knobs-reset' });
+  }
+
+  /**
+   * Puts a handoff's edits onto the draft the defaults just made, through the form's
+   * own edit path, so each is preflighted like any edit. True when it applied them.
+   */
+  private applyHandoff(): boolean {
+    const handoff = this.handoff();
+    if (!this.handoffPending || handoff === null || this.draft() === null || this.reviseFrom() !== null) return false;
+    if (this.symbol().toUpperCase() !== handoff.symbol.toUpperCase()) return false;
+    this.handoffPending = false;
+    for (const edit of handoff.edits) this.onEdit(edit);
+    if (handoff.edits.length === 0) this.scheduleCheck();
+    return true;
   }
 
   /** Fetches the sessions a refusal names as missing, then checks the plan again: the lake it reads has changed. */
@@ -311,7 +358,8 @@ export class GoldenSearchPlanFormComponent {
       this.incumbentLabel.set(incumbentLabel);
       this.incumbentSentence.set(incumbentSentence);
       this.draft.set(draft);
-      this.scheduleCheck();
+      this.handoffPending = true;
+      if (!this.applyHandoff()) this.scheduleCheck();
     } catch (error) {
       if (generation === this.defaultsGeneration) {
         this.defaultsError.set(extractServerMessage(error, 'The study defaults could not be loaded for this strategy and instrument. Check the service and pick again.'));

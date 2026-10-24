@@ -1,0 +1,30 @@
+@let current = state();
+@switch (current.kind) {
+  @case ('reading') {
+    <p class="intent" role="status">
+      Checking golden configuration <code>{{ qualificationId() }}</code>…
+      Choose a ready Paper or Live account below to use the golden configuration.
+    </p>
+  }
+  @case ('ready') {
+    @let offer = current.offer;
+    <section class="intent" role="status" aria-label="Golden configuration">
+      <p class="intent__line">
+        <strong>Golden configuration <code>{{ offer.qualification_id }}</code></strong>:
+        <code>{{ offer.program_key }}</code> on <app-asset-identity [symbol]="offer.symbol" size="sm" />
+      </p>
+      <p class="intent__settings">{{ settings() }}</p>
+      <p>
+        @if (offer.is_default) {
+          It is the current default for {{ offer.symbol }}.
+        } @else {
+          It is not the current default for {{ offer.symbol }}; this exact version is the one carried.
+        }
+        Choose a ready Paper or Live account below to use the golden configuration. Nothing is deployed from this page.
+      </p>
+    </section>
+  }
+  @case ('refused') {
+    <app-workspace-state-block [state]="current.content" (actionTriggered)="onAction($event)" />
+  }
+}

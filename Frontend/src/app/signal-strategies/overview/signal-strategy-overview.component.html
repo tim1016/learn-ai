@@ -1,0 +1,29 @@
+@if (entry(); as strategy) {
+  <app-signal-strategy-section
+    title="What the registry allows"
+    scope="Allowed only means the registry does not rule the action out. It is not proof, approval or a deployment."
+    [read]="always"
+  >
+    <app-signal-strategy-capabilities [capabilities]="strategy.capabilities" />
+  </app-signal-strategy-section>
+
+  <app-signal-strategy-program-proof [proof]="store.proof()" (retry)="store.retry('proof')" />
+
+  <app-signal-strategy-configuration-evidence
+    [entry]="strategy"
+    [reviews]="store.configurationReviews()"
+    (retry)="store.retry('approvals')"
+  />
+
+  <app-signal-strategy-qualified-versions
+    [versions]="store.qualifiedVersions()"
+    [goldenRefusal]="strategy.capabilities.golden.reason"
+    (retry)="store.retry('approvals')"
+  />
+
+  <app-signal-strategy-running-bots
+    [fleet]="store.fleet()"
+    [answer]="store.runningBots()"
+    (retry)="store.retry('fleet')"
+  />
+}

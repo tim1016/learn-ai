@@ -25,9 +25,11 @@ import {
 } from "./golden-validation-review.component";
 
 /**
- * A focused research workbench for an immutable Validation Golden Run.
- * It deliberately keeps computed parity evidence and a human promotion
- * decision in separate panels; a manual override never changes the evidence.
+ * A focused research workbench for an immutable selected baseline run (ADR 0061's
+ * Validation Golden Run). It deliberately keeps computed parity evidence and a
+ * human promotion decision in separate panels; a manual override never changes
+ * the evidence. It lives in a strategy's Golden → Configuration review, the only
+ * place a configuration is reviewed.
  */
 @Component({
   selector: "app-golden-validation-workbench",
@@ -44,9 +46,13 @@ import {
 export class GoldenValidationWorkbenchComponent {
   private readonly golden = inject(GoldenValidationService);
 
-  /** When supplied by Strategy Lab, lets a researcher designate that Python run. */
+  /** The strategy whose baseline runs this lists. Unset, it lists every strategy's. */
+  readonly strategyKey = input<string | null>(null);
+  /** When supplied, lets a researcher select that Python run as the baseline run. */
   readonly sourceRunId = input<number | null>(null);
-  /** Lets a History host refresh its visible Golden badge after a saved decision. */
+  /** The baseline run's review to open first, by its id. */
+  readonly caseId = input<number | null>(null);
+  /** Lets a host refresh what it shows of a baseline run after a saved decision. */
   readonly changed = output<GoldenValidation>();
   private readonly selectedId = signal<number | null>(null);
   private readonly latestResponse = signal<GoldenValidation | null>(null);
@@ -65,7 +71,8 @@ export class GoldenValidationWorkbenchComponent {
   protected readonly error = signal<string | null>(null);
 
   protected readonly catalog = resource({
-    loader: () => firstValueFrom(this.golden.list()),
+    params: () => this.strategyKey(),
+    loader: ({ params }) => firstValueFrom(this.golden.list(params === null ? {} : { strategyName: params })),
   });
 
   /** A catalog exactly as long as one read asked for may be cut short: older cases exist that it does not show. */
@@ -87,7 +94,7 @@ export class GoldenValidationWorkbenchComponent {
     if (sourceRunId !== null) {
       return cases.find((entry) => entry.source_run_id === sourceRunId) ?? null;
     }
-    return cases.find((entry) => entry.id === this.selectedId()) ?? cases[0] ?? null;
+    return cases.find((entry) => entry.id === (this.selectedId() ?? this.caseId())) ?? cases[0] ?? null;
   });
 
   protected readonly canDesignate = computed(() => this.sourceRunId() !== null && this.selected() === null);
@@ -143,7 +150,7 @@ export class GoldenValidationWorkbenchComponent {
     const rationale = this.designationRationale().trim();
     if (sourceRunId === null || this.busy()) return;
     if (rationale.length < 3) {
-      this.error.set("Explain why this is the selected validation baseline.");
+      this.error.set("Explain why this is the selected baseline run.");
       return;
     }
     this.busy.set(true);
@@ -161,10 +168,10 @@ export class GoldenValidationWorkbenchComponent {
       this.designationLabel.set("");
       this.designationRationale.set("");
       this.designationCommandId.set(this.commandId("designate"));
-      this.message.set("Validation Golden Run designated. Review the frozen case and current evidence below.");
+      this.message.set("Selected baseline run recorded. Review the frozen case and current evidence below.");
       this.catalog.reload();
     } catch (caught: unknown) {
-      this.error.set(extractServerMessage(caught, "This run could not be designated."));
+      this.error.set(extractServerMessage(caught, "This run could not be selected as the baseline run."));
     } finally {
       this.busy.set(false);
     }

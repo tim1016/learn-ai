@@ -43,16 +43,16 @@
                 type="button"
                 class="badge badge--golden golden-action"
                 (click)="requestGolden(row, $event)"
-                [attr.aria-label]="'Review Validation Golden Run for run ' + row.id">
-                Golden · {{ goldenLabel(row) }}
+                [attr.aria-label]="'Review the selected baseline run for run ' + row.id">
+                Baseline run · {{ goldenLabel(row) }}
               </button>
             } @else if (row.source === 'engine' && goldenCatalogReadable()) {
               <button
                 type="button"
                 class="golden-action"
                 (click)="requestGolden(row, $event)"
-                [attr.aria-label]="'Designate run ' + row.id + ' as a Validation Golden Run'">
-                Mark golden
+                [attr.aria-label]="'Select run ' + row.id + ' as the baseline run'">
+                Select baseline run
               </button>
             }
           </td>

@@ -115,11 +115,11 @@ describe("GoldenValidationWorkbenchComponent", () => {
     });
     const user = userEvent.setup();
 
-    await user.click(await screen.findByRole("button", { name: "Designate golden run" }));
-    expect(screen.getByText(/Explain why this is the selected validation baseline/i)).toBeTruthy();
+    await user.click(await screen.findByRole("button", { name: "Select as baseline run" }));
+    expect(screen.getByText(/Explain why this is the selected baseline run/i)).toBeTruthy();
 
     await user.type(screen.getByRole("textbox", { name: /Why is this/i }), "Selected after parameter exploration.");
-    await user.click(screen.getByRole("button", { name: "Designate golden run" }));
+    await user.click(screen.getByRole("button", { name: "Select as baseline run" }));
 
     await waitFor(() => expect(service.designate).toHaveBeenCalled());
     expect(service.designate).toHaveBeenCalledWith(expect.objectContaining({ source_run_id: 44 }));
@@ -291,7 +291,7 @@ describe("GoldenValidationWorkbenchComponent", () => {
     });
     const user = userEvent.setup();
     expect(await screen.findByText(affected.evidence_applicability?.explanation ?? "Missing evidence disposition")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Open saved configuration to rerun" }).getAttribute("href")).toBe("/strategy-lab?run=44");
+    expect(screen.getByRole("link", { name: "Open saved configuration to rerun" }).getAttribute("href")).toBe("/signal-strategies/ema_crossover/explore/backtest?run=44");
     await user.type(screen.getByRole("textbox", { name: "Review note" }), "I accept the recorded limitation.");
     await user.click(screen.getByRole("button", { name: "Save review" }));
     expect(service.review).not.toHaveBeenCalled();
@@ -322,7 +322,7 @@ describe("GoldenValidationWorkbenchComponent", () => {
     const user = userEvent.setup();
 
     await user.type(await screen.findByRole("textbox", { name: /Why is this/i }), "Selected after parameter exploration.");
-    await user.click(screen.getByRole("button", { name: "Designate golden run" }));
+    await user.click(screen.getByRole("button", { name: "Select as baseline run" }));
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toBe("Run 44 already has a designation under another command.");
@@ -337,10 +337,10 @@ describe("GoldenValidationWorkbenchComponent", () => {
     const user = userEvent.setup();
 
     await user.type(await screen.findByRole("textbox", { name: /Why is this/i }), "Selected after parameter exploration.");
-    await user.click(screen.getByRole("button", { name: "Designate golden run" }));
+    await user.click(screen.getByRole("button", { name: "Select as baseline run" }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("could not be designated");
+    expect(alert.textContent).toContain("could not be selected as the baseline run");
     expect(alert.textContent).not.toContain("Only completed Python baselines");
   });
 
@@ -369,7 +369,7 @@ describe("GoldenValidationWorkbenchComponent", () => {
       providers: [provideZonelessChangeDetection(), { provide: GoldenValidationService, useValue: service }],
     });
 
-    expect(await screen.findByText(/newest 100 Validation Golden Runs/i)).toBeTruthy();
+    expect(await screen.findByText(/newest 100 selected baseline runs/i)).toBeTruthy();
   });
 
   it("stays quiet about a cap when the catalog is shorter than one page", async () => {
@@ -390,7 +390,7 @@ describe("GoldenValidationWorkbenchComponent", () => {
       providers: [provideZonelessChangeDetection(), { provide: GoldenValidationService, useValue: service }],
     });
 
-    const catalog = await screen.findByRole("navigation", { name: "Validation Golden Run catalog" });
+    const catalog = await screen.findByRole("navigation", { name: "Selected baseline run catalog" });
     const buttons = within(catalog).getAllByRole("button");
     expect(buttons[0]?.textContent).toContain("Accepted Reviewed Deviations · review no longer applies");
     expect(buttons[1]?.textContent).toContain("Accepted Reviewed Deviations");
@@ -417,7 +417,7 @@ describe("GoldenValidationWorkbenchComponent", () => {
       providers: [provideZonelessChangeDetection(), { provide: GoldenValidationService, useValue: service }],
     });
     const user = userEvent.setup();
-    const catalog = await screen.findByRole("navigation", { name: "Validation Golden Run catalog" });
+    const catalog = await screen.findByRole("navigation", { name: "Selected baseline run catalog" });
 
     expect(screen.getByText("No paired verdict")).toBeTruthy();
     expect(screen.queryByText("Trade deviations")).toBeNull();

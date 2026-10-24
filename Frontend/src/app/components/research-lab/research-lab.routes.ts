@@ -120,13 +120,11 @@ export const researchLabRoutes: Routes = [
           ),
         data: { title: 'Backtest Runs' },
       },
+      // The multi-strategy comparison moved under the Signal strategies list.
       {
         path: 'backtests/recency-chart',
-        loadComponent: () =>
-          import(
-            './recency-chart/recency-chart-page.component'
-          ).then((m) => m.RecencyChartPageComponent),
-        data: { title: 'Recency Chart' },
+        redirectTo: redirectKeepingState(['/signal-strategies', 'recency']),
+        pathMatch: 'full',
       },
 
       // Data divergence and Strategy pre-flight moved to Operations → Data checks.

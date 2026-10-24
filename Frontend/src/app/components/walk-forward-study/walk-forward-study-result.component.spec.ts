@@ -80,11 +80,11 @@ function foldCurves(overrides: Partial<WalkForwardFoldCurves> = {}): WalkForward
   return { sessions_ms: SESSIONS_MS.slice(0, 2), curves: [foldCurve(0, 0, 0.02)], not_recorded: [], ...overrides };
 }
 
-async function renderResult(row: WalkForwardStudyDetail, overrides: Partial<WalkForwardStudyService> = {}) {
+async function renderResult(row: WalkForwardStudyDetail, overrides: Partial<WalkForwardStudyService> = {}, extraInputs: { goldenRoute?: readonly string[] } = {}) {
   const gridGet = vi.fn(async (id: string) => gridSearchDetail({ id, owner: { kind: 'walk_forward', owner_id: 'study-1', fold_index: 0, phase: 'test' }, leader_params: { short_window: 5 }, resume_refusal: null }));
   const charts = fakeCharts();
   const view = await render(WalkForwardStudyResultComponent, {
-    inputs: { studyId: row.id, pollMs: 0 },
+    inputs: { studyId: row.id, pollMs: 0, ...extraInputs },
     providers: [
       provideRouter([]),
       ...charts.providers,
@@ -114,6 +114,20 @@ describe('WalkForwardStudyResultComponent', () => {
     expect(screen.getAllByText('67%').length).toBe(2); // the verdict's median and fold 1's own retention
     expect(screen.getByText(/no candidate was eligible/)).not.toBeNull();
     expect(screen.getByText(/out of sample/)).not.toBeNull();
+  });
+
+  it("leads on to a golden search plan with this study's id when its host offers Golden", async () => {
+    await renderResult(detail(), {}, { goldenRoute: ['/signal-strategies', 'sma_crossover', 'golden', 'studies'] });
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'could not be judged' })).not.toBeNull());
+    expect(screen.getByRole('link', { name: /Plan a golden search from this study/ }).getAttribute('href')).toBe('/signal-strategies/sma_crossover/golden/studies?walkForward=study-1');
+  });
+
+  it('offers no golden search plan when its host names no Golden', async () => {
+    await renderResult(detail());
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'could not be judged' })).not.toBeNull());
+    expect(screen.queryByRole('link', { name: /Plan a golden search/ })).toBeNull();
   });
 
   it.each(['signal_bar_close', 'next_bar_open'] as const)("names the fill rule the study ran under (%s), not today's default (#2599)", async (ranUnder) => {

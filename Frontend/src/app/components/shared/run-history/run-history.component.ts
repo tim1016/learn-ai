@@ -29,12 +29,12 @@ const ENGINE_LABELS: Record<EngineSourceLiteral, string> = {
 export class RunHistoryComponent {
   readonly rows = input.required<RunHistoryRow[]>();
   readonly runSelected = output<string>();
-  /** Requests designation of a completed Python run as a Validation Golden Run. */
+  /** Requests that a completed Python run be selected as the baseline run (ADR 0061's Validation Golden Run). */
   readonly goldenRequested = output<string>();
   /**
    * True only once the host has read the Golden catalog. Before that, or when
    * the read failed, a run with no badge is unknown, not undesignated, so
-   * "Mark golden" is not offered for it.
+   * "Select baseline run" is not offered for it.
    */
   readonly goldenCatalogReadable = input(false);
   /** PR B.3 (2026-05-19) — emitted when the user saves a notes edit on a row.

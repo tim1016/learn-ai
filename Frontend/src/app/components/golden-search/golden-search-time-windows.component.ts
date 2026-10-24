@@ -6,6 +6,7 @@ import { etIsoDate } from '../../shared/date/et-midnight';
 import { DateRangePickerComponent, type DataGaps, type DateBounds, type QuickRangeKey } from '../../shared/date-picker';
 import { DEFAULT_ADJUSTMENT_MODE, HeldGapsService, TickerCatalogService, heldBoundsFor } from '../../shared/ticker-catalog';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
+import { windowsOverlap, type ViewedWindow } from '../../signal-strategies/golden/golden-handoff';
 import { EXPOSURE_CLAIMS, EXPOSURE_LABELS } from './golden-search-display';
 import { numberProblemKey, type PlanEdit, type ProtocolNumberField, type StudyRange } from './golden-search-plan-draft';
 import { RANGE_INPUT_ID, numberInputId, type PlanProblem, type RangeOffer } from './golden-search-plan-problems';
@@ -64,6 +65,8 @@ export class GoldenSearchTimeWindowsComponent {
   readonly problems = input<ReadonlyMap<string, string>>(new Map());
   /** The server's refusals of the plan; the ones that name a date are shown under the range. */
   readonly refusals = input<readonly PlanProblem[]>([]);
+  /** A window Explore already looked at, when the plan was opened from Explore evidence; null otherwise. */
+  readonly viewed = input<ViewedWindow | null>(null);
   readonly edit = output<PlanEdit>();
 
   protected readonly numberId = numberInputId;
@@ -135,6 +138,19 @@ export class GoldenSearchTimeWindowsComponent {
    * then describe the plan before.
    */
   protected readonly current = computed(() => this.rangeLaidOut() && this.layoutProblem() === null);
+
+  /**
+   * The explored window, when it shares a day with the plan's final test. The
+   * recorded-research ledger may still answer "not opened", but dates Explore
+   * already viewed are not an untouched look, so the plan says so and never offers
+   * them as unexposed.
+   */
+  protected readonly viewedFinal = computed(() => {
+    const viewed = this.viewed();
+    if (viewed === null || !this.current()) return null;
+    const p = this.protocol();
+    return windowsOverlap(viewed, etIsoDate(p.final_start_ms), etIsoDate(p.final_end_ms - 1)) ? viewed : null;
+  });
 
   /** Where the final test starts along the bar, and each fold's test window within development; null when the dates are out of order. */
   protected readonly timeline = computed<{ readonly finalAt: number; readonly folds: readonly Span[] } | null>(() => {

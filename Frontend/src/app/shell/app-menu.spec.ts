@@ -136,11 +136,20 @@ describe('app menu projections', () => {
     ['/research-lab/strategy-runs/run-42', 'Research', 'Research Lab'],
     ['/edge/regimes', 'Research', 'Regimes'],
     ['/golden-search/study-9', 'Signal strategies', 'Golden Search'],
+    // The old Strategy Lab address of a saved run is not listed; it ends under its own entry.
+    ['/engine/runs/204', 'Signal strategies', 'Strategy Lab'],
+    // A strategy's place, and what it hosts, light the list's entry.
+    ['/signal-strategies/ema_crossover_signal/overview', 'Signal strategies', 'Signal strategies'],
+    ['/signal-strategies/ema_crossover_signal/define', 'Signal strategies', 'Signal strategies'],
+    ['/signal-strategies/ema_crossover_signal/explore/sweep', 'Signal strategies', 'Signal strategies'],
+    ['/signal-strategies/ema_crossover_signal/golden/studies/study-9', 'Signal strategies', 'Signal strategies'],
+    ['/signal-strategies/ema_crossover_signal/golden/configuration', 'Signal strategies', 'Signal strategies'],
+    ['/signal-strategies/ema_crossover_signal/proof', 'Signal strategies', 'Signal strategies'],
+    ['/signal-strategies/evidence/run/91', 'Signal strategies', 'Signal strategies'],
     ['/options-golden-search/study-9', 'Options setups', 'Options Golden Search'],
     // Pages the menu does not list, though another place's shell still hosts them:
-    // instrument headlines are Markets', the multi-strategy comparison Signal strategies'.
+    // instrument headlines are Markets'.
     ['/research-lab/market/news', 'Markets', 'Ticker News'],
-    ['/research-lab/backtests/recency-chart', 'Signal strategies', 'Recency Chart'],
     // The analytical builder is an Options Lab tab, filed under Options setups (R32).
     ['/options-lab/strategy-builder', 'Options setups', 'Strategy Builder'],
     ['/options-evidence/run/run-7', 'Options setups', 'Options evidence'],

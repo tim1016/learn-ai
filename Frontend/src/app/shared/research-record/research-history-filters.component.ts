@@ -18,12 +18,14 @@ export interface ResearchHistoryFilters {
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="filters">
-      <label><span>Strategy</span>
-        <select (change)="onEvent('strategy_key', $event)" aria-label="Filter by strategy">
-          <option value="">All</option>
-          @for (strategy of filterableStrategies(); track strategy.name) { <option [value]="strategy.name">{{ strategy.display_name }}</option> }
-        </select>
-      </label>
+      @if (!strategyFixed()) {
+        <label><span>Strategy</span>
+          <select (change)="onEvent('strategy_key', $event)" aria-label="Filter by strategy">
+            <option value="">All</option>
+            @for (strategy of filterableStrategies(); track strategy.name) { <option [value]="strategy.name">{{ strategy.display_name }}</option> }
+          </select>
+        </label>
+      }
       <label><span>Symbol</span><input #symbolFilter pInputText type="text" placeholder="Any" (input)="set('symbol', symbolFilter.value)" /></label>
       <label><span>Status</span>
         <select (change)="onEvent('status', $event)" aria-label="Filter by status">
@@ -43,6 +45,8 @@ export interface ResearchHistoryFilters {
 export class ResearchHistoryFiltersComponent {
   readonly strategies = input<readonly StrategyInfo[]>([]);
   readonly statuses = input.required<readonly string[]>();
+  /** The history is one strategy's, so there is no strategy to filter by. */
+  readonly strategyFixed = input(false);
   readonly filterChange = output<ResearchHistoryFilters>();
   readonly refresh = output();
 

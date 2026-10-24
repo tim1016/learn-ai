@@ -31,7 +31,7 @@ function fakeService(study: StudyDetail): FakeService {
 
 async function renderStudy(service: FakeService) {
   const view = await render(GoldenSearchStudyComponent, {
-    inputs: { studyId: 'study-0001-aaaa', capabilities: [emaCapability()], pollMs: 0 },
+    inputs: { studyId: 'study-0001-aaaa', strategyKey: 'ema_crossover_signal', capabilities: [emaCapability()], pollMs: 0 },
     providers: [provideRouter([]), { provide: GoldenSearchService, useValue: service }],
   });
   await screen.findByRole('navigation', { name: 'Research steps' });
@@ -52,7 +52,7 @@ describe('GoldenSearchStudyComponent', () => {
   it('opens a linked step once and keeps a subsequent user selection on refresh', async () => {
     const service = fakeService(studyDetail('locked'));
     const view = await render(GoldenSearchStudyComponent, {
-      inputs: { studyId: 'study-0001-aaaa', step: 'plan', capabilities: [emaCapability()], pollMs: 0 },
+      inputs: { studyId: 'study-0001-aaaa', strategyKey: 'ema_crossover_signal', step: 'plan', capabilities: [emaCapability()], pollMs: 0 },
       providers: [provideRouter([]), { provide: GoldenSearchService, useValue: service }],
     });
     await waitFor(() => expect(currentStep()).toMatch(/^1Plan/));
@@ -164,6 +164,9 @@ describe('GoldenSearchStudyComponent', () => {
     expect(screen.getByRole('alert').textContent).toContain(QUALIFICATION_FAILURE);
     expect(screen.getByRole('heading', { name: 'Qualification failed · current default unchanged' })).not.toBeNull();
     expect(screen.getByRole('button', { name: 'Retry qualification' })).not.toBeNull();
+    // A technical proof failure has no override: nothing approves the fit, and nothing offers Deploy.
+    expect(screen.queryByRole('button', { name: /as golden/i })).toBeNull();
+    expect(screen.queryByRole('link', { name: /use in deploy/i })).toBeNull();
   });
 
   it('awaiting validation: the Search step shows the procedure and the next action is Test over time', async () => {
@@ -279,7 +282,7 @@ describe('GoldenSearchStudyComponent', () => {
       .mockRejectedValueOnce(new Error('network down'))
       .mockImplementationOnce(() => new Promise<StudyDetail>((resolve) => (answerRetry = resolve)));
     await render(GoldenSearchStudyComponent, {
-      inputs: { studyId: 'study-0001-aaaa', capabilities: [emaCapability()], pollMs: 5 },
+      inputs: { studyId: 'study-0001-aaaa', strategyKey: 'ema_crossover_signal', capabilities: [emaCapability()], pollMs: 5 },
       providers: [provideRouter([]), { provide: GoldenSearchService, useValue: service }],
     });
 
@@ -295,7 +298,7 @@ describe('GoldenSearchStudyComponent', () => {
     const service = fakeService(studyDetail('locked'));
     service.get.mockRejectedValueOnce(new HttpErrorResponse({ status: 404, error: { detail: { code: 'NOT_FOUND', message: 'No Golden Search study study-0001-aaaa exists.' } } }));
     const view = await render(GoldenSearchStudyComponent, {
-      inputs: { studyId: 'study-0001-aaaa', capabilities: [emaCapability()], pollMs: 0 },
+      inputs: { studyId: 'study-0001-aaaa', strategyKey: 'ema_crossover_signal', capabilities: [emaCapability()], pollMs: 0 },
       providers: [provideRouter([]), { provide: GoldenSearchService, useValue: service }],
     });
     expect((await screen.findByRole('alert')).textContent).toContain('No Golden Search study study-0001-aaaa exists.');
@@ -362,7 +365,7 @@ describe('GoldenSearchStudyComponent', () => {
     const table = await screen.findByRole('table', { name: /knobs, in search order/i });
     expect(within(table).queryAllByRole('spinbutton')).toHaveLength(0);
     const revise = screen.getByRole('link', { name: /revise \(new study\)/i });
-    expect(revise.getAttribute('href')).toBe('/golden-search?revise=study-0001-aaaa');
+    expect(revise.getAttribute('href')).toBe('/signal-strategies/ema_crossover_signal/golden/studies?revise=study-0001-aaaa');
   });
 
   it('Plan step: a frequency plan shows the floors its receipt froze for each window, and no fixed floors', async () => {

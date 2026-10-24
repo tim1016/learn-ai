@@ -8,16 +8,23 @@ import {
   type Route,
   type Routes,
 } from '@angular/router';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, of } from 'rxjs';
 import { filter } from 'rxjs/operators';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { appConfig } from './app.config';
 import { routes } from './app.routes';
+import { GridSearchService } from './components/grid-search/grid-search.service';
+import { GoldenSearchService } from './components/golden-search/golden-search.service';
+import { studyDetail } from './components/golden-search/testing/fixtures';
 import { TEST_ACCOUNT_ID, TEST_CLERK_ID, provideFleetDirectory } from './fleet/fleet-directory-testing';
+import { BacktestRunsService } from './services/backtest-runs.service';
 import { activeMenuNodeFor, APP_MENU } from './shell/app-menu';
 import { routeTreeHasData } from './shell/current-url.service';
 import { HELP_DOCUMENTS } from './shared/help/help-documents';
+import { savedRun, savedSearch } from './signal-strategies/explore/testing/explore-fixtures';
+import { SignalStrategyRegistryService } from './signal-strategies/signal-strategy-registry.service';
+import { registryEntry } from './signal-strategies/testing/fixtures';
 
 /**
  * T01 (PRD #3490): every route the app declares, direct-loaded with a query
@@ -39,6 +46,12 @@ interface Row {
   readonly lands?: string;
   /** The route ends in the not-found page. */
   readonly notFound?: true;
+  /**
+   * The route reads a stored record to name its owner, so it ends in one redirect
+   * that the router makes after the read: the first navigation is replaced
+   * by the final one, which is the only one that ends.
+   */
+  readonly resolvesOwner?: true;
 }
 
 const MARKETS = 'Markets';
@@ -52,6 +65,10 @@ const ACCOUNT_LIST = '/brokers/alpaca';
 const LANE = '/brokers/alpaca/clerks/clrk_spec';
 const WORKSPACE = `${LANE}/accounts/PA9`;
 const DOCUMENT: Row = { group: null };
+const OWNER = 'ema_crossover_signal';
+const BACKTEST_OF_RUN_7 = `/signal-strategies/${OWNER}/explore/backtest?run=7`;
+const RESOLVED_RUN: Row = { group: SIGNAL, lands: BACKTEST_OF_RUN_7, resolvesOwner: true };
+const RESOLVED_STUDY: Row = { group: SIGNAL, lands: `/signal-strategies/${OWNER}/golden/studies/7`, resolvesOwner: true };
 const RETIRED_BROKER_ALIAS: Row = { group: ACCOUNTS, lands: ACCOUNT_LIST };
 
 const ROWS: Readonly<Record<string, Row>> = {
@@ -104,18 +121,39 @@ const ROWS: Readonly<Record<string, Row>> = {
   'spec-strategy': { group: RESEARCH },
 
   // ── Signal strategies ────────────────────────────────────────────────────
+  // These addresses name no strategy, so they open a chooser at the address they were opened at.
   'strategy-lab': { group: SIGNAL },
-  'strategy-lab/runs/:id': { group: SIGNAL, lands: '/strategy-lab?run=7' },
-  'engine/runs/:id': { group: SIGNAL, lands: '/strategy-lab?run=7' },
+  'strategy-lab/runs/:id': RESOLVED_RUN,
+  'engine/runs/:id': RESOLVED_RUN,
   engine: { group: SIGNAL, lands: '/strategy-lab' },
   'lean-engine': { group: SIGNAL, lands: '/strategy-lab' },
   'lean-lab': { group: SIGNAL, lands: '/strategy-lab' },
   'grid-search': { group: SIGNAL },
   'walk-forward': { group: SIGNAL },
   'golden-search': { group: SIGNAL },
-  'golden-search/:studyId': { group: SIGNAL },
+  'golden-search/:studyId': RESOLVED_STUDY,
   'strategy-validation': { group: SIGNAL },
-  'research-lab/backtests/recency-chart': { group: SIGNAL },
+  'research-lab/backtests/recency-chart': { group: SIGNAL, lands: '/signal-strategies/recency' },
+  'signal-strategies': { group: SIGNAL },
+  'signal-strategies/recency': { group: SIGNAL },
+  // A strategy's address always carries its tab: a bare key names nothing.
+  'signal-strategies/:key': { group: null, notFound: true },
+  'signal-strategies/:key/overview': { group: SIGNAL },
+  'signal-strategies/:key/define': { group: SIGNAL },
+  'signal-strategies/:key/explore': { group: SIGNAL, lands: '/signal-strategies/7/explore/backtest' },
+  'signal-strategies/:key/explore/backtest': { group: SIGNAL },
+  'signal-strategies/:key/explore/sweep': { group: SIGNAL },
+  'signal-strategies/:key/explore/walk-forward': { group: SIGNAL },
+  'signal-strategies/:key/golden': { group: SIGNAL, lands: '/signal-strategies/7/golden/studies' },
+  'signal-strategies/:key/golden/studies': { group: SIGNAL },
+  'signal-strategies/:key/golden/studies/:studyId': { group: SIGNAL },
+  'signal-strategies/:key/golden/versions': { group: SIGNAL },
+  'signal-strategies/:key/golden/configuration': { group: SIGNAL },
+  'signal-strategies/:key/proof': { group: SIGNAL },
+  // Evidence whose owner is not in its address resolves it from the record.
+  'signal-strategies/evidence/run/:id': RESOLVED_RUN,
+  'signal-strategies/evidence/search/:id': { group: SIGNAL, lands: `/signal-strategies/${OWNER}/explore/sweep?search=7`, resolvesOwner: true },
+  'signal-strategies/evidence/study/:id': RESOLVED_STUDY,
 
   // ── Options setups ───────────────────────────────────────────────────────
   'options-backtest': { group: OPTIONS },
@@ -281,7 +319,15 @@ describe('the route inventory (T01)', () => {
     function configure() {
       TestBed.resetTestingModule();
       TestBed.configureTestingModule({
-        providers: [...appConfig.providers, { provide: fleet.provide, useValue: fleet.useValue }],
+        providers: [
+          ...appConfig.providers,
+          { provide: fleet.provide, useValue: fleet.useValue },
+          // The records the owner-resolving routes read: a run, a search and a study of one registered strategy.
+          { provide: BacktestRunsService, useValue: { get: (id: number) => of(savedRun({ id, strategyName: OWNER })) } },
+          { provide: GridSearchService, useValue: { get: async (id: string) => savedSearch({ id, strategy_key: OWNER }) } },
+          { provide: GoldenSearchService, useValue: { get: async (id: string) => studyDetail('awaiting_validation', { id, strategy_key: OWNER }) } },
+          { provide: SignalStrategyRegistryService, useValue: { entries: async () => [registryEntry({ strategy_key: OWNER })] } },
+        ],
       });
       return TestBed.inject(Router);
     }
@@ -319,7 +365,8 @@ describe('the route inventory (T01)', () => {
 
         expect.soft(failed, 'no router error, loop or unmatched address').toEqual([]);
         expect.soft(ended, 'ends one navigation').toHaveLength(1);
-        expect.soft(cancelled, 'is not redirected a second time by a guard').toEqual([]);
+        // A route that reads a record to name its owner replaces its navigation once, with the final one.
+        expect.soft(cancelled, 'is redirected only by its own resolver, straight to the final address').toHaveLength(row.resolvesOwner === true ? 1 : 0);
 
         const landed = router.parseUrl(router.url);
         if (path === '') {
@@ -467,7 +514,7 @@ describe('the route inventory (T01)', () => {
     it('keeps everything else a persisted-run bookmark carried, and lets the path decide the run', async () => {
       const { router } = await load('/strategy-lab/runs/204?tab=history&run=9#trades');
 
-      expect(router.url).toBe('/strategy-lab?tab=history&run=204#trades');
+      expect(router.url).toBe(`/signal-strategies/${OWNER}/explore/backtest?tab=history&run=204#trades`);
     });
 
     it('keeps a review request on the non-Alpaca Configuration alias', async () => {

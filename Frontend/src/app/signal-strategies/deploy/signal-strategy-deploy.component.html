@@ -1,0 +1,73 @@
+<section class="deploy" aria-labelledby="deploy-a-bot-title">
+  <div class="deploy__head">
+    <h2 id="deploy-a-bot-title" class="deploy__title">Deploy a bot</h2>
+    <button type="button" (click)="closed.emit()">Close</button>
+  </div>
+  <p class="note">
+    Choose what to take to Deploy. You choose the account next, and nothing is started from here:
+    Deploy checks the version, the account and its gates again before anything is sent.
+  </p>
+
+  <div class="deploy__part">
+    <h3 class="deploy__heading">A qualified version</h3>
+    <p class="note">
+      Each version covers one symbol and one exact configuration. Choosing one takes exactly that version, and the
+      current default is only what is marked as such.
+    </p>
+    @if (gate(); as state) {
+      <app-workspace-state-block [state]="state" (actionTriggered)="retry()" />
+    } @else if (store.qualifiedVersions(); as read) {
+      @if (read.kind === 'ready') {
+        @for (group of read.value.bySymbol; track group.symbol) {
+          <div class="group">
+            <h4 class="group__heading">
+              <app-asset-identity [symbol]="group.symbol" size="sm" />
+              <span class="group__summary">
+                @for (count of group.statusCounts; track count.status; let last = $last) {
+                  {{ count.count }} {{ count.status | receiptLabel | lowercase }}@if (!last) { · }
+                }
+              </span>
+            </h4>
+            <ul class="versions">
+              @for (version of group.versions; track version.id) {
+                <li class="version">
+                  <div class="version__what">
+                    <span class="mono">{{ version.id }}</span>
+                    <app-signal-strategy-chip [tone]="tones[version.status]">{{ version.status | receiptLabel }}</app-signal-strategy-chip>
+                    @if (version.is_default) { <app-signal-strategy-chip tone="ready">current default for {{ group.symbol }}</app-signal-strategy-chip> }
+                    <div class="mono muted">{{ parameters(version) }}</div>
+                  </div>
+                  <div class="version__use">
+                    @if (version.status === 'ready') {
+                      <a
+                        [routerLink]="accountListRoute"
+                        [queryParams]="versionQuery(version)"
+                        [attr.aria-label]="(version.is_default ? 'Use the current default ' : 'Deploy version ') + version.id + ' for ' + group.symbol"
+                      >{{ version.is_default ? 'Use the current default' : 'Deploy this version' }}</a>
+                    } @else {
+                      <span class="muted">Not offered: {{ version.status_explanation }}</span>
+                    }
+                  </div>
+                </li>
+              }
+            </ul>
+          </div>
+        } @empty {
+          <p class="note">{{ goldenRefusal() ?? 'No symbol has a qualified version of this strategy yet.' }}</p>
+        }
+        @if (read.value.mayBeCut) {
+          <p class="note">The read returns at most {{ listLimit }} versions, so some may not be listed here.</p>
+        }
+      }
+    }
+  </div>
+
+  <div class="deploy__part">
+    <h3 class="deploy__heading">The strategy, without a saved version</h3>
+    <p class="note">
+      Deploy opens on this strategy at the symbol and settings it registers, and applies no saved version. Its own
+      checks decide what the account may run.
+    </p>
+    <a [routerLink]="accountListRoute" [queryParams]="strategyOnlyQuery()">Choose an account for {{ store.key() }} without a saved version</a>
+  </div>
+</section>

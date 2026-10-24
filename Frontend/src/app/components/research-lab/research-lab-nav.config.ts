@@ -50,7 +50,6 @@ export const RESEARCH_LAB_NAV: readonly NavGroup[] = [
         help: { route: '/docs/indicator-reliability-methodology', anchor: '1-context-and-scope' },
       },
       { path: 'backtests/strategy-runs', label: 'Strategy Runs' },
-      { path: 'backtests/recency-chart', label: 'Recency Chart' },
     ],
   },
 ];

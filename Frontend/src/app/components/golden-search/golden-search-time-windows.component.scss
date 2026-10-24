@@ -11,5 +11,5 @@
 .range__offers { display: flex; flex-wrap: wrap; gap: var(--space-1); }
 .exposure { display: flex; gap: var(--space-2); align-items: baseline; font-size: var(--fs-sm); border-radius: var(--radius); padding: var(--space-2) var(--space-3); background: var(--bg-elevated); }
 .exposure[data-state='not_opened'] i { color: var(--bull); }
-.exposure[data-state='previously_used'], .exposure[data-state='history_unknown'] { background: var(--warn-soft); }
-.exposure[data-state='previously_used'] i, .exposure[data-state='history_unknown'] i { color: var(--warn); }
+.exposure[data-state='previously_used'], .exposure[data-state='history_unknown'], .exposure[data-state='viewed'] { background: var(--warn-soft); }
+.exposure[data-state='previously_used'] i, .exposure[data-state='history_unknown'] i, .exposure[data-state='viewed'] i { color: var(--warn); }

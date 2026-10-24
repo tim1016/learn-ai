@@ -1,0 +1,50 @@
+<app-signal-strategy-section
+  title="Qualified versions"
+  scope="Versions Golden Search approved, each for one symbol and one exact configuration. Only a ready version is current."
+  [read]="versions()"
+  (retry)="retry.emit()"
+>
+  @if (versions(); as state) {
+    @if (state.kind === 'ready') {
+      @for (group of state.value.bySymbol; track group.symbol) {
+        <div class="group">
+          <h3 class="group__heading">
+            <app-asset-identity [symbol]="group.symbol" size="sm" />
+            <span class="group__summary">
+              @for (count of group.statusCounts; track count.status; let last = $last) {
+                {{ count.count }} {{ count.status | receiptLabel | lowercase }}@if (!last) { · }
+              }
+            </span>
+          </h3>
+          <table class="rows">
+            <thead>
+              <tr><th>Version</th><th>Status</th><th>Program</th><th>Approved</th></tr>
+            </thead>
+            <tbody>
+              @for (version of group.versions; track version.id) {
+                <tr>
+                  <td class="mono">{{ version.id }}@if (version.is_default) { <app-signal-strategy-chip>default for {{ group.symbol }}</app-signal-strategy-chip> }</td>
+                  <td>
+                    <div class="status-cell">
+                      <app-signal-strategy-chip [tone]="tones[version.status]">{{ version.status | receiptLabel }}</app-signal-strategy-chip>
+                      <span class="muted">{{ version.status_explanation }}</span>
+                    </div>
+                  </td>
+                  <td class="mono">{{ version.program_version }}</td>
+                  <td><app-timestamp-display [value]="version.created_at_ms" mode="local" /></td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      } @empty {
+        <p class="note">
+          {{ goldenRefusal() ?? 'No symbol has a qualified version of this strategy.' }}
+        </p>
+      }
+      @if (state.value.mayBeCut) {
+        <p class="note">The read returns at most {{ listLimit }} versions, so some may not be listed here.</p>
+      }
+    }
+  }
+</app-signal-strategy-section>

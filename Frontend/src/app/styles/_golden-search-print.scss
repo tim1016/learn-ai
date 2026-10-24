@@ -3,7 +3,14 @@
   body:has(app-golden-search-report) {
     page: golden-search-report;
     background: white;
-    app-top-bar, app-markdown-drawer-host, p-toast, app-golden-search-page > app-page-header { display: none !important; }
+    app-top-bar, app-markdown-drawer-host, p-toast { display: none !important; }
+    // The report prints alone: the strategy's header and tabs, and Golden's own strip and words, stay on screen.
+    app-signal-strategy-workspace > app-workspace-header,
+    app-signal-strategy-workspace > app-workspace-tab-list,
+    app-signal-strategy-workspace > .notice,
+    app-signal-strategy-golden app-workspace-tab-list,
+    app-signal-strategy-golden .golden__scope,
+    app-signal-strategy-golden .golden__purpose { display: none !important; }
     app-root, .shell, .main, .main-content, app-page-body, .study {
       display: block !important;
       height: auto !important;
