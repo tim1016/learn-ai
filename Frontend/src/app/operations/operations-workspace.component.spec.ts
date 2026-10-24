@@ -90,7 +90,8 @@ describe('the Operations place', () => {
 
     await open('/operations/option-archive');
 
-    const chips = await screen.findAllByRole('listitem', {}, { timeout: 2000 }).then((items) => items.filter((item) => item.closest('.health-chips')));
+    // The header also draws the menu trail as a list, so wait on the chips' own list.
+    const chips = await within(await screen.findByRole('list', { name: 'Data health' })).findAllByRole('listitem', {}, { timeout: 2000 });
     expect(chips.map((chip) => [...chip.querySelectorAll('.health-chips__chip > span')].map((part) => part.textContent?.trim()).join(' '))).toEqual([
       'Lake OK',
       'Option archive OK',
