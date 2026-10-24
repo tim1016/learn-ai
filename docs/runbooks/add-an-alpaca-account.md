@@ -78,8 +78,8 @@ for the new worker to confirm its binding, then run the checks again.
 
 ### Find the roster, account details, and transactions in the menu
 
-Open **Alpaca** in the top navigation bar and choose **Accounts** — the one
-Alpaca menu item (ADR 0064 Decision 2); it lists every registered account and
+Open **Accounts** in the top navigation bar and choose **Accounts** — the one
+item in that group (ADR 0064 Decision 2, ADR 0084); it lists every registered account and
 does not automatically choose Paper or Live for you. Selecting an account card
 opens that account's workspace: one account header (free to deploy, cash,
 equity, today) over **Home**, **Activity** and **Settings** tabs (PRD #2560).
@@ -89,9 +89,9 @@ unchanged.
 
 | What you want to see | Click path |
 |---|---|
-| Paper bot roster | **Alpaca → Accounts → Paper card → Home tab**, the **Bots** section |
-| Live account bot roster (including Shadow bots) | **Alpaca → Accounts → card marked Live → Home tab**, the **Bots** section |
-| Account balances and where the money is | **Alpaca → Accounts → intended account card**; opens on **Home**: the header's figures and the money bar. Buying power and margin are under **Account details** |
+| Paper bot roster | **Accounts → Paper card → Home tab**, the **Bots** section |
+| Live account bot roster (including Shadow bots) | **Accounts → card marked Live → Home tab**, the **Bots** section |
+| Account balances and where the money is | **Accounts → intended account card**; opens on **Home**: the header's figures and the money bar. Buying power and margin are under **Account details** |
 | What each bot holds | On **Home**, each bot's row; a stopped bot that still holds money is striped and offers **Flatten…** |
 | Today's buys/sells and cash moves | That account's **Activity** tab, period **Today** |
 | Orders, executions, and their status | That account's **Activity** tab: choose **Today**, **30D** or **60D**, expand **Order records and recovery**, then **Transaction history** → **View details** on a row |
@@ -99,7 +99,7 @@ unchanged.
 | Order-recovery evidence | That account's **Activity** tab → **Order records and recovery** |
 | Bots as live chart tiles | **Home → Wall** (the former Gallery tab) |
 | Another account, from any page | The **Live** or **Paper** pill in the top bar: it opens that account on the tab you are on. A dot on a pill means something on that account needs you; a dot marked **?** means that is not known yet |
-| Saved credentials and account configuration | **Alpaca → Accounts → intended account card → Settings tab → Broker connection** |
+| Saved credentials and account configuration | **Accounts → intended account card → Settings tab → Broker connection** |
 | Deploy a bot | The account header's **Deploy a bot** button, on any tab |
 
 The account workspace opens on **Home**: the money bar, one line for each

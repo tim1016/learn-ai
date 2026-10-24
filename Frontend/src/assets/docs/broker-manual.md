@@ -4,7 +4,7 @@
 
 Start with a **Paper** account. Paper trading uses simulated money. A **Live** account can create real positions and charges. Simply reading an account page does not place a trade.
 
-1. Open **Alpaca → Accounts**, or use **Open broker accounts** above.
+1. Open **Accounts** in the menu, or use **Open broker accounts** above.
 2. Select the intended account. Read its identity and Paper or Live environment before opening deployment or order controls. Do not identify an account only by its balance.
 3. Open **Home**. Find the account's cash, holdings and readiness information. Connection health alone does not prove that a price is fresh enough to trade.
 4. Open **Activity**. Select Today, 30D or 60D. Expand **Order records and recovery**, then use **Transaction history → View details** on an existing row to follow its status, fills and charges. An empty account may have no activity yet; that is not an error.
