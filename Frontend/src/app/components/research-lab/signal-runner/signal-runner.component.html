@@ -9,18 +9,26 @@
   [previous]="inputs.isPrevious()"
   [captured]="inputs.captured()"
   [prefill]="prefillNotice()"
+  [dataSource]="dataSource()"
+  dataSourceWindows="date-et"
   (run)="runSignalEngine()"
 >
-  <app-ticker-range-picker
-    studyInstrument
-    [(value)]="range"
-    dateBounds="provider"
-    presentation="embedded"
-    sessionMode="hidden"
-    [showAutoFetch]="false"
-    [availableResolutions]="availableResolutions"
-    [availableMultipliers]="availableMultipliers"
-  />
+  <div studyInstrument>
+    <app-ticker-range-picker
+      [value]="shownRange()"
+      (valueChange)="onRangeChange($event)"
+      dateBounds="provider"
+      presentation="embedded"
+      sessionMode="enabled"
+      [showAutoFetch]="false"
+      [availableResolutions]="availableResolutions"
+      [availableMultipliers]="availableMultipliers()"
+    />
+    @if (barNote(); as note) {
+      <p-message severity="info" class="w-full" data-testid="bar-size-note">{{ note }}</p-message>
+    }
+    <app-lake-holding-notice [holding]="holding" />
+  </div>
 
   <div studyConfig class="study-config">
     <div class="field-group">
@@ -95,7 +103,9 @@
       }
     }
 
-    @if (error(); as err) {
+    @if (refusal(); as shown) {
+      <app-lake-study-source [refusal]="shown.refused.refusal" [session]="shown.session" />
+    } @else if (error(); as err) {
       <p-message severity="error">{{ err }}</p-message>
     }
   </div>

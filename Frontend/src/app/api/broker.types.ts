@@ -5353,9 +5353,16 @@ export interface paths {
          * Start Signal Engine Job
          * @description Kick off a signal-engine run in a worker thread.
          *
-         *     Eight phases (load bars → graduation). Long phases (backtest grid,
-         *     walk-forward) emit fine-grained ``on_progress`` so the bar moves
-         *     while the worker is mid-sweep.
+         *     The worker admits the study's bars from the data lake (materializing what
+         *     is missing), then runs the signal pipeline: nine phases (admit and load
+         *     bars through graduation). Long phases (backtest grid, walk-forward) emit
+         *     fine-grained ``on_progress`` so the bar moves while the worker is
+         *     mid-sweep. A window the lake cannot admit, or a bar size the study can
+         *     never run on, fails the job with a typed refusal; no result is computed.
+         *
+         *     A successful prior run over the same admitted data is served from cache
+         *     (the lookup follows admission — see ``signal_study_service``). Pass
+         *     ``force=true`` to bypass.
          */
         post: operations["start_signal_engine_job_api_jobs_internal_signal_engine_post"];
         delete?: never;
@@ -31707,6 +31714,19 @@ export interface components {
          *     pre-migration default. Signal-engine processing operates on
          *     15-minute bars by default; the inherited base default of 1 would
          *     silently switch every caller to 1-minute bars.
+         *
+         *     The worker reads the study's bars from the data lake itself, materializing
+         *     what the lake lacks (``app.services.signal_study_service``). Only minute
+         *     bars that divide the hour and are short enough to reach the study's
+         *     validity gate for the session are accepted; other sizes are refused with a
+         *     reason before the lake is touched.
+         *
+         *     **Default override**: ``session="extended"``. ``session`` is the one
+         *     control for which bars the study computes on: ``extended`` is every bar the
+         *     provider served, 04:00-20:00 ET, which is what the study has always read;
+         *     ``rth`` is the scheduled session, and the page offers both. The base default
+         *     (``rth``) would have silently moved every caller that omits it onto a
+         *     different sample (#3522).
          */
         SignalEngineJobRequest: {
             /** Featurename */
@@ -31739,7 +31759,7 @@ export interface components {
             rerunOf?: string | null;
             /**
              * Session
-             * @default rth
+             * @default extended
              * @enum {string}
              */
             session?: "rth" | "extended";

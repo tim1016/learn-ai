@@ -26,8 +26,8 @@ describe('StudyListComponent', () => {
     await renderList();
 
     const studies = within(screen.getByRole('list', { name: 'Studies' }));
-    expect(studies.getAllByText(/^Reads Polygon/).length, 'the studies still on the provider').toBe(3);
-    expect(studies.getAllByText('Reads Data lake, Polygon').length, 'the Feature and Indicator reliability studies read the lake').toBe(2);
+    expect(studies.getAllByText(/^Reads Polygon/).length, 'the studies still on the provider').toBe(2);
+    expect(studies.getAllByText('Reads Data lake, Polygon').length, 'the Feature, Signal and Indicator reliability studies read the lake').toBe(3);
   });
 
   it('lists the Rule sandbox beside the studies, at its own page under Research', async () => {

@@ -32,8 +32,10 @@ instant (``capture_final_ms + CLAIM_LEASE_MS``): every claim still live then was
 after it, and every capture the consumer makes is final under this rule.
 
 Canonical implementation: this file. The calendar owns ``close``; the tail, the
-delay and the lease are the vendor's and the lake's, named here once. The test
-helper ``tests/_helpers/pinned_vendor.py`` serves an after-hours tape of the same
+delay and the lease are the vendor's and the lake's, named here once, and so is
+the pre-market head that bounds the extended tape from the other side (finality
+does not need it; a reader sizing the tape does). The test helper
+``tests/_helpers/pinned_vendor.py`` serves an after-hours tape of the same
 length.
 Validated against: tests/unit/data_lake/test_capture_finality.py
 """
@@ -53,6 +55,9 @@ VENDOR_DELAY_MS = 15 * 60_000
 
 #: How long the vendor's after-hours tape runs past the scheduled close.
 AFTER_HOURS_TAIL_MS = 4 * 3_600_000
+
+#: How long before the scheduled open the vendor's pre-market tape begins (04:00 ET for a 09:30 open).
+PRE_MARKET_HEAD_MS = 330 * 60_000
 
 #: The longest a writer holds a minute-bar claim before another may take it over (``ensure_data._LEASE_TTL_MS``; a
 #: test pins the two together). The vendor was asked no earlier than this before the catalog says the artifact completed.

@@ -26,7 +26,7 @@ To adopt it::
     STUDY = LakeStudy(
         job_type="signal_engine",            # a key of app.jobs.phases.JOB_PHASES
         cache_namespace="signal_engine:lake:v1",
-        calculation_version="signal-study/1",
+        calculation_version="signal-study/2",
         requester="signal-study",
         subject={"ticker": params.symbol},   # echoed in a refusal's payload
         cache_extra={"signal_config": asdict(config)},   # inputs beyond the lake identity

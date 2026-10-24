@@ -1,0 +1,38 @@
+{
+ "requests": [
+  {
+   "file": "wmt_minute_adjusted_2024-02-20_2024-02-23.json",
+   "method": "GET",
+   "path": "/v2/aggs/ticker/WMT/range/1/minute/2024-02-20/2024-02-23",
+   "query": {
+    "adjusted": "true",
+    "sort": "asc",
+    "limit": "50000"
+   },
+   "http_status": 200,
+   "fetched_on": "2026-10-24",
+   "sha256": "e36a5795fc4abcaf16d71021021c1bff3da868ce6d1f7aa1b7f44545e3f1dc26",
+   "bytes": 212753
+  }
+ ],
+ "facts": {
+  "bars": 2226,
+  "sessions": 4,
+  "bars_per_session": {
+   "2024-02-20": 650,
+   "2024-02-21": 527,
+   "2024-02-22": 519,
+   "2024-02-23": 530
+  },
+  "open_high_low_close_values": 8904,
+  "values_finer_than_one_ten_thousandth": 0,
+  "lowest_price": "56.0186",
+  "highest_price": "60.45",
+  "split": {
+   "execution_date": "2024-02-26",
+   "split_from": 1,
+   "split_to": 3,
+   "source": "stated by the owner; no request was made for it"
+  }
+ }
+}

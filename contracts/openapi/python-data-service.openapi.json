@@ -61116,7 +61116,7 @@
       },
       "SignalEngineJobRequest": {
         "additionalProperties": false,
-        "description": "Body of POST /api/jobs-internal/signal-engine.\n\n**Default override**: ``multiplier=15`` to preserve the\npre-migration default. Signal-engine processing operates on\n15-minute bars by default; the inherited base default of 1 would\nsilently switch every caller to 1-minute bars.",
+        "description": "Body of POST /api/jobs-internal/signal-engine.\n\n**Default override**: ``multiplier=15`` to preserve the\npre-migration default. Signal-engine processing operates on\n15-minute bars by default; the inherited base default of 1 would\nsilently switch every caller to 1-minute bars.\n\nThe worker reads the study's bars from the data lake itself, materializing\nwhat the lake lacks (``app.services.signal_study_service``). Only minute\nbars that divide the hour and are short enough to reach the study's\nvalidity gate for the session are accepted; other sizes are refused with a\nreason before the lake is touched.\n\n**Default override**: ``session=\"extended\"``. ``session`` is the one\ncontrol for which bars the study computes on: ``extended`` is every bar the\nprovider served, 04:00-20:00 ET, which is what the study has always read;\n``rth`` is the scheduled session, and the page offers both. The base default\n(``rth``) would have silently moved every caller that omits it onto a\ndifferent sample (#3522).",
         "properties": {
           "featureName": {
             "minLength": 1,
@@ -61167,7 +61167,7 @@
             "title": "Rerunof"
           },
           "session": {
-            "default": "rth",
+            "default": "extended",
             "enum": [
               "rth",
               "extended"
@@ -91484,7 +91484,7 @@
     },
     "/api/jobs-internal/signal-engine": {
       "post": {
-        "description": "Kick off a signal-engine run in a worker thread.\n\nEight phases (load bars \u2192 graduation). Long phases (backtest grid,\nwalk-forward) emit fine-grained ``on_progress`` so the bar moves\nwhile the worker is mid-sweep.",
+        "description": "Kick off a signal-engine run in a worker thread.\n\nThe worker admits the study's bars from the data lake (materializing what\nis missing), then runs the signal pipeline: nine phases (admit and load\nbars through graduation). Long phases (backtest grid, walk-forward) emit\nfine-grained ``on_progress`` so the bar moves while the worker is\nmid-sweep. A window the lake cannot admit, or a bar size the study can\nnever run on, fails the job with a typed refusal; no result is computed.\n\nA successful prior run over the same admitted data is served from cache\n(the lookup follows admission \u2014 see ``signal_study_service``). Pass\n``force=true`` to bypass.",
         "operationId": "start_signal_engine_job_api_jobs_internal_signal_engine_post",
         "requestBody": {
           "content": {
