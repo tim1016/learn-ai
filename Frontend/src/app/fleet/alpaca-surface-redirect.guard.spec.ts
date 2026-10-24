@@ -17,8 +17,6 @@ describe('alpacaSurfaceRedirectGuard', () => {
       providers: [
         provideRouter([
           { path: 'brokers/alpaca', canActivate: [alpacaSurfaceRedirectGuard], component: RouteStubComponent },
-          { path: 'brokers/alpaca/bots', component: RouteStubComponent },
-          { path: 'brokers/alpaca/gallery', component: RouteStubComponent },
         ]),
       ],
     });
