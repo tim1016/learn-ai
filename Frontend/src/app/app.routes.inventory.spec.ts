@@ -78,20 +78,26 @@ const ROWS: Readonly<Record<string, Row>> = {
   'research/signal': { group: RESEARCH },
   'research/indicator-reliability': { group: RESEARCH },
   'research/realized-vs-iv': { group: RESEARCH },
+  'research/rule-sandbox': { group: RESEARCH },
+  // A spec run and its children are Research evidence at their native detail pages.
+  'research/history/spec-run/:run_id': { group: RESEARCH },
+  'research/history/walk-forward/:wf_id': { group: RESEARCH },
+  'research/history/monte-carlo/:mc_id': { group: RESEARCH },
+  'research/history/baseline/:baseline_id': { group: RESEARCH },
   'research/demos': { group: RESEARCH, lands: '/research' },
   'research/demos/cross-asset': { group: RESEARCH },
   'research/demos/regimes': { group: RESEARCH },
   'research/demos/edge-score': { group: RESEARCH },
   'research/demos/trade-simulator': { group: RESEARCH },
-  // The Research Lab shell still hosts History and Strategy Runs until slices 28 and 29.
+  // The Research Lab shell still hosts History and the Strategy Runs list until slice 29.
   'research-lab': { group: RESEARCH, lands: '/research' },
   'research-lab/features/experiments': { group: RESEARCH },
   'research-lab/signals/history': { group: RESEARCH },
   'research-lab/backtests/strategy-runs': { group: RESEARCH },
-  'research-lab/strategy-runs/:run_id': { group: RESEARCH },
-  'research-lab/walk-forward/:wf_id': { group: RESEARCH },
-  'research-lab/monte-carlo/:mc_id': { group: RESEARCH },
-  'research-lab/baselines/:baseline_id': { group: RESEARCH },
+  'research-lab/strategy-runs/:run_id': { group: RESEARCH, lands: '/research/history/spec-run/7' },
+  'research-lab/walk-forward/:wf_id': { group: RESEARCH, lands: '/research/history/walk-forward/7' },
+  'research-lab/monte-carlo/:mc_id': { group: RESEARCH, lands: '/research/history/monte-carlo/7' },
+  'research-lab/baselines/:baseline_id': { group: RESEARCH, lands: '/research/history/baseline/7' },
   'research-lab/signal-report/:id': { group: RESEARCH },
   // The five studies moved to /research; every old address goes straight to its study.
   'research-lab/features/validate': { group: RESEARCH, lands: '/research/feature' },
@@ -115,7 +121,7 @@ const ROWS: Readonly<Record<string, Row>> = {
   'edge/realized-vs-iv': { group: RESEARCH, lands: '/research/realized-vs-iv' },
   'edge/cross-asset': { group: RESEARCH, lands: '/research/demos/cross-asset' },
   'edge/regimes': { group: RESEARCH, lands: '/research/demos/regimes' },
-  'spec-strategy': { group: RESEARCH },
+  'spec-strategy': { group: RESEARCH, lands: '/research/rule-sandbox' },
 
   // ── Signal strategies ────────────────────────────────────────────────────
   'strategy-lab': { group: SIGNAL },

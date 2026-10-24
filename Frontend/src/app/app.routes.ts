@@ -141,11 +141,11 @@ export const routes: Routes = [
     ],
   },
   {
+    // The Strategy Spec builder became Research's Rule sandbox; its saved specs
+    // are browser state under the same key, so they open at the new address.
     path: "spec-strategy",
-    loadComponent: () =>
-      import(
-        "./components/spec-strategy-runner/spec-strategy-runner.component"
-      ).then((m) => m.SpecStrategyRunnerComponent),
+    redirectTo: redirectKeepingState(["/research", "rule-sandbox"]),
+    pathMatch: "full",
   },
   {
     path: "pricing-lab",

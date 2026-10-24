@@ -25,7 +25,7 @@ import { TimestampDisplayPipe } from '../../../shared/timestamp';
  * Columns are intentionally limited to ``RunLedger`` fields — the
  * listing endpoint returns ledgers, not full results, so metric
  * columns (return %, drawdown, win rate) live on the detail page only.
- * Clicking a row navigates to ``/research-lab/strategy-runs/<run_id>``,
+ * Clicking a row navigates to ``/research/history/spec-run/<run_id>``,
  * which fetches the full ``BacktestRunResult``.
  *
  * The ``Run SPY EMA fixture`` button POSTs the canonical fixture spec
@@ -96,7 +96,7 @@ export class StrategyRunsComponent {
 
   /** Navigate by raw run_id — used by the "fixture run completed" flash link. */
   openById(runId: string): void {
-    void this.router.navigate(['/research-lab/strategy-runs', runId]);
+    void this.router.navigate(['/research/history/spec-run', runId]);
   }
 
   /**

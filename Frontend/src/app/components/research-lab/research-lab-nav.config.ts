@@ -7,9 +7,10 @@ export interface NavItem {
 
 /**
  * The pages the Research Lab shell still hosts, each waiting for the slice
- * that moves it: Strategy Runs (#3518), History (#3519), instrument headlines
- * (#3501) and the Recency Chart (#3508). The five studies live under
- * `/research`; the two data checks are reached from Operations and need no tab.
+ * that moves it: the Strategy Runs list and History (#3519), instrument
+ * headlines (#3501) and the Recency Chart (#3508). The five studies live under
+ * `/research` and each spec-run record under `/research/history`; the two data
+ * checks are reached from Operations and need no tab.
  */
 export const RESEARCH_LAB_NAV: readonly NavItem[] = [
   { path: 'features/experiments', label: 'Experiments' },

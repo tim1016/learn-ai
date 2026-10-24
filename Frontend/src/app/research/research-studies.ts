@@ -148,7 +148,7 @@ export const RESEARCH_STUDIES: readonly StudyDefinition[] = [
       HELD_FOR_A_DAY,
     ],
     nextStep: 'A signal that survives can be written as entry and exit rules and replayed in the Rule sandbox.',
-    nextLinks: [{ label: 'Open the Rule sandbox', route: '/spec-strategy' }],
+    nextLinks: [{ label: 'Open the Rule sandbox', route: '/research/rule-sandbox' }],
   },
   {
     id: 'indicator-reliability',
@@ -241,11 +241,12 @@ export const RESEARCH_DEMOS: readonly DemoDefinition[] = [
 ];
 
 /**
- * The Rule sandbox is the Strategy Spec builder at its present address until
- * its own slice moves it under `/research` (#3518).
+ * The Rule sandbox: the free-form Strategy Spec builder (PRD #3490 R27). It
+ * replays rules on past prices and offers no Deploy, so it is listed with the
+ * studies but is not one: it has no fixed question and no data-source line.
  */
 export const RULE_SANDBOX = {
-  route: '/spec-strategy',
+  route: '/research/rule-sandbox',
   summary: 'Write entry and exit rules over indicators and replay them on past prices. Nothing built here is deployed.',
 } as const;
 

@@ -82,8 +82,7 @@ export const APP_MENU: readonly AppMenuGroup[] = [
       { title: 'Signal study', route: '/research/signal' },
       { title: 'Indicator reliability', route: '/research/indicator-reliability' },
       { title: 'Realized vs implied vol', route: '/research/realized-vs-iv' },
-      // The Strategy Spec builder, until its slice moves it under /research.
-      { title: 'Rule sandbox', route: '/spec-strategy' },
+      { title: 'Rule sandbox', route: '/research/rule-sandbox' },
       // Sample data, never measurements: the title says so.
       { title: 'Cross-asset demo', route: '/research/demos/cross-asset' },
       { title: 'Regimes demo', route: '/research/demos/regimes' },
@@ -91,8 +90,12 @@ export const APP_MENU: readonly AppMenuGroup[] = [
       { title: 'Trade simulator demo', route: '/research/demos/trade-simulator' },
     ],
     // History and Strategy Runs: tabs the Research Lab shell still hosts until
-    // the slices that move them.
-    pages: [{ title: 'Research Lab', route: '/research-lab' }],
+    // the slices that move them. The spec-run records already sit under History,
+    // at their native addresses.
+    pages: [
+      { title: 'Research Lab', route: '/research-lab' },
+      { title: 'History', route: '/research/history' },
+    ],
   },
   {
     id: 'signal-strategies',

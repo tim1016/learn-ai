@@ -153,7 +153,7 @@ describe('BaselinesSectionComponent', () => {
   it('open(b) navigates to the baseline detail route', () => {
     component.open(makeBaselineConfig({ baseline_id: 'c'.repeat(32) }));
     expect(routerNavigate).toHaveBeenCalledWith([
-      '/research-lab/baselines',
+      '/research/history/baseline',
       'c'.repeat(32),
     ]);
   });

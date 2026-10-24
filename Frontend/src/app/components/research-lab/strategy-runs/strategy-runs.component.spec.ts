@@ -6,76 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { StrategyRunsComponent } from './strategy-runs.component';
 import { StrategyRunsService } from '../../../services/strategy-runs.service';
-import type {
-  RunLedger,
-  StrategyRunResponse,
-} from '../../../services/strategy-runs.types';
-
-function makeLedger(overrides: Partial<RunLedger> = {}): RunLedger {
-  return {
-    schema_version: '1.0',
-    run_id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    parent_run_id: null,
-    parent_spec_hash: null,
-    strategy_spec_id: 'spy_ema_crossover',
-    strategy_spec_hash: 'd'.repeat(64),
-    strategy_spec_json: { name: 'spy_ema_crossover' },
-    engine_name: 'learn_ai_event_driven',
-    engine_version: '0.1.0',
-    engine_git_commit: 'unknown',
-    symbol: 'SPY',
-    resolution_minutes: 15,
-    start_ms: 1704160800000,
-    end_ms: 1735714800000,
-    initial_cash: 100000,
-    fill_mode: 'signal_bar_close',
-    commission_per_order: 0,
-    slippage_per_share: 0,
-    warmup_policy: 'spec_indicator_warmup',
-    random_seed: 0,
-    data_source: 'lean_minute_reader',
-    data_snapshot_id: 'SPY|15|...|test',
-    result_hash: 'r'.repeat(64),
-    trade_log_hash: 't'.repeat(64),
-    metrics_hash: 'm'.repeat(64),
-    created_at_ms: 1736000000000,
-    completed_at_ms: 1736000001000,
-    status: 'completed',
-    failure_reason: null,
-    ...overrides,
-  };
-}
-
-function makeRunResponse(): StrategyRunResponse {
-  return {
-    ledger: makeLedger(),
-    result: {
-      run_id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-      initial_cash: 100000,
-      final_equity: 102500,
-      equity_curve: [],
-      drawdown_curve: [],
-      trades: [],
-      metrics: {
-        total_trades: 0,
-        winning_trades: 0,
-        losing_trades: 0,
-        win_rate: null,
-        total_return_pct: 0.025,
-        max_drawdown_pct: 0,
-        sharpe_ratio: null,
-        sortino_ratio: null,
-        profit_factor: null,
-        expectancy_pct: null,
-        payoff_ratio: null,
-        exposure_pct: null,
-        avg_trade_bars: null,
-      },
-      log_lines: [],
-      warnings: [],
-    },
-  };
-}
+import { makeRunLedger, makeRunResponse } from '../../../testing/strategy-run-fixtures';
 
 interface ServiceMock {
   listRuns: ReturnType<typeof vi.fn>;
@@ -92,7 +23,7 @@ describe('StrategyRunsComponent', () => {
 
   beforeEach(async () => {
     service = {
-      listRuns: vi.fn().mockResolvedValue({ runs: [makeLedger()] }),
+      listRuns: vi.fn().mockResolvedValue({ runs: [makeRunLedger()] }),
       runSpyEmaFixture: vi.fn().mockResolvedValue(makeRunResponse()),
       getRun: vi.fn(),
       createRun: vi.fn(),
@@ -152,10 +83,10 @@ describe('StrategyRunsComponent', () => {
   });
 
   it('open(run) navigates to the detail route', () => {
-    const ledger = makeLedger({ run_id: 'b'.repeat(32) });
+    const ledger = makeRunLedger({ run_id: 'b'.repeat(32) });
     component.open(ledger);
     expect(routerNavigate).toHaveBeenCalledWith([
-      '/research-lab/strategy-runs',
+      '/research/history/spec-run',
       'b'.repeat(32),
     ]);
   });

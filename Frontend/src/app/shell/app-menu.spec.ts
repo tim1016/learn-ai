@@ -127,12 +127,13 @@ describe('app menu projections', () => {
     ['/data-lab/export', 'Markets', 'Stocks'],
     ['/options-lab/chain', 'Markets', 'Options Lab'],
     ['/options-lab/strategy-finder', 'Markets', 'Options Lab'],
-    ['/research-lab/strategy-runs/run-42', 'Research', 'Research Lab'],
+    // A spec run is Research evidence at its native address, never a registry strategy's.
+    ['/research/history/spec-run/run-42', 'Research', 'History'],
     ['/research', 'Research', 'Studies'],
     ['/research/feature', 'Research', 'Feature study'],
     ['/research/realized-vs-iv', 'Research', 'Realized vs implied vol'],
     ['/research/demos/regimes', 'Research', 'Regimes demo'],
-    ['/spec-strategy', 'Research', 'Rule sandbox'],
+    ['/research/rule-sandbox', 'Research', 'Rule sandbox'],
     ['/golden-search/study-9', 'Signal strategies', 'Golden Search'],
     ['/options-golden-search/study-9', 'Options setups', 'Options Golden Search'],
     // Pages the menu does not list, though another place's shell still hosts them:

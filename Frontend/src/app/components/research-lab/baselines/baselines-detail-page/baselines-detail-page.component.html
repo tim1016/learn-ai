@@ -1,6 +1,6 @@
 <div class="bl-detail">
   <header class="bld-header">
-    <a routerLink="/research-lab" class="bld-back">← Research Lab</a>
+    <a routerLink="/research-lab/backtests/strategy-runs" class="bld-back">← Strategy runs</a>
     @if (baseline(); as data) {
       <div class="bld-title">
         <h1>Null baseline</h1>
@@ -17,7 +17,7 @@
       </div>
       <div class="bld-parent">
         <strong>Parent run:</strong>
-        <a [routerLink]="['/research-lab/strategy-runs', data.config.parent_run_id]">
+        <a [routerLink]="['/research/history/spec-run', data.config.parent_run_id]">
           <code>{{ shortHash(data.config.parent_run_id, 16) }}…</code>
         </a>
       </div>
@@ -178,7 +178,7 @@
               } @else { — }
             </td>
             <td class="bld-hash-cell">
-              <a [routerLink]="['/research-lab/strategy-runs', b.baseline_run_id]">
+              <a [routerLink]="['/research/history/spec-run', b.baseline_run_id]">
                 {{ shortHash(b.baseline_run_id, 12) }}…
               </a>
             </td>

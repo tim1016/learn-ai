@@ -14,38 +14,30 @@ const movedStudy = (path: string, ...study: [string, ...string[]]): Routes[numbe
   pathMatch: 'full',
 });
 
+/**
+ * The old address of one spec-run record, straight to its native detail page
+ * under `/research/history` (ADR 0084) in one redirect that keeps query and
+ * fragment. A spec run and its Monte Carlo, baseline and walk-forward children
+ * are Research evidence: the redirect names the record's own kind and id and
+ * looks nothing up, so no run is ever re-homed under a strategy that merely
+ * resembles its name (PRD #3490 R27).
+ */
+const movedRecord = (path: string, kind: string, idParam: string): Routes[number] => ({
+  path,
+  redirectTo: redirectKeepingState((params) => ['/research', 'history', kind, String(params[idParam] ?? '')]),
+  pathMatch: 'full',
+});
+
 export const researchLabRoutes: Routes = [
-  // Detail routes retain focused content while inheriting the root application
-  // shell. Listed before the research-lab child shell so their more-specific
-  // patterns match first.
-  {
-    path: 'strategy-runs/:run_id',
-    loadComponent: () =>
-      import('./strategy-runs/run-detail-page/run-detail-page.component').then(
-        (m) => m.RunDetailPageComponent,
-      ),
-  },
-  {
-    path: 'walk-forward/:wf_id',
-    loadComponent: () =>
-      import(
-        './walk-forward/walk-forward-detail-page/walk-forward-detail-page.component'
-      ).then((m) => m.WalkForwardDetailPageComponent),
-  },
-  {
-    path: 'monte-carlo/:mc_id',
-    loadComponent: () =>
-      import(
-        './monte-carlo/monte-carlo-detail-page/monte-carlo-detail-page.component'
-      ).then((m) => m.MonteCarloDetailPageComponent),
-  },
-  {
-    path: 'baselines/:baseline_id',
-    loadComponent: () =>
-      import(
-        './baselines/baselines-detail-page/baselines-detail-page.component'
-      ).then((m) => m.BaselinesDetailPageComponent),
-  },
+  // The spec-run records moved to /research/history.
+  movedRecord('strategy-runs/:run_id', 'spec-run', 'run_id'),
+  movedRecord('walk-forward/:wf_id', 'walk-forward', 'wf_id'),
+  movedRecord('monte-carlo/:mc_id', 'monte-carlo', 'mc_id'),
+  movedRecord('baselines/:baseline_id', 'baseline', 'baseline_id'),
+
+  // The signal report keeps focused content while inheriting the root
+  // application shell. Listed before the research-lab child shell so its
+  // more-specific pattern matches first.
   {
     path: 'signal-report/:id',
     loadComponent: () =>
@@ -68,9 +60,9 @@ export const researchLabRoutes: Routes = [
   movedStudy('signal-engine', 'signal'),
   movedStudy('cross-sectional', 'cross-sectional'),
 
-  // Sub-nav shell for the pages Research Lab still hosts: Strategy Runs and
-  // History (#3518, #3519), instrument headlines, the Recency Chart and the two
-  // data checks (the slices of the places they belong to).
+  // Sub-nav shell for the pages Research Lab still hosts: the Strategy Runs
+  // list and History (#3519), instrument headlines, the Recency Chart and the
+  // two data checks (the slices of the places they belong to).
   {
     path: '',
     loadComponent: () =>

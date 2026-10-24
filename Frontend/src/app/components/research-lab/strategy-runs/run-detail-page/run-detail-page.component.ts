@@ -51,7 +51,7 @@ const DRAWDOWN_COLOR = '#f87171';
 
 /**
  * Full-page detail view for a single strategy run, mounted at
- * ``/research-lab/strategy-runs/:run_id``. Loads the persisted
+ * ``/research/history/spec-run/:run_id``. Loads the persisted
  * ``(ledger, result)`` pair via ``StrategyRunsService.getRun`` and
  * renders four sections:
  *

@@ -1,6 +1,6 @@
 <div class="run-detail">
   <header class="rd-header">
-    <a routerLink="/research-lab" class="rd-back">← Research Lab</a>
+    <a routerLink="/research-lab/backtests/strategy-runs" class="rd-back">← Strategy runs</a>
     @if (run(); as data) {
       <div class="rd-title">
         <h1>{{ data.ledger.strategy_spec_id }}</h1>
@@ -276,7 +276,7 @@
         @if (data.ledger.parent_run_id; as parentId) {
           <dt>Parent run</dt>
           <dd>
-            <a [routerLink]="['/research-lab/strategy-runs', parentId]">
+            <a [routerLink]="['/research/history/spec-run', parentId]">
               <code>{{ shortHash(parentId, 16) }}…</code>
             </a>
           </dd>
