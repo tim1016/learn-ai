@@ -112,6 +112,7 @@ def saved_run(primed_store: None) -> RunDetail:
         verdict_grade=None,
         verdict_signal=None,
         parity_group_id=None,
+        custom_source=False,
         requested_engine="python",
         fill_mode=response.fill_mode,
         timespan="minute",

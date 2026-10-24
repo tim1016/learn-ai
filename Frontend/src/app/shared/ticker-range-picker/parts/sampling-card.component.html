@@ -47,10 +47,12 @@
     <div class="session" role="group" aria-label="Session">
       <div class="session__head">
         <span class="session__label">Session</span>
-        <span class="session__tag mono"
-              data-testid="session-reason"
-              pTooltip="Extended hours are not available: the Python engine reads regular trading hours only."
-              tooltipPosition="top">RTH only</span>
+        @if (sessionMode() === 'disabled') {
+          <span class="session__tag mono"
+                data-testid="session-reason"
+                pTooltip="Extended hours are not available: the Python engine reads regular trading hours only."
+                tooltipPosition="top">RTH only</span>
+        }
       </div>
       <div class="session__group">
         <button
@@ -59,13 +61,20 @@
           [class.session-btn--active]="effectiveSession() === 'rth'"
           (click)="setSession('rth')"
           [attr.aria-pressed]="effectiveSession() === 'rth'"
+          pTooltip="Regular trading hours only."
+          [tooltipDisabled]="sessionMode() !== 'enabled'"
+          tooltipPosition="top"
         >RTH</button>
         <button
           type="button"
           class="session-btn"
           [class.session-btn--active]="effectiveSession() === 'extended'"
-          disabled
+          [disabled]="sessionMode() !== 'enabled'"
+          (click)="setSession('extended')"
           [attr.aria-pressed]="effectiveSession() === 'extended'"
+          pTooltip="Pre-market and after-hours trading included."
+          [tooltipDisabled]="sessionMode() !== 'enabled'"
+          tooltipPosition="top"
         >Ext</button>
       </div>
     </div>

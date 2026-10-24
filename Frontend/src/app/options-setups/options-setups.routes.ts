@@ -1,0 +1,71 @@
+import type { CanMatchFn, Routes } from '@angular/router';
+
+/** A setup's address always carries its tab, so a bare second segment names no setup and falls through to the not-found page. */
+const carriesATab: CanMatchFn = (_route, segments) => segments.length >= 2;
+
+/**
+ * The Options setups place (ADR 0084). A saved name is one segment and a tab
+ * is the next, so a bare second segment never names a setup; evidence has
+ * three segments after the group and needs no name. A golden search study is
+ * evidence too (`evidence/study/:studyId`), and is declared before the other
+ * kinds because it holds the study's workbench, not only its record.
+ */
+export const OPTIONS_SETUPS_ROUTES: Routes = [
+  {
+    path: '',
+    pathMatch: 'full',
+    loadComponent: () => import('./index/options-setups-index.component').then((m) => m.OptionsSetupsIndexComponent),
+  },
+  {
+    path: 'evidence/study/:studyId',
+    loadComponent: () => import('./study/options-study-page.component').then((m) => m.OptionsStudyPageComponent),
+  },
+  {
+    path: 'evidence/:kind/:subjectId',
+    loadComponent: () => import('../components/options-evidence/options-evidence-page.component').then((m) => m.OptionsEvidencePageComponent),
+  },
+  {
+    // Fixed-leg analysis, not a setup. A setup named `analysis` still opens at
+    // `analysis/:tab`: neither child below matches a tab, so the match falls through to `:name`.
+    path: 'analysis',
+    loadComponent: () => import('./analysis/options-analysis.component').then((m) => m.OptionsAnalysisComponent),
+    children: [
+      {
+        path: '',
+        pathMatch: 'full',
+        loadComponent: () => import('../components/strategy-builder/strategy-builder.component').then((m) => m.StrategyBuilderComponent),
+      },
+      {
+        path: 'finder',
+        loadComponent: () => import('./analysis/strategy-finder-unavailable.component').then((m) => m.StrategyFinderUnavailableComponent),
+      },
+    ],
+  },
+  {
+    path: ':name',
+    canMatch: [carriesATab],
+    loadComponent: () => import('./workspace/options-setup-workspace.component').then((m) => m.OptionsSetupWorkspaceComponent),
+    children: [
+      {
+        path: 'overview',
+        loadComponent: () => import('./workspace/overview/options-setup-overview.component').then((m) => m.OptionsSetupOverviewComponent),
+      },
+      {
+        path: 'define',
+        // The setup's read-back rail stays in view beside the form while the page scrolls.
+        data: { stickyContent: true },
+        loadComponent: () => import('./workspace/define/options-setup-define.component').then((m) => m.OptionsSetupDefineComponent),
+      },
+      {
+        // The view and the run it is about are query keys (`?view=history&run=68`), so an opened run has an address.
+        path: 'explore',
+        loadComponent: () => import('./workspace/explore/options-setup-explore.component').then((m) => m.OptionsSetupExploreComponent),
+      },
+      {
+        // The run under review and the study a plan forks are query keys (`?run=76&parent_study_id=os_…`), so a review has an address.
+        path: 'golden',
+        loadComponent: () => import('./workspace/golden/options-setup-golden.component').then((m) => m.OptionsSetupGoldenComponent),
+      },
+    ],
+  },
+];

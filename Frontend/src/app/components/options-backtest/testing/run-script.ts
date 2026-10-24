@@ -2,7 +2,7 @@ import type { vi as Vi } from 'vitest';
 
 import type { RunDetail } from '../options-backtest.types';
 import { fakeJobs, type FakeJobs } from './fake-jobs';
-import { fakeService, type FakeService } from './render-page';
+import { fakeService, type FakeService } from './fake-service';
 import { runDetail, runItem } from './run-fixtures';
 
 type Spy = Pick<typeof Vi, 'fn'>;

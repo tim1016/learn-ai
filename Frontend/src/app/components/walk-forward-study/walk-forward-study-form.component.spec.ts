@@ -44,7 +44,7 @@ const PREFILL: GridSearchSpecRequest = {
 
 async function renderForm(service: Partial<WalkForwardStudyService>, inputs: Record<string, unknown> = {}, pool?: readonly TickerOption[]) {
   return render(WalkForwardStudyFormComponent, {
-    inputs: { strategies: [strategy()], preflightDebounceMs: 0, ...inputs },
+    inputs: { strategy: strategy(), preflightDebounceMs: 0, ...inputs },
     providers: [
       ...fakePickerWorld(pool).providers,
       { provide: WalkForwardStudyService, useValue: { preflight: vi.fn(async (_spec: WalkForwardStudySpecRequest) => PLAN), launch: vi.fn(async (_spec: WalkForwardStudySpecRequest) => 'job-1'), ...service } },

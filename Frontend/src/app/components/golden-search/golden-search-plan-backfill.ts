@@ -124,7 +124,8 @@ export class GoldenSearchPlanBackfill {
     );
     switch (end.kind) {
       case 'completed': return { kind: 'finished', remedy, failure: end.failure };
-      case 'failed': return { kind: 'failed', remedy, message: end.message };
+      case 'failed':
+      case 'cancelled': return { kind: 'failed', remedy, message: end.message };
       case 'detached': return null;
     }
   }

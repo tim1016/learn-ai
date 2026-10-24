@@ -2,7 +2,8 @@ import { ChangeDetectionStrategy, Component, computed, effect, input, output, si
 import { RouterLink } from '@angular/router';
 import { ButtonModule } from 'primeng/button';
 
-import { GOLDEN_DEPLOY_HANDOFF_ROUTE, GOLDEN_QUALIFICATION_QUERY_PARAM } from '../../fleet/account-workspace';
+import { GOLDEN_DEPLOY_HANDOFF_ROUTE } from '../../fleet/account-workspace';
+import { deployHandoffQuery } from '../../signal-strategies/golden/golden-tabs';
 import { expectedDefault, factualNote } from './golden-search-decision';
 import { GoldenSearchRetainComponent, RETAIN_KINDS, type RetainDecision } from './golden-search-retain.component';
 import { isLive, type ExamFit, type RetainKind, type StudyCommand, type StudyDetail } from './golden-search.types';
@@ -50,7 +51,7 @@ export class GoldenSearchApprovalComponent {
   protected readonly approveLabel = computed(() => (this.retry() ? 'Retry qualification' : `Approve the ${this.fit().label} as golden`));
   protected readonly programVersion = computed(() => this.study().results.qualification?.deploy?.program_version ?? this.study().receipt.program_version ?? 'unversioned');
   protected readonly qualificationId = computed(() => this.study().results.qualification?.qualification_id ?? this.study().qualification_id);
-  protected readonly deployQuery = computed(() => ({ [GOLDEN_QUALIFICATION_QUERY_PARAM]: this.qualificationId() }));
+  protected readonly deployQuery = computed(() => deployHandoffQuery(this.study().strategy_key, this.qualificationId()));
   protected readonly canApprove = computed(
     () => this.canApproveState() && !this.busy() && this.note().trim() !== '' && this.parityAcknowledged() && (!this.weak() || this.weaknessAcknowledged()),
   );

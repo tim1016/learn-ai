@@ -23,6 +23,7 @@ import {
   accountWorkspaceTitle,
 } from './fleet/account-workspace';
 import { laneDisplayNameText } from './fleet/fleet-directory.types';
+import { signalStrategyLocation, signalStrategyWindowTitle } from './signal-strategies/signal-strategy-tabs';
 
 // The global JobsDrawer / floating "Jobs" launcher was removed in favor
 // of per-feature SSE-driven progress UIs (e.g. the Engine Lab run
@@ -185,6 +186,13 @@ export class AppComponent {
     );
   });
 
+  /** A signal strategy's page names the strategy, its tab, then the group
+   * (PRD #3490 R01); the registry key is all the address holds. */
+  private readonly strategyTitle = computed(() => {
+    const location = signalStrategyLocation(this.currentUrl());
+    return location === null ? null : signalStrategyWindowTitle(location);
+  });
+
   /** Outside a workspace the window reads `Page · Group` from the same menu
    * node the menubar highlights (PRD #3490 R01); an instrument's place reads
    * `SPY · Chart · Markets`, the entity first (ADR 0084). An address no page
@@ -192,7 +200,9 @@ export class AppComponent {
    * with. */
   protected readonly pageTitle = computed(() => {
     const url = this.pageUrl();
-    return url === null ? NOT_FOUND_TITLE : (this.workspaceTitle() ?? instrumentWindowTitle(url) ?? windowTitleFor(url));
+    return url === null
+      ? NOT_FOUND_TITLE
+      : (this.workspaceTitle() ?? this.strategyTitle() ?? instrumentWindowTitle(url) ?? windowTitleFor(url));
   });
   protected readonly alpacaLanes = computed(() => this.fleetDirectory.lanesOf('alpaca'));
   /** The header's solid worst-case tint (owner decision 2026-10-03,

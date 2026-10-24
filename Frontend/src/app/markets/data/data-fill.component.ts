@@ -8,6 +8,7 @@ import { gapCauseText } from './gap-copy';
 import type { FillReport } from './instrument-data';
 import { InstrumentDataStore, type FillState } from './instrument-data.store';
 import type { InstrumentDataReport } from '../../shared/data-lake';
+import type { CaptureProgress } from '../../shared/data-lake/capture-fill-window';
 
 /** The sentence for sessions still missing after a Fill, one cause per clause. */
 function missingText(report: FillReport): string {
@@ -66,10 +67,7 @@ export class DataFillComponent {
   }
 }
 
-function describeFill(
-  fill: FillState,
-  progress: { readonly done: number; readonly total: number } | null,
-): WorkspaceStateContent | null {
+function describeFill(fill: FillState, progress: CaptureProgress | null): WorkspaceStateContent | null {
   switch (fill.kind) {
     case 'idle':
       return null;
@@ -78,6 +76,7 @@ function describeFill(
         kind: 'filling',
         happened: `Filling ${fill.sessions} ${fill.sessions === 1 ? 'session' : 'sessions'} of ${fill.request.symbol}.`,
         progress: progress === null ? { kind: 'phase', label: 'Starting the backfill job' } : { kind: 'counts', done: progress.done, total: progress.total, unit: 'days of the span' },
+        why: fill.cancelRefused,
         next: 'Cancelling stops the job; what it already wrote stays in the lake. You can leave this tab: the job keeps going.',
         actions: [{ id: 'cancel-fill', label: 'Cancel the fill' }],
       };
@@ -99,8 +98,8 @@ function describeEnd(fill: Extract<FillState, { kind: 'ended' }>): WorkspaceStat
     };
   }
   const counts = `${report.added} added, ${report.reused} already held`;
-  if (end.kind === 'failed') {
-    const cancelled = end.code === 'backfill_cancelled';
+  if (end.kind !== 'completed') {
+    const cancelled = end.kind === 'cancelled';
     return {
       kind: cancelled ? 'cancelled' : 'failed',
       happened: `${cancelled ? 'The fill was cancelled' : 'The fill stopped before it finished'}: ${counts}, ${report.missingCount} still missing.`,

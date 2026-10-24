@@ -9,7 +9,7 @@ distance that holds all year, named for it.
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Any, Literal, Self
+from typing import Any, Self
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -124,24 +124,34 @@ class SavedSetupResponse(BaseModel):
     saved_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     setup: OptionsBacktestSetup | None = None
     cannot_open_reason: str | None = None
-    golden_setup_id: str | None = None
-    golden_status: Literal["ready", "stale", "revoked"] | None = None
-    golden_status_explanation: str | None = None
+    setup_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+        description=(
+            "The exact identity of the setup's content, present when the setup is. A run, a search or an approved "
+            "version is matched to a saved setup by an equal hash and never by name: a name can be edited, deleted "
+            "and reused, and two names with identical content share one hash."
+        ),
+    )
 
     @model_validator(mode="after")
     def _either_the_setup_or_why_not(self) -> Self:
         if (self.setup is None) == (self.cannot_open_reason is None):
             raise ValueError("a listed setup carries its setup, or the reason it cannot be opened, and not both")
+        if (self.setup is None) != (self.setup_sha256 is None):
+            raise ValueError("a listed setup carries its content hash exactly when it carries its setup")
         return self
 
     @classmethod
-    def from_saved(cls, saved: SavedSetup) -> Self:
+    def from_saved(cls, saved: SavedSetup, *, setup_sha256: str | None) -> Self:
+        """The setup as listed. ``setup_sha256`` is its content identity (``None`` for one that cannot be opened)."""
         return cls(
             name=saved.name,
             example=saved.example,
             saved_at_ms=saved.saved_at_ms,
             setup=None if saved.setup is None else served_setup(saved.setup),
             cannot_open_reason=saved.cannot_open_reason,
+            setup_sha256=setup_sha256,
         )
 
 

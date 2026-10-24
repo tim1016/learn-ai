@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 import respx
 
+from app.data_lake.capture_finality import CLAIM_LEASE_MS, capture_final_ms
 from app.jobs import cache as result_cache
 from app.jobs.progress import ProgressEmitter
 from app.jobs.runner import run_in_thread
@@ -27,7 +28,7 @@ from app.routers.jobs import FeatureResearchJobRequest, start_feature_research_j
 from app.services import feature_study_service
 from app.services.feature_study_service import CACHE_NAMESPACE, FeatureStudyParams, run_feature_study
 from tests._helpers.fake_lake_catalog import FakeCatalog, install_fake_catalog, mock_launcher, point_lake_writer_at_tmp
-from tests._helpers.lake_study import commit_bars, corrected_day
+from tests._helpers.lake_study import commit_bars, corrected_day, lake_file, leave_early_capture, row_of
 from tests._helpers.pinned_vendor import VendorBar, mock_vendor, vendor_history
 from tests.jobs.conftest import _FakeRedis
 
@@ -364,7 +365,7 @@ def test_the_one_session_field_is_honoured_and_defaults_to_the_session_the_study
     asked_for_rth = FeatureResearchJobRequest.model_validate({**browser, "session": "rth"})
 
     assert asked_for_extended.session == "extended"
-    assert omitted.session == "extended", "a caller that omits it keeps the sample the study has always computed on (D02)"
+    assert omitted.session == "extended", "a caller that omits it keeps the sample the study has always computed on"
     assert asked_for_rth.session == "rth"
     assert [SESSION_POLICY_FOR_REQUEST[r.session] for r in (asked_for_extended, omitted, asked_for_rth)] == [
         "extended", "extended", "regular",
@@ -408,3 +409,99 @@ async def test_the_route_hands_the_worker_the_study_it_was_asked_for(monkeypatch
     await start_feature_research_job(regular)
     captured["work"]("emit", "cancel")
     assert captured["params"].session_policy == "regular", "rth is the scheduled session, honoured, not ignored"
+
+
+# ---------------------------------------------------------------------------
+# Regular hours, end to end: the person's choice reaches the lake and comes back labelled (#3521)
+# ---------------------------------------------------------------------------
+
+#: The clock the worker reads (the route does not pass one): after the window, and inside the provider's history.
+NOW_MS = 1_735_689_600_000
+
+
+def browser_request(job_id: str, *, session: str) -> FeatureResearchJobRequest:
+    """The body the Feature page sends: the symbol, the window, the bar, the feature and the session it chose."""
+    return FeatureResearchJobRequest.model_validate(
+        {"jobId": job_id, "symbol": "SPY", "featureName": "rsi_14", "fromDate": WINDOW[0].isoformat(),
+         "toDate": WINDOW[-1].isoformat(), "multiplier": 5, "session": session}
+    )
+
+
+@pytest.fixture
+def through_the_route(harness, monkeypatch: pytest.MonkeyPatch):
+    """Starts a job through the real route handler and returns its state hash once the worker thread has finished."""
+    real_study, real_run_in_thread = run_feature_study, run_in_thread
+    monkeypatch.setattr("app.routers.jobs.run_feature_study", lambda p, **kwargs: real_study(p, now_ms=NOW_MS, **kwargs))
+    monkeypatch.setattr(
+        "app.routers.jobs.run_in_thread", lambda job_id, work, **kwargs: real_run_in_thread(job_id, work, **kwargs).join(timeout=120)
+    )
+
+    async def start(request: FeatureResearchJobRequest) -> dict[str, str]:
+        await start_feature_research_job(request)
+        return harness.fake.hashes[f"job:{request.job_id}:state"]
+
+    return start
+
+
+async def test_a_regular_hours_request_is_admitted_computed_and_labelled_regular_and_cached_apart_from_extended(
+    harness, through_the_route
+):
+    regular_state = await through_the_route(browser_request("regular", session="rth"))
+    regular = harness.result("regular")
+    extended_state = await through_the_route(browser_request("extended", session="extended"))
+    extended = harness.result("extended")
+
+    assert status_of(regular_state) == status_of(extended_state) == "completed"
+    assert regular["data_source"]["session_policy"] == "regular" and extended["data_source"]["session_policy"] == "extended"
+    assert regular["data_source"]["coverage"]["window"]["added"] == len(WINDOW), "the regular session was admitted, every day"
+    assert extended["data_source"]["coverage"]["window"]["reused"] == len(WINDOW), "the same days serve both sessions"
+    assert regular["bars_used"] < extended["bars_used"], "extended adds the pre-market and after-hours bars"
+    assert regular["data_source"]["identity_digest"] != extended["data_source"]["identity_digest"]
+    assert extended_state.get("cached") != "1" and harness.computed == 2, "the regular result was not served for extended"
+    assert len(harness.cache_keys()) == 2, "each session is cached under its own key"
+
+    repeat = await through_the_route(browser_request("regular-again", session="rth"))
+
+    assert repeat["cached"] == "1" and harness.computed == 2
+    assert harness.result("regular-again")["data_source"]["session_policy"] == "regular"
+    assert harness.result("regular-again")["bars_used"] == regular["bars_used"]
+
+
+@pytest.mark.parametrize(
+    ("after_final_ms", "regular_runs"),
+    [
+        pytest.param(CLAIM_LEASE_MS - 1, False, id="a_millisecond_inside_the_claim_lease"),
+        pytest.param(CLAIM_LEASE_MS, True, id="once_the_claim_lease_has_passed"),
+    ],
+)
+async def test_the_early_capture_gate_sits_at_the_regular_final_instant_for_a_regular_request_and_later_for_extended(
+    harness, through_the_route, after_final_ms, regular_runs
+):
+    day = WINDOW[2]
+    await through_the_route(browser_request("seed", session="rth"))
+    leave_early_capture(
+        harness.catalog, harness.lake, harness.tape, day, mode="polygon_split_adjusted",
+        completed_at_ms=capture_final_ms(day, "regular") + after_final_ms,
+    )
+    row_before = dict(row_of(harness.catalog, day, "polygon_split_adjusted"))
+    bytes_before = lake_file(harness.lake, "polygon_split_adjusted", day).read_bytes()
+
+    regular_state = await through_the_route(browser_request("regular", session="rth"))
+    extended_state = await through_the_route(browser_request("extended", session="extended"))
+
+    if regular_runs:
+        assert status_of(regular_state) == "completed"
+        assert harness.result("regular")["data_source"]["session_policy"] == "regular"
+    else:
+        refusal = harness.result("regular")
+        [issue] = refusal["refusal"]["sessions"]
+        assert status_of(regular_state) == "failed" and regular_state["error_code"] == "captured_before_final"
+        assert (issue["outcome"], issue["group"]) == ("captured_before_final", "window")
+        assert "regular session" in issue["reason"]
+        assert refusal["data_source"]["session_policy"] == "regular", "the refusal names the session it judged"
+    assert status_of(extended_state) == "failed" and extended_state["error_code"] == "captured_before_final", (
+        "the same capture is early for extended hours, whose tape runs four hours longer"
+    )
+    assert "extended session" in harness.result("extended")["refusal"]["sessions"][0]["reason"]
+    assert row_of(harness.catalog, day, "polygon_split_adjusted") == row_before, "a refusal rewrites nothing"
+    assert lake_file(harness.lake, "polygon_split_adjusted", day).read_bytes() == bytes_before

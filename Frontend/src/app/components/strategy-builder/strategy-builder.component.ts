@@ -28,7 +28,6 @@ import { ExpirationRibbonComponent } from '../options-chain-v2/expiration-ribbon
 import { CandlestickChartComponent } from '../../shared/charts/candlestick-chart/candlestick-chart.component';
 import { VolumeChartComponent } from '../../shared/charts/volume-chart/volume-chart.component';
 import { PayoffChartComponent } from '../../shared/payoff-chart/payoff-chart.component';
-import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 import { SymbolPickerComponent } from '../../shared/symbol-picker/symbol-picker.component';
 import { errorMessage } from '../../shared/errors/error-message';
 
@@ -130,7 +129,6 @@ function formatPayoffExtremum(value: number | null): string {
     Drawer, Button, Tooltip, Skeleton,
     ExpirationRibbonComponent, PayoffChartComponent,
     CandlestickChartComponent, VolumeChartComponent,
-    PageHeaderComponent,
     SymbolPickerComponent,
   ],
   templateUrl: './strategy-builder.component.html',

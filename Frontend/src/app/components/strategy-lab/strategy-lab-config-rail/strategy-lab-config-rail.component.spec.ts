@@ -68,7 +68,7 @@ async function createRail(
     resolution: "minute",
     autoFetch: true,
   });
-  fixture.componentRef.setInput("strategies", [STRATEGY]);
+  fixture.componentRef.setInput("strategy", STRATEGY);
   fixture.componentRef.setInput("selectedStrategyName", STRATEGY.name);
   fixture.componentRef.setInput("paramValues", { fast: 12, slow: 26 });
   fixture.detectChanges();
@@ -105,21 +105,6 @@ describe("StrategyLabConfigRailComponent", () => {
     expect.soft(advanced?.textContent, "keeps strategy parameters in Advanced").toContain("Strategy parameters");
     expect.soft(advanced?.textContent, "keeps execution in Advanced").toContain("Execution");
     expect.soft(advanced?.textContent, "keeps the LEAN launcher in Advanced").toContain("LEAN launcher");
-  });
-
-  it("shows the restored strategy when it is not the first available option", async () => {
-    const fixture = await createRail();
-    fixture.componentRef.setInput("strategies", [{
-      ...STRATEGY,
-      name: "deployment_validation",
-      display_name: "Deployment Validation",
-    }, STRATEGY]);
-    fixture.detectChanges();
-
-    const picker = (fixture.nativeElement as HTMLElement)
-      .querySelector<HTMLSelectElement>("#strategy-picker");
-    expect(picker?.value).toBe("ema_crossover_signal");
-    expect(picker?.selectedOptions[0]?.textContent).toContain("EMA crossover");
   });
 
   it("collapses vertically while retaining the full side-rail width", async () => {
@@ -212,6 +197,7 @@ describe("StrategyLabConfigRailComponent", () => {
   it("disables rerun when the restored strategy is no longer selectable", async () => {
     const fixture = await createRail();
     fixture.componentRef.setInput("launcherStatus", "ready");
+    fixture.componentRef.setInput("strategy", null);
     fixture.componentRef.setInput("selectedStrategyName", "retired_strategy");
     fixture.detectChanges();
 
@@ -352,18 +338,14 @@ describe("StrategyLabConfigRailComponent", () => {
     expect(advanced.textContent).toContain("LEAN launcher");
   });
 
-  it("says Deployment Validation is experimental where it is listed, chosen and summarised (#2607)", async () => {
+  it("says Deployment Validation is experimental where it is chosen and summarised (#2607)", async () => {
     const notice = "Experimental validation only — not a trading strategy";
     const dv: StrategyInfo = { ...STRATEGY, name: "deployment_validation", display_name: "Deployment Validation", experimental_notice: notice };
     const fixture = await createRail();
-    fixture.componentRef.setInput("strategies", [STRATEGY, dv]);
-    fixture.detectChanges();
     const root = fixture.nativeElement as HTMLElement;
-
-    const options = [...root.querySelectorAll("#strategy-picker option")].map((option) => option.textContent?.trim());
-    expect(options).toEqual(["EMA crossover", `Deployment Validation — ${notice}`]);
     expect(root.querySelector("[role='note']")).toBeNull();
 
+    fixture.componentRef.setInput("strategy", dv);
     fixture.componentRef.setInput("selectedStrategyName", dv.name);
     fixture.detectChanges();
     expect(root.querySelector("[role='note']")?.textContent).toContain(notice);

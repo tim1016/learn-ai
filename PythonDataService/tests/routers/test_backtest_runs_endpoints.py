@@ -50,7 +50,7 @@ async def test_history_lists_newest_first_filters_by_engine_and_keeps_the_graphq
         assert set(engine_row) == {
             "id", "source", "engine", "strategyName", "symbol", "leanRunId", "parameters", "startDate", "endDate",
             "executedAt", "totalTrades", "totalPnL", "commissionPerOrder", "brokeragePolicy", "notes", "dataPolicy",
-            "verdictGrade", "verdictSignal", "parityGroupId", "hasSyntheticExit",
+            "verdictGrade", "verdictSignal", "parityGroupId", "customSource", "hasSyntheticExit",
         }
         assert engine_row["engine"] == "PYTHON" and engine_row["source"] == "engine" and engine_row["totalPnL"] == 20.0
         assert engine_row["startDate"] == 1736139600000 and engine_row["endDate"] == 1736485200000  # ET midnight, ms UTC
@@ -64,6 +64,23 @@ async def test_history_lists_newest_first_filters_by_engine_and_keeps_the_graphq
         assert [row["id"] for row in lean_only.json() if row["symbol"] == symbol] == [lean_id]
         assert (await c.get("/api/research/backtest-runs", params={"engine": "QC"})).status_code == 422
         assert (await c.get("/api/research/backtest-runs", params={"limit": 0})).status_code == 422
+
+
+async def test_history_filters_by_strategy_before_it_limits(client) -> None:
+    _requires_ephemeral_db()
+    symbol = _symbol()
+    strategy = f"strategy_{uuid.uuid4().hex[:8]}"
+    wanted = await _seed(engine_payload(symbol=symbol, strategy_name=strategy))
+    # Newer rows of other strategies must not push the wanted one out of a short page.
+    for _ in range(3):
+        await _seed(engine_payload(symbol=symbol))
+
+    async with client as c:
+        listed = await c.get("/api/research/backtest-runs", params={"strategy_name": strategy, "limit": 1})
+        assert listed.status_code == 200, listed.text
+        assert [row["id"] for row in listed.json()] == [wanted]
+        assert (await c.get("/api/research/backtest-runs", params={"strategy_name": f"{strategy}_none"})).json() == []
+        assert (await c.get("/api/research/backtest-runs", params={"strategy_name": ""})).status_code == 422
 
 
 async def test_the_run_report_serves_the_stored_envelopes_as_the_producers_wrote_them(client) -> None:

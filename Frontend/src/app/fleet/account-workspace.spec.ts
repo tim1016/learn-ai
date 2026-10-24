@@ -11,6 +11,7 @@ import {
   accountWorkspaceLocation,
   accountWorkspaceTabRoute,
   accountWorkspaceTitle,
+  isQualificationId,
   type AccountWorkspaceLocation,
 } from './account-workspace';
 
@@ -317,5 +318,16 @@ describe('accountWorkspaceTitle', () => {
       'History'],
   ] as const)('departs from the "Tab · Account" title: %s', (_name, tab, accountName, botName, expected) => {
     expect(accountWorkspaceTitle(tab, accountName, botName)).toBe(expected);
+  });
+});
+
+describe('isQualificationId', () => {
+  it.each(['gq-0001-aaaa-bbbb', 'gq_1.v2:a', 'A', 'x'.repeat(128)])('takes %s as a version id', (id) => {
+    expect(isQualificationId(id)).toBe(true);
+  });
+
+  // Both the account list and Deploy judge the address by this, so a value one refuses is never read by the other.
+  it.each([null, '', '../accounts', '-gq', 'gq 1', 'gq/1', 'x'.repeat(129)])('refuses %s', (id) => {
+    expect(isQualificationId(id)).toBe(false);
   });
 });

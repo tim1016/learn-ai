@@ -11,8 +11,10 @@ from pathlib import Path, PurePosixPath
 from zoneinfo import ZoneInfo
 
 from app.data_lake.adjustment_versions import adjustment_companion, companion_path
+from app.data_lake.capture_finality import VENDOR_DELAY_MS
 from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes
 from app.data_lake.path_policy import LeanMinuteBarPath, lake_subpath
+from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from tests._helpers.fake_lake_catalog import FakeCatalog
 from tests._helpers.pinned_vendor import VendorBar
 
@@ -22,6 +24,15 @@ ET = ZoneInfo("America/New_York")
 def lake_file(lake: Path, mode: str, day: date, symbol: str = "SPY") -> Path:
     """Where the lake keeps ``symbol``'s minute bars for ``day`` under ``mode``."""
     return lake / lake_subpath(mode) / LeanMinuteBarPath("usa", symbol, day, "trade").relative_path()  # type: ignore[arg-type]
+
+
+def row_of(catalog: FakeCatalog, day: date, mode: str = "raw") -> dict:
+    """The catalog's minute row for ``day`` under ``mode``."""
+    return next(
+        r
+        for r in catalog.rows.values()
+        if r["trading_date"] == day and r["resolution"] == "minute" and r["price_adjustment_mode"] == mode
+    )
 
 
 def commit_payload(catalog: FakeCatalog, lake: Path, day: date, payload: bytes, *, mode: str = "raw") -> None:
@@ -69,6 +80,19 @@ def corrected_day(day: date, vendor_day: list[VendorBar], *, bump: str = "0.05")
         )
         for b in vendor_day
     ]
+
+
+def leave_early_capture(
+    catalog: FakeCatalog, lake: Path, tape: dict[date, list[VendorBar]], day: date, *, completed_at_ms: int | None, mode: str = "raw"
+) -> None:
+    """Leave ``day`` as a regular-hours chart opened right after the close leaves it.
+
+    The artifact holds the vendor's bars up to the quarter hour it had delivered by then, and the catalog says when
+    the capture completed. The next fetch of the day would return the whole tape.
+    """
+    delivered_until = session_close_ms_utc(day) + VENDOR_DELAY_MS
+    commit_bars(catalog, lake, day, corrected_day(day, [b for b in tape[day] if b["t"] < delivered_until], bump="0"), mode=mode)
+    row_of(catalog, day, mode)["completed_at_ms"] = completed_at_ms
 
 
 def leave_publication_in_flight(catalog: FakeCatalog, lake: Path, day: date, *, lease_ms_from_now: int, mode: str = "raw") -> bytes:

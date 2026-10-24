@@ -1,0 +1,49 @@
+<section class="deploy" aria-labelledby="deploy-a-bot-title">
+  <div class="deploy__head">
+    <h2 id="deploy-a-bot-title" class="deploy__title">Deploy a bot</h2>
+    <button type="button" (click)="closed.emit()">Close</button>
+  </div>
+  <p class="note">
+    Choose what to take to Deploy. You choose the account next, and nothing is started from here:
+    Deploy checks the version, the account and its gates again before anything is sent.
+  </p>
+
+  <div class="deploy__part">
+    <h3 class="deploy__heading">A qualified version</h3>
+    <p class="note">
+      Each version covers one symbol and one exact configuration. Choosing one takes exactly that version, and the
+      current default is only what is marked as such.
+    </p>
+    @if (gate(); as state) {
+      <app-workspace-state-block [state]="state" (actionTriggered)="retry()" />
+    } @else if (store.qualifiedVersions(); as read) {
+      @if (read.kind === 'ready') {
+        <app-symbol-version-groups [versions]="read.value">
+          <ng-template appVersionColumns><th>Deploy</th></ng-template>
+          <ng-template appVersionCells let-version>
+            <td>
+              @if (version.status === 'ready') {
+                <a
+                  [routerLink]="accountListRoute"
+                  [queryParams]="versionQuery(version)"
+                  [attr.aria-label]="(version.is_default ? 'Use the current default ' : 'Deploy version ') + version.id + ' for ' + version.symbol"
+                >{{ version.is_default ? 'Use the current default' : 'Deploy this version' }}</a>
+              } @else {
+                <span class="muted">Not offered: {{ version.status_explanation }}</span>
+              }
+            </td>
+          </ng-template>
+        </app-symbol-version-groups>
+      }
+    }
+  </div>
+
+  <div class="deploy__part">
+    <h3 class="deploy__heading">The strategy, without a saved version</h3>
+    <p class="note">
+      Deploy opens on this strategy at the symbol and settings it registers, and applies no saved version. Its own
+      checks decide what the account may run.
+    </p>
+    <a [routerLink]="accountListRoute" [queryParams]="strategyOnlyQuery()">Choose an account for {{ store.key() }} without a saved version</a>
+  </div>
+</section>

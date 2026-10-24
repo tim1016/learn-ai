@@ -1,0 +1,35 @@
+<app-signal-strategy-section
+  title="Current exploratory values"
+  scope="Values being tried out, never approved ones. They are exploratory and in-sample, and no page approves settings from them."
+  [read]="always"
+>
+  @if (exploring(); as values) {
+    <p class="note">
+      As the Backtest workbench holds them now: {{ values.symbol }}, {{ values.from }} to {{ values.to }}, {{ values.resolution }} bars,
+      {{ values.engine }} engine.
+      @if (values.restoredFromRunId !== null) { They were restored from saved run #{{ values.restoredFromRunId }}. }
+    </p>
+    <table class="rows">
+      <thead>
+        <tr><th>Parameter</th><th>Exploratory value</th><th>Against the schema default</th></tr>
+      </thead>
+      <tbody>
+        @for (parameter of values.parameters; track parameter.name) {
+          <tr>
+            <td><span class="mono">{{ parameter.name }}</span></td>
+            <td>{{ valueText(parameter.value) }}</td>
+            <td>{{ parameter.changedFromDefault ? 'changed' : 'the default' }}</td>
+          </tr>
+        } @empty {
+          <tr><td colspan="3">The workbench holds no settings for this strategy.</td></tr>
+        }
+      </tbody>
+    </table>
+    <p class="note"><a [routerLink]="backtestRoute()" [queryParams]="backtestQuery()">Change them in Backtest</a></p>
+  } @else {
+    <p class="note">
+      Nothing has been tried out for this strategy yet. The workbench in
+      <a [routerLink]="backtestRoute()" [queryParams]="backtestQuery()">Backtest</a> holds the values being explored, and they show here.
+    </p>
+  }
+</app-signal-strategy-section>

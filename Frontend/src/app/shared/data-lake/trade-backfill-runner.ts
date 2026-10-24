@@ -6,9 +6,14 @@ import { BackfillJobRunner, BackfillSubmissionError, type BackfillJobRun } from 
 import type { BackfillDefaults, BackfillFailure } from './data-lake.types';
 import { tradeBackfillSpec, type TradeBackfillWindow } from './trade-backfill-spec';
 
+/** The code a `cancelled` end carries, for a consumer that reports a stopped backfill beside the failed ones. */
+export const BACKFILL_CANCELLED_CODE = 'backfill_cancelled';
+
 export type TradeBackfillEnd =
   | { readonly kind: 'completed'; readonly failure: BackfillFailure | null }
   | { readonly kind: 'failed'; readonly code: string; readonly message: string }
+  /** The job was stopped on request; what it already wrote stays. It carries a code and words for a consumer that reports it as a failure. */
+  | { readonly kind: 'cancelled'; readonly code: typeof BACKFILL_CANCELLED_CODE; readonly message: string }
   | { readonly kind: 'detached' };
 
 type WindowSelection = TradeBackfillWindow | Extract<TradeBackfillEnd, { kind: 'failed' }> | null;
@@ -50,7 +55,7 @@ export class TradeBackfillRunner {
       switch (terminal.kind) {
         case 'completed': return { kind: 'completed', failure };
         case 'failed': return failed(terminal.code, terminal.message);
-        case 'cancelled': return failed('backfill_cancelled', 'The backfill was cancelled.');
+        case 'cancelled': return { kind: 'cancelled', code: BACKFILL_CANCELLED_CODE, message: 'The backfill was cancelled.' };
         case 'detached': return terminal;
       }
     } catch (error) {

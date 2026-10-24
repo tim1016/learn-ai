@@ -33,7 +33,7 @@
         tooltipPosition="top"
         [attr.aria-label]="'About ' + selected.label + ': ' + selected.explanation"
       >i</button>
-      <a routerLink="/strategy-validation" [queryParams]="{ strategy: selected.strategy_key }">View validation</a>
+      <a [routerLink]="['/signal-strategies', selected.strategy_key, 'proof']">View validation</a>
     }
   </div>
   @if (selectedStrategy()?.blocked_explanation; as blockedReason) {

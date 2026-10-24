@@ -91,7 +91,7 @@ def strategy_gate_recovery(
     """Return the action that can actually clear the strategy gate.
 
     A runtime-backed blocked row needs its evidence repaired. A visible row
-    with no runtime cannot be repaired in Strategy Validation; its runtime
+    with no runtime cannot be repaired in its Proof tab; its runtime
     must be registered instead. Keeping this distinction here gives the
     readiness view and the request preflight one recovery authority.
     """
@@ -105,10 +105,10 @@ def strategy_gate_recovery(
     if any(strategy.paper_access_state == "available" for strategy in strategies):
         return "Allow broker trading for a strategy in What."
     if any("dry_run" in strategy.admissible_modes for strategy in strategies):
-        return "Repair the named proof, or re-validate the strategy in Strategy Validation."
+        return "Repair the named proof, or re-validate the strategy in its Proof tab under Signal strategies."
     if strategies:
         raise PaperDeployInvariantError("A non-empty strategy catalog has no classified recovery path.")
-    return "Review and validate a strategy in Strategy Validation."
+    return "Review and validate a strategy in its Proof tab under Signal strategies."
 
 
 def resolve_deploy_strategy_params(

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { comparison } from '../run-detail/testing/detail-fixtures';
 import { fakeRunDetail } from '../run-detail/testing/fake-run-detail';
 import { renderHistoryTab } from '../testing/render-history';
-import { fakeService } from '../testing/render-page';
+import { fakeService } from '../testing/fake-service';
 import { runItem } from '../testing/run-fixtures';
 
 /**

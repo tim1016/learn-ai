@@ -7,7 +7,7 @@ import { tradesPage } from '../run-detail/testing/detail-fixtures';
 import { fakeRunDetail } from '../run-detail/testing/fake-run-detail';
 import { lettingGo } from '../testing/page-actions';
 import { renderRunPanel } from '../testing/render-run';
-import { fakeService } from '../testing/render-page';
+import { fakeService } from '../testing/fake-service';
 import { runDetail, runItem } from '../testing/run-fixtures';
 
 /** The closer look at a run (its trades, its export, one day) belongs to a complete run, and to no other. */

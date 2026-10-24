@@ -80,6 +80,7 @@ function makeRun(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail 
     },
     insightSummaryJson: null,
     parityGroupId: null,
+    customSource: false,
     trades: [],
     tradesTruncated: false,
     closingBarSkips: [],

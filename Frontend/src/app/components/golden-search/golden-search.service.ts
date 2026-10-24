@@ -76,6 +76,9 @@ export function toConflict(error: unknown): StudyConflictError | null {
   return new StudyConflictError(detail['code'], detail['message'], current);
 }
 
+/** How many of the newest qualified versions one list read asks for; a reply this long may be cut short. */
+export const QUALIFICATION_LIST_LIMIT = 500;
+
 /**
  * HTTP client for `/api/research/golden-search` (#2696). The base is relative
  * so the dev proxy attaches the data-plane control header to the guarded
@@ -198,8 +201,11 @@ export class GoldenSearchService {
     return firstValueFrom(this.http.get<QualificationDeployOffer>(`${this.qualificationsBase}/${encodeURIComponent(qualificationId)}/deploy-offer`));
   }
 
-  listQualifications(): Promise<GoldenQualificationSummary[]> {
-    return firstValueFrom(this.http.get<GoldenQualificationSummary[]>(this.qualificationsBase, { params: { limit: 500 } }));
+  /** The newest qualified versions: every program's, or one program's when `programKey` names it. */
+  listQualifications(programKey?: string): Promise<GoldenQualificationSummary[]> {
+    const params: Record<string, string | number> = { limit: QUALIFICATION_LIST_LIMIT };
+    if (programKey !== undefined) params['program_key'] = programKey;
+    return firstValueFrom(this.http.get<GoldenQualificationSummary[]>(this.qualificationsBase, { params }));
   }
 
   reproveQualification(id: string, idempotencyKey: string): Promise<GoldenQualificationSummary> {

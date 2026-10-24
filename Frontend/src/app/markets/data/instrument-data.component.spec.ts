@@ -5,13 +5,13 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { BackfillDefaults } from '../../shared/data-lake';
 import type { BackfillJobRun, BackfillRunState } from '../../shared/data-lake/backfill-job-runner';
+import { dataReport, dataSession } from '../../shared/data-lake/testing/instrument-data-report';
 import { TradeBackfillRunner, type TradeBackfillEnd } from '../../shared/data-lake/trade-backfill-runner';
 import type { TradeBackfillWindow } from '../../shared/data-lake/trade-backfill-spec';
+import { fakeTickerCatalog, provideFakeTickerCatalog } from '../../shared/ticker-catalog/testing/fake-ticker-catalog';
 import {
   INSTRUMENT_DATA_URL,
   WINDOW_QUERY,
-  dataReport,
-  dataSession,
   openPlace,
   type OpenedPlace,
 } from '../testing/instrument-place';
@@ -305,9 +305,52 @@ describe('an instrument\'s Data tab', () => {
       await userEvent.click(await screen.findByRole('button', { name: 'Fill 2 sessions' }));
       await userEvent.click(await screen.findByRole('button', { name: 'Cancel the fill' }));
       expect(runner.cancel).toHaveBeenCalledTimes(1);
-      runner.end({ kind: 'failed', code: 'backfill_cancelled', message: 'The backfill was cancelled.' });
+      runner.end({ kind: 'cancelled', code: 'backfill_cancelled', message: 'The backfill was cancelled.' });
       await flushRead(opened, gappedReport());
 
+      expect(await screen.findByText(/The fill was cancelled: /)).toBeTruthy();
+    });
+
+    it.each([
+      ['completes', { kind: 'completed', failure: null } as const],
+      ['fails', { kind: 'failed', code: 'provider_rate_limited', message: 'Too many requests' } as const],
+      ['is cancelled', { kind: 'cancelled', code: 'backfill_cancelled', message: 'The backfill was cancelled.' } as const],
+    ])('reads the lake catalog again when a fill %s, because the pickers\' held spans come from what it wrote', async (_name, end) => {
+      const runner = fakeRunner();
+      const catalog = fakeTickerCatalog([{ symbol: 'SPY', name: 'SPDR S&P 500', firstHeld: '2024-01-02', lastHeld: '2026-09-18' }]);
+      const opened = await openPlace(`/markets/SPY/data?${WINDOW_QUERY}`, [runner.provider, provideFakeTickerCatalog(catalog)]);
+      await flushRead(opened, gappedReport());
+      const reloads = () => catalog.viewFor('polygon_split_adjusted').reloadCount;
+      const before = reloads();
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Fill 2 sessions' }));
+      await waitFor(() => expect(runner.run).toHaveBeenCalled());
+      expect.soft(reloads(), 'nothing is re-read while the job runs').toBe(before);
+      runner.end(end);
+      await flushRead(opened, gappedReport());
+      await screen.findByText(/The fill (was cancelled|stopped before it finished)|Fill finished/);
+
+      expect(reloads()).toBe(before + 1);
+    });
+
+    it('says so when the server could not be told to stop the fill, keeps Fill shut while the job may be writing, and lets the person try again', async () => {
+      const runner = fakeRunner();
+      const opened = await openPlace(`/markets/SPY/data?${WINDOW_QUERY}`, [runner.provider]);
+      await flushRead(opened, gappedReport());
+      runner.cancel.mockRejectedValueOnce(new Error('Network error'));
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Fill 2 sessions' }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Cancel the fill' }));
+
+      expect(await screen.findByText(/The server could not be told to stop it, so it may still be running\. Network error/)).toBeTruthy();
+      expect.soft(screen.getByText('Filling 2 sessions of SPY.'), 'the job is still what is running').toBeTruthy();
+      expect.soft((screen.getByRole('button', { name: 'Fill 2 sessions' }) as HTMLButtonElement).disabled).toBe(true);
+      expect.soft(runner.run).toHaveBeenCalledTimes(1);
+
+      await userEvent.click(screen.getByRole('button', { name: 'Cancel the fill' }));
+      expect(runner.cancel, 'the cancel is offered again').toHaveBeenCalledTimes(2);
+      runner.end({ kind: 'cancelled', code: 'backfill_cancelled', message: 'The backfill was cancelled.' });
+      await flushRead(opened, gappedReport());
       expect(await screen.findByText(/The fill was cancelled: /)).toBeTruthy();
     });
 

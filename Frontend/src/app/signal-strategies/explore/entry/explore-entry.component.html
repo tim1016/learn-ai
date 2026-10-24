@@ -1,0 +1,31 @@
+<app-workspace-header [title]="title()" [breadcrumb]="breadcrumb()" />
+
+@if (savedRun(); as run) {
+  <app-unregistered-run-report [runId]="run.runId" [storedStrategy]="run.storedStrategy" />
+} @else if (refusal(); as state) {
+  <div class="entry">
+    <app-workspace-state-block [state]="state" />
+  </div>
+} @else {
+  <section class="entry" aria-label="Strategies">
+    @if (unknownStrategy(); as name) {
+      <p class="entry__note">"{{ name }}" is not a registered strategy. Choose one from the list.</p>
+    } @else {
+      <p class="entry__note">This tool works on one strategy. Choose which.</p>
+    }
+    <ul class="entry__list">
+      @for (choice of choices(); track choice.key) {
+        <li class="entry__item">
+          @if (choice.closedReason === null) {
+            <a [routerLink]="choice.route" [queryParams]="choice.query">{{ choice.name }}</a>
+          } @else {
+            <span class="entry__closed">{{ choice.name }}</span>
+            <app-signal-strategy-chip tone="degraded">not allowed</app-signal-strategy-chip>
+            <span class="entry__reason">{{ choice.closedReason }}</span>
+          }
+          <code>{{ choice.key }}</code>
+        </li>
+      }
+    </ul>
+  </section>
+}

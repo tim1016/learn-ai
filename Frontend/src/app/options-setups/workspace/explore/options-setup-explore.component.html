@@ -1,0 +1,63 @@
+<section class="explore" aria-label="Explore the setup">
+  <app-health-notice [needs]="healthNeeds" note="Your requested sessions are checked separately by Check data." />
+  <nav class="views" aria-label="Explore views">
+    @for (link of viewLinks(); track link.id) {
+      <a [routerLink]="address()" [queryParams]="link.query" [class.is-active]="viewKnown() && link.id === activeView()" [attr.aria-current]="viewKnown() && link.id === activeView() ? 'page' : null">{{ link.label }}</a>
+    }
+    @if (pastChain(); as chain) {
+      <a class="elsewhere" [routerLink]="chain.commands" [queryParams]="chain.queryParams">Past chain in Markets</a>
+    }
+  </nav>
+
+  @if (addressState(); as why) {
+    <app-workspace-state-block [state]="why" />
+  } @else if (activeView() === 'backtest') {
+    @if (backtestState(); as why) {
+      <app-workspace-state-block [state]="why" />
+    } @else {
+      <div class="backtest">
+        <section class="tested" aria-labelledby="ex-tested">
+          <h2 id="ex-tested">What this backtest tests</h2>
+          <p>
+            “{{ explore.name() }}”,
+            @if (explore.example()) { a shipped example. } @else { as last saved (<app-timestamp-display [value]="explore.savedAtMs()" mode="local" />). }
+            A backtest tests the setup as it is saved, so nothing edited in Define changes it until it is saved.
+          </p>
+          @if (setup.standing().kind === 'changed') {
+            <p class="changed" role="status">Define holds changes that are not saved. They are not in this backtest. Save them in Define to test them.</p>
+          }
+          @if (explore.readBack(); as words) {
+            <app-options-backtest-setup-sentences [summary]="words" />
+          } @else if (explore.readBackProblem(); as problem) {
+            <p class="problem" role="alert">The saved setup could not be read back: {{ problem }}</p>
+            <button type="button" class="again" (click)="act('retry')">Try again</button>
+          } @else {
+            <p class="muted" role="status">Reading the saved setup back…</p>
+          }
+        </section>
+        <app-options-backtest-duration-card
+          [range]="explore.range()" [optionPricesFromMs]="explore.pricesFromMs()" [problem]="explore.rangeProblem()" [rangeChange]="explore.rangeNote()" (changed)="explore.rangeChanged($event)" />
+        <app-options-backtest-run-actions [canCheck]="explore.canCheck()" [canStart]="explore.canStart()" [hint]="explore.runHint()" (check)="checkData()" (start)="start()" />
+        <div class="results">
+          @if (explore.check().kind !== 'idle') {
+            <app-options-backtest-data-check-panel [state]="explore.check()" [stale]="explore.checkIsStale()" (dismissed)="dismissCheck()" (retry)="checkData()" (useStretch)="explore.useStretch($event)" />
+          }
+          @if (explore.launch.starting()) { <p class="notice" role="status">Starting the backtest…</p> }
+          @if (explore.launch.problem(); as problem) { <app-options-backtest-launch-notice [problem]="problem" (retry)="explore.launch.takeUp()" /> }
+          @if (explore.launch.current(); as run) {
+            <app-options-backtest-run-panel [run]="run" [exploreRoute]="address()" [goldenOffer]="offerFor(run.id)" (updated)="runUpdated($event)" />
+          }
+        </div>
+      </div>
+    }
+  } @else if (activeView() === 'history') {
+    <app-options-backtest-history
+      [active]="true" [setupBlockedWhy]="explore.setupBlockedWhy()" [openRun]="historyRun()" [compareRuns]="comparison()" [exploreRoute]="address()" [goldenOffer]="offerFor"
+      (runShown)="runShown($event)" (comparisonShown)="comparisonShown($event)" (useSetup)="explore.useRunSetup($event)" (deleted)="runDeleted($event)" />
+  } @else if (onRunView()) {
+    @if (runId(); as id) {
+      <app-options-evidence-view
+        kind="run" [subjectId]="id.toString()" [view]="activeView()" [comparator_run_id]="comparator_run_id()" [route]="address()" [keep]="runQuery()" [embedded]="true" [goldenOffer]="offerFor(id)" />
+    }
+  }
+</section>

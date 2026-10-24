@@ -288,10 +288,8 @@ a defect.
 - **F7 — QC-ID hard-required client-side though ignored for proof-less
   candidates (low).** Flag-form validation out of sync with the backend
   recording rule
-  (`Frontend/src/app/components/strategy-validation/strategy-validation.component.ts`;
+  (`Frontend/src/app/signal-strategies/proof/proof-actions.component.ts`;
   ceremony §3).
-- **F8 — human-flag toggle defaults to Reject (low).** Users have saved
-  rejections by accident (same component as F7; ceremony §3).
 - **F10 — dry-run deploys break atomicity on refusal (medium).** 500s on the
   reference topology (virtiofs bind mount), leaks orphan `sim:<sid>/` dirs
   with partially provisioned `source_bars.sqlite3`, raw error envelope
@@ -644,13 +642,9 @@ re-arms the server-authored timeframe auto-correct, and numeric
 
 ## Lake-sourced research studies: divergences from the provider path (#3521, 2026-10-24)
 
-The Feature study reads admitted lake bars instead of one provider call per run. The differences below are measured
-in `tests/research/test_feature_study_lake_vs_provider.py`; the first and the fourth are owner decisions (D02 of
-PRD #3490 and the re-capture path below).
+The Feature study reads admitted lake bars instead of one provider call per run. The open differences below are
+measured in `tests/research/test_feature_study_lake_vs_provider.py`.
 
-- **P2: which session the study computes on is undecided.** It keeps `extended` (04:00 to 20:00 ET), what the
-  provider call always returned; `regular` is opt-in per request. Moving the default changes every number the study
-  prints (see the measured RSI and IC movement in the comparison test).
 - **P2: a held day with no recorded capture time cannot be judged early.** `captured_early` treats a missing
   `CompletedAtMs` as final, and an imported day carries its import time, which is later than its capture. Such a day
   captured before its session finished stays as short as it was captured. New captures always carry the time. A
@@ -659,8 +653,8 @@ PRD #3490 and the re-capture path below).
 - **P2: the vendor's after-hours tail (four hours) and delivery delay (15 minutes) are constants.**
   `app/data_lake/capture_finality.py` names them once. A plan that delivers in real time makes the delay
   conservative, not wrong; a change to the extended window needs the constant changed.
-- **Owner decision, P2: how a day captured before its session finished is captured again.** A study whose window
-  holds one refuses it (`captured_before_final`, with the day, when it was captured and what it needs) rather than
+- **P2: a held day captured before its session finished stays refused, and no re-capture path exists (owner,
+  2026-10-24).** A study whose window holds one refuses it (`captured_before_final`, with the day, when it was captured and what it needs) rather than
   computing on the short tape; it asks the vendor for nothing and rewrites nothing. The lake keeps a committed day as
   captured, so the only way to capture it again today is a forced rewrite of a complete day
   (`refresh_complete_artifact`, the path of a provider correction), and that is not safe to run from a study:
@@ -670,17 +664,23 @@ PRD #3490 and the re-capture path below).
     fetch ends, and a vendor failure leaves it `failed` with the prior row not restored (the prior path and sha are
     returned for exactly this, and unused).
 
-  To decide: an operator-run re-capture that fetches first, swaps only on success and restores the prior row on any
-  failure, together with what happens to receipts that pinned the early bytes; or leaving held early days refused for
-  good. An extended-hours study refuses a day whose capture completed before 20:20 ET (17:20 on an early close); a
+  The owner chose to leave held early days refused rather than build an operator-run re-capture. An extended-hours
+  study refuses a day whose capture completed before 20:20 ET (17:20 on an early close); a
   regular-hours study one that completed before 16:20 ET (13:20). Those are the final instants (20:15, 16:15) plus the
   five-minute claim lease. Any writer, such as a chart or a backfill, whose capture completes in the five minutes after
   the final instant leaves a day that is refused for good although it may be whole; that is the price of the conservative bound. A
-  study also does not start on a session until the final instant plus that lease has passed (`window_not_complete`
-  before), so a day it captures itself is never one of those.
+  study that has to capture a day does not start on it until the extended final instant plus that lease has passed
+  (`window_not_complete` before), whichever session it reads, because the lake keeps one copy of a day for every reader; a
+  study that finds the day held waits only for its own session's final instant plus the lease. So a day a study captures
+  itself is never one of those.
 - **P2: a split announced after a day was captured stays invisible to that held day until a later capture of the
-  symbol refreshes its adjusted history.** The provider path adjusted to the moment of the request. Price-level
+  symbol refreshes its adjusted history (accepted by the owner, 2026-10-24).** The provider path adjusted to the moment of the request. Price-level
   outputs (MACD signal, quantile-bin bounds) move by the split factor, not only the prices.
+- **P3: the pre-run count of sessions the lake lacks does not see a held early day.** The Feature page counts
+  missing sessions from the catalog, as the Data tab does, and there a day captured early is `ready`; the run still
+  refuses it (`captured_before_final`, naming the day) after the count warned of nothing. The count also treats today
+  as forming until the New York date rolls, while a run admits it once the extended final instant plus the lease has
+  passed (20:20 ET, or 17:20 on an early close), so between 20:20 ET and midnight the notice says nothing and the run fetches one session.
 - **P2: a window that starts before the symbol listed refuses.** Admission has no "not applicable" outcome for a
   session before the first trade; the provider path computed on the shorter series. The refusal is
   `data_unavailable_from_provider` for the sessions the vendor answers empty.

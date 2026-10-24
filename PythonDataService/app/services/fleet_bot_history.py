@@ -84,6 +84,8 @@ class BotHistoryFilters:
     symbol: str | None = None
     #: One bot, with all of its runs (its own page links here).
     strategy_instance_id: str | None = None
+    #: One strategy's bots, by registry key (its own page counts them).
+    strategy_key: str | None = None
 
     def admits(self, row: FleetBotHistoryRow) -> bool:
         return (
@@ -91,6 +93,7 @@ class BotHistoryFilters:
             and (self.world is None or row.world == self.world)
             and (self.symbol is None or self.symbol in _symbols_of(row))
             and (self.strategy_instance_id is None or row.strategy_instance_id == self.strategy_instance_id)
+            and (self.strategy_key is None or row.strategy_key == self.strategy_key)
         )
 
 

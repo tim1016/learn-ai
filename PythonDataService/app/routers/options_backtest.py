@@ -2,18 +2,21 @@
 
 ``GET /session-clock`` is a full session's open and close, from the calendar.
 ``POST /setups/describe`` says a setup in plain sentences. ``GET /limits`` is what a setup and a range may be. ``GET /setups``
-lists the shipped examples and the saved setups, ``PUT /setups/{name}`` saves
-one and ``DELETE /setups/{name}`` removes one. Nothing here runs a backtest.
+lists the shipped examples and the saved setups, each with the hash of its content, ``PUT /setups/{name}`` saves
+one and ``DELETE /setups/{name}`` removes one. ``GET /setup-index`` lists every run, study and approved version, each
+with the hash of the content it froze, so evidence meets a saved setup by an equal hash (#3512). Nothing here runs a backtest.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Annotated
 
 import asyncpg
 from fastapi import APIRouter, HTTPException, Path, Response, status
 
+from app.data_lake.catalog_client import CatalogUnavailableError
 from app.options_backtest import saved_setups
 from app.options_backtest.chain_download import MAX_CONTRACTS_PER_DOWNLOAD
 from app.options_backtest.describe import describe_setup
@@ -29,9 +32,8 @@ from app.options_backtest.setup import (
     MAX_STRIKE_STEPS,
     OptionsBacktestSetup,
 )
-from app.options_bots.golden import qualification_status
-from app.options_bots.golden_proof import GoldenProofError, current_rules_digest, setup_sha256
-from app.options_bots.golden_repository import events, records_for_setups
+from app.options_bots.golden_proof import setup_sha256
+from app.research.options_setup_index import read_index
 from app.research.persistence.db import with_connection
 from app.schemas.options_backtest import (
     OptionsBacktestLimitsResponse,
@@ -41,7 +43,10 @@ from app.schemas.options_backtest import (
     SessionClockResponse,
     SetupDescriptionResponse,
 )
+from app.schemas.options_setup_index import OptionsSetupIndexResponse
 from app.utils.timestamps import now_ms_utc
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -87,30 +92,37 @@ async def get_limits() -> OptionsBacktestLimitsResponse:
 
 @router.get("/setups", response_model=list[SavedSetupResponse])
 async def list_setups() -> list[SavedSetupResponse]:
-    """The two shipped examples, then the saved setups, newest first. One that cannot be opened says why."""
-    return await with_connection(_listed_setups)
+    """The two shipped examples, then the saved setups, newest first. One that cannot be opened says why.
+
+    Each setup carries the hash of its content. Evidence is matched to a setup by an equal hash, so this lists no
+    approved version and picks none for a name (``GET /setup-index`` lists the evidence).
+    """
+    return [listed_setup(saved) for saved in await with_connection(saved_setups.list_setups)]
 
 
-async def _listed_setups(conn: asyncpg.Connection) -> list[SavedSetupResponse]:
-    listed = await saved_setups.list_setups(conn)
-    hashes = {saved.name: setup_sha256(saved.setup) for saved in listed if saved.setup is not None}
-    records = await records_for_setups(conn, list(hashes.values()))
+def listed_setup(saved: saved_setups.SavedSetup) -> SavedSetupResponse:
+    """One setup as listed, with the hash of its content (none for one that cannot be opened)."""
+    return SavedSetupResponse.from_saved(saved, setup_sha256=None if saved.setup is None else setup_sha256(saved.setup))
+
+
+@router.get(
+    "/setup-index",
+    response_model=OptionsSetupIndexResponse,
+    responses={status.HTTP_503_SERVICE_UNAVAILABLE: {"model": OptionsBacktestRefusalBody}},
+)
+async def get_setup_index() -> OptionsSetupIndexResponse:
+    """The saved setups and all Options evidence in one read, each with its exact content hash; nothing is joined by name."""
     try:
-        running = await asyncio.to_thread(current_rules_digest)
-    except GoldenProofError:
-        running = None
-    by_hash: dict[str, tuple[str, str, str]] = {}
-    for record in records:
-        status, explanation = qualification_status(record, await events(conn, record.id), running_digest=running)
-        if record.setup_sha256 not in by_hash or (status == "ready" and by_hash[record.setup_sha256][1] != "ready"):
-            by_hash[record.setup_sha256] = (record.id, status, explanation)
-    result: list[SavedSetupResponse] = []
-    for saved in listed:
-        view = SavedSetupResponse.from_saved(saved)
-        if summary := by_hash.get(hashes.get(saved.name, "")):
-            view.golden_setup_id, view.golden_status, view.golden_status_explanation = summary
-        result.append(view)
-    return result
+        return await read_index()
+    except (CatalogUnavailableError, asyncpg.PostgresConnectionError, asyncpg.InterfaceError, ConnectionError) as exc:
+        logger.warning("the Options setup index could not be read", extra={"action": "options_setup_index_unavailable"}, exc_info=exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "OPTIONS_SETUP_INDEX_UNAVAILABLE",
+                "message": "The saved setups and their evidence could not be read, because the research store could not be reached. Try again once it is back.",
+            },
+        ) from exc
 
 
 @router.put("/setups/{name}", response_model=SavedSetupResponse, responses=_IS_AN_EXAMPLE)
@@ -120,7 +132,7 @@ async def save_setup(name: SetupName, setup: OptionsBacktestSetup) -> SavedSetup
         saved = await with_connection(saved_setups.save_setup, name, setup, saved_at_ms=now_ms_utc())
     except ExampleSetupError as exc:
         raise _is_an_example(exc) from exc
-    return SavedSetupResponse.from_saved(saved)
+    return listed_setup(saved)
 
 
 @router.delete(

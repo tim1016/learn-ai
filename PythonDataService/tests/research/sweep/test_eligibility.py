@@ -11,6 +11,7 @@ from app.research.sweep.eligibility import (
     REASON_NO_SIGNAL_PROGRAM,
     REASON_NON_NUMERIC_PUBLIC_PARAMETER,
     REASON_NOT_PRODUCTION_CANDIDATE,
+    ineligibility_reason,
     non_numeric_parameters,
     sweep_eligibility,
 )
@@ -67,3 +68,21 @@ def test_a_registration_without_a_signal_program_cannot_be_sized_and_is_excluded
 
     assert answer.eligible is False
     assert answer.reason_codes == (REASON_NO_SIGNAL_PROGRAM,)
+
+
+def test_a_refusal_is_worded_with_every_reason_and_the_offending_parameters_and_an_allowance_has_none() -> None:
+    class _Mixed(StrategyParamsBase):
+        symbol: str = "SPY"
+        mode: Literal["a", "b"] = "a"
+
+    harness_like = replace(
+        _STRATEGY_REGISTRY["deployment_validation"], param_schema=_Mixed, signal_program_contract=None
+    )
+
+    reason = ineligibility_reason(sweep_eligibility(harness_like))
+
+    assert reason is not None
+    assert "operational harness" in reason
+    assert "no Signal Program" in reason
+    assert "Some parameters are not plain numbers: mode." in reason
+    assert ineligibility_reason(sweep_eligibility(_STRATEGY_REGISTRY["sma_crossover"])) is None
