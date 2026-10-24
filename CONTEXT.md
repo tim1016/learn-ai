@@ -1650,6 +1650,23 @@ these are the others.
   (`/options-setups/:name/explore?view=&run=`). **Take to Golden** carries the id of
   a run that froze this setup's saved content to Golden and approves nothing there.
   _Avoid_: Backtest tab (it is a view of Explore).
+- **Golden (an options setup's)** — the tab where a saved setup's tested runs and
+  searches become approved versions, by the two ways that exist: **approve a tested
+  run** (a note, and the run's own execution proof) and **start a golden search**
+  from the setup as last saved. Both publish through Golden Options. A review is of
+  the run named in the address (`?run=`) and of what that run froze, never of the
+  draft in Define, and an approval carries the hash of the content read. A search
+  starts from the saved content, named by its hash, and its study opens at its own
+  address (`/options-setups/evidence/study/:id`), whether or not a saved setup still
+  holds what it started from.
+  _Avoid_: Options Golden Search (the page it replaced; the search itself keeps the name).
+- **Single-run approval** — an approved version made from one backtest run after
+  review. No search ran for it, so it is never called a qualified search. A
+  **golden search version** carries its study and the verdict that study recorded;
+  a version whose study link is incomplete claims no search. A search that changes
+  settings makes a version whose content is not the saved content, so it is linked
+  through its study and never matched to the draft. **Re-proof** replays a run's
+  execution under the current rules and does not recertify statistical evidence.
 - **Operations** — the group for the machinery under the research: the data lake,
   the option archive, backups, math checks (the golden fixtures) and data checks
   (the TradingView comparison, data divergence and strategy pre-flight). It holds

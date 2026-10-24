@@ -260,7 +260,7 @@ Older runs can say **Not recorded** for newer evidence. That is not zero. The re
 **Your goal:** compare a deliberate change without confusing different samples.
 
 1. In **Explore**, open **History** and find the run by setup, date range, start time and status. Use **Show older runs** when offered.
-2. Open a completed run to read its saved result and setup. **Use this setup** opens those instructions in **Define** as a new draft with no saved name, for a new experiment; the setup you opened Explore for is not changed. **Performance and research lineage** reads the run's retained evidence, and **Take to Golden** carries that run to the setup's Golden tab. Taking a run to Golden approves nothing.
+2. Open a completed run to read its saved result and setup. **Use this setup** opens those instructions in **Define** as a new draft with no saved name, for a new experiment; the setup you opened Explore for is not changed. **Performance and research lineage** reads the run's retained evidence, and **Take to Golden** carries that run to the setup's Golden tab (chapter 13). Taking a run to Golden approves nothing.
 3. Select two eligible completed runs and press **Compare**. Read any eligibility message if comparison is unavailable.
 4. Start with the settings that differ. Then read the results over **shared sessions**: only days present in both runs contribute to those comparison totals.
 5. If you intended to test one change but several settings differ, make a better-controlled pair before drawing a conclusion.
@@ -269,7 +269,22 @@ Deleting a run removes that saved research result. Export anything you need befo
 
 **Practice:** compare your baseline with the version containing one stop. Explain the change in trades, costs and drawdown; do not judge it only by which total is larger.
 
-## 13. Explore the Past chain {#past-chain}
+## 13. Approve a run or start a golden search {#golden}
+
+**Your goal:** turn a run you have read into an approved version, or look for a stronger version with a search, and know which of the two made each version.
+
+**Golden** is the fourth tab of a saved setup. It holds both ways to an approved version, and both publish through the same Golden Options approval. Golden means owner-approved; it does not mean optimal and it is not a forecast.
+
+1. **Approve a tested run.** In **Explore**, open a completed run and press **Take to Golden**, or open **Golden** and press **Review run** beside a run of the saved content. Taking a run to Golden approves nothing. Golden reads what *that run* froze, shows it, and asks for a note. **Approve golden setup** sends the run and the hash of the content you read, so a setup that is edited, or saved again, in **Define** while you read cannot change what is approved: an approval of any other content is refused. Pressing the button twice, or again after a lost answer, is one request. A run that already has an approved version shows that version instead of making a second.
+2. **Start a golden search.** Press **Set up a golden search**. The search starts from the setup as last saved, and every check and the start name that content by its hash, so a setup saved differently since you read it is refused rather than searched. Edit the setup in **Define** and save it first; unsaved changes there are not used. A search ends in a study you open at its own address, where you compare candidates, open the final test and decide.
+3. **Read each version.** Every approved version says which path made it. A **single-run approval** is your approval of one tested run: no search ran, so no statistical qualification is claimed. A **golden search** version carries the study it came from and the verdict that study recorded, an **owner exception** keeps its failed rules and what you acknowledged, and a version whose study link is incomplete claims no search at all. Each lists its limitations, its source run and study, whether its execution proof still holds, and every revoke and re-proof since.
+4. **Re-prove or revoke.** Press **Review run** on a version to reach the run it came from, where **Re-prove from retained evidence** and **Revoke golden setup** are. **Re-proof replays the run's execution under the current rules; it does not recertify the statistical evidence recorded when a search approved the version.** Revoking needs a reason and blocks new entries.
+
+A search can change settings, so the version it approves may not be what the setup is saved as. Such a version is listed under the study that made it, never as a match for the draft. Versions are found for a setup by the exact content they froze, never by a name.
+
+Deploying a bot from an approved version is done from an account, not here.
+
+## 14. Explore the Past chain {#past-chain}
 
 **Your goal:** see what was listed and what had traded at a historical instant.
 
@@ -290,7 +305,7 @@ Expiry tags describe calendar position: **Daily, Weekly, Monthly, Quarterly, Unk
 
 Calls and puts can have different at-the-money strikes if their listed strikes differ. No price is borrowed from another day or a nearby strike.
 
-## 14. Find out why it did not trade {#troubleshooting}
+## 15. Find out why it did not trade {#troubleshooting}
 
 **Your goal:** find the first missing requirement rather than changing settings at random.
 
@@ -310,7 +325,7 @@ Calls and puts can have different at-the-money strikes if their listed strikes d
 
 When asking for help, retain the setup export, run identifier, affected day and leg, and exact problem message. Do not include broker credentials.
 
-## 15. Words and further reading {#glossary}
+## 16. Words and further reading {#glossary}
 
 | Term | Plain meaning |
 |---|---|

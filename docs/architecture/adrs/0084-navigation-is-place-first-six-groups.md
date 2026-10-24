@@ -62,3 +62,11 @@ A draft that has no saved name (a new setup, an imported file, the setup of a pa
 An options setup's Explore is one address, `/options-setups/:name/explore`, and says what it shows in its query: `?view=` is `backtest` (the default, and left out), `history`, `chain`, `performance`, `lineage` or `comparison`; `run=` names the run the view is about, and `comparator_run_id=` the second run of a comparison. History's open run (`?view=history&run=30`) and two runs side by side (`?view=history&run=30&comparator_run_id=29`) are addressable the same way, so an opened run has a URL. The views are not path segments, so the setup's tab stays the third segment and the window title keeps reading `Name · Explore · Options setups`.
 
 A backtest runs the setup **as last saved** and records the saved name; a draft with no saved name has none to run. A run froze its own setup, so nothing edited in Define changes what it shows. Take to Golden is the link `/options-setups/:name/golden?run=<id>`: it carries the run's id and approves nothing, and is offered only for a run that froze this setup's saved content (read by exact content, never by name).
+
+## Amendment (#3514): Golden, and where a golden search study lives
+
+An options setup's Golden is one address, `/options-setups/:name/golden`, and says what it reviews and forks in its query: `?run=<id>` is the run under review (what **Take to Golden** carries) and `?parent_study_id=<id>` the study a new plan forks. It holds both ways to an approved version, and the Options Golden Search page is gone: a plan is made on the tab, from the setup as last saved, named by its content hash.
+
+A golden search study is evidence, so it has no saved name in its address: `/options-setups/evidence/study/:studyId` is the study to work on (its research, the comparison and final test, and the approval), and `?view=lineage` its recorded lineage. It opens whether or not a saved setup still holds the content it started from, and says which do. `/options-golden-search/:studyId` ends there in one redirect.
+
+`/options-golden-search` ends at `/options-setups/:name/golden` when it names a setup (`?setup_name=`), carrying the study it forks, and otherwise at `/options-setups?then=golden`, where every saved setup opens on its Golden tab. No setup is chosen for a link that names none.
