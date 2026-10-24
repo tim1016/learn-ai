@@ -56,3 +56,7 @@ Two rules keep these unambiguous without reserving names. A setup or strategy ad
 ## Amendment (#3512): a setup with no saved name
 
 A draft that has no saved name (a new setup, an imported file, the setup of a past run) is addressed `/options-setups/_new/(overview|define)`. A saved name must start with a letter or a digit, so no name can be `_new`, and the draft needs no reserved name. Saving it under a name moves the address to `/options-setups/:name/define`. `/options-setups/:name` with no tab, and a tab no page serves yet, are lost addresses and fail in place.
+
+## Amendment (#3516): the analytical views are not setups
+
+`/options-setups/analysis` is the fixed-leg Strategy Builder and `/options-setups/analysis/finder` is the Strategy finder's not-available page. Both say they are analysis and not a deployable setup, and neither offers a way to save one as a setup, because fixed strikes, premiums and implied volatility carry none of the rules a replayed setup needs (PRD #3490 D04, still open). The menu does not list them; the Options setups list links to the builder. `/options-lab/strategy-builder` and `/options-lab/strategy-finder` end at them in one redirect. A setup named `analysis` still opens at `/options-setups/analysis/:tab`, because neither view's address ends in a setup tab.

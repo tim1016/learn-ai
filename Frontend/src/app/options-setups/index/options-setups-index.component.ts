@@ -12,7 +12,7 @@ import type { WorkspaceAction } from '../../shared/workspace/workspace-action';
 import { WorkspaceHeaderComponent } from '../../shared/workspace/workspace-header.component';
 import type { WorkspaceStateContent } from '../../shared/workspace/workspace-state';
 import { WorkspaceStateBlockComponent } from '../../shared/workspace/workspace-state-block.component';
-import { optionsEvidenceRoute, optionsSetupRoute, type OptionsEvidenceKind } from '../options-setups.address';
+import { optionsAnalysisRoute, optionsEvidenceRoute, optionsSetupRoute, type OptionsEvidenceKind } from '../options-setups.address';
 import { evidenceHolding, holdersOf, newestFirst, type ContentHolders } from './options-setup-evidence';
 import { OptionsSetupIndexService, type IndexedSetup, type OptionsSetupIndex } from './options-setup-index.service';
 
@@ -87,6 +87,8 @@ export class OptionsSetupsIndexComponent {
   protected readonly deleteProblem = signal<string | null>(null);
 
   protected readonly newSetup: WorkspaceAction = { id: 'new', label: 'New options setup', route: optionsSetupRoute(null, 'define') };
+  /** Fixed-leg payoff analysis. It is named for what it is, so it is not taken for a way to start a setup. */
+  protected readonly analysis: WorkspaceAction = { id: 'analysis', label: 'Strategy Builder (analysis only)', route: optionsAnalysisRoute('builder') };
   protected readonly setupRoute = optionsSetupRoute;
 
   protected readonly loaded = computed<OptionsSetupIndex | null>(() => (this.index.hasValue() ? this.index.value() : null));

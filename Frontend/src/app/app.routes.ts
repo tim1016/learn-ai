@@ -5,7 +5,12 @@ import { RETIRED_LENS_QUERY_PARAM, dropRetiredLensGuard } from "./fleet/retired-
 import { EntryComponent } from "./components/entry/entry.component";
 import { redirectLegacyDataLab } from "./components/data-lab/data-lab-ingress";
 import { brokerClerkRedirectGuard } from "./fleet/broker-clerk-redirect.guard";
-import { redirectOptionsBacktest, redirectOptionsEvidence } from "./options-setups/options-setups.redirects";
+import {
+  redirectOptionsBacktest,
+  redirectOptionsEvidence,
+  redirectOptionsStrategyBuilder,
+  redirectOptionsStrategyFinder,
+} from "./options-setups/options-setups.redirects";
 import { redirectKeepingState } from "./shell/route-redirects";
 
 const loadBrokerLaneUnavailable = () =>
@@ -110,6 +115,16 @@ export const routes: Routes = [
       ),
   },
   {
+    path: "options-lab/strategy-builder",
+    redirectTo: redirectOptionsStrategyBuilder,
+    pathMatch: "full",
+  },
+  {
+    path: "options-lab/strategy-finder",
+    redirectTo: redirectOptionsStrategyFinder,
+    pathMatch: "full",
+  },
+  {
     path: "options-lab",
     data: { fullBleed: true },
     loadComponent: () =>
@@ -124,20 +139,6 @@ export const routes: Routes = [
           import(
             "./components/options-lab/chain/options-lab-chain.component"
           ).then((m) => m.OptionsLabChainComponent),
-      },
-      {
-        path: "strategy-builder",
-        loadComponent: () =>
-          import(
-            "./components/strategy-builder/strategy-builder.component"
-          ).then((m) => m.StrategyBuilderComponent),
-      },
-      {
-        path: "strategy-finder",
-        loadComponent: () =>
-          import(
-            "./components/options-lab/strategy-finder-unavailable/strategy-finder-unavailable.component"
-          ).then((m) => m.StrategyFinderUnavailableComponent),
       },
     ],
   },

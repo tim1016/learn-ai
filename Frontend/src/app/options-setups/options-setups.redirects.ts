@@ -2,7 +2,7 @@ import { inject } from '@angular/core';
 import { Router, type RedirectFunction } from '@angular/router';
 
 import { redirectKeepingState, redirectState } from '../shell/route-redirects';
-import { OPTIONS_SETUPS_ROOT, optionsEvidenceRoute, optionsSetupRoute, type OptionsEvidenceKind } from './options-setups.address';
+import { OPTIONS_SETUPS_ROOT, optionsAnalysisRoute, optionsEvidenceRoute, optionsSetupRoute, type OptionsEvidenceKind } from './options-setups.address';
 
 /**
  * `/options-backtest` ends at the Options setups list; a link that carried the
@@ -25,3 +25,11 @@ export const redirectOptionsBacktest: RedirectFunction = (source) => {
 export const redirectOptionsEvidence = redirectKeepingState((params) =>
   optionsEvidenceRoute(String(params['kind'] ?? '') as OptionsEvidenceKind, String(params['subjectId'] ?? '')),
 );
+
+/**
+ * `/options-lab/strategy-builder` and `/options-lab/strategy-finder` end at the
+ * same views in the Options setups place (#3516). Neither is a setup, so no
+ * saved name is looked up or guessed; query and fragment go with the link.
+ */
+export const redirectOptionsStrategyBuilder = redirectKeepingState(optionsAnalysisRoute('builder'));
+export const redirectOptionsStrategyFinder = redirectKeepingState(optionsAnalysisRoute('finder'));

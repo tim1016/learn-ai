@@ -108,9 +108,12 @@ export const APP_MENU: readonly AppMenuGroup[] = [
       { title: 'Options setups', route: '/options-setups' },
       { title: 'Options Golden Search', route: '/options-golden-search' },
     ],
-    // The analytical builder is an Options Lab tab until the options setup
-    // workspace hosts it (R32 files it under Options setups, not Markets).
-    pages: [{ title: 'Strategy Builder', route: '/options-lab/strategy-builder' }],
+    // The analytical views are not setups, so the menu does not list them: the
+    // Options setups list links to them (#3516).
+    pages: [
+      { title: 'Strategy Builder', route: '/options-setups/analysis' },
+      { title: 'Strategy Finder (not available)', route: '/options-setups/analysis/finder' },
+    ],
   },
   {
     id: 'accounts',

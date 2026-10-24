@@ -37,11 +37,6 @@
   color: var(--ol-fg-strong, #e7e9ec);
 }
 
-.mono {
-  font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
-  font-variant-numeric: tabular-nums;
-}
-
 .ol-tabs {
   display: flex;
   gap: 4px;
@@ -87,18 +82,6 @@
 .ol-tab:focus-visible {
   outline: 2px solid var(--ol-accent, #2962ff);
   outline-offset: 2px;
-}
-
-.ol-tab-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 6px;
-  border-radius: 3px;
-  background: rgba(245, 158, 11, 0.15);
-  color: #f59e0b;
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.5px;
 }
 
 .ol-content {
