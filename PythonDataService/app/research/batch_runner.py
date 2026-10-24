@@ -298,6 +298,18 @@ def run_cross_sectional_study(
 ) -> CrossSectionalReport:
     """Run a feature across multiple tickers and aggregate results.
 
+    Formula: over valid members, aggregate IC = Σ(N_eff_i · mean_IC_i) / Σ N_eff_i and pass rate = n_passed / n_valid;
+      report the eigenvalue-based effective asset count, its adjusted binomial tail and the internal graduation stage.
+    Reference: internal cross-sectional aggregation and graduation policies in this module, not an external port;
+      the component IV and IC references are recorded in their canonical implementations. Input admission follows #3524.
+    Canonical implementation: this file's _compute_weighted_aggregate_ic, _compute_n_eff_assets_with_method,
+      _compute_binomial_null_test and _compute_stage_info; per-member IV is app/research/options/iv_builder.py::build_iv_history,
+      and feature validation is app/research/options_runner.py::run_options_feature_research.
+    Validated against: tests/test_batch_runner.py (numerical aggregation, effective asset count, binomial and stage cases);
+      tests/jobs/test_cross_sectional_study_job.py (real composition, admission and valid-member denominators);
+      tests/research/test_cross_sectional_options_lake_vs_provider.py (selection and IV parity). These validate the internal
+      policy and its components, not equivalence to an independent cross-sectional study implementation.
+
     ``stock_bars`` holds each member's admitted daily rows (the target is measured on them) and ``option_inputs`` its
     admitted option inputs (the IV is built from them); ``excluded`` the members that never reached the compute and why.
     Every ticker must be in exactly one of the two places: the runner has no data source of its own, so a ticker in

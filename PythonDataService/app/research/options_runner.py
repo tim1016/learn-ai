@@ -93,6 +93,18 @@ def run_options_feature_research(
 ) -> OptionsResearchReport:
     """Run options feature research with IV data.
 
+    Formula: align daily IV features with forward log return, its absolute value or five-session realized volatility;
+      compute IC/HAC statistics, stationarity, quantile monotonicity and robustness, then apply the internal validation gate.
+    Reference: internal daily options-research policy, not an external port; the composed IC/HAC method's references are
+      in app/research/validation/ic.py, and the feature definitions are in app/research/features/options_features.py.
+    Canonical implementation: this file for daily target construction, alignment and the validation gate;
+      app/research/features/options_features.py::OptionsFeatures for features; app/research/validation/ic.py,
+      quantile.py and robustness.py for the corresponding statistics; app/ml/preprocessing/stationarity.py for stationarity.
+    Validated against: tests/research/test_options_runner.py (daily target arithmetic and report integration),
+      tests/fixtures/test_research_fixtures.py (RP-001 and REL-001 for the composed IC calculation), and
+      tests/research/test_cross_sectional_lake_vs_provider.py (target/input-path parity). Integration and parity checks
+      exercise this internal policy; they are not an independent reference implementation of the complete report.
+
     Same pipeline as stock feature research but:
     - Daily granularity (not minute)
     - IV data instead of OHLCV for feature computation

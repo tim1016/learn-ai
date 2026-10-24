@@ -306,7 +306,7 @@ def regular_session_close(bars: Sequence[OptionBar], session: date) -> tuple[Dec
     Canonical implementation: this file.
     Validated against: tests/research/options/test_option_inputs_fold.py (hand-worked sessions, an early close and a real
       captured SPY session); the price against the vendor's own daily VWAP is measured in
-      tests/research/test_cross_sectional_options_lake_vs_provider.py.
+      tests/research/options/test_option_inputs_fold.py::test_the_vendors_real_spy_day_through_the_lake_prices_each_option_at_its_15_59_close.
     """
     unplaceable = [bar.start_ms for bar in bars if (bar.start_ms + _MS_PER_MINUTE) % _MS_PER_MINUTE or et_date_at_ms(bar.start_ms + _MS_PER_MINUTE) != session]
     if unplaceable:
