@@ -302,6 +302,28 @@ def test_a_writer_that_died_between_the_rename_and_the_commit_is_recaptured_not_
 
 
 @respx.mock
+def test_a_file_mid_publish_reads_building_not_corrupt_when_a_damaged_neighbour_means_no_capture_is_asked(catalog, lake):
+    """One session no capture can fix leaves the materializer unasked, so nothing says whether the stranded file's
+    writer is alive. It is not yet readable; it is not shown as damaged beside the day that is."""
+    mock_launcher()
+    calls = VendorCalls()
+    mock_vendor("SPY", vendor_history(MARCH), calls=calls)
+    admit(identity(MARCH[:3]))
+    leave_publication_in_flight(catalog, lake, MARCH[1], lease_ms_from_now=60_000)
+    damaged = [minute_bar(MARCH[2], 10, 0), minute_bar(MARCH[2], 10, 1)]
+    commit_bars(catalog, lake, MARCH[2], [*damaged, damaged[1]])  # committed, but a duplicate timestamp
+    calls.requests.clear()
+
+    refusal = refusal_of(identity(MARCH[:3]))
+
+    assert refusal.code == "data_corrupt", "the damaged day still decides the refusal"
+    assert {(i.trading_date, i.outcome) for i in refusal.coverage.issues} == {(MARCH[1], "building"), (MARCH[2], "corrupt")}
+    assert (refusal.coverage.window.building, refusal.coverage.window.corrupt) == (1, 1)
+    assert "no capture was asked" in next(i.reason for i in refusal.coverage.issues if i.trading_date == MARCH[1])
+    assert calls.count == 0
+
+
+@respx.mock
 @pytest.mark.parametrize("reason", ["io_error", "internal_error", "run_aborted"])
 def test_a_capture_that_failed_for_the_lakes_own_reason_is_not_captured_never_corrupt(catalog, lake, monkeypatch, reason):
     mock_launcher()

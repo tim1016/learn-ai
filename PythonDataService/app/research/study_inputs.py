@@ -364,12 +364,14 @@ class _SessionRead:
     admitted or decoded. ``invalid``: it decoded to bars that break the session's invariants. ``early``: readable,
     but captured before the policy's data stopped forming, so its tail is missing for good; no capture the lake makes
     on its own puts that right, so it is never ``repairable``. ``repairable`` is whether a capture can put the
-    session right (see :data:`_REPAIRED_BY_CAPTURE`).
+    session right (see :data:`_REPAIRED_BY_CAPTURE`). ``uncommitted``: the bytes have no committed receipt, which a
+    writer still publishing and a writer that died both leave.
     """
 
     state: Literal["ready", "absent", "unreadable", "invalid", "early"]
     reason: str = ""
     repairable: bool = False
+    uncommitted: bool = False
     bars: list[TradeBar] = field(default_factory=list)
     receipts: dict[str, str] = field(default_factory=dict)
 
@@ -409,7 +411,12 @@ def _read_session(
         reader.adjustment_guard.verify(path, payload, identity.symbol, companion_payload=companion)
         bars = reader.parse_day_zip(payload, identity.symbol, day)
     except _UNREADABLE_FILE as exc:
-        return _SessionRead("unreadable", f"{type(exc).__name__}: {exc}", repairable=isinstance(exc, _REPAIRED_BY_CAPTURE))
+        return _SessionRead(
+            "unreadable",
+            f"{type(exc).__name__}: {exc}",
+            repairable=isinstance(exc, _REPAIRED_BY_CAPTURE),
+            uncommitted=isinstance(exc, LakeAdmissionError),
+        )
     if not bars:
         return _SessionRead("absent", f"the file holds no {identity.session_policy}-session bars", repairable=True)
     previous: int | None = None
@@ -489,8 +496,11 @@ def _why_not_ready(
     for it. Otherwise the materializer's own failure for the session wins when it
     has one — it says why the lake could not repair or fill it. A file that
     exists but cannot be read is corrupt whatever else is true, unless a capture
-    was asked to put it right and is still at it. A missing session older than the
-    provider's history was never asked of the provider.
+    was asked to put it right and is still at it, or no capture was asked and the
+    file is only missing its receipt (a writer mid-publish looks the same as one
+    that died; nothing was done to tell them apart, so it is not called damaged).
+    A missing session older than the provider's history was never asked of the
+    provider.
     """
     if read.state == "early":
         return "captured_before_final", read.reason
@@ -502,6 +512,8 @@ def _why_not_ready(
     if read.state in ("unreadable", "invalid"):
         if capture_timed_out and read.repairable:
             return "building", f"{read.reason}; the capture did not finish in time"
+        if read.uncommitted and not fetched:
+            return "building", f"{read.reason}; no capture was asked, so a writer still publishing it is not ruled out"
         return "corrupt", read.reason
     if older_than_floor:
         return "unavailable_from_provider", f"older than the provider's history, which starts {floor.isoformat()}"
