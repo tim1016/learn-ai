@@ -32,7 +32,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.data_lake import catalog_client, path_policy, root_identity
+from app.data_lake import catalog_client, root_identity
 from app.data_lake.backfill import (
     BackfillDayProgress,
     BackfillResult,
@@ -42,17 +42,16 @@ from app.data_lake.backfill import (
     run_backfill,
 )
 from app.data_lake.catalog_client import MinuteBarLeaseStatus, select_minute_bar_lease_status
-from app.data_lake.ensure_data import ensure_data, provider_for_data_type
+from app.data_lake.coverage import CoverageRequestError, coverage_window, read_coverage
+from app.data_lake.ensure_data import ensure_data
 from app.data_lake.polygon_fetcher import current_polygon_history_floor
-from app.data_lake.run_readiness import coverage_gaps, read_run_readiness
+from app.data_lake.run_readiness import read_run_readiness
 from app.data_lake.types import (
     MAX_SYMBOL_LENGTH,
     MAX_TRADING_RANGE_DAYS,
-    SYMBOL_RE,
     ArtifactDetail,
     ArtifactFailure,
     ArtifactIdentity,
-    CoverageDay,
     CoverageResponse,
     DataAvailabilityResult,
     DataRunSpec,
@@ -61,14 +60,12 @@ from app.data_lake.types import (
     PriceAdjustmentMode,
     RunReadinessResponse,
     StorageSummaryResponse,
-    trading_date_at_ms,
     trading_date_to_calendar_anchor_ms,
-    trading_range_span_days,
 )
 from app.jobs.progress import ProgressEmitter
 from app.jobs.runner import run_in_thread
 from app.lean_sidecar.config import PINNED_LEAN_IMAGE_DIGEST
-from app.lean_sidecar.trading_calendar import session_open_ms_utc, session_windows_ms_utc
+from app.lean_sidecar.trading_calendar import session_open_ms_utc
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/data-lake", tags=["data-lake"])
@@ -141,111 +138,17 @@ async def get_coverage(
     (missing required query parameter) is what an omitted value gets, the
     same as an omitted ``symbol`` or ``start_trading_date_ms`` already does.
     """
-    if not SYMBOL_RE.match(symbol) or len(symbol) > MAX_SYMBOL_LENGTH:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "reason": "invalid_symbol",
-                "message": f"symbol must match {SYMBOL_RE.pattern} and be at most {MAX_SYMBOL_LENGTH} chars: {symbol!r}",
-            },
-        )
     try:
-        start_trading_date = trading_date_at_ms(start_trading_date_ms)
-        end_trading_date = trading_date_at_ms(end_trading_date_ms)
-    except (OverflowError, OSError, ValueError) as exc:
-        # A ms value outside the representable instant range. Typed, because
-        # the alternative is a 500 on a caller sending seconds for ms -- the
-        # single likeliest way to get this parameter wrong.
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "reason": "invalid_trading_date_ms",
-                "message": (
-                    f"trading-date window is not a representable ms-UTC instant "
-                    f"({start_trading_date_ms}..{end_trading_date_ms}); values are "
-                    f"milliseconds since the Unix epoch, anchored at the session open"
-                ),
-            },
-        ) from exc
-    if start_trading_date > end_trading_date:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "reason": "invalid_range",
-                "message": f"start_trading_date {start_trading_date} is after end_trading_date {end_trading_date}",
-            },
-        )
-    # Same computation DataRunSpec's validator uses (types.py) — one shared
-    # cap, one shared formula, so a write-window accepted by POST
-    # /ensure-data can never be a read-window GET /coverage rejects.
-    span_days = trading_range_span_days(start_trading_date, end_trading_date)
-    if span_days > MAX_TRADING_RANGE_DAYS:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "reason": "range_too_large",
-                "message": f"range is {span_days} days; max is {MAX_TRADING_RANGE_DAYS}",
-            },
-        )
-
+        window = coverage_window(symbol, start_trading_date_ms, end_trading_date_ms)
+    except CoverageRequestError as exc:
+        raise HTTPException(status_code=422, detail=exc.detail) from exc
     logger.info(
         "[STEP 1] /api/data-lake/coverage requested: symbol=%s, start=%s, end=%s",
-        symbol,
-        start_trading_date,
-        end_trading_date,
+        window.symbol,
+        window.start,
+        window.end,
     )
-    provider = provider_for_data_type(data_type)
-    # Resolved once and passed explicitly to both the catalog query and the
-    # response (issue #1876): coverage defaults to the service's configured
-    # active root.
-    data_root_id = root_identity.active_root_id()
-    # One schedule build for the whole range, not one per day: session_date
-    # and its 09:30 ET open both come off the same SessionWindow, so no
-    # per-day session_open_ms_utc() call re-queries pandas_market_calendars.
-    # A per-day query pattern here measured ~10s at the 5-year cap.
-    windows = session_windows_ms_utc(start_trading_date, end_trading_date)
-    rows_by_date = {
-        row.trading_date: row
-        for row in await catalog_client.select_artifact_coverage(
-            market=market,
-            symbol=symbol,
-            data_type=data_type,
-            provider=provider,
-            price_adjustment_mode=price_adjustment_mode,
-            start_trading_date=start_trading_date,
-            end_trading_date=end_trading_date,
-            data_root_id=data_root_id,
-        )
-    }
-    # The catalog calls a session complete once its price file is committed; a
-    # split-adjusted reader also refuses a file without a valid adjustment
-    # record. One stat and one small read per session, off the event loop.
-    gaps = await asyncio.to_thread(
-        coverage_gaps, list(rows_by_date.values()), path_policy.resolve_lake_root(price_adjustment_mode)
-    )
-    days = []
-    for window in windows:
-        row = rows_by_date.get(window.session_date)
-        gap = gaps.get(window.session_date)
-        days.append(
-            CoverageDay(
-                trading_date_ms=window.open_ms_utc,
-                status="missing" if row is None else "needs_rebuild" if gap is not None else row.status,
-                artifact_id=row.artifact_id if row is not None else None,
-                rebuild_reason=gap,
-                failure_reason=row.last_error if row is not None and row.status == "failed" else None,
-            )
-        )
-    return CoverageResponse(
-        market=market,
-        symbol=symbol,
-        data_type=data_type,
-        resolution="minute",
-        provider=provider,
-        price_adjustment_mode=price_adjustment_mode,
-        data_root_id=data_root_id,
-        days=days,
-    )
+    return await read_coverage(window, market=market, data_type=data_type, price_adjustment_mode=price_adjustment_mode)
 
 
 @router.get("/artifacts/{artifact_id}", response_model=ArtifactDetail, dependencies=[Depends(_ensure_catalog_pool)])
