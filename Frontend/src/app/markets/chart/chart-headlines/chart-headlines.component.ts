@@ -68,17 +68,22 @@ export class ChartHeadlinesComponent {
   /** Every headline for the instrument, keeping the context in the address. */
   protected readonly allHeadlines = computed(() => instrumentHeadlinesCommands(this.ticker() ?? ''));
 
+  /** The instrument and window the section speaks for, as one value: an equal commit is not a change. */
+  private readonly contextKey = computed(() => {
+    const window = this.window();
+    return `${this.ticker() ?? ''}|${window?.startMsUtc ?? ''}|${window?.endMsUtc ?? ''}`;
+  });
+
   constructor() {
-    // A committed ticker or window change invalidates already-loaded
-    // headlines — they answered another context. Mark the section stale
+    // A committed ticker or window change invalidates whatever the section
+    // says, not only loaded headlines: "No headlines in this window", a
+    // failure or a rate-limit all answered another context, and a request
+    // still in flight is dropped when it lands. Mark the section stale
     // instead of silently refetching.
     effect(() => {
-      this.ticker();
-      this.window();
+      this.contextKey();
       untracked(() => {
-        if (this.newsArticles().length > 0 && this.newsState() === 'ready') {
-          this.newsState.set('stale');
-        }
+        if (this.newsState() !== 'idle') this.newsState.set('stale');
       });
     });
   }

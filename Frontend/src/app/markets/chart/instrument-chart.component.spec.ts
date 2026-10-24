@@ -246,6 +246,53 @@ describe('InstrumentChartComponent', () => {
     expect(screen.getByRole('link', { name: 'View all' }).getAttribute('href')).toBe('/markets/SPY/chart/news');
   });
 
+  describe('headlines when the committed context changes', () => {
+    const NEWS = `${environment.pythonServiceUrl}/api/news`;
+    const LATER_WINDOW = { startMsUtc: Date.UTC(2026, 4, 20), endMsUtc: Date.UTC(2026, 5, 20) + 86_400_000 - 1 };
+
+    async function openHeadlines() {
+      const rendered = await renderChart();
+      flushCatalog(rendered.http);
+      (await chartRequests(rendered.http, 1))[0].flush(chartResponse());
+      await userEvent.click(screen.getByRole('button', { name: /Headlines for SPY/ }));
+      const news = await waitFor(() => rendered.http.expectOne((r) => r.method === 'GET' && r.url === NEWS));
+      return { ...rendered, news };
+    }
+
+    function commitWindow(store: DataLabWorkspaceStore, fixture: { detectChanges(): void }) {
+      store.patchDraft({ window: LATER_WINDOW });
+      store.commitScope();
+      fixture.detectChanges();
+    }
+
+    it.each([
+      ['an empty answer', 'No headlines in this window.', (news: TestRequest) => news.flush({ articles: [], count: 0, vendor: 'polygon', fetched_at_ms: 1 })],
+      ['a failure', 'Could not load headlines', (news: TestRequest) => news.flush('boom', { status: 500, statusText: 'Internal Server Error' })],
+      ['a rate limit', 'News vendor rate limit reached', (news: TestRequest) => news.flush('slow down', { status: 429, statusText: 'Too Many Requests' })],
+    ])('does not leave %s standing under a window it did not answer', async (_name, said, answer) => {
+      const { store, fixture, news } = await openHeadlines();
+      answer(news);
+      expect(await screen.findByText(new RegExp(said))).toBeTruthy();
+
+      commitWindow(store, fixture);
+
+      expect(await screen.findByText('Headlines out of date — refresh to reload.')).toBeTruthy();
+      expect(screen.queryByText(new RegExp(said))).toBeNull();
+    });
+
+    it('goes stale while a request is in flight, and the late answer for the old window fills nothing', async () => {
+      const { store, fixture, http, news } = await openHeadlines();
+
+      commitWindow(store, fixture);
+      news.flush({ articles: [{ id: 'old', title: 'Old window headline', published_utc_ms: 1 }], count: 1, vendor: 'polygon', fetched_at_ms: 1 });
+
+      expect(await screen.findByText('Headlines out of date — refresh to reload.')).toBeTruthy();
+      expect(screen.queryByText('Old window headline')).toBeNull();
+      expect(screen.queryByText('Loading headlines…')).toBeNull();
+      http.match(CHART_URL);
+    });
+  });
+
   it('says so in the Indicators drawer when the catalog fails to load', async () => {
     const { http, fixture } = await renderChart();
     http
