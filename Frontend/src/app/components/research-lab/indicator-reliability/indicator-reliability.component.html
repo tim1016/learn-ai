@@ -166,17 +166,19 @@
     </div>
   }
 
-  <!-- Error Message -->
-  @if (error()) {
+  <!-- A run the lake refused: no result, the reason, and what admission reached. Any other failure is a message. -->
+  @if (refusal(); as refused) {
+    <app-lake-study-source [source]="refused.dataSource" [refusal]="refused.refusal" />
+  } @else if (error()) {
     <p-message severity="error" class="mb-4">{{ error()! }}</p-message>
   }
 
   <!-- Where the bars came from: the lake, and what admission did to get them -->
-  @if (sourceLine(); as line) {
-    @if (line.notice) {
-      <p-message severity="warn" class="mb-2">{{ line.notice }}</p-message>
+  @if (dataSource(); as source) {
+    @if (warmupNotice(); as notice) {
+      <p-message severity="warn" class="mb-2">{{ notice }}</p-message>
     }
-    <app-data-source origin="Lake" [method]="line.method" [freshness]="line.freshness" />
+    <app-lake-study-source [source]="source" />
   }
 
   <!-- Results (Mission-control) -->

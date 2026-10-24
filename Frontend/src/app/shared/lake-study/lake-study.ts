@@ -28,7 +28,8 @@ export type LakeRefusalCode =
   | 'data_corrupt'
   | 'data_building'
   | 'data_missing'
-  | 'lake_unavailable';
+  | 'lake_unavailable'
+  | 'warmup_shortened';
 
 /** What admission concluded about a session it could not make ready. */
 export type LakeSessionOutcome = 'missing' | 'building' | 'corrupt' | 'unavailable_from_provider';

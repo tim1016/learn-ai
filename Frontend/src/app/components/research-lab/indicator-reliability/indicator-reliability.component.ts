@@ -35,14 +35,18 @@ import {
 } from '../../../shared/indicator-verdict-hero';
 import { TickerRangePickerComponent } from '../../../shared/ticker-range-picker/ticker-range-picker.component';
 import type { TickerRange } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
-import { DataSourceComponent } from '../../../shared/data-source/data-source.component';
-import { refusalProse } from '../../../shared/errors/refusal-body';
-import { tickerRangeToWire } from '../../../utils/ticker-wire';
+import { LakeStudySourceComponent } from '../../../shared/lake-study/lake-study-source.component';
 import {
-  describeReliabilitySource,
-  refusalDataSource,
-  type ReliabilityDataSource,
-} from './indicator-reliability-data-source';
+  mapLakeStudyDataSource,
+  readLakeStudyRefusal,
+  type LakeStudyDataSource,
+  type LakeStudyRefused,
+} from '../../../shared/lake-study/lake-study';
+import { tickerRangeToWire } from '../../../utils/ticker-wire';
+import type { components } from '../../../api/broker.types';
+
+/** The `data_source` of a reliability result: the shared lake block plus the warmup report (#3523). */
+type ReliabilityDataSource = components['schemas']['ReliabilityDataSource-Output'];
 
 Chart.register(...registerables);
 
@@ -170,7 +174,7 @@ interface IndicatorReliabilityResponse {
   // Warnings
   warnings: string[];
   /** The lake input behind this result: identity, admitted snapshot, coverage, warmup (#3523). */
-  data_source?: ReliabilityDataSource | null;
+  data_source: ReliabilityDataSource;
   error: string | null;
 }
 
@@ -224,7 +228,7 @@ interface HorizonOption {
     AssetIdentityComponent,
     IndicatorVerdictHeroComponent,
     TickerRangePickerComponent,
-    DataSourceComponent,
+    LakeStudySourceComponent,
   ],
 })
 export class IndicatorReliabilityComponent {
@@ -280,12 +284,12 @@ export class IndicatorReliabilityComponent {
   loadingIndicators = signal(false);
   result = signal<IndicatorReliabilityResponse | null>(null);
   error = signal<string | null>(null);
-  /** The lake source of the last run: from its result, or from the refusal that stopped it. */
-  dataSource = signal<ReliabilityDataSource | null>(null);
-  readonly sourceLine = computed(() => {
-    const source = this.dataSource();
-    return source ? describeReliabilitySource(source) : null;
-  });
+  /** The lake source of the last completed run. */
+  dataSource = signal<LakeStudyDataSource | null>(null);
+  /** Why the lake could not supply the last run, and what admission reached, when it refused. */
+  refusal = signal<LakeStudyRefused | null>(null);
+  /** The warmup shortfall of the last completed run in a sentence, from the server; null when the lead-in was whole. */
+  readonly warmupNotice = computed(() => this.result()?.data_source.warmup?.notice ?? null);
   formCollapsed = signal(false);
   selectedHorizon = signal<number | null>(null);
 
@@ -467,6 +471,7 @@ export class IndicatorReliabilityComponent {
     this.error.set(null);
     this.result.set(null);
     this.dataSource.set(null);
+    this.refusal.set(null);
 
     // Wire the canonical TickerRange shape into the request body via the
     // shared adapter. Python's IndicatorReliabilityRequest now inherits
@@ -493,10 +498,13 @@ export class IndicatorReliabilityComponent {
       .pipe(
         takeUntilDestroyed(this.destroyRef),
         catchError(err => {
-          // A lake refusal carries its reason in `detail.message` and what admission reached in `detail.data_source`.
-          const msg = refusalProse(err)?.message ?? err?.error?.detail ?? err?.message ?? 'An unexpected error occurred';
-          this.error.set(msg);
-          this.dataSource.set(refusalDataSource(err));
+          // A refused run (409, or 503) answers with the shared refusal; any other error carries a `detail` sentence.
+          const refused = readLakeStudyRefusal(err?.error);
+          if (refused !== null) {
+            this.refusal.set(refused);
+          } else {
+            this.error.set(err?.error?.detail ?? err?.message ?? 'An unexpected error occurred');
+          }
           return of(null);
         }),
         finalize(() => this.loading.set(false)),
@@ -504,7 +512,7 @@ export class IndicatorReliabilityComponent {
       .subscribe(res => {
         if (res) {
           this.result.set(res);
-          this.dataSource.set(res.data_source ?? null);
+          this.dataSource.set(mapLakeStudyDataSource(res.data_source));
           if (!res.success && res.error) {
             this.error.set(res.error);
           } else if (res.success) {
@@ -523,6 +531,8 @@ export class IndicatorReliabilityComponent {
     this.formCollapsed.set(false);
     this.result.set(null);
     this.error.set(null);
+    this.dataSource.set(null);
+    this.refusal.set(null);
   }
 
   // ─── Helpers for Display ─────────────────────────────────
