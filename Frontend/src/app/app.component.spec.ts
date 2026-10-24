@@ -57,6 +57,7 @@ describe('AppComponent', () => {
           { path: 'research-lab/monte-carlo/:id', component: ShellSmokeRouteComponent },
           { path: 'research-lab/baselines/:id', component: ShellSmokeRouteComponent },
           { path: 'research-lab/signal-report/:id', component: ShellSmokeRouteComponent },
+          { path: 'strategy-lab/docs', component: ShellSmokeRouteComponent },
           // The workspace's own URLs, stubbed: these specs grade the window
           // title the shell computes from them, not what the tabs render.
           { path: 'brokers/alpaca/clerks/:clerkId/settings', component: ShellSmokeRouteComponent },
@@ -73,6 +74,7 @@ describe('AppComponent', () => {
             path: 'brokers/alpaca/clerks/:clerkId/accounts/:accountId',
             component: ShellSmokeRouteComponent,
           },
+          { path: '**', component: ShellSmokeRouteComponent, data: { notFound: true } },
         ]),
       ],
       providers: [
@@ -219,10 +221,24 @@ describe('AppComponent', () => {
     });
 
     it.each([
-      ['/options-lab', 'Options Lab'],
-      ['/data-lab', 'Stocks'],
-    ])('sets the browser title outside a workspace from the active menu node: %s', async (url, expected) => {
+      ['/options-lab', 'Options Lab · Markets'],
+      ['/data-lab', 'Stocks · Markets'],
+      ['/options-backtest', 'Options Backtest · Options setups'],
+      ['/research-lab/strategy-runs/run-42', 'Research Lab · Research'],
+      // A document is titled by itself: the help index is its home, not the page it explains.
+      ['/strategy-lab/docs', 'Strategy Lab Manual'],
+    ])('sets the browser title outside a workspace as Page · Group from the active menu node: %s', async (url, expected) => {
       expect(await titleAt(url)).toBe(expected);
+    });
+
+    it('says no page is there for an address that only starts like one, rather than borrowing that page\'s title', async () => {
+      expect(await titleAt('/research-lab/nothing-here')).toBe('Page not found');
+    });
+
+    it('marks no menu group for an address no page answers', async () => {
+      await titleAt('/research-lab/nothing-here');
+
+      expect(fixture.nativeElement.querySelector('.app-menubar-group--active')).toBeNull();
     });
   });
 

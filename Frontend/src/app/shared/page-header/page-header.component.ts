@@ -1,8 +1,14 @@
-import { ChangeDetectionStrategy, Component, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
+import { RouterLink } from '@angular/router';
+
+import { menuTrailFor } from '../../shell/app-menu';
+import { CurrentUrlService } from '../../shell/current-url.service';
 
 /**
  * App-wide page header. Standardizes the h1 + optional actions slot so every
- * route renders the same hierarchy and spacing.
+ * route renders the same hierarchy and spacing. A page inside a menu group
+ * also gets the trail back to it, drawn from the menu itself (PRD #3490 R01),
+ * so no page restates its group.
  *
  * Slots:
  *   - ``[slot=actions]`` — chips, links, or buttons aligned to the right.
@@ -20,9 +26,19 @@ import { ChangeDetectionStrategy, Component, input } from '@angular/core';
   selector: 'app-page-header',
   changeDetection: ChangeDetectionStrategy.OnPush,
   styleUrl: './page-header.component.scss',
+  imports: [RouterLink],
   template: `
     <header class="page-header" [class.page-header--with-tabs]="hasTabs()">
       <div class="page-header-inner">
+        @if (trail().length > 0) {
+          <nav class="page-breadcrumb" aria-label="Breadcrumb">
+            <ol>
+              @for (crumb of trail(); track crumb.label) {
+                <li><a [routerLink]="crumb.route">{{ crumb.label }}</a></li>
+              }
+            </ol>
+          </nav>
+        }
         <h1 class="page-title">
           @if (icon(); as ic) {
             <i [class]="'pi ' + ic" class="page-title-icon" aria-hidden="true"></i>
@@ -48,4 +64,11 @@ export class PageHeaderComponent {
    *  header — drops the bottom margin so the two read as one SubNav
    *  unit per the design hand-off. */
   readonly hasTabs = input(false);
+
+  private readonly pageUrl = inject(CurrentUrlService).pageUrl;
+
+  protected readonly trail = computed(() => {
+    const url = this.pageUrl();
+    return url === null ? [] : menuTrailFor(url, this.title());
+  });
 }

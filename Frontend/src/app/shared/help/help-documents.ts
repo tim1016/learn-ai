@@ -1,16 +1,16 @@
 /**
  * Every document the app serves, listed once.
  *
- * The top-bar help index and the Documentation menu group both project this
- * list, and a page's "How this works" link names one of its routes, so a
- * document cannot be reachable from one place and missing from another. A new
- * document is one entry here plus its route in `app.routes.ts`.
+ * The top-bar help index projects this list, the window title of a document
+ * page reads from it, and a page's "How this works" link names one of its
+ * routes, so a document cannot be reachable from one place and missing from
+ * another. A new document is one entry here plus its route in `app.routes.ts`.
  *
  * Routes and fragments are the documents' public addresses (bookmarks, the
  * served-copy contract); keep them as they are.
  */
 export interface HelpDocument {
-  /** The single display name for every projection: menu entry, window title and index row. */
+  /** The single display name for every projection: window title and index row. */
   readonly title: string;
   /** Router path of the document's page. */
   readonly route: string;
