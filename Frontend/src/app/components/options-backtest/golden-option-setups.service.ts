@@ -22,13 +22,12 @@ export class GoldenOptionSetupsService {
   }
 
   /**
-   * Approves one completed run. `expectedSetupSha256` is the hash of the content the owner reviewed: the server
-   * refuses the approval, and approves nothing, when the run's content is any other.
+   * Approves one completed run. `expectedSetupSha256` is the hash of the content the owner reviewed, and every
+   * approval carries one: the server refuses the approval, and approves nothing, when the run's content is any other.
    */
-  approve(runId: number, note: string, idempotencyKey: string, expectedSetupSha256?: string): Promise<GoldenOptionSetup> {
+  approve(runId: number, note: string, idempotencyKey: string, expectedSetupSha256: string): Promise<GoldenOptionSetup> {
     return firstValueFrom(this.http.post<GoldenOptionSetup>(`${BASE}/approve`, {
-      run_id: runId, note, idempotency_key: idempotencyKey,
-      ...(expectedSetupSha256 === undefined ? {} : { expected_setup_sha256: expectedSetupSha256 }),
+      run_id: runId, note, idempotency_key: idempotencyKey, expected_setup_sha256: expectedSetupSha256,
     }));
   }
 

@@ -6,10 +6,12 @@ import { GoldenOptionSetupsService } from '../golden-option-setups.service';
 import { exceptionGoldenSetup, goldenSetup } from '../testing/golden-fixture';
 import { GoldenSetupApprovalComponent } from './golden-setup-approval.component';
 
+const HASH = 'c'.repeat(64);
+
 describe('Golden setup approval', () => {
   it('retains the owner exception, failed rule and exposure label on a ready approved version', async () => {
     const version = exceptionGoldenSetup();
-    await render(GoldenSetupApprovalComponent, { inputs: { runId: version.source_run_id }, providers: [provideRouter([]), { provide: GoldenOptionSetupsService, useValue: { list: async () => [version] } }] });
+    await render(GoldenSetupApprovalComponent, { inputs: { runId: version.source_run_id, expectedSetupSha256: version.setup_sha256 }, providers: [provideRouter([]), { provide: GoldenOptionSetupsService, useValue: { list: async () => [version] } }] });
     expect(await screen.findByText('Owner exception', { exact: true })).toBeTruthy();
     expect(screen.getByText(/The final Sharpe hurdle was not met/)).toBeTruthy();
     expect(screen.getByText(/The final interval was used in recorded research/)).toBeTruthy();
@@ -19,7 +21,7 @@ describe('Golden setup approval', () => {
   it('approves the chosen completed run and retries a lost response under the same key', async () => {
     const approve = vi.fn().mockRejectedValueOnce(new Error('response lost')).mockResolvedValue(goldenSetup());
     await render(GoldenSetupApprovalComponent, {
-      inputs: { runId: 7 },
+      inputs: { runId: 7, expectedSetupSha256: HASH },
       providers: [{ provide: GoldenOptionSetupsService, useValue: { list: async () => [], approve } }],
     });
     const note = await screen.findByLabelText('Approval note');
@@ -33,6 +35,8 @@ describe('Golden setup approval', () => {
     expect(approve.mock.calls[0]).toEqual(approve.mock.calls[1]);
     expect(approve.mock.calls[0][0]).toBe(7);
     expect(approve.mock.calls[0][1]).toBe('Reviewed the exact run.');
+    // The content the owner reviewed travels with every approval, and with the retry.
+    expect(approve.mock.calls[0][3]).toBe(HASH);
     expect(screen.getByText('Trade bars do not validate quote spreads or actual live fills.')).toBeTruthy();
   });
 
@@ -41,7 +45,7 @@ describe('Golden setup approval', () => {
     const reprove = vi.fn().mockResolvedValue(goldenSetup());
     const revoke = vi.fn().mockResolvedValue(goldenSetup({ status: 'revoked', status_explanation: 'New entries are blocked.' }));
     await render(GoldenSetupApprovalComponent, {
-      inputs: { runId: 7 }, providers: [{ provide: GoldenOptionSetupsService, useValue: {
+      inputs: { runId: 7, expectedSetupSha256: HASH }, providers: [{ provide: GoldenOptionSetupsService, useValue: {
         list, reprove, revoke,
       } }],
     });

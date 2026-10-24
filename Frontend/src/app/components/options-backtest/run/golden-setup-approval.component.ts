@@ -23,8 +23,8 @@ import { GoldenOptionSetupsService, type GoldenOptionSetup } from '../golden-opt
 })
 export class GoldenSetupApprovalComponent {
   readonly runId = input.required<number>();
-  /** The hash of the content the owner reviewed in the run, sent with an approval so any other content is refused. */
-  readonly expectedSetupSha256 = input<string | null>(null);
+  /** The hash of the content the owner reviewed in the run, sent with every approval so any other content is refused. Required: no approval is made without it. */
+  readonly expectedSetupSha256 = input.required<string>();
   /** A version was approved, revoked or re-proved, or found to exist already. */
   readonly changed = output<GoldenOptionSetup>();
   protected readonly noteId = computed(() => `golden-note-${this.runId()}`);
@@ -72,7 +72,7 @@ export class GoldenSetupApprovalComponent {
         // The list on screen may be older than another approval of this run; this one is read now.
         result = (await this.service.list(runId)).find((version) => version.status !== 'revoked') ?? null;
         if (result !== null) this.notice.set('This run was already approved. That version is shown, and nothing more was approved.');
-        else result = await this.service.approve(runId, note, key, expected ?? undefined);
+        else result = await this.service.approve(runId, note, key, expected);
       } else if (golden !== null) {
         result = kind === 'reprove' ? await this.service.reprove(golden.id, key) : await this.service.revoke(golden.id, note, key);
       }
