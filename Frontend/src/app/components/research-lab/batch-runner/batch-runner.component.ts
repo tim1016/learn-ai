@@ -25,10 +25,10 @@ import {
   BinomialNullTest,
   CrossSectionalCriterion,
   CrossSectionalDataSource,
+  CrossSectionalFailure,
   CrossSectionalStageInfo,
   MemberExclusion,
   ProviderInputSource,
-  StudyCoverageGroup,
   StudyUniverse,
   TickerBatchResult,
   TickerValidity,
@@ -44,6 +44,12 @@ import { RunProgressPanelComponent } from '../shared/run-progress-panel/run-prog
 import { MultiTickerRangePickerComponent } from '../../../shared/multi-ticker-range-picker/multi-ticker-range-picker.component';
 import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
 import { DataSourceComponent } from '../../../shared/data-source/data-source.component';
+import { LakeStudySourceComponent } from '../../../shared/lake-study/lake-study-source.component';
+import {
+  mapLakeStudyDataSource,
+  readLakeStudyRefusal,
+  type LakeDataSourceRaw,
+} from '../../../shared/lake-study/lake-study';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import type { MultiTickerRange } from '../../../shared/multi-ticker-range-picker/multi-ticker-range-picker.types';
 import { multiTickerRangeToWire } from '../../../utils/ticker-wire';
@@ -64,17 +70,6 @@ const TARGET_TYPES = [
   { label: 'Absolute Return', value: 'abs_return' },
 ];
 
-interface StudyCoverageGroupRaw {
-  expected_sessions: number;
-  reused: number;
-  added: number;
-  missing: number;
-  failed: number;
-  building: number;
-  corrupt: number;
-  unavailable_from_provider: number;
-}
-
 interface ProviderInputSourceRaw {
   provider: string;
   endpoint?: string;
@@ -88,28 +83,27 @@ interface ProviderInputSourceRaw {
 interface CrossSectionalDataSourceRaw {
   kind: 'composite';
   calculation_version: string;
-  stock_bars: {
-    kind: 'lake';
-    provider: string;
-    price_adjustment_mode: string;
-    session_policy: 'regular' | 'extended';
-    bar_resolution: 'day';
-    window_start_ms: number;
-    window_end_ms: number;
-    identity_digest: string;
-    universe_snapshot_digest: string | null;
-    coverage: {
-      window: StudyCoverageGroupRaw;
-      artifacts: { fetched: number; reused: number; refreshed: number };
-    };
-    members: { ticker: string; status: 'admitted' | 'excluded'; code?: string; reason?: string }[];
-  } | null;
+  /** The block every lake study writes; a universe's counts are member-sessions. */
+  stock_bars: LakeDataSourceRaw | null;
   option_inputs: {
     inputs: Record<'option_expiries' | 'option_contracts' | 'option_bars', ProviderInputSourceRaw>;
-    risk_free_rate: { provider: string; days_from_fred: number; days_from_default: number; reproducible: boolean };
+    risk_free_rate: {
+      provider: string;
+      days_from_fred: number;
+      days_from_default: number;
+      days_fetch_failed: number;
+      reproducible: boolean;
+    };
     failures_total: number;
   } | null;
-  cache: { hit: boolean; cached_at_ms: number | null };
+}
+
+/** What a study that ended without a result parks as the job's result. */
+interface CrossSectionalFailedResultRaw {
+  success: false;
+  status: 'refused' | 'not_evaluated';
+  universe?: StudyUniverseRaw;
+  data_source?: CrossSectionalDataSourceRaw;
 }
 
 interface StudyUniverseRaw {
@@ -119,7 +113,7 @@ interface StudyUniverseRaw {
   evaluated_count: number;
   excluded: MemberExclusion[];
   excluded_count: number;
-  degraded: { ticker: string; failures_total: number }[];
+  degraded: { ticker: string; failures_total: number; rate_days_fetch_failed: number }[];
   denominator: number;
   inclusion_policy: { name: string; description: string };
   complete: boolean;
@@ -209,6 +203,19 @@ interface CrossSectionalJobResultRaw {
   summary: string;
 }
 
+/** One line for the option inputs: the provider's live answers, not archived, and what went unanswered. */
+function optionInputsText(source: CrossSectionalDataSource | null): string {
+  const options = source?.optionInputs;
+  if (!options) return '';
+  const provider = Object.values(options.inputs)[0]?.provider ?? 'provider';
+  const rate = options.riskFreeRate;
+  const outage = rate.daysFetchFailed > 0 ? ` (${rate.daysFetchFailed} because FRED did not answer)` : '';
+  return (
+    `Option inputs: ${provider} live requests, not archived — ${options.failuresTotal} failed; ` +
+    `risk-free rate: ${rate.provider.toUpperCase()}, ${rate.daysFromDefault} days on the default${outage}`
+  );
+}
+
 @Component({
   selector: 'app-batch-runner',
   imports: [
@@ -227,6 +234,7 @@ interface CrossSectionalJobResultRaw {
     MultiTickerRangePickerComponent,
     AssetIdentityComponent,
     DataSourceComponent,
+    LakeStudySourceComponent,
     TimestampDisplayComponent,
   ],
   templateUrl: './batch-runner.component.html',
@@ -258,6 +266,8 @@ export class BatchRunnerComponent {
   readonly jobId = signal<string | null>(null);
   readonly result = signal<BatchResearchResult | null>(null);
   readonly error = signal<string | null>(null);
+  /** Why a run that failed has no result, read from the payload the failed job parked. */
+  readonly failure = signal<CrossSectionalFailure | null>(null);
 
   /** Rolling FIFO log buffer (cap 500). Replaces the unbounded
    *  cumulativeLogs signal that used to live inline. */
@@ -316,6 +326,7 @@ export class BatchRunnerComponent {
       if (j.status === 'failed' && resultFetchedFor !== id) {
         resultFetchedFor = id;
         this.error.set(j.errorMessage ?? 'Cross-sectional run failed');
+        void this.loadFailure(id);
       } else if (j.status === 'cancelled' && resultFetchedFor !== id) {
         resultFetchedFor = id;
         this.error.set(j.message ?? 'Run cancelled');
@@ -444,36 +455,42 @@ export class BatchRunnerComponent {
   readonly dataSource = computed<CrossSectionalDataSource | null>(() => this.result()?.dataSource ?? null);
 
   /** True when the result on screen is a stored one rather than a fresh computation. */
-  readonly servedFromCache = computed<boolean>(() => this.dataSource()?.cache.hit ?? false);
+  readonly servedFromCache = computed<boolean>(() => this.dataSource()?.stockBars?.cache.hit ?? false);
 
-  readonly cachedAtMs = computed<number | null>(() => this.dataSource()?.cache.cachedAtMs ?? null);
+  readonly cachedAtMs = computed<number | null>(() => this.dataSource()?.stockBars?.cache.cachedAtMs ?? null);
+
+  /** The lake's refusal when the stock bars could not be admitted: its reason, counts and each session that failed. */
+  readonly refusal = computed(() => this.failure()?.refused ?? null);
 
   /**
-   * One line naming each input and its source. The result as a whole is not "lake": the stock bars are, the option
-   * inputs are the provider's live answers.
+   * One line for the option inputs, which are not the lake's: the provider's live answers, not archived. The stock
+   * bars have the shared lake data-source line; the result as a whole is not labelled "lake".
    */
-  readonly dataSourceLine = computed<string>(() => {
-    const source = this.dataSource();
-    if (!source) return '';
+  readonly optionInputsLine = computed<string>(() => optionInputsText(this.dataSource()));
+
+  /** The same line for a run that ended without a result, when it got as far as asking the provider. */
+  readonly failureOptionInputsLine = computed<string>(() => optionInputsText(this.failure()?.dataSource ?? null));
+
+  /** What left a member short of what was asked, in words. */
+  degradedReason(d: { failuresTotal: number; rateDaysFetchFailed: number }): string {
     const parts: string[] = [];
-    const stock = source.stockBars;
-    if (stock) {
-      const w = stock.coverage.window;
-      parts.push(
-        `Stock bars: data lake, ${stock.priceAdjustmentMode.replace(/_/g, ' ')} daily, ${stock.sessionPolicy} session — ` +
-          `${w.expectedSessions} member-sessions: ${w.reused} reused, ${w.added} added, ${w.missing} missing, ${w.failed} failed`,
-      );
+    if (d.failuresTotal > 0) parts.push(`${d.failuresTotal} option request(s) went unanswered while its IV history was built`);
+    if (d.rateDaysFetchFailed > 0) {
+      parts.push(`${d.rateDaysFetchFailed} day(s) were priced at the default risk-free rate because FRED did not answer`);
     }
-    const options = source.optionInputs;
-    if (options) {
-      const provider = Object.values(options.inputs)[0]?.provider ?? 'provider';
-      parts.push(
-        `Option inputs: ${provider} live requests, not archived — ${options.failuresTotal} failed; ` +
-          `risk-free rate: ${options.riskFreeRate.provider.toUpperCase()}, ${options.riskFreeRate.daysFromDefault} days on the default`,
-      );
-    }
-    return parts.join(' · ');
-  });
+    return parts.join(' and ');
+  }
+
+  partialText(uni: StudyUniverse): string {
+    return (
+      `${uni.evaluatedCount} of ${uni.requestedCount} requested members are in the statistics, so every statistic ` +
+      `divides by ${uni.denominator}. ${uni.inclusionPolicy.description}`
+    );
+  }
+
+  unevaluatedText(uni: StudyUniverse): string {
+    return `${uni.evaluatedCount} of ${uni.requestedCount} requested members are in the statistics. ${uni.inclusionPolicy.description}`;
+  }
 
   // Note: ticker selection (toggle / All / None) now lives inside
   // <app-multi-ticker-range-picker>. The component refuses to leave the
@@ -489,6 +506,7 @@ export class BatchRunnerComponent {
     }
 
     this.error.set(null);
+    this.failure.set(null);
     this.result.set(null);
     this.logBuffer.clear();
 
@@ -547,6 +565,7 @@ export class BatchRunnerComponent {
     this.jobId.set(null);
     this.result.set(null);
     this.error.set(null);
+    this.failure.set(null);
     this.logBuffer.clear();
   }
 
@@ -571,6 +590,26 @@ export class BatchRunnerComponent {
           ? String((err as { message: unknown }).message)
           : 'Failed to fetch cross-sectional result';
       this.error.set(msg);
+    }
+  }
+
+  /**
+   * A run that ended without a result parks why as the job's result: the lake's refusal, or the universe when no
+   * member could be evaluated. A job that failed for any other reason parks nothing, and the fetch finds none: the
+   * failure message already shown is all there is.
+   */
+  private async loadFailure(id: string): Promise<void> {
+    try {
+      const raw = await this.jobsService.fetchResult<CrossSectionalFailedResultRaw>(id);
+      if (this.jobId() !== id) return;
+      this.failure.set({
+        // A refusal's source is the lake part of the composite block: read it with the shared reader.
+        refused: readLakeStudyRefusal({ ...raw, data_source: raw.data_source?.stock_bars ?? null }),
+        universe: raw.universe ? this.toUniverse(raw.universe) : null,
+        dataSource: raw.data_source ? this.toDataSource(raw.data_source) : null,
+      });
+    } catch {
+      // No parked result: the job failed on something other than the stock bars or an empty universe.
     }
   }
 
@@ -664,7 +703,11 @@ export class BatchRunnerComponent {
       evaluatedCount: u.evaluated_count,
       excluded: u.excluded,
       excludedCount: u.excluded_count,
-      degraded: u.degraded.map((d) => ({ ticker: d.ticker, failuresTotal: d.failures_total })),
+      degraded: u.degraded.map((d) => ({
+        ticker: d.ticker,
+        failuresTotal: d.failures_total,
+        rateDaysFetchFailed: d.rate_days_fetch_failed,
+      })),
       denominator: u.denominator,
       inclusionPolicy: u.inclusion_policy,
       complete: u.complete,
@@ -672,16 +715,6 @@ export class BatchRunnerComponent {
   }
 
   private toDataSource(raw: CrossSectionalDataSourceRaw): CrossSectionalDataSource {
-    const group = (g: StudyCoverageGroupRaw): StudyCoverageGroup => ({
-      expectedSessions: g.expected_sessions,
-      reused: g.reused,
-      added: g.added,
-      missing: g.missing,
-      failed: g.failed,
-      building: g.building,
-      corrupt: g.corrupt,
-      unavailableFromProvider: g.unavailable_from_provider,
-    });
     const provider = (p: ProviderInputSourceRaw): ProviderInputSource => ({
       provider: p.provider,
       endpoint: p.endpoint,
@@ -690,26 +723,11 @@ export class BatchRunnerComponent {
       observationDigest: p.observation_digest,
       reproducible: p.reproducible,
     });
-    const stock = raw.stock_bars;
     const options = raw.option_inputs;
     return {
       kind: raw.kind,
       calculationVersion: raw.calculation_version,
-      stockBars: stock
-        ? {
-            kind: stock.kind,
-            provider: stock.provider,
-            priceAdjustmentMode: stock.price_adjustment_mode,
-            sessionPolicy: stock.session_policy,
-            barResolution: stock.bar_resolution,
-            windowStartMs: stock.window_start_ms,
-            windowEndMs: stock.window_end_ms,
-            identityDigest: stock.identity_digest,
-            universeSnapshotDigest: stock.universe_snapshot_digest,
-            coverage: { window: group(stock.coverage.window), artifacts: stock.coverage.artifacts },
-            members: stock.members,
-          }
-        : null,
+      stockBars: raw.stock_bars ? mapLakeStudyDataSource(raw.stock_bars) : null,
       optionInputs: options
         ? {
             inputs: {
@@ -721,12 +739,12 @@ export class BatchRunnerComponent {
               provider: options.risk_free_rate.provider,
               daysFromFred: options.risk_free_rate.days_from_fred,
               daysFromDefault: options.risk_free_rate.days_from_default,
+              daysFetchFailed: options.risk_free_rate.days_fetch_failed,
               reproducible: options.risk_free_rate.reproducible,
             },
             failuresTotal: options.failures_total,
           }
         : null,
-      cache: { hit: raw.cache.hit, cachedAtMs: raw.cache.cached_at_ms },
     };
   }
 

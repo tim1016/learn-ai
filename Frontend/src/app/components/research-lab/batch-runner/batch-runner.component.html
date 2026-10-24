@@ -83,16 +83,56 @@
     />
   }
 
-  @if (error(); as err) {
+  <!-- Every requested member, with the stage and reason that left it out, and what degraded the ones that stayed in. -->
+  <ng-template #memberList let-uni let-lead="lead" let-text="text" let-testid="testid">
+    <div class="ci-unreliable-banner mb-4" [attr.data-testid]="testid">
+      <i class="pi pi-exclamation-triangle"></i>
+      <span>
+        <strong>{{ lead }}</strong>
+        {{ text }}
+        @for (e of uni.excluded; track e.ticker) {
+          <span class="block"><app-asset-identity [symbol]="e.ticker" size="xs" /> — {{ e.reason }}</span>
+        }
+        @for (d of uni.degraded; track d.ticker) {
+          <span class="block">
+            <app-asset-identity [symbol]="d.ticker" size="xs" /> — in the statistics, but {{ degradedReason(d) }}.
+          </span>
+        }
+      </span>
+    </div>
+  </ng-template>
+
+  <!-- A run with no result says why: the lake's refusal (reason, counts, sessions), or the empty universe. -->
+  @if (refusal(); as refused) {
+    <app-lake-study-source [source]="refused.dataSource" [refusal]="refused.refusal" />
+  } @else if (error(); as err) {
     <p-message severity="error" class="mb-4">{{ err }}</p-message>
+  }
+  @if (failure(); as failed) {
+    @let admitted = failed.dataSource?.stockBars ?? null;
+    @if (failed.refused === null && admitted) {
+      <app-lake-study-source [source]="admitted" />
+      @if (failureOptionInputsLine(); as line) {
+        <app-data-source class="block mb-2" origin="Polygon (live)" [method]="line" />
+      }
+    }
+    @if (failed.universe; as uni) {
+      <ng-container
+        [ngTemplateOutlet]="memberList"
+        [ngTemplateOutletContext]="{ $implicit: uni, lead: 'Members:', text: unevaluatedText(uni), testid: 'failed-universe' }"
+      />
+    }
   }
 
   <!-- Final aggregate result -->
   @if (result(); as res) {
 
     <!-- Where every input came from, and whether this is a stored result. -->
-    @if (dataSource()) {
-      <app-data-source class="block mb-2" origin="Lake + Polygon" [method]="dataSourceLine()" />
+    @if (dataSource(); as source) {
+      <app-lake-study-source [source]="source.stockBars" />
+      @if (optionInputsLine(); as line) {
+        <app-data-source class="block mb-2" origin="Polygon (live)" [method]="line" />
+      }
       @if (servedFromCache()) {
         <p class="text-sm text-color-secondary mb-3" data-testid="cache-note">
           Stored result, computed
@@ -105,23 +145,10 @@
     <!-- A universe that is not fully evaluated says so, member by member. -->
     @if (universe(); as uni) {
       @if (isPartial()) {
-        <div class="ci-unreliable-banner mb-4" data-testid="partial-universe">
-          <i class="pi pi-exclamation-triangle"></i>
-          <span>
-            <strong>Partial universe:</strong>
-            {{ uni.evaluatedCount }} of {{ uni.requestedCount }} requested members are in the statistics, so every
-            statistic divides by {{ uni.denominator }}. {{ uni.inclusionPolicy.description }}
-            @for (e of uni.excluded; track e.ticker) {
-              <span class="block"><app-asset-identity [symbol]="e.ticker" size="xs" /> — {{ e.reason }}</span>
-            }
-            @for (d of uni.degraded; track d.ticker) {
-              <span class="block">
-                <app-asset-identity [symbol]="d.ticker" size="xs" /> — in the statistics, but {{ d.failuresTotal }} option
-                request(s) went unanswered while its IV history was built.
-              </span>
-            }
-          </span>
-        </div>
+        <ng-container
+          [ngTemplateOutlet]="memberList"
+          [ngTemplateOutletContext]="{ $implicit: uni, lead: 'Partial universe:', text: partialText(uni), testid: 'partial-universe' }"
+        />
       }
     }
 

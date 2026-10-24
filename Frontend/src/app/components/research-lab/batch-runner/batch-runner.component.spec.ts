@@ -34,30 +34,48 @@ const providerInput = (over: Record<string, unknown> = {}) => ({
   attempted: 4, failed: 0, observation_digest: 'a'.repeat(64), reproducible: false, ...over,
 });
 
-function dataSource(over: { cacheHit?: boolean; failed?: number; coverage?: Record<string, number> } = {}) {
+/** The lake block as `stock_bars_block` writes it: the shape every lake study's block has, for a universe. */
+function stockBars(over: Record<string, unknown> = {}, counts: Record<string, number> = {}) {
+  return {
+    kind: 'lake', provider: 'polygon', symbol: 'SPY, QQQ', price_adjustment_mode: 'polygon_split_adjusted',
+    session_policy: 'regular', window_start_ms: 1756785600000, window_end_ms: 1764565200000,
+    effective_window: { start_ms: 1756785600000, end_ms: 1764565200000 }, warmup_sessions: 0, bar_minutes: null,
+    aggregation: 'minute_fold_per_et_session_no_fill', identity_digest: 'b'.repeat(64), calculation_version: 'cross-sectional-study/1',
+    snapshot_digest: 'c'.repeat(64),
+    coverage: {
+      window: group(counts), warmup: group({ expected_sessions: 0, reused: 0, added: 0 }),
+      artifacts: { fetched: 78, reused: 70, refreshed: 0 },
+    },
+    bars_used: 148, cache: { hit: false, cached_at_ms: null },
+    members: [{ ticker: 'SPY', status: 'admitted' }, { ticker: 'QQQ', status: 'admitted' }],
+    ...over,
+  };
+}
+
+function optionInputs(over: { failed?: number; defaultDays?: number; fetchFailedDays?: number } = {}) {
+  return {
+    inputs: {
+      option_expiries: providerInput(),
+      option_contracts: providerInput(),
+      option_bars: providerInput({ failed: over.failed ?? 0 }),
+    },
+    risk_free_rate: {
+      provider: 'fred', days_from_fred: 0, days_from_default: over.defaultDays ?? 148,
+      days_fetch_failed: over.fetchFailedDays ?? 0, reproducible: false,
+    },
+    failures_total: over.failed ?? 0,
+  };
+}
+
+function dataSource(over: { cacheHit?: boolean; failed?: number; fetchFailedDays?: number; coverage?: Record<string, number> } = {}) {
   return {
     kind: 'composite',
     calculation_version: 'cross-sectional-study/1',
-    stock_bars: {
-      kind: 'lake', provider: 'polygon', price_adjustment_mode: 'polygon_split_adjusted', session_policy: 'regular',
-      bar_resolution: 'day', window_start_ms: 1756785600000, window_end_ms: 1764565200000,
-      identity_digest: 'b'.repeat(64), universe_snapshot_digest: 'c'.repeat(64),
-      coverage: { window: group(over.coverage), artifacts: { fetched: 78, reused: 70, refreshed: 0 } },
-      members: [
-        { ticker: 'SPY', status: 'admitted' },
-        { ticker: 'QQQ', status: 'admitted' },
-      ],
-    },
-    option_inputs: {
-      inputs: {
-        option_expiries: providerInput(),
-        option_contracts: providerInput(),
-        option_bars: providerInput({ failed: over.failed ?? 0 }),
-      },
-      risk_free_rate: { provider: 'fred', days_from_fred: 0, days_from_default: 148, reproducible: false },
-      failures_total: over.failed ?? 0,
-    },
-    cache: { hit: over.cacheHit ?? false, cached_at_ms: over.cacheHit ? 1761000000000 : null },
+    stock_bars: stockBars(
+      { cache: { hit: over.cacheHit ?? false, cached_at_ms: over.cacheHit ? 1761000000000 : null } },
+      over.coverage,
+    ),
+    option_inputs: optionInputs({ failed: over.failed, fetchFailedDays: over.fetchFailedDays }),
   };
 }
 
@@ -150,17 +168,19 @@ describe('BatchRunnerComponent', () => {
     expect(view.container.querySelector('app-sampling-card')).toBeNull();
   });
 
-  it('names the lake for the stock bars and the provider for the option inputs, with the session counts', async () => {
+  it('names the lake for the stock bars on the shared line and the provider for the option inputs apart', async () => {
     const { user, finish } = await renderPage();
     await user.click(runButton());
     finish('completed');
 
-    const line = await screen.findByText(/Stock bars: data lake/);
-
-    expect(line.textContent).toContain('polygon split adjusted daily, regular session');
-    expect(line.textContent).toContain('148 member-sessions: 70 reused, 78 added, 0 missing, 0 failed');
-    expect(line.textContent).toContain('Option inputs: polygon live requests, not archived — 0 failed');
-    expect(line.textContent).toContain('risk-free rate: FRED, 148 days on the default');
+    expect(await screen.findByText('Data source')).not.toBeNull();
+    expect(screen.getByText('SPY, QQQ')).not.toBeNull();
+    expect(screen.getAllByText('daily bars, folded from 1-minute bars').length).toBeGreaterThan(0);
+    expect(screen.getByText('78 added · 70 reused · 0 missing')).not.toBeNull();
+    const options = screen.getByText(/Option inputs: polygon live requests/);
+    expect(options.textContent).toContain('0 failed');
+    expect(options.textContent).toContain('risk-free rate: FRED, 148 days on the default');
+    expect(options.textContent).not.toContain('because FRED did not answer');
     expect(screen.queryByTestId('partial-universe')).toBeNull();
     expect(screen.queryByRole('button', { name: /ignoring the stored result/i })).toBeNull();
   });
@@ -200,7 +220,7 @@ describe('BatchRunnerComponent', () => {
       rawResult({
         status: 'partial',
         ticker_results: [tickerRow('SPY'), tickerRow('QQQ', { option_inputs: { failures_total: 3 } })],
-        universe: universe({ complete: false, degraded: [{ ticker: 'QQQ', failures_total: 3 }] }),
+        universe: universe({ complete: false, degraded: [{ ticker: 'QQQ', failures_total: 3, rate_days_fetch_failed: 0 }] }),
         data_source: dataSource({ failed: 3 }),
       }),
     );
@@ -209,9 +229,27 @@ describe('BatchRunnerComponent', () => {
 
     const banner = await screen.findByTestId('partial-universe');
 
-    expect(banner.textContent).toMatch(/QQQ\s*— in the statistics, but 3 option\s+request\(s\) went unanswered/);
+    expect(banner.textContent).toMatch(/QQQ\s*— in the statistics, but 3 option request\(s\) went unanswered while its IV history was built\./);
     expect(screen.getByText(/3 option request\(s\) went unanswered while this ticker's IV history was built/)).not.toBeNull();
-    expect((await screen.findByText(/Stock bars: data lake/)).textContent).toContain('Option inputs: polygon live requests, not archived — 3 failed');
+    expect((await screen.findByText(/Option inputs: polygon live requests/)).textContent).toContain('3 failed');
+  });
+
+  it('flags a member whose days were priced at the default rate because FRED did not answer', async () => {
+    const { user, finish } = await renderPage(
+      rawResult({
+        status: 'partial',
+        universe: universe({ complete: false, degraded: [{ ticker: 'QQQ', failures_total: 0, rate_days_fetch_failed: 74 }] }),
+        data_source: dataSource({ fetchFailedDays: 74 }),
+      }),
+    );
+    await user.click(runButton());
+    finish('completed');
+
+    const banner = await screen.findByTestId('partial-universe');
+
+    expect(banner.textContent).toMatch(/QQQ\s*— in the statistics, but 74 day\(s\) were priced at the default risk-free rate because FRED did not answer\./);
+    expect(banner.textContent).not.toContain('option request(s)');
+    expect((await screen.findByText(/Option inputs: polygon live requests/)).textContent).toContain('148 days on the default (74 because FRED did not answer)');
   });
 
   it('says a result is a stored one and offers to run again without it', async () => {
@@ -230,14 +268,103 @@ describe('BatchRunnerComponent', () => {
     expect(jobs.startJob.mock.calls[0][1]).toMatchObject({ force: true, timespan: 'day' });
   });
 
-  it('shows the reason a refused run gives instead of an opaque failure', async () => {
-    const { user, finish } = await renderPage();
-    await user.click(runButton());
-
-    finish('failed', {
-      errorMessage: 'The cross-sectional study runs on daily bars only (its targets look one and five sessions ahead); 1-minute bars were requested. Use daily bars.',
+  describe('a run that ends without a result', () => {
+    const excluded = (ticker: string, over: Record<string, unknown> = {}) => ({
+      ticker, stage: 'stock_bars', code: 'data_unavailable_from_provider',
+      reason: 'The lake cannot admit this window: 2 of 148 sessions cannot be supplied by the provider', retryable: true, ...over,
     });
 
-    await waitFor(() => expect(screen.getByText(/runs on daily bars only/)).not.toBeNull());
+    it('shows the lake refusal with its reason, its counts and each session that failed, and names every member', async () => {
+      const refusal = {
+        success: false, status: 'refused', feature_name: 'iv_rank_60', target_type: 'directional',
+        error: 'The lake cannot admit stock bars for any of the 2 requested members. SPY: nothing. QQQ: nothing.',
+        refusal: {
+          code: 'data_unavailable_from_provider',
+          reason: 'The lake cannot admit stock bars for any of the 2 requested members. SPY: nothing. QQQ: nothing.',
+          sessions: [{ group: 'window', trading_date_ms: 1756785600000, outcome: 'unavailable_from_provider', reason: 'SPY: provider_no_data', failure_reason: 'provider_no_data' }],
+          sessions_total: 1,
+          coverage: {
+            window: group({ expected_sessions: 296, reused: 0, added: 295, failed: 1, unavailable_from_provider: 1 }),
+            warmup: group({ expected_sessions: 0, reused: 0, added: 0 }),
+            artifacts: { fetched: 295, reused: 0, refreshed: 0 },
+          },
+          members: [excluded('SPY'), excluded('QQQ')], members_total: 2,
+        },
+        universe: universe({
+          evaluated: [], evaluated_count: 0, denominator: 0, complete: false,
+          excluded: [excluded('SPY'), excluded('QQQ')], excluded_count: 2,
+        }),
+        data_source: { kind: 'composite', calculation_version: 'cross-sectional-study/1', stock_bars: stockBars({ snapshot_digest: null, effective_window: null }), option_inputs: null },
+      };
+      const { user, finish } = await renderPage(refusal);
+      await user.click(runButton());
+
+      finish('failed', { errorMessage: refusal.error });
+
+      expect(await screen.findByText('No result: the lake could not supply this study its data.')).not.toBeNull();
+      expect(screen.getByText(refusal.refusal.reason)).not.toBeNull();
+      expect(screen.getByText(/296 sessions · 0 reused · 295 added · 0 missing · 1 failed \(1 unavailable from the provider\)/)).not.toBeNull();
+      expect(screen.getByText('SPY: provider_no_data')).not.toBeNull();
+      expect(screen.getByText('SPY, QQQ')).not.toBeNull();
+      const members = await screen.findByTestId('failed-universe');
+      expect(members.textContent).toContain('0 of 2 requested members are in the statistics');
+      expect(members.textContent).toMatch(/SPY\s*— The lake cannot admit this window/);
+      expect(members.textContent).toMatch(/QQQ\s*— The lake cannot admit this window/);
+      expect(screen.queryByText(/Option inputs:/)).toBeNull();
+    });
+
+    it('shows a request refused before anything was read with its reason and no data-source line', async () => {
+      const reason = 'The cross-sectional study runs on daily bars only (its targets look one and five sessions ahead); 1-minute bars were requested. Use daily bars.';
+      const { user, finish } = await renderPage({
+        success: false, status: 'refused', error: reason,
+        refusal: { code: 'resolution_unsupported', reason, sessions: [], sessions_total: 0, coverage: null, members: [], members_total: 0 },
+        universe: universe({ evaluated: [], evaluated_count: 0, denominator: 0, complete: false }),
+        data_source: { kind: 'composite', calculation_version: 'cross-sectional-study/1', stock_bars: null, option_inputs: null },
+      });
+      await user.click(runButton());
+
+      finish('failed', { errorMessage: reason });
+
+      await waitFor(() => expect(screen.getByText(/runs on daily bars only/)).not.toBeNull());
+      expect(screen.queryByText('Data source')).toBeNull();
+    });
+
+    it('shows why no member was evaluated: the admitted source, the option inputs, and each member with its reason', async () => {
+      const reason = 'None of the 2 requested members could be evaluated, so there is no statistic to report. SPY: 30 days is outside the expiry bracket QQQ: 30 days is outside the expiry bracket';
+      const stage = (ticker: string) => excluded(ticker, { stage: 'iv_inputs', code: 'iv_build_failed', reason: '30 days is outside the expiry bracket' });
+      const { user, finish } = await renderPage({
+        success: false, status: 'not_evaluated', feature_name: 'iv_rank_60', target_type: 'directional', error: reason,
+        universe: universe({
+          evaluated: [], evaluated_count: 0, denominator: 0, complete: false,
+          excluded: [stage('SPY'), stage('QQQ')], excluded_count: 2,
+        }),
+        data_source: { ...dataSource(), option_inputs: optionInputs({ failed: 0 }) },
+      });
+      await user.click(runButton());
+
+      finish('failed', { errorMessage: reason });
+
+      expect(await screen.findByText(reason)).not.toBeNull();
+      expect(screen.queryByText(/No result: the lake could not supply/)).toBeNull();
+      expect(screen.getByText('78 added · 70 reused · 0 missing')).not.toBeNull();
+      expect(screen.getByText(/Option inputs: polygon live requests/)).not.toBeNull();
+      const members = await screen.findByTestId('failed-universe');
+      expect(members.textContent).toContain('0 of 2 requested members are in the statistics');
+      expect(members.textContent).toMatch(/SPY\s*— 30 days is outside the expiry bracket/);
+      expect(members.textContent).toMatch(/QQQ\s*— 30 days is outside the expiry bracket/);
+    });
+
+    it('shows only the failure message when the job parked nothing', async () => {
+      const { jobs, user, finish } = await renderPage();
+      jobs.fetchResult.mockRejectedValue(new Error('no result for this job'));
+      await user.click(runButton());
+
+      finish('failed', { errorMessage: 'the worker crashed' });
+
+      expect(await screen.findByText('the worker crashed')).not.toBeNull();
+      await waitFor(() => expect(jobs.fetchResult).toHaveBeenCalled());
+      expect(screen.queryByTestId('failed-universe')).toBeNull();
+      expect(screen.queryByText('Data source')).toBeNull();
+    });
   });
 });

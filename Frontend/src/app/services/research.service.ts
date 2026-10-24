@@ -5,7 +5,7 @@ import type { components } from '../api/broker.types';
 import { environment } from '../../environments/environment';
 import { toResearchExperiment, toSignalEngineResult, toSignalExperiment } from './research-experiments.mappers';
 import { failureAsError, isPythonRefusal } from './python-http-failure';
-import type { LakeStudyDataSource } from '../shared/lake-study/lake-study';
+import type { LakeStudyDataSource, LakeStudyRefused } from '../shared/lake-study/lake-study';
 
 type Schema = components['schemas'];
 
@@ -591,8 +591,11 @@ export interface StudyUniverse {
   evaluatedCount: number;
   excluded: MemberExclusion[];
   excludedCount: number;
-  /** In the statistics, but built their IV history while provider requests went unanswered. */
-  degraded: { ticker: string; failuresTotal: number }[];
+  /**
+   * In the statistics, but short of what was asked: provider requests went unanswered while the IV history was
+   * built, or days were priced at the default risk-free rate because FRED did not answer.
+   */
+  degraded: { ticker: string; failuresTotal: number; rateDaysFetchFailed: number }[];
   denominator: number;
   inclusionPolicy: { name: string; description: string };
   /** True only when every requested member is evaluated and none is degraded. */
@@ -616,30 +619,34 @@ export interface ProviderInputSource {
 export interface CrossSectionalDataSource {
   kind: 'composite';
   calculationVersion: string;
-  stockBars: {
-    kind: 'lake';
-    provider: string;
-    priceAdjustmentMode: string;
-    /** `regular` is the scheduled session; `extended` folds 04:00-20:00 ET. */
-    sessionPolicy: 'regular' | 'extended';
-    barResolution: 'day';
-    windowStartMs: number;
-    windowEndMs: number;
-    identityDigest: string;
-    universeSnapshotDigest: string | null;
-    /** Member-sessions: each expected unit is one member's one session. */
-    coverage: {
-      window: StudyCoverageGroup;
-      artifacts: { fetched: number; reused: number; refreshed: number };
-    };
-    members: { ticker: string; status: 'admitted' | 'excluded'; code?: string; reason?: string }[];
-  } | null;
+  /**
+   * The lake part, mapped by the mapper every lake study shares. It names the universe as its subject and counts
+   * member-sessions; its `cache` is the whole result's.
+   */
+  stockBars: LakeStudyDataSource | null;
   optionInputs: {
     inputs: Record<'option_expiries' | 'option_contracts' | 'option_bars', ProviderInputSource>;
-    riskFreeRate: { provider: string; daysFromFred: number; daysFromDefault: number; reproducible: boolean };
+    riskFreeRate: {
+      provider: string;
+      daysFromFred: number;
+      daysFromDefault: number;
+      /** Days priced at the default only because FRED, with a key configured, gave no rate. */
+      daysFetchFailed: number;
+      reproducible: boolean;
+    };
     failuresTotal: number;
   } | null;
-  cache: { hit: boolean; cachedAtMs: number | null };
+}
+
+/**
+ * What a study that ended without a result parked (#3524): the lake's refusal (its reason, counts and source) when
+ * the stock bars could not be admitted, or just the universe and source when the bars were admitted and no member
+ * could be evaluated. Either way every requested member is accounted for in `universe`.
+ */
+export interface CrossSectionalFailure {
+  refused: LakeStudyRefused | null;
+  universe: StudyUniverse | null;
+  dataSource: CrossSectionalDataSource | null;
 }
 
 export interface AggregateIcCi {
