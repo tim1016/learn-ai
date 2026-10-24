@@ -20244,7 +20244,7 @@ export interface components {
             /** Instrument */
             instrument?: string | null;
             /** Mode */
-            mode?: string | null;
+            mode?: ("raw" | "polygon_split_adjusted" | "lean_adjusted") | ("paper" | "live") | null;
             /** Session Ms */
             session_ms?: number | null;
         };

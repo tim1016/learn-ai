@@ -31780,6 +31780,18 @@
           "mode": {
             "anyOf": [
               {
+                "enum": [
+                  "raw",
+                  "polygon_split_adjusted",
+                  "lean_adjusted"
+                ],
+                "type": "string"
+              },
+              {
+                "enum": [
+                  "paper",
+                  "live"
+                ],
                 "type": "string"
               },
               {

@@ -27,6 +27,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
+from app.data_lake.types import PriceAdjustmentMode
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 TimestampMs = Annotated[int, Field(ge=0, le=MAX_TIMESTAMP_MS)]
@@ -75,7 +76,7 @@ class HealthScope(BaseModel):
     #: The earliest affected session, as its canonical session open.
     session_ms: TimestampMs | None = None
     #: The price-adjustment mode of stock bars, or the IBKR session's paper/live mode.
-    mode: str | None = None
+    mode: PriceAdjustmentMode | Literal["paper", "live"] | None = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property
