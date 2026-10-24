@@ -33363,13 +33363,18 @@ export interface components {
             added: number;
             /** Building */
             building: number;
+            /**
+             * Captured Before Final
+             * @description Held, but captured before the session's data stopped forming
+             */
+            captured_before_final: number;
             /** Corrupt */
             corrupt: number;
             /** Expected Sessions */
             expected_sessions: number;
             /**
              * Failed
-             * @description building + corrupt + unavailable_from_provider
+             * @description building + corrupt + captured_before_final + unavailable_from_provider
              */
             failed: number;
             /**
@@ -33438,7 +33443,7 @@ export interface components {
              * Code
              * @enum {string}
              */
-            code: "resolution_unsupported" | "symbol_not_addressable" | "no_sessions_in_window" | "window_not_complete" | "data_unavailable_from_provider" | "data_corrupt" | "data_building" | "data_missing" | "lake_unavailable" | "warmup_shortened";
+            code: "resolution_unsupported" | "symbol_not_addressable" | "no_sessions_in_window" | "window_not_complete" | "data_unavailable_from_provider" | "data_corrupt" | "captured_before_final" | "data_building" | "data_missing" | "lake_unavailable" | "warmup_shortened";
             /** @description Null when admission never started */
             coverage: components["schemas"]["StudyCoverage"] | null;
             /** Reason */
@@ -33470,7 +33475,7 @@ export interface components {
              * Outcome
              * @enum {string}
              */
-            outcome: "missing" | "building" | "corrupt" | "unavailable_from_provider";
+            outcome: "missing" | "building" | "corrupt" | "captured_before_final" | "unavailable_from_provider";
             /** Reason */
             reason: string;
             /**
