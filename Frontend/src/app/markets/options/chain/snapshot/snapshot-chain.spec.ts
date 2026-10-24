@@ -106,7 +106,7 @@ describe('Now · Snapshot, as the one chain presentation', () => {
     expect(textOf(cell(rowOf(present({ contracts: [call] }), 720).call).fields.last)).toBe(expected);
   });
 
-  // F07: a quote is not a trade. The bid and ask are their own fields, so a midpoint never stands in for a price that traded.
+  // A quote is not a trade (PRD #3490 F07). The bid and ask are their own fields, so a midpoint never stands in for a price that traded.
   it.each([
     ['no day and no trade', { day: null, lastTrade: null }, 'no_trade_in_snapshot'],
     ['a day that closed at 0 and no trade', { day: { open: 0, high: 0, low: 0, close: 0, volume: 0, vwap: 0 }, lastTrade: null }, 'no_trade_in_snapshot'],
