@@ -23,8 +23,9 @@ type StudiesTab = 'new' | 'history';
  * from that study's frozen protocol (locking it creates a new linked study); and
  * `?run=`, `?search=` or `?walkForward=` open the plan from the Explore evidence
  * they name, which only fills the plan in for review: it is unlocked, it starts no
- * stage, and the explored window is compared with the final test's dates. A locked
- * plan navigates straight to its study.
+ * stage, and the explored window is compared with the final test's dates. The plan
+ * is not shown until the evidence is read or refused, so it is never filled in over
+ * an edit made while it was on its way. A locked plan navigates straight to its study.
  */
 @Component({
   selector: 'app-golden-studies',

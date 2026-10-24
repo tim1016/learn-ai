@@ -2,10 +2,11 @@ import { TestBed } from '@angular/core/testing';
 import { Router } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { fireEvent, screen, waitFor, within } from '@testing-library/angular';
-import { of } from 'rxjs';
+import { from, of } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { defaults, emaCapability, exposure, preflight, studyDetail } from '../../components/golden-search/testing/fixtures';
+import { BacktestRunsService } from '../../services/backtest-runs.service';
 import type { GoldenQualificationSummary } from '../../components/golden-search/golden-search.types';
 import type { StudyDetail } from '../../components/golden-search/golden-search.types';
 import { etDayEndMs, etMidnightMs } from '../../shared/date/et-midnight';
@@ -303,6 +304,25 @@ describe('Golden → Studies', () => {
 });
 
 describe('Explore → Golden (T12)', () => {
+  it('holds the plan back until the run it starts from is read, so what arrives late never lands over an edit the owner made meanwhile', async () => {
+    let arrive: (run: ReturnType<typeof savedRun>) => void = () => undefined;
+    const pending = new Promise<ReturnType<typeof savedRun>>((resolve) => (arrive = resolve));
+    const { golden } = planServices();
+    const explore = provideExploreWorld(world(), { runs: {}, searches: {} }, {}, { golden });
+    TestBed.configureTestingModule({ providers: [...explore.providers, { provide: BacktestRunsService, useValue: { get: () => from(pending) } }] });
+    const harness = await RouterTestingHarness.create();
+    await harness.navigateByUrl(`/signal-strategies/${EMA}/golden/studies?run=91`);
+
+    expect(await screen.findByText('Reading the evidence to start from.')).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Strategy, instrument and starting point' })).toBeNull();
+
+    arrive(savedRun({ id: 91, symbol: 'SPY' }));
+
+    expect(await screen.findByRole('region', { name: 'Started from' })).toBeTruthy();
+    expect(await screen.findByRole('region', { name: 'Strategy, instrument and starting point' })).toBeTruthy();
+    expect(golden.createStudy).not.toHaveBeenCalled();
+  });
+
   /** The final test the fixture plan lays out: 2026-01-01 through 2026-03-31. */
   const OVERLAPPING = sweepRequest({ start_ms: etMidnightMs('2025-06-02'), end_ms: etDayEndMs('2026-02-27') });
   const EARLIER = sweepRequest({ start_ms: etMidnightMs('2024-02-01'), end_ms: etDayEndMs('2025-09-30') });
