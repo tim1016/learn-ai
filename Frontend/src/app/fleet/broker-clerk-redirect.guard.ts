@@ -1,14 +1,11 @@
 import { inject } from '@angular/core';
 import { CanActivateFn, Router } from '@angular/router';
 
-import {
-  HOME_VIEW_QUERY_PARAM,
-  HOME_WALL_VIEW,
-  accountWorkspaceBotRoute,
-  accountWorkspaceHomeRoute,
-} from './account-workspace';
+import { redirectState } from '../shell/route-redirects';
+import { accountWorkspaceBotRoute, accountWorkspaceHomeRoute } from './account-workspace';
 import { FleetDirectoryService } from './fleet-directory.service';
 import { laneIsReady } from './fleet-directory.types';
+import { homeRedirectState } from './home-redirect';
 
 /** Redirect an unscoped broker route to its clerk-scoped canonical URL.
  *
@@ -46,14 +43,17 @@ export function brokerClerkRedirectGuard(
     }
     // Bots and Gallery merged into the account's Home (PRD #2560): the old
     // roster lands on Home, the old Gallery on its Wall, and a bot's page
-    // keeps its own URL under Home.
+    // keeps its own URL under Home. The old URL's query and fragment go with
+    // it, as they do through the route redirects that cover the lane-scoped
+    // addresses.
     const account = { broker, clerkId: lane.clerk_id, accountId };
     const commands =
       suffix === '/bots/:sid' && sid !== null
         ? accountWorkspaceBotRoute(account, sid).commands
         : accountWorkspaceHomeRoute(account);
-    return router.createUrlTree([...commands], {
-      queryParams: suffix === '/gallery' ? { [HOME_VIEW_QUERY_PARAM]: HOME_WALL_VIEW } : {},
-    });
+    return router.createUrlTree(
+      [...commands],
+      redirectState(homeRedirectState(suffix === '/gallery' ? 'wall' : 'list'), route),
+    );
   };
 }

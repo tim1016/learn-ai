@@ -14,7 +14,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 import { appConfig } from './app.config';
 import { routes } from './app.routes';
-import { provideFleetDirectory } from './fleet/fleet-directory-testing';
+import { TEST_ACCOUNT_ID, TEST_CLERK_ID, provideFleetDirectory } from './fleet/fleet-directory-testing';
 import { activeMenuNodeFor, APP_MENU } from './shell/app-menu';
 import { routeTreeHasData } from './shell/current-url.service';
 import { HELP_DOCUMENTS } from './shared/help/help-documents';
@@ -354,6 +354,32 @@ describe('the route inventory (T01)', () => {
 
       expect(router.url).toBe(`${ACCOUNT_LIST}?deploy=1&strategy=momentum&golden_qualification=abc#go`);
       expect(ended).toEqual([router.url]);
+    });
+
+    it.each([
+      ['a lane', `${LANE}/bots?view=wall&probe=1`, `${LANE}/home?probe=1`],
+      ['an account', `${WORKSPACE}/bots?view=wall&probe=1`, `${WORKSPACE}?probe=1`],
+    ])('lands a Bots bookmark of %s on Home\'s list, though it carries ?view=wall', async (_name, url, landsOn) => {
+      const { router } = await load(url);
+
+      expect(router.url).toBe(landsOn);
+    });
+
+    // The rows above probe these three unscoped addresses with the `ibkr`
+    // stand-in, which fails in place. With a ready Alpaca lane the guard
+    // resolves the account and moves once, to its Home.
+    it.each([
+      ['Bots', '', ''],
+      ['Gallery', '/gallery', '&view=wall'],
+    ])('lands the unscoped Alpaca %s address on the account Home with its query and fragment', async (_name, suffix, view) => {
+      const home = `/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/${TEST_ACCOUNT_ID}`;
+      const { router, ended, failed } = await load(
+        `/brokers/alpaca/accounts/${TEST_ACCOUNT_ID}${suffix === '' ? '/bots' : suffix}?probe=1&lens=operator#probe`,
+      );
+
+      expect.soft(failed).toEqual([]);
+      expect.soft(ended).toHaveLength(1);
+      expect(router.url).toBe(`${home}?probe=1${view}#probe`);
     });
 
     it('keeps the page and its group through Back and Forward', async () => {
