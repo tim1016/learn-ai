@@ -872,16 +872,16 @@ against a broker, so this vocabulary survives a broker change.
   hue stays the candle's direction, bright where the gate holds and dark where
   it fails. Each strategy's default gate is one of its own recorded rules, so
   its edges are the bot's. Gates only shade; they never trade.
-- **Strategy Validation page** — the standalone surface that owns a strategy
-  *becoming* validated and that displays the equivalence evidence. It is a
-  **master-detail list** (a row per validated strategy, click through to detail),
-  a sibling in spirit to the Golden Fixtures surface. The detail shows the
-  strategy's brief metadata, the **validation diagnostics** (QC backtest ID,
-  validation-case symbol, trades-matched / trades-validated counts, P&L-matched
-  magnitude, and the `DivergenceCategory` taxonomy from `qc_reconciler.py`), and
-  the **QuantConnect reference code** rendered inline. It never renders our
-  internal LEAN/engine port source — sovereignty means the reference is shown for
-  audit, the port is not.
+- **Strategy Validation page** — retired 2026-10-24 (ADR 0085). It was the
+  standalone surface that owned a strategy *becoming* validated, a
+  **master-detail list** that also embedded the Golden Validation workbench. Its
+  detail is now a strategy's **Proof** tab: the strategy's brief metadata, the
+  **validation diagnostics** (QC backtest ID, validation-case symbol,
+  trades-matched / trades-validated counts, P&L-matched magnitude, and the
+  `DivergenceCategory` taxonomy from `qc_reconciler.py`), and the **QuantConnect
+  reference code** rendered inline. It never renders our internal LEAN/engine port
+  source — sovereignty means the reference is shown for audit, the port is not.
+  The embedded workbench is Golden → **Configuration review**.
 - **Production candidate** — a strategy intended to advance through the
   external-reference validation cycle toward Paper deployment and, under a
   separate future release decision, possible Live deployment. Its current
@@ -967,6 +967,8 @@ parity verdicts of any version.
 - **Validation Golden Run** — a completed Strategy Lab history run selected by a
   user as the baseline for a proposed Golden Validation decision. “Golden” means
   user-selected baseline, not profitable, optimal, or universally validated.
+  Shown as **Selected baseline run** since ADR 0085; the stored type, the wire
+  fields and every historical decision keep this name.
 - **Golden Validation configuration** — the exact strategy or Signal Program
   version, signal ticker, resolved parameters, data identity/window, and execution
   assumptions named by a Validation Golden Run. A different value in any of these
@@ -1014,6 +1016,22 @@ parity verdicts of any version.
 - **QuantConnect Cloud backtest ID** — optional supplementary reference evidence
   for Golden Validation. It is neither required nor a substitute for selected
   Python/LEAN history evidence.
+- **Selected baseline run** — the display term for a **Validation Golden Run**
+  (ADR 0085): a completed Strategy Lab history run a person chose as the baseline
+  for one exact configuration, and the run its **Configuration review** judges. It
+  is not the best run, not a Golden Search version and not corpus coverage.
+  _Avoid_: golden run (alone), designated run, benchmark baseline.
+- **Benchmark baseline** — the null-hypothesis comparison a Research strategy run
+  carries: a buy-and-hold run, or runs of random EMA windows, whose results show
+  what the strategy has to beat. It is analysis of a run; it selects nothing and
+  approves nothing, and it is not a **Selected baseline run**.
+  _Avoid_: baseline run, golden baseline.
+- **Configuration review** — a signal strategy's Golden page for selected baseline
+  runs: it selects a completed run, freezes its exact configuration and records the
+  Golden Validation decision (Engine agreement, Reviewed deviations or Manual
+  override, each with its required note). It is the only place that decision is
+  made. It covers one symbol and one configuration, so it is neither program proof
+  (Proof) nor a qualified version (Versions).
 
 ## Golden Search (resolved 2026-10-01)
 
@@ -1637,11 +1655,30 @@ these are the others.
   _Avoid_: Strategy Lab, Engine Lab, the Grid Search page (the old tool names; their
   addresses redirect to the owning strategy's Explore).
 - **Handoff** — the move from one Explore tool to the next (Backtest to Sweep to
-  Walk-forward). It carries what the next tool can take, lists what it cannot and
-  why, names what is left to choose, and starts nothing: the next tool opens its
-  form on the carried values, checks them against its own schema, and runs only
-  when the owner launches it.
+  Walk-forward), or from any of them to a golden search plan. It carries what the
+  next tool can take, lists what it cannot and why, names what is left to choose,
+  and starts nothing: the next tool opens its form on the carried values, checks
+  them against its own schema, and runs only when the owner launches it. Into
+  Golden it opens an unlocked plan: no stage runs, an exploratory leader is not a
+  starting point or proof, the explored window is not the study range, and a
+  final interval that window reaches is shown as already viewed, never as
+  unexposed.
   _Avoid_: promote (a handoff approves nothing), send to (it starts nothing).
+- **Golden** — a signal strategy's tab, and the only place its settings are
+  approved, one symbol and one exact configuration at a time. It holds three
+  pages: **Studies** (Golden Search, and one study's workbench), **Versions** (the
+  qualified versions with the active default, each ready, stale, revoked or
+  unverifiable, and Re-prove for a stale one) and **Configuration review**. Explore
+  and Proof never approve settings.
+  _Avoid_: Golden Search (the page; it is one of Golden's three), golden status (a
+  strategy has no single golden state).
+- **Proof** — a signal strategy's tab for its program: the ordered proof dossier,
+  whether it is accepted for Deploy, the reconciliation evidence and the one
+  strategy-level human flag. It is about the program at its validated corpus point
+  and approves no symbol; a selected baseline run and a configuration's approval
+  are Golden's.
+  _Avoid_: Strategy Validation (the retired page that held this and Configuration
+  review together), validated (alone, for a strategy).
 - **Options setup** — one saved setup (see Options Backtest) as a place, with its
   tabs: Overview, Define, Explore and Golden. The saved name addresses the current
   draft; an approved version is addressed by its Golden Options ID and exact

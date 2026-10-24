@@ -238,10 +238,8 @@ a defect.
 - **F7 — QC-ID hard-required client-side though ignored for proof-less
   candidates (low).** Flag-form validation out of sync with the backend
   recording rule
-  (`Frontend/src/app/components/strategy-validation/strategy-validation.component.ts`;
+  (`Frontend/src/app/signal-strategies/proof/proof-actions.component.ts`;
   ceremony §3).
-- **F8 — human-flag toggle defaults to Reject (low).** Users have saved
-  rejections by accident (same component as F7; ceremony §3).
 - **F10 — dry-run deploys break atomicity on refusal (medium).** 500s on the
   reference topology (virtiofs bind mount), leaks orphan `sim:<sid>/` dirs
   with partially provisioned `source_bars.sqlite3`, raw error envelope
