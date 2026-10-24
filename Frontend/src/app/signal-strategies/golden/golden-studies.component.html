@@ -22,9 +22,8 @@
           }
           @if (revise() && reviseFrom() === null && reviseError() === null) {
             <p class="notice" role="status">Loading the study to revise…</p>
-          } @else if (handoff()?.kind === 'loading') {
+          } @else if (handoff()?.kind !== 'loading') {
             <!-- The plan waits for the evidence it starts from, so what arrives late never lands over an edit the owner made meanwhile. -->
-          } @else {
             <app-golden-search-plan-form
               [capabilities]="capabilities()"
               [pinnedStrategy]="key()"
