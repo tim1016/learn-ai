@@ -240,10 +240,18 @@ const group = (over: Record<string, number> = {}) => ({
   building: 0, corrupt: 0, captured_before_final: 0, unavailable_from_provider: 0, ...over,
 });
 
-const providerInput = (over: Record<string, unknown> = {}) => ({
-  kind: 'provider', provider: 'polygon', endpoint: '/v3/reference/options/contracts',
-  attempted: 4, failed: 0, observation_digest: 'a'.repeat(64), reproducible: false, ...over,
+const PRICE_RULE_WORDS =
+  'each option is priced at its last regular-hours trade: the close of the latest minute bar that lies wholly inside the scheduled session, kept only with at least 50 contracts traded in regular hours';
+
+/** One member's option inputs as `option_inputs_block` writes it: admitted, read from the archive or kept by this study. */
+const optionMember = (ticker: string, over: Record<string, unknown> = {}) => ({
+  ticker, status: 'admitted', digest: 'd'.repeat(64), source: 'kept',
+  listings: { expected: 21, reused: 0, added: 21 },
+  contract_days: { expected: 168, reused: 0, added: 168, from_archive: 0 }, ...over,
 });
+
+const archived = (ticker: string) =>
+  optionMember(ticker, { source: 'archive', listings: { expected: 21, reused: 21, added: 0 }, contract_days: { expected: 168, reused: 168, added: 0, from_archive: 168 } });
 
 /** The lake block as `stock_bars_block` writes it: the shape every lake study's block has, for a universe. */
 function stockBars(over: Record<string, unknown> = {}, counts: Record<string, number> = {}) {
@@ -251,8 +259,8 @@ function stockBars(over: Record<string, unknown> = {}, counts: Record<string, nu
     kind: 'lake', provider: 'polygon', symbol: 'SPY, QQQ', price_adjustment_mode: 'polygon_split_adjusted',
     session_policy: 'regular', window_start_ms: 1756785600000, window_end_ms: 1764565200000,
     effective_window: { start_ms: 1756785600000, end_ms: 1764565200000 }, warmup_sessions: 0, bar_minutes: null,
-    aggregation: 'minute_fold_per_et_session_no_fill', identity_digest: 'b'.repeat(64), calculation_version: 'cross-sectional-study/1',
-    snapshot_digest: 'c'.repeat(64),
+    aggregation: 'minute_fold_per_et_session_no_fill', identity_digest: 'b'.repeat(64), calculation_version: 'cross-sectional-study/2',
+    snapshot_digest: 'c'.repeat(64), raw_snapshot_digest: 'a'.repeat(64),
     coverage: {
       window: group(counts), warmup: group({ expected_sessions: 0, reused: 0, added: 0 }),
       artifacts: { fetched: 78, reused: 70, refreshed: 0 },
@@ -263,30 +271,34 @@ function stockBars(over: Record<string, unknown> = {}, counts: Record<string, nu
   };
 }
 
-function optionInputs(over: { failed?: number; defaultDays?: number; fetchFailedDays?: number } = {}) {
+function optionInputs(members: Record<string, unknown>[] = [archived('SPY'), archived('QQQ')]) {
   return {
-    inputs: {
-      option_expiries: providerInput(),
-      option_contracts: providerInput(),
-      option_bars: providerInput({ failed: over.failed ?? 0 }),
-    },
-    risk_free_rate: {
-      provider: 'fred', days_from_fred: 0, days_from_default: over.defaultDays ?? 148,
-      days_fetch_failed: over.fetchFailedDays ?? 0, reproducible: false,
-    },
-    failures_total: over.failed ?? 0,
+    kind: 'lake', policy: 'lake_option_inputs/v1', price_rule_words: PRICE_RULE_WORDS, digest: 'e'.repeat(64),
+    listings: { expected: 42, reused: 42, added: 0 },
+    contract_days: { expected: 336, reused: 336, added: 0, from_archive: 336 },
+    members,
   };
 }
 
-function dataSource(over: { cacheHit?: boolean; failed?: number; fetchFailedDays?: number; coverage?: Record<string, number> } = {}) {
+function riskFreeRate(over: { defaultDays?: number; fetchFailedDays?: number } = {}) {
   return {
-    kind: 'composite',
-    calculation_version: 'cross-sectional-study/1',
+    kind: 'provider', provider: 'fred', days_from_fred: 0, days_from_default: over.defaultDays ?? 148,
+    days_fetch_failed: over.fetchFailedDays ?? 0, values_digest: 'f'.repeat(64),
+  };
+}
+
+function dataSource(
+  over: { cacheHit?: boolean; fetchFailedDays?: number; coverage?: Record<string, number>; members?: Record<string, unknown>[] } = {},
+) {
+  return {
+    kind: 'lake',
+    calculation_version: 'cross-sectional-study/2',
     stock_bars: stockBars(
       { cache: { hit: over.cacheHit ?? false, cached_at_ms: over.cacheHit ? 1761000000000 : null } },
       over.coverage,
     ),
-    option_inputs: optionInputs({ failed: over.failed, fetchFailedDays: over.fetchFailedDays }),
+    option_inputs: optionInputs(over.members),
+    risk_free_rate: riskFreeRate({ fetchFailedDays: over.fetchFailedDays }),
   };
 }
 
@@ -294,7 +306,7 @@ function tickerRow(ticker: string, over: Record<string, unknown> = {}) {
   return {
     ticker, mean_ic: 0.03, ic_t_stat: 1.2, ic_p_value: 0.2, nw_t_stat: 1.1, nw_p_value: 0.25, effective_n: 40,
     is_stationary: true, passed_validation: false, data_points: 74, error: null, validity: 'valid',
-    low_confidence: false, exclusion: null, option_inputs: { failures_total: 0 }, ...over,
+    low_confidence: false, exclusion: null, ...over,
   };
 }
 
@@ -382,7 +394,7 @@ describe('BatchRunnerComponent: where the inputs came from, and why a run has no
     expect(payload).toMatchObject({ timespan: 'day', multiplier: 1, force: false, symbols: ['SPY', 'QQQ', 'AAPL'] });
   });
 
-  it('names the lake for the stock bars on the shared line and the provider for the option inputs apart', async () => {
+  it('names the lake for the stock bars on the shared line, the lake for the option inputs on their own, and FRED apart', async () => {
     const { user, finish } = await renderPage();
     await user.click(runButton());
     finish('completed');
@@ -391,12 +403,39 @@ describe('BatchRunnerComponent: where the inputs came from, and why a run has no
     expect(screen.getAllByText('Data source')).toHaveLength(1);
     expect(screen.getAllByText('daily bars, folded from 1-minute bars').length).toBeGreaterThan(0);
     expect(screen.getByText('78 added · 70 reused · 0 missing')).not.toBeNull();
-    const options = screen.getByText(/Option inputs: polygon live requests/);
-    expect(options.textContent).toContain('0 failed');
-    expect(options.textContent).toContain('risk-free rate: FRED, 148 days on the default');
-    expect(options.textContent).not.toContain('because FRED did not answer');
+    const options = screen.getByText(/^Option inputs: /);
+    expect(options.textContent).toBe(`Option inputs: SPY, QQQ from the nightly archive. Each option is priced at its last regular-hours trade: the close of the latest minute bar that lies wholly inside the scheduled session, kept only with at least 50 contracts traded in regular hours.`);
+    const rate = screen.getByText(/^Risk-free rate: /);
+    expect(rate.textContent).toBe("Risk-free rate: FRED, asked live and not archived — 0 days at FRED's rate, 148 on the default.");
+    expect(rate.textContent).not.toContain('because FRED did not answer');
+    expect(screen.getAllByText('Data lake').length, 'the option inputs say where they are from').toBeGreaterThan(0);
+    expect(screen.getByText('FRED (live)')).not.toBeNull();
+    expect(document.body.textContent).not.toMatch(/Polygon \(live\)|live requests|not archived — \d+ failed/);
     expect(screen.queryByTestId('partial-universe')).toBeNull();
     expect(screen.queryByRole('button', { name: /ignoring the stored result/i })).toBeNull();
+  });
+
+  it('says what this run saved into the lake for a member the archive does not hold, and what it found already kept', async () => {
+    const { user, finish } = await renderPage(
+      rawResult({
+        data_source: dataSource({
+          members: [
+            archived('SPY'),
+            optionMember('AAPL'),
+            optionMember('MSFT', { listings: { expected: 21, reused: 21, added: 0 }, contract_days: { expected: 168, reused: 168, added: 0, from_archive: 0 } }),
+            optionMember('IWM', { source: 'mixed' }),
+          ],
+        }),
+      }),
+    );
+    await user.click(runButton());
+    finish('completed');
+
+    const options = await screen.findByText(/^Option inputs: /);
+
+    expect(options.textContent).toContain(
+      'SPY from the nightly archive; AAPL saved by this run (21 listings, 168 contract days added); MSFT already kept in the lake; IWM from the nightly archive and what this run saved.',
+    );
   });
 
   it('says how many requested members are in the statistics, and why each other is not', async () => {
@@ -425,7 +464,7 @@ describe('BatchRunnerComponent: where the inputs came from, and why a run has no
 
     expect(banner.textContent).toContain('2 of 3 requested members are in the statistics');
     expect(banner.textContent).toContain('every statistic divides by 2');
-    expect(banner.textContent).toMatch(/IWM\s*— The lake cannot admit this window/);
+    expect(banner.textContent).toMatch(/IWM\s*— stock bars: The lake cannot admit this window/);
     expect(banner.textContent).toContain('Statistics count only valid members.');
   });
 
@@ -456,13 +495,25 @@ describe('BatchRunnerComponent: where the inputs came from, and why a run has no
     expect(banner.compareDocumentPosition(verdict as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it('flags a member that is in the statistics but was built on unanswered option requests', async () => {
+  it('says why a member was left out for want of option inputs, at its own stage, and lists it as excluded beside the admitted ones', async () => {
+    const reason = 'The lake cannot supply the option inputs: 2 of 336 option inputs are not in the lake: 2025-10-09 (O:IWM251017C00230000: the contract is not in that day\'s contract listing)';
+    const refused = {
+      ticker: 'IWM', status: 'excluded', code: 'data_missing', reason, retryable: false, issues_total: 2,
+      issues: [{
+        kind: 'contract_day', trading_date_ms: 1760031000000, subject: 'O:IWM251017C00230000', outcome: 'missing',
+        reason: 'O:IWM251017C00230000: the contract is not in that day\'s contract listing', failure_reason: 'not_listed', retryable: false,
+      }],
+    };
     const { user, finish } = await renderPage(
       rawResult({
         status: 'partial',
-        ticker_results: [tickerRow('SPY'), tickerRow('QQQ', { option_inputs: { failures_total: 3 } })],
-        universe: universe({ complete: false, degraded: [{ ticker: 'QQQ', failures_total: 3, rate_days_fetch_failed: 0 }] }),
-        data_source: dataSource({ failed: 3 }),
+        tickers_tested_raw: 3, tickers_valid: 2,
+        ticker_results: [tickerRow('SPY'), tickerRow('QQQ'), tickerRow('IWM', { validity: 'invalid_data', error: reason })],
+        universe: universe({
+          requested: ['SPY', 'QQQ', 'IWM'], requested_count: 3, complete: false,
+          excluded: [{ ticker: 'IWM', stage: 'option_inputs', code: 'data_missing', reason, retryable: false }], excluded_count: 1,
+        }),
+        data_source: dataSource({ members: [archived('SPY'), archived('QQQ'), refused] }),
       }),
     );
     await user.click(runButton());
@@ -470,16 +521,16 @@ describe('BatchRunnerComponent: where the inputs came from, and why a run has no
 
     const banner = await screen.findByTestId('partial-universe');
 
-    expect(banner.textContent).toMatch(/QQQ\s*— in the statistics, but 3 option request\(s\) went unanswered while its IV history was built\./);
-    expect(screen.getByText(/3 option request\(s\) went unanswered while this ticker's IV history was built/)).not.toBeNull();
-    expect((await screen.findByText(/Option inputs: polygon live requests/)).textContent).toContain('3 failed');
+    expect(banner.textContent).toMatch(/IWM\s*— option inputs: The lake cannot supply the option inputs/);
+    expect((await screen.findByText(/^Option inputs: /)).textContent).toContain('SPY, QQQ from the nightly archive.');
+    expect(screen.getByText(/^Option inputs: /).textContent, 'the left-out member is not claimed as read from anywhere').not.toContain('IWM');
   });
 
   it('flags a member whose days were priced at the default rate because FRED did not answer', async () => {
     const { user, finish } = await renderPage(
       rawResult({
         status: 'partial',
-        universe: universe({ complete: false, degraded: [{ ticker: 'QQQ', failures_total: 0, rate_days_fetch_failed: 74 }] }),
+        universe: universe({ complete: false, degraded: [{ ticker: 'QQQ', rate_days_fetch_failed: 74 }] }),
         data_source: dataSource({ fetchFailedDays: 74 }),
       }),
     );
@@ -490,7 +541,7 @@ describe('BatchRunnerComponent: where the inputs came from, and why a run has no
 
     expect(banner.textContent).toMatch(/QQQ\s*— in the statistics, but 74 day\(s\) were priced at the default risk-free rate because FRED did not answer\./);
     expect(banner.textContent).not.toContain('option request(s)');
-    expect((await screen.findByText(/Option inputs: polygon live requests/)).textContent).toContain('148 days on the default (74 because FRED did not answer)');
+    expect((await screen.findByText(/^Risk-free rate: /)).textContent).toContain('148 on the default (74 because FRED did not answer)');
   });
 
   it('says a result is a stored one and offers to run again without it', async () => {
@@ -535,7 +586,7 @@ describe('BatchRunnerComponent: where the inputs came from, and why a run has no
           evaluated: [], evaluated_count: 0, denominator: 0, complete: false,
           excluded: [excluded('SPY'), excluded('QQQ')], excluded_count: 2,
         }),
-        data_source: { kind: 'composite', calculation_version: 'cross-sectional-study/1', stock_bars: stockBars({ snapshot_digest: null, effective_window: null }), option_inputs: null },
+        data_source: { kind: 'lake', calculation_version: 'cross-sectional-study/2', stock_bars: stockBars({ snapshot_digest: null, effective_window: null }), option_inputs: null, risk_free_rate: null },
       };
       const { user, finish } = await renderPage(refusal);
       await user.click(runButton());
@@ -549,8 +600,8 @@ describe('BatchRunnerComponent: where the inputs came from, and why a run has no
       expect(screen.getByText('SPY, QQQ')).not.toBeNull();
       const members = await screen.findByTestId('failed-universe');
       expect(members.textContent).toContain('0 of 2 requested members are in the statistics');
-      expect(members.textContent).toMatch(/SPY\s*— The lake cannot admit this window/);
-      expect(members.textContent).toMatch(/QQQ\s*— The lake cannot admit this window/);
+      expect(members.textContent).toMatch(/SPY\s*— stock bars: The lake cannot admit this window/);
+      expect(members.textContent).toMatch(/QQQ\s*— stock bars: The lake cannot admit this window/);
       expect(screen.queryByText(/Option inputs:/)).toBeNull();
     });
 
@@ -560,7 +611,7 @@ describe('BatchRunnerComponent: where the inputs came from, and why a run has no
         success: false, status: 'refused', error: reason,
         refusal: { code: 'resolution_unsupported', reason, sessions: [], sessions_total: 0, coverage: null, members: [], members_total: 0 },
         universe: universe({ evaluated: [], evaluated_count: 0, denominator: 0, complete: false }),
-        data_source: { kind: 'composite', calculation_version: 'cross-sectional-study/1', stock_bars: null, option_inputs: null },
+        data_source: { kind: 'lake', calculation_version: 'cross-sectional-study/2', stock_bars: null, option_inputs: null, risk_free_rate: null },
       });
       await user.click(runButton());
 
@@ -579,7 +630,7 @@ describe('BatchRunnerComponent: where the inputs came from, and why a run has no
           evaluated: [], evaluated_count: 0, denominator: 0, complete: false,
           excluded: [stage('SPY'), stage('QQQ')], excluded_count: 2,
         }),
-        data_source: { ...dataSource(), option_inputs: optionInputs({ failed: 0 }) },
+        data_source: dataSource(),
       });
       await user.click(runButton());
 
@@ -588,11 +639,12 @@ describe('BatchRunnerComponent: where the inputs came from, and why a run has no
       expect(await screen.findByText(reason)).not.toBeNull();
       expect(screen.queryByText(/No result: the lake could not supply/)).toBeNull();
       expect(screen.getByText('78 added · 70 reused · 0 missing')).not.toBeNull();
-      expect(screen.getByText(/Option inputs: polygon live requests/)).not.toBeNull();
+      expect(screen.getByText(/^Option inputs: /)).not.toBeNull();
+      expect(screen.getByText(/^Risk-free rate: /)).not.toBeNull();
       const members = await screen.findByTestId('failed-universe');
       expect(members.textContent).toContain('0 of 2 requested members are in the statistics');
-      expect(members.textContent).toMatch(/SPY\s*— 30 days is outside the expiry bracket/);
-      expect(members.textContent).toMatch(/QQQ\s*— 30 days is outside the expiry bracket/);
+      expect(members.textContent).toMatch(/SPY\s*— IV history: 30 days is outside the expiry bracket/);
+      expect(members.textContent).toMatch(/QQQ\s*— IV history: 30 days is outside the expiry bracket/);
     });
 
     it('shows only the failure message when the job parked nothing', async () => {

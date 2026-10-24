@@ -20,6 +20,7 @@ import {
   BatchResearchResult,
   CrossSectionalDataSource,
   CrossSectionalFailure,
+  OptionInputsMember,
 } from '../../../services/research.service';
 import { JobsService, JobState } from '../../../services/jobs.service';
 import {
@@ -74,16 +75,44 @@ interface BatchStudyInputs {
   readonly target: string;
 }
 
-/** One line for the option inputs: the provider's live answers, not archived, and what went unanswered. */
+const PLURAL = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
+
+/** What a member's option inputs cost the lake this run, in words: nothing, or what was saved. */
+function savedByThisRun(member: OptionInputsMember): string {
+  const added = member.listings?.added ?? 0;
+  const days = member.contractDays?.added ?? 0;
+  return added + days === 0
+    ? `${member.ticker} already kept in the lake`
+    : `${member.ticker} saved by this run (${PLURAL(added, 'listing', 'listings')}, ${PLURAL(days, 'contract day', 'contract days')} added)`;
+}
+
+/**
+ * One line for the option inputs, which the lake holds: where each member's came from (the nightly archive, or what
+ * this run saved), and the rule that prices an option. The stock bars have the shared lake data-source line, and the
+ * risk-free rate its own, since FRED is live.
+ */
 function optionInputsText(source: CrossSectionalDataSource | null): string {
   const options = source?.optionInputs;
   if (!options) return '';
-  const provider = Object.values(options.inputs)[0]?.provider ?? 'provider';
-  const rate = options.riskFreeRate;
+  const admitted = options.members.filter((m) => m.status === 'admitted');
+  const archived = admitted.filter((m) => m.source === 'archive').map((m) => m.ticker);
+  const where = [
+    archived.length > 0 ? `${archived.join(', ')} from the nightly archive` : '',
+    ...admitted.filter((m) => m.source === 'kept').map(savedByThisRun),
+    ...admitted.filter((m) => m.source === 'mixed').map((m) => `${m.ticker} from the nightly archive and what this run saved`),
+  ].filter((part) => part !== '');
+  const rule = options.priceRuleWords.charAt(0).toUpperCase() + options.priceRuleWords.slice(1);
+  return `Option inputs: ${where.length > 0 ? `${where.join('; ')}. ` : ''}${rule}.`;
+}
+
+/** The risk-free rate line: FRED, asked live and not archived, and how many days fell back to the default. */
+function riskFreeRateText(source: CrossSectionalDataSource | null): string {
+  const rate = source?.riskFreeRate;
+  if (!rate) return '';
   const outage = rate.daysFetchFailed > 0 ? ` (${rate.daysFetchFailed} because FRED did not answer)` : '';
   return (
-    `Option inputs: ${provider} live requests, not archived — ${options.failuresTotal} failed; ` +
-    `risk-free rate: ${rate.provider.toUpperCase()}, ${rate.daysFromDefault} days on the default${outage}`
+    `Risk-free rate: ${rate.provider.toUpperCase()}, asked live and not archived — ` +
+    `${PLURAL(rate.daysFromFred, 'day', 'days')} at FRED's rate, ${rate.daysFromDefault} on the default${outage}.`
   );
 }
 
@@ -145,7 +174,7 @@ export class BatchRunnerComponent {
   /** Why a run that failed has no result, read from the payload the failed job parked. */
   readonly failure = signal<CrossSectionalFailure | null>(null);
 
-  /** Where every input of the shown result came from: the lake's stock bars and the provider's option inputs. */
+  /** Where every input of the shown result came from: the lake's stock bars and option inputs, and FRED's rate. */
   readonly dataSource = computed<CrossSectionalDataSource | null>(() => this.result()?.dataSource ?? null);
 
   /** True when the result on screen is a stored one rather than a fresh computation. */
@@ -156,14 +185,15 @@ export class BatchRunnerComponent {
   /** The lake's refusal when the stock bars could not be admitted: its reason, counts and each session that failed. */
   readonly refusal = computed(() => this.failure()?.refused ?? null);
 
-  /**
-   * One line for the option inputs, which are not the lake's: the provider's live answers, not archived. The stock
-   * bars have the shared lake data-source line; the result as a whole is not labelled "lake".
-   */
+  /** The option inputs' line: where each member's came from. The stock bars have the shared lake data-source line. */
   readonly optionInputsLine = computed<string>(() => optionInputsText(this.dataSource()));
 
-  /** The same line for a run that ended without a result, when it got as far as asking the provider. */
+  /** FRED's line, apart from the lake's: the rate is asked live. */
+  readonly riskFreeRateLine = computed<string>(() => riskFreeRateText(this.dataSource()));
+
+  /** The same two lines for a run that ended without a result, when it got as far as the option inputs. */
   readonly failureOptionInputsLine = computed<string>(() => optionInputsText(this.failure()?.dataSource ?? null));
+  readonly failureRiskFreeRateLine = computed<string>(() => riskFreeRateText(this.failure()?.dataSource ?? null));
 
   /**
    * The study page's data-source line for what is on screen: the shown result's stock bars, or the source a refused

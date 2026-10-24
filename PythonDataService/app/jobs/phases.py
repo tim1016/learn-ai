@@ -39,6 +39,7 @@ class Phase:
 CROSS_SECTIONAL_PHASES: tuple[Phase, ...] = (
     Phase("starting", "Starting cross-sectional study", 1),
     Phase("admitting_data", "Checking the data lake for each member's daily bars", 2),
+    Phase("admitting_options", "Saving each member's option listings and contract bars to the lake", 3),
     Phase("aggregating", "Aggregating per-ticker results", 1),
     Phase("completed", "Run complete", 1),
 )

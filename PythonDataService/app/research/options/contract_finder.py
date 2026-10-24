@@ -1,9 +1,9 @@
 """Options contract finder for research pipeline.
 
-Formula: Select the available strike nearest target delta (BSM delta = N(d1) for calls, N(d1)-1 for puts, d1 = (ln(S/K) + (r + σ²/2)·T) / (σ·√T)); choose, for each trading date d, the latest listed expiry 7 to 30 calendar days out and the earliest 31 to 45 days out, so 30 days is always inside the pair; an expiry exactly 30 days out becomes the far end when nothing is listed beyond it. Within a month a date keeps the previous date's pair while it still brackets 30 days and its near expiry is at least 7 days out, and picks afresh when it does not; the expiries are listed once per month, and again as of a later date when that date's pick finds no near or no far expiry in a list taken earlier, or when the month's first lookup raised. No strike interpolation occurs; an expiry's ATM and 25Δ strikes are chosen at its first use in the run and reused until it leaves the pair, so a date's IV can depend on where the window starts.
-Reference: BSM delta per Hull §19.4; nearest-strike and expiry selection are internal rules, not an external port.
+Formula: Select the available strike nearest target delta (BSM delta = N(d1) for calls, N(d1)-1 for puts, d1 = (ln(S/K) + (r + σ²/2)·T) / (σ·√T)); choose, for each trading date d, the latest listed expiry 7 to 30 calendar days out and the earliest 31 to 45 days out, so 30 days is always inside the pair; an expiry exactly 30 days out becomes the far end when nothing is listed beyond it. Within a month a date keeps the previous date's pair while it still brackets 30 days and its near expiry is at least 7 days out, and picks afresh when it does not; the expiries are read once per month from the stored listing as of the month's first session (calls, within 5% of that day's close, expiring 7 days after that session up to 45 days after the month's last), and again from the listing as of a later date when that date's pick finds no near or no far expiry in a list taken earlier. An expiry's contracts are those of the stored listing as of its first use in the run: standard contracts of that expiry within 15% of the close that day, none cut off. No strike interpolation occurs; an expiry's ATM and 25Δ strikes are chosen at its first use in the run and reused until it leaves the pair, so a date's IV can depend on where the window starts.
+Reference: BSM delta per Hull §19.4; nearest-strike and expiry selection are internal rules, not an external port. The close is the raw (unadjusted) regular-session close, which is the price a listing's strikes were struck against (ADR 0078 decision 6).
 Canonical implementation: app/research/options/contract_finder.py
-Validated against: NONE — pending (no golden fixture); the expiry pair is pinned by tests/research/options/test_contract_finder_bracket.py and tests/research/options/test_iv_builder_bracket_window.py
+Validated against: the expiry pair is pinned by tests/research/options/test_contract_finder_bracket.py and tests/research/options/test_iv_builder_bracket_window.py; the whole selection against the provider path it replaced, frozen as golden fixture XSIV-001, by tests/research/test_cross_sectional_options_lake_vs_provider.py
 """
 from __future__ import annotations
 
@@ -12,14 +12,15 @@ from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
-from app.research.options.option_input_ledger import OptionInputLedger
 from app.services.bs_greeks import black_scholes_greeks
-from app.services.polygon_client import PolygonClientService
 from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
+
+if TYPE_CHECKING:
+    from app.research.options.option_inputs import ChainSource
 
 logger = logging.getLogger(__name__)
 
@@ -32,23 +33,15 @@ DEFAULT_IV = 0.25  # Default IV for delta estimation when not available
 TARGET_DTE = 30  # The constant maturity the expiry pair brackets
 MIN_DTE_DAYS = 7  # An expiry nearer than this is never used: no IV is derived for it
 EXPIRY_MAX_DTE = 45  # The far expiry of a date's pair is at most this many days out
-# The contracts one expiry lookup may return per calendar day of its window. SPY at ~$690 with every daily expiry
-# listed has about 69 calls within 5% of the money on each of about 48 expiries a month, some 3,300 contracts, which
-# 50 a day would cut short. 150 a day leaves room for a chain three times as dense. Paging stops at the vendor's last
-# page, so a lighter chain pays nothing for the headroom.
-EXPIRY_LOOKUP_CONTRACTS_PER_DAY = 150
-
-
-class ExpiryLookupTruncated(Exception):
-    """An expiry lookup filled its contract cap, so the vendor's list may be missing expiries; the ledger names it."""
+# The strike band of a month's expiry list and of an expiry's contracts, as a fraction of the close.
+EXPIRY_LIST_STRIKE_BAND = 0.05
+EXPIRY_CONTRACTS_STRIKE_BAND = 0.15
 
 
 class BracketGap(StrEnum):
     """Why a date has no expiry pair bracketing 30 days; the value is what the bracket frame carries."""
 
-    LOOKUP_FAILED = "expiry_lookup_failed"  # the expiry lookup raised
-    LOOKUP_TRUNCATED = "expiry_lookup_truncated"  # the expiry lookup hit its contract cap: the list may be cut short
-    NO_EXPIRIES = "no_expiries_listed"  # the expiry lookup answered with nothing
+    NO_EXPIRIES = "no_expiries_listed"  # the listing holds no usable call expiry
     NO_NEAR_EXPIRY = "no_near_expiry"  # nothing listed 7 to 30 days out
     NO_FAR_EXPIRY = "no_far_expiry"  # nothing listed 31 to 45 days out
 
@@ -137,25 +130,22 @@ def _find_otm_call_by_delta(
     )
 
 
-def _fetch_contracts_for_expiry(
-    polygon_client: PolygonClientService,
-    underlying: str,
-    expiration_date: str,
-    stock_close: float,
-    dte_days: int = 30,
+def _contracts_for_expiry(
+    source: ChainSource, expiry: str, first_use: date, stock_close: float, dte_days: int = 30
 ) -> dict[str, Any]:
-    """Fetch and filter contracts for a specific expiry, returning ATM + OTM contracts."""
-    strike_range = stock_close * 0.15  # Search within 15% of ATM
-    # expired=True is needed here (no as_of_date conflict) to find
-    # contracts whose expiration date has already passed.
-    contracts = polygon_client.list_options_contracts(
-        underlying_ticker=underlying,
-        expiration_date=expiration_date,
-        expired=True,
-        strike_price_gte=stock_close - strike_range,
-        strike_price_lte=stock_close + strike_range,
-        limit=250,
-    )
+    """The listing's standard contracts of one expiry, as of its first use, and the ATM and OTM picks among them.
+
+    The contracts are those of the listing as of ``first_use``, in ticker order, within 15% of ``stock_close``; a strike
+    listed after that session is not among them, and none is dropped for there being many.
+    """
+    strike_range = stock_close * EXPIRY_CONTRACTS_STRIKE_BAND
+    low, high = stock_close - strike_range, stock_close + strike_range
+    wanted = date.fromisoformat(expiry)
+    contracts = [
+        {"ticker": option.ticker, "contract_type": option.right, "strike_price": option.strike, "expiration_date": expiry}
+        for option in source.listing_as_of(first_use)
+        if option.expiry == wanted and low <= option.strike <= high
+    ]
 
     calls = [c for c in contracts if c.get("contract_type") == "call"]
     puts = [c for c in contracts if c.get("contract_type") == "put"]
@@ -173,75 +163,23 @@ def _fetch_contracts_for_expiry(
     }
 
 
-def _picked_tickers(selection: dict[str, Any]) -> dict[str, str | None]:
-    """The contracts a lookup chose, by role: the part of the provider's answer the study reads."""
-    return {role: (contract.get("ticker") if contract else None) for role, contract in sorted(selection.items())}
+def _list_month_expiries(source: ChainSource, first_date: date, last_date: date, stock_close: float) -> frozenset[str]:
+    """The call expiries, as listed on ``first_date``, that a session from ``first_date`` to ``last_date`` can use.
 
-
-def _list_month_expiries(
-    polygon_client: PolygonClientService,
-    underlying: str,
-    first_date: datetime,
-    last_date: datetime,
-    ledger: OptionInputLedger,
-    stock_close: float | None = None,
-) -> frozenset[str] | BracketGap:
-    """List the call expiries, as of ``first_date``, that a session from ``first_date`` to ``last_date`` can use.
-
-    One wide lookup serves the rest of the month: the window runs from the first session's nearest usable expiry (7
-    days out) to the last session's farthest (45 days out). ``pick_bracket_expiries`` picks each date's pair from it.
-    A lookup that raised, or that hit its contract cap and so may be missing the far expiries, returns the
-    ``BracketGap`` saying so instead of a list: a list cut short must not pass as the chain.
-    Each lookup is recorded in ``ledger`` under its as-of date: the expiries it answered with, or, as a failure, the
-    error it raised or the cap it hit.
+    One list serves the rest of the month: it runs from the first session's nearest usable expiry (7 days out) to the last
+    session's farthest (45 days out), calls within 5% of ``stock_close``. ``pick_bracket_expiries`` picks each date's pair
+    from it. The list is the whole stored listing filtered, so it is never cut short.
     """
     search_start = first_date + timedelta(days=MIN_DTE_DAYS)
     search_end = last_date + timedelta(days=EXPIRY_MAX_DTE)
-
-    trade_date_str = first_date.strftime("%Y-%m-%d")
-    lookup_key = f"{underlying}:{trade_date_str}"
-
-    # Use narrow strike filter (±5% ATM) to reduce results per expiry,
-    # ensuring we capture enough expiry dates within the limit.
-    strike_gte = None
-    strike_lte = None
-    if stock_close and stock_close > 0:
-        narrow_range = stock_close * 0.05
-        strike_gte = stock_close - narrow_range
-        strike_lte = stock_close + narrow_range
-
-    # Do NOT pass expired=True with as_of — that combination filters to
-    # contracts already expired on the as_of date, returning 0 results
-    # for contracts that were still active at that time.
-    limit = EXPIRY_LOOKUP_CONTRACTS_PER_DAY * (search_end - search_start).days
-    try:
-        contracts = polygon_client.list_options_contracts(
-            underlying_ticker=underlying,
-            as_of_date=trade_date_str,
-            expiration_date_gte=search_start.strftime("%Y-%m-%d"),
-            expiration_date_lte=search_end.strftime("%Y-%m-%d"),
-            strike_price_gte=strike_gte,
-            strike_price_lte=strike_lte,
-            contract_type="call",
-            limit=limit,
-        )
-    except Exception as e:
-        logger.warning(f"[CONTRACT FINDER] Error finding expiries for {trade_date_str}: {e}")
-        ledger.failed("option_expiries", lookup_key, e)
-        return BracketGap.LOOKUP_FAILED
-    if len(contracts) >= limit:
-        # The vendor's order is not ours to assume, so the cut can fall on any expiry
-        message = (
-            f"Expiry lookup for {underlying} as of {trade_date_str} hit its {limit}-contract cap; "
-            "its dates are marked missing rather than picked from a partial list"
-        )
-        logger.warning(f"[CONTRACT FINDER] {message}")
-        ledger.failed("option_expiries", lookup_key, ExpiryLookupTruncated(message))
-        return BracketGap.LOOKUP_TRUNCATED
-
-    expiries = frozenset(exp for c in contracts if (exp := c.get("expiration_date")))
-    ledger.answered("option_expiries", lookup_key, sorted(expiries))
-    return expiries
+    band = stock_close * EXPIRY_LIST_STRIKE_BAND
+    return frozenset(
+        option.expiry.isoformat()
+        for option in source.listing_as_of(first_date)
+        if option.right == "call"
+        and search_start <= option.expiry <= search_end
+        and (stock_close <= 0 or stock_close - band <= option.strike <= stock_close + band)
+    )
 
 
 def pick_bracket_expiries(expiries: Collection[str], trade_date: str) -> tuple[str, str] | BracketGap:
@@ -273,8 +211,8 @@ def pick_bracket_expiries(expiries: Collection[str], trade_date: str) -> tuple[s
     return BracketGap.NO_FAR_EXPIRY
 
 
-# The gaps a later lookup could fill: the list was taken before an expiry existed, or the lookup raised
-_RELISTABLE_GAPS = (BracketGap.NO_NEAR_EXPIRY, BracketGap.NO_FAR_EXPIRY, BracketGap.LOOKUP_FAILED)
+# The gaps a later listing could fill: the list was taken before an expiry existed
+_RELISTABLE_GAPS = (BracketGap.NO_NEAR_EXPIRY, BracketGap.NO_FAR_EXPIRY)
 
 
 def _dte(expiry: str, trade_date: str) -> int:
@@ -287,32 +225,23 @@ class _MonthListing:
 
     month: str
     listed_on: str
-    expiries: frozenset[str] | BracketGap  # a BracketGap is a lookup that failed or was cut short
+    expiries: frozenset[str]
 
 
 class _BracketPicker:
-    """Picks each session's expiry pair, keeping the month's expiry lookup and the pair in use.
+    """Picks each session's expiry pair, keeping the month's expiry list and the pair in use.
 
-    A month costs one lookup, taken as of its first session. Within the month a date keeps the previous date's pair
+    A month costs one list, read as of its first session. Within the month a date keeps the previous date's pair
     while it still brackets 30 days and its near expiry is at least 7 days out: the pair the month-long reuse before
     #3528 carried. Otherwise it picks afresh. An expiry's strikes are fixed at its first use in the run, which after
     a re-list can be a different session from the pre-#3528 code's, so a value can differ from it on a chain that is
-    not fully listed. An expiry listed after the lookup is invisible to it, so a date whose fresh pick finds no near
-    or no far expiry takes a new lookup as of that date, which replaces the month's list; so does a date after a first
-    lookup that raised, and it costs that date only if the new lookup raises too.
+    not fully listed. An expiry listed after the list was read is invisible to it, so a date whose fresh pick finds no near
+    or no far expiry reads the listing as of that date, which replaces the month's list.
     """
 
-    def __init__(
-        self,
-        polygon_client: PolygonClientService,
-        underlying: str,
-        last_date_by_month: dict[str, str],
-        ledger: OptionInputLedger,
-    ):
-        self._polygon_client = polygon_client
-        self._underlying = underlying
+    def __init__(self, source: ChainSource, last_date_by_month: dict[str, str]):
+        self._source = source
         self._last_date_by_month = last_date_by_month
-        self._ledger = ledger
         self._listing: _MonthListing | None = None  # the current month's: an earlier month's is never read again
         self._pair: tuple[str, str] | None = None  # the previous session's pair; None after a date with none
 
@@ -326,30 +255,22 @@ class _BracketPicker:
 
         pair = self._pick(listing, date_str)
         if pair in _RELISTABLE_GAPS and listing.listed_on < date_str:
-            fresh = self._list(month, date_str, stock_close)
-            if isinstance(fresh.expiries, BracketGap):
-                pair = fresh.expiries  # the date's gap is the failed lookup; the earlier list stays for the next date
-            else:
-                self._listing = fresh
-                pair = self._pick(fresh, date_str)
+            fresh = self._listing = self._list(month, date_str, stock_close)
+            pair = self._pick(fresh, date_str)
         self._pair = None if isinstance(pair, BracketGap) else pair
         return pair
 
     def _list(self, month: str, date_str: str, stock_close: float) -> _MonthListing:
         expiries = _list_month_expiries(
-            self._polygon_client,
-            self._underlying,
-            datetime.strptime(date_str, "%Y-%m-%d"),
-            datetime.strptime(self._last_date_by_month[month], "%Y-%m-%d"),
-            self._ledger,
-            stock_close=stock_close,
+            self._source,
+            date.fromisoformat(date_str),
+            date.fromisoformat(self._last_date_by_month[month]),
+            stock_close,
         )
         return _MonthListing(month, date_str, expiries)
 
     @staticmethod
     def _pick(listing: _MonthListing, date_str: str) -> tuple[str, str] | BracketGap:
-        if isinstance(listing.expiries, BracketGap):
-            return listing.expiries
         return pick_bracket_expiries(listing.expiries, date_str)
 
     @staticmethod
@@ -366,14 +287,16 @@ _SIDE_CONTRACT_COLUMNS = {
     "call_contract": "otm_call",
 }
 
+#: Every contract column of the bracket frame: the contracts a date's IV is priced from.
+CONTRACT_COLUMNS = tuple(f"{side}_dte_{column}" for side in ("low", "high") for column in _SIDE_CONTRACT_COLUMNS)
+
 
 def find_bracket_contracts(
     underlying: str,
     start_date: str,
     end_date: str,
-    polygon_client: PolygonClientService,
+    source: ChainSource,
     stock_bars: list[dict[str, Any]],
-    ledger: OptionInputLedger,
 ) -> pd.DataFrame:
     """Find bracket contracts (two expiries around 30 DTE) for each trading day.
 
@@ -381,12 +304,11 @@ def find_bracket_contracts(
         underlying: Stock ticker (e.g. "SPY")
         start_date: ISO date string
         end_date: ISO date string
-        polygon_client: Polygon REST client wrapper
-        stock_bars: Daily OHLCV bars with 'timestamp' and 'close' fields
-        ledger: Records each provider request this search makes: every expiry lookup under its as-of date (the
-            month's first and each re-list) and every contract lookup, with what it answered or the error it
-            raised. A request that fails leaves its dates without that expiry or contract, as it always did, but
-            the failure is named in the ledger instead of only in a log line.
+        source: The option chain the contracts are chosen from: the standard contracts alive on a session
+            (:class:`~app.research.options.option_inputs.ChainSource`). A source that cannot supply a listing raises, and
+            the search ends there: a date is never picked from a list that is not the chain.
+        stock_bars: Daily bars with 'timestamp' and 'close' fields; the close is the price a strike is compared with, so
+            it is the raw close (a listing holds the strikes as they were listed, ADR 0078 decision 6).
 
     Returns:
         DataFrame with columns per date:
@@ -394,9 +316,8 @@ def find_bracket_contracts(
          low_dte_put_contract, low_dte_call_contract, high_dte, high_dte_atm_contract,
          high_dte_atm_put_contract, high_dte_put_contract, high_dte_call_contract, bracket_gap]
         ``bracket_gap`` is None when the date has a pair, else the ``BracketGap`` value saying why it has none.
-        The pair comes from the month's expiry lookup (``_BracketPicker``: one per month, taken again on a date that
-        finds no near or no far expiry in it, or after a first lookup that raised), so 30 days is inside
-        ``[low_dte, high_dte]`` on every date that has one.
+        The pair comes from the month's expiry list (``_BracketPicker``: one per month, read again on a date that finds no
+        near or no far expiry in it), so 30 days is inside ``[low_dte, high_dte]`` on every date that has one.
     """
     # Build date→close map from stock bars
     date_close_map: dict[str, float] = {}
@@ -423,8 +344,8 @@ def find_bracket_contracts(
 
     rows: list[dict[str, Any]] = []
 
-    # The last trading day of each month in the range: a month's expiry lookup must reach what its last day needs
-    picker = _BracketPicker(polygon_client, underlying, {d[:7]: d for d in filtered_dates}, ledger)
+    # The last trading day of each month in the range: a month's expiry list must reach what its last day needs
+    picker = _BracketPicker(source, {d[:7]: d for d in filtered_dates})
 
     # Cache contract selections — same (underlying, expiry) reused across many trading days
     _contract_cache: dict[str, dict[str, Any]] = {}
@@ -450,20 +371,15 @@ def find_bracket_contracts(
         for side, expiry in zip(("low", "high"), pair, strict=True):
             dte = _dte(expiry, date_str)
             row[f"{side}_dte"] = dte
-            try:
-                contract_key = f"{underlying}:{expiry}"
-                if contract_key not in _contract_cache:
-                    _contract_cache[contract_key] = _fetch_contracts_for_expiry(
-                        polygon_client, underlying, expiry, stock_close, dte_days=dte
-                    )
-                    ledger.answered("option_contracts", contract_key, _picked_tickers(_contract_cache[contract_key]))
-                picked = _contract_cache[contract_key]
-                for column, key in _SIDE_CONTRACT_COLUMNS.items():
-                    if picked.get(key):
-                        row[f"{side}_dte_{column}"] = picked[key].get("ticker")
-            except Exception as e:
-                logger.warning(f"[CONTRACT FINDER] Error fetching {side}-DTE contracts for {date_str}: {e}")
-                ledger.failed("option_contracts", f"{underlying}:{expiry}", e)
+            contract_key = f"{underlying}:{expiry}"
+            if contract_key not in _contract_cache:
+                _contract_cache[contract_key] = _contracts_for_expiry(
+                    source, expiry, date.fromisoformat(date_str), stock_close, dte_days=dte
+                )
+            picked = _contract_cache[contract_key]
+            for column, key in _SIDE_CONTRACT_COLUMNS.items():
+                if picked.get(key):
+                    row[f"{side}_dte_{column}"] = picked[key].get("ticker")
 
         rows.append(row)
 

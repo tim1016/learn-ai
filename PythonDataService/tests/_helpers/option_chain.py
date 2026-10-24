@@ -1,31 +1,36 @@
-"""A pinned option chain, served at the Polygon SDK client's seam (#3524).
+"""A pinned option chain: the generator behind the Cross-sectional option-input tests (#3524, #3540).
 
-The cross-sectional study keeps its option inputs (expiries, contracts, option bars) with the provider. A test of
-the whole study therefore needs a provider to ask. :class:`OptionChain` is that provider: a deterministic listed
-chain (weekly Friday expiries, a regular strike grid) whose daily option bars are Black-Scholes prices of a known
-volatility on a known underlying path. It is installed as ``PolygonClientService.client`` — the SDK object whose
-``list_options_contracts`` and ``list_aggs`` the service wraps — so the real wrapper code, the real contract
-finder, the real IV builder and the real solver run over it, and what comes back out can be checked against the
-volatility that generated the prices.
+:class:`OptionChain` is a deterministic listed chain (weekly Friday expiries, a regular strike grid) whose option prices
+are Black-Scholes prices of a known volatility on a known underlying path. It answers what the study asks of the lake:
 
-It serves *option* tickers only. A request for the underlying's own bars fails the test: the study's stock bars
-come from the lake, and a provider fetch of the underlying is the bypass #3524 removed.
+* as a :class:`~app.research.options.option_inputs.ChainSource` (``listing_as_of``), in memory, for the contract finder;
+* ``daily_price`` for a contract on a session, the price the lake path stores as the 15:59 minute's close
+  (``tests/_helpers/option_chain_vendor.py`` serves it at the vendor's HTTP seam, through the lake's real writers);
+* ``member_inputs`` builds a member's :class:`~app.research.options.option_inputs.MemberOptionInputs` in memory, for tests
+  of the IV build that need no lake.
 
-Everything is integer arithmetic on the calendar (no ``sin``, no RNG), so the chain is the same on every platform.
+Because the prices come from a known volatility, what the study returns can be checked against the number that generated
+it. Everything is integer arithmetic on the calendar (no ``sin``, no RNG), so the chain is the same on every platform.
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Any
+from decimal import Decimal
+from typing import Any, Protocol
 
-from polygon.rest.models import Agg, OptionsContract
-
+from app.research.options.contract_finder import find_bracket_contracts
+from app.research.options.option_inputs import (
+    ListedOption,
+    MemberOptionInputs,
+    OptionDayClose,
+    OptionInputCoverage,
+    needed_contract_days,
+)
 from app.services.bs_greeks import bs_european_price
-from app.utils.session_anchors import et_midnight_ms
 
 FRIDAY = 4
 
@@ -45,6 +50,23 @@ def parse_option_ticker(ticker: str) -> tuple[str, date, str, float]:
     )
 
 
+def stock_rows(days: Sequence[date], *, start: float = 150.0, step: float = 0.1) -> list[dict[str, Any]]:
+    """Daily stock rows as the study hands them over: a gentle walk, each stamped with its session's open."""
+    from app.lean_sidecar.trading_calendar import session_open_ms_utc
+
+    return [
+        {
+            "timestamp": session_open_ms_utc(day),
+            "open": start + step * i,
+            "high": start + step * i + 1.0,
+            "low": start + step * i - 1.0,
+            "close": round(start + step * i, 4),
+            "volume": 1_000_000.0,
+        }
+        for i, day in enumerate(days)
+    ]
+
+
 def default_sigma(day: date) -> float:
     """A volatility that moves a little day to day (22%-23%), as integer arithmetic on the date."""
     return 0.22 + 0.01 * ((day.toordinal() * 7) % 11) / 11
@@ -52,12 +74,10 @@ def default_sigma(day: date) -> float:
 
 @dataclass
 class OptionChain:
-    """The provider's option side for one underlying.
+    """One underlying's listed chain, priced off a known volatility.
 
     ``spots`` is the underlying's price on each session, which the options are priced off; ``rate`` the
     risk-free rate they are priced with (the study's IV solve must use the same one to recover ``sigma``).
-    ``bar_failure`` / ``contract_failure`` name a request that should fail: they return the exception to raise
-    for an option ticker / an expiry, or ``None`` to answer it.
     """
 
     underlying: str
@@ -70,10 +90,8 @@ class OptionChain:
     #: The first session an expiry is listed on; an expiry missing here is listed from the start. A listing as of an
     #: earlier date does not hold it, which is what forces the contract finder to list again.
     listed_on: Mapping[date, date] = field(default_factory=dict)
-    bar_failure: Callable[[str], Exception | None] = lambda ticker: None
-    contract_failure: Callable[[str | None], Exception | None] = lambda expiry: None
-    contract_requests: list[dict[str, Any]] = field(default_factory=list)
-    bar_requests: list[str] = field(default_factory=list)
+    #: Every session ``listing_as_of`` was asked for, in order: the lookups the contract finder made.
+    listing_requests: list[date] = field(default_factory=list)
 
     # -- the listed chain ----------------------------------------------------
 
@@ -91,65 +109,72 @@ class OptionChain:
         count = int((high - low) / self.strike_step) + 1
         return [low + i * self.strike_step for i in range(count)]
 
-    # -- the SDK surface -----------------------------------------------------
+    def contracts_alive(self, day: date) -> list[tuple[str, str, float, date]]:
+        """Every contract alive on ``day`` as ``(ticker, call or put, strike, expiry)``, in ticker order."""
+        alive = [
+            (option_ticker(self.underlying, expiry, kind, strike), kind, strike, expiry)
+            for expiry in self._expiries()
+            if expiry >= day and self.listed_on.get(expiry, date.min) <= day
+            for strike in self._strikes()
+            for kind in ("call", "put")
+        ]
+        return sorted(alive)
 
-    def list_options_contracts(self, **kwargs: Any) -> Iterator[OptionsContract]:
-        self.contract_requests.append(kwargs)
-        expiry_asked = kwargs.get("expiration_date")
-        failure = self.contract_failure(expiry_asked)
-        if failure is not None:
-            raise failure
-        as_of = date.fromisoformat(kwargs["as_of"]) if kwargs.get("as_of") else None
-        lo = date.fromisoformat(kwargs["expiration_date_gte"]) if kwargs.get("expiration_date_gte") else None
-        hi = date.fromisoformat(kwargs["expiration_date_lte"]) if kwargs.get("expiration_date_lte") else None
-        kind = kwargs.get("contract_type")
-        for expiry in self._expiries():
-            if expiry_asked is not None and expiry.isoformat() != expiry_asked:
-                continue
-            if as_of is not None and (expiry < as_of or self.listed_on.get(expiry, date.min) > as_of):
-                continue
-            if (lo is not None and expiry < lo) or (hi is not None and expiry > hi):
-                continue
-            for strike in self._strikes():
-                if kwargs.get("strike_price_gte") is not None and strike < kwargs["strike_price_gte"]:
-                    continue
-                if kwargs.get("strike_price_lte") is not None and strike > kwargs["strike_price_lte"]:
-                    continue
-                for contract_type in ("call", "put"):
-                    if kind is not None and kind != contract_type:
-                        continue
-                    yield OptionsContract.from_dict(
-                        {
-                            "ticker": option_ticker(self.underlying, expiry, contract_type, strike),
-                            "underlying_ticker": self.underlying,
-                            "contract_type": contract_type,
-                            "strike_price": strike,
-                            "expiration_date": expiry.isoformat(),
-                            "exercise_style": "american",
-                            "shares_per_contract": 100,
-                            "primary_exchange": "BATO",
-                        }
-                    )
+    # -- what the lake path serves --------------------------------------------
 
-    def list_aggs(self, *, ticker: str, multiplier: int, timespan: str, from_: str, to: str, **_: Any) -> Iterator[Agg]:
-        if not ticker.startswith("O:"):
-            raise AssertionError(f"the study asked the provider for {ticker}'s own bars; stock bars come from the lake")
-        self.bar_requests.append(ticker)
-        failure = self.bar_failure(ticker)
-        if failure is not None:
-            raise failure
+    def listing_as_of(self, day: date) -> tuple[ListedOption, ...]:
+        """The chain as the contract finder reads it (``ChainSource``): standard contracts alive on ``day``."""
+        self.listing_requests.append(day)
+        return tuple(ListedOption(ticker, kind, strike, expiry) for ticker, kind, strike, expiry in self.contracts_alive(day))
+
+    def daily_price(self, ticker: str, day: date) -> float | None:
+        """The contract's price on a session: Black-Scholes at the day's volatility, rounded to 1e-4; ``None`` below a cent
+        or on or after the expiry, as the chain's market printed nothing."""
         underlying, expiry, kind, strike = parse_option_ticker(ticker)
-        assert underlying == self.underlying and (multiplier, timespan) == (1, "day")
-        start, end = date.fromisoformat(from_), date.fromisoformat(to)
-        for day in sorted(self.spots):
-            if not (start <= day <= end) or day >= expiry:
-                continue
-            price = bs_european_price(
-                self.spots[day], strike, (expiry - day).days / 365.0, self.rate, self.sigma(day), kind == "call"
-            )
-            if price < 0.01:
-                continue
-            price = round(price, 4)
-            yield Agg.from_dict(
-                {"t": et_midnight_ms(day), "o": price, "h": price, "l": price, "c": price, "v": 500, "vw": price, "n": 12}
-            )
+        assert underlying == self.underlying
+        if day not in self.spots or day >= expiry:
+            return None
+        price = bs_european_price(self.spots[day], strike, (expiry - day).days / 365.0, self.rate, self.sigma(day), kind == "call")
+        return None if price < 0.01 else round(price, 4)
+
+
+class PricedChain(Protocol):
+    """What ``member_inputs`` needs of a chain: the underlying's name, the chain as a ``ChainSource``, a price per session."""
+
+    underlying: str
+
+    def listing_as_of(self, day: date) -> tuple[ListedOption, ...]: ...
+
+    def daily_price(self, ticker: str, day: date) -> float | None: ...
+
+
+def member_inputs(
+    chain: PricedChain,
+    stock_rows: Sequence[dict[str, Any]],
+    days: Sequence[date],
+    *,
+    volume: int = 500,
+    price: Callable[[str, date], float | None] | None = None,
+) -> MemberOptionInputs:
+    """A member's option inputs for ``days``, in memory: the contracts the finder picks over ``chain``, each one's price.
+
+    ``price`` replaces ``chain.daily_price`` where a test needs another number (a contract that did not trade is ``None``).
+    Nothing is read from or written to a lake; the digests are placeholders.
+    """
+    priced = price or chain.daily_price
+    bracket = find_bracket_contracts(chain.underlying, days[0].isoformat(), days[-1].isoformat(), chain, list(stock_rows))
+    folded: dict[tuple[str, date], OptionDayClose] = {}
+    needed = {} if bracket.empty else needed_contract_days(bracket)
+    for day, contracts in needed.items():
+        for contract in contracts:
+            value = priced(contract, day)
+            close = None if value is None else Decimal(repr(value))
+            folded[(contract, day)] = OptionDayClose(contract, day, close, Decimal(0 if close is None else volume), "0" * 64)
+    return MemberOptionInputs(
+        ticker=chain.underlying,
+        bracket=bracket,
+        days=folded,
+        listings_read={},
+        coverage=OptionInputCoverage(days_expected=len(folded)),
+        data_root_id="in-memory",
+    )

@@ -5,8 +5,8 @@ statistics (``evaluated``), left out with a stage, a typed code and a plain reas
 statistics but built on inputs a second attempt could have improved (``degraded``). The statistics divide by the
 evaluated count, and ``complete`` is true only when nothing was left out and nothing was degraded.
 
-This module knows nothing of where a member's data came from: the data lake's admission, the option provider and the
-math runner each name their own exclusions with it.
+This module knows nothing of where a member's data came from: the data lake's admission of its stock bars and of its
+option inputs, and the math runner, each name their own exclusions with it.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 #: Where a member can be left out of the statistics.
-ExclusionStage = Literal["stock_bars", "iv_inputs", "iv_diagnostics", "computation"]
+ExclusionStage = Literal["stock_bars", "option_inputs", "iv_inputs", "iv_diagnostics", "computation"]
 
 #: The code a study ends with when no requested member reached its statistics.
 NO_MEMBER_EVALUATED = "no_member_evaluated"
@@ -82,8 +82,8 @@ def universe_of_rows(requested: Sequence[str], rows: Sequence[dict[str, Any]]) -
     """Account for every requested member from the study's per-ticker rows.
 
     A row is evaluated when its ``validity`` is ``valid``; every other row must carry its exclusion. A valid row
-    whose ``option_inputs`` are degraded (a provider request unanswered, or a rate that is the default only because
-    FRED did not answer) stays in the statistics and is named in ``degraded`` with the counts.
+    whose ``option_inputs`` are degraded (a rate that is the default only because FRED, the one live input, did not
+    answer) stays in the statistics and is named in ``degraded`` with the count of days.
     """
     evaluated: list[str] = []
     excluded: list[dict[str, Any]] = []
@@ -94,11 +94,7 @@ def universe_of_rows(requested: Sequence[str], rows: Sequence[dict[str, Any]]) -
             inputs = row["option_inputs"]
             if inputs and inputs["degraded"]:
                 degraded.append(
-                    {
-                        "ticker": row["ticker"],
-                        "failures_total": inputs["failures_total"],
-                        "rate_days_fetch_failed": inputs["risk_free_rate"]["days_fetch_failed"],
-                    }
+                    {"ticker": row["ticker"], "rate_days_fetch_failed": inputs["risk_free_rate"]["days_fetch_failed"]}
                 )
         elif row["exclusion"] is None:
             raise RuntimeError(f"{row['ticker']} is {row['validity']} but carries no exclusion")

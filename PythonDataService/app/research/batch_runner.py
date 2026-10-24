@@ -45,17 +45,17 @@ Inferential machinery (added 2026-05-01 after methodology review):
   ladder, with concrete numerical thresholds derived from the
   external methodology review.
 
-Inputs (#3524). The runner fetches no stock bars. The caller admits each
-member's daily bars from the data lake first
-(``app/research/cross_sectional_inputs.py``) and hands them in; a member the
-lake could not admit arrives as a typed exclusion (``app/research/study_universe.py``)
+Inputs (#3524, #3540). The runner fetches nothing. The caller admits each
+member's daily stock bars and its option inputs from the data lake first
+(``app/research/cross_sectional_inputs.py``) and hands them in: the adjusted daily
+rows the target is measured on, and the member's ``MemberOptionInputs`` (the
+contracts picked off the raw close and each one's stored price) the IV is built from.
+A member the lake could not admit arrives as a typed exclusion (``app/research/study_universe.py``)
 and is carried through as an ``invalid_data`` row with its reason, so the requested
 universe is always fully accounted for. A member that fails later is excluded the same
-way, with the typed code the failing step returned (never read from error text). The same rows set the IV spot and the ATM strike inside
-``build_iv_history``, which has no fetch of its own. The option inputs (expiries,
-contracts, option bars, the risk-free rate) are the provider's: each ticker's
-requests, failures and answers are recorded in an ``OptionInputLedger`` that
-rides on the ticker's result row.
+way, with the typed code the failing step returned (never read from error text).
+``build_iv_history`` has no fetch of its own; the only live input left is the risk-free
+rate, whose source is counted in a ``RateTally`` that rides on the ticker's result row.
 """
 
 from __future__ import annotations
@@ -70,10 +70,9 @@ import pandas as pd
 from scipy import stats as scipy_stats
 
 from app.research.options.iv_builder import build_iv_history
-from app.research.options.option_input_ledger import OptionInputLedger
+from app.research.options.option_inputs import MemberOptionInputs, RateTally
 from app.research.options_runner import run_options_feature_research
 from app.research.study_universe import ExclusionStage, MemberExclusion
-from app.services.polygon_client import PolygonClientService
 
 logger = logging.getLogger(__name__)
 
@@ -276,8 +275,8 @@ class CrossSectionalReport:
 
     summary: str = ""
 
-    option_ledgers: dict[str, OptionInputLedger] = field(default_factory=dict)
-    """Each ticker's provider requests, failures and answers for the option inputs, for the data-source block."""
+    rate_tallies: dict[str, RateTally] = field(default_factory=dict)
+    """Where each evaluated ticker's risk-free rate came from, for the data-source block."""
 
 
 # ─── Main entry ───────────────────────────────────────────────────────────
@@ -288,8 +287,8 @@ def run_cross_sectional_study(
     tickers: list[str],
     start_date: str,
     end_date: str,
-    polygon_client: PolygonClientService,
     stock_bars: Mapping[str, list[dict[str, Any]]],
+    option_inputs: Mapping[str, MemberOptionInputs],
     target_type: str = "directional",
     excluded: Mapping[str, MemberExclusion] | None = None,
     on_phase: PhaseCallback = _noop_phase,
@@ -299,17 +298,17 @@ def run_cross_sectional_study(
 ) -> CrossSectionalReport:
     """Run a feature across multiple tickers and aggregate results.
 
-    ``stock_bars`` holds each member's admitted daily rows; ``excluded`` the members that never reached the
-    compute and why. Every ticker must be in exactly one of them: the runner has no bar source of its own, so
-    a ticker in neither is a caller bug and raises rather than being fetched or skipped.
-    ``polygon_client`` serves the option inputs only.
+    ``stock_bars`` holds each member's admitted daily rows (the target is measured on them) and ``option_inputs`` its
+    admitted option inputs (the IV is built from them); ``excluded`` the members that never reached the compute and why.
+    Every ticker must be in exactly one of the two places: the runner has no data source of its own, so a ticker in
+    neither is a caller bug and raises rather than being fetched or skipped.
     """
     n = len(tickers)
     excluded = excluded or {}
-    unplaced = [t for t in tickers if t not in stock_bars and t not in excluded]
+    unplaced = [t for t in tickers if t not in excluded and not (t in stock_bars and t in option_inputs)]
     if unplaced:
-        raise ValueError(f"no admitted bars and no exclusion for: {', '.join(unplaced)}")
-    ledgers: dict[str, OptionInputLedger] = {}
+        raise ValueError(f"no admitted inputs and no exclusion for: {', '.join(unplaced)}")
+    tallies: dict[str, RateTally] = {}
 
     ticker_results: list[dict[str, Any]] = []
     # Per-ticker daily-return series, keyed by ticker, used for the
@@ -346,25 +345,19 @@ def run_cross_sectional_study(
             continue
 
         on_log(f"[{i + 1}/{n}] {ticker}: building IV history...")
-        ledger = ledgers[ticker] = OptionInputLedger()
+        rates = tallies[ticker] = RateTally()
         member_bars = stock_bars[ticker]
+        inputs = option_inputs[ticker]
 
         try:
-            iv_df = build_iv_history(
-                underlying=ticker,
-                start_date=start_date,
-                end_date=end_date,
-                polygon_client=polygon_client,
-                stock_bars=member_bars,
-                ledger=ledger,
-            )
+            iv_df = build_iv_history(underlying=ticker, inputs=inputs, rates=rates)
         except Exception as e:
             # Poll before recording the failure: on the final ticker an early
             # ``continue`` is the last thing this loop does, and a cancellation
             # that arrived during the IV build would otherwise be reported as a
             # completed study with one errored row.
             cancel_check()
-            result["option_inputs"] = ledger.as_dict()
+            result["option_inputs"] = _option_inputs_of_row(inputs, rates)
             _fail_ticker(
                 result, e, ticker=ticker, index=i, total=n, on_log=on_log, on_progress=on_progress,
                 stage="iv_inputs", code="iv_build_failed",
@@ -372,7 +365,7 @@ def run_cross_sectional_study(
             ticker_results.append(result)
             continue
 
-        result["option_inputs"] = ledger.as_dict()
+        result["option_inputs"] = _option_inputs_of_row(inputs, rates)
 
         # The mid-ticker poll sits between the two per-ticker error handlers on
         # purpose, and ahead of the empty-IV early exit for the same reason as
@@ -382,15 +375,8 @@ def run_cross_sectional_study(
         cancel_check()
 
         if iv_df.empty:
-            if ledger.failure_count:
-                reason = (
-                    f"No IV data could be derived: {ledger.failure_count} provider request(s) for the option "
-                    f"inputs did not answer (first: {ledger.failures[0].reason})"
-                )
-                exclusion = MemberExclusion(ticker, "iv_inputs", "iv_source_unavailable", reason, retryable=True)
-            else:
-                reason = "No IV data could be derived"
-                exclusion = MemberExclusion(ticker, "iv_inputs", "no_iv_derived", reason, retryable=ledger.degraded)
+            reason = "No IV data could be derived"
+            exclusion = MemberExclusion(ticker, "iv_inputs", "no_iv_derived", reason, retryable=rates.degraded)
             result["error"] = reason
             result["validity"] = "invalid_data"
             result["exclusion"] = exclusion.as_dict()
@@ -442,9 +428,9 @@ def run_cross_sectional_study(
                     "iv_diagnostics" if is_iv_problem else "computation",
                     code,
                     research_report.error,
-                    # Sparse IV from unanswered requests, or built at a rate FRED did not give, could pass on a
-                    # second attempt; a failed computation of unknown cause is not evidence either way.
-                    retryable=ledger.degraded or not is_iv_problem,
+                    # IV built at a rate FRED did not give could pass on a second attempt; a failed computation of
+                    # unknown cause is not evidence either way.
+                    retryable=rates.degraded or not is_iv_problem,
                 ).as_dict()
                 on_log(f"[{i + 1}/{n}] {ticker}: INVALID — {research_report.error}")
                 on_progress(i + 1, n, f"{ticker}: invalid")
@@ -555,7 +541,7 @@ def run_cross_sectional_study(
         stage_info=stage_info,
         ticker_results=ticker_results,
         summary=summary,
-        option_ledgers=ledgers,
+        rate_tallies=tallies,
     )
 
 
@@ -586,6 +572,11 @@ def _fail_ticker(
     logger.error("[Batch] Error processing %s: %s", ticker, str(error))
 
 
+def _option_inputs_of_row(inputs: MemberOptionInputs, rates: RateTally) -> dict[str, Any]:
+    """A ticker's row of what its IV history was built from: the lake inputs, and the rate with whether it is degraded."""
+    return {**inputs.as_dict(), "risk_free_rate": rates.as_dict(), "degraded": rates.degraded}
+
+
 def _empty_ticker_result(ticker: str) -> dict[str, Any]:
     return {
         "ticker": ticker,
@@ -602,7 +593,7 @@ def _empty_ticker_result(ticker: str) -> dict[str, Any]:
         "validity": "valid",  # overwritten if anything fails
         "low_confidence": False,
         "exclusion": None,  # set when the ticker is left out of the statistics: where, why, whether to ask again
-        "option_inputs": None,  # the provider requests behind this ticker's IV history
+        "option_inputs": None,  # the lake inputs and the rate behind this ticker's IV history
     }
 
 

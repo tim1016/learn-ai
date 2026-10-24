@@ -13,12 +13,8 @@ import pytest
 from app.research.study_universe import MemberExclusion, members_summary, universe_of_rows, universe_record
 
 
-def inputs(*, failures: int = 0, rate_days_fetch_failed: int = 0) -> dict[str, Any]:
-    return {
-        "failures_total": failures,
-        "risk_free_rate": {"days_fetch_failed": rate_days_fetch_failed},
-        "degraded": bool(failures or rate_days_fetch_failed),
-    }
+def inputs(*, rate_days_fetch_failed: int = 0) -> dict[str, Any]:
+    return {"risk_free_rate": {"days_fetch_failed": rate_days_fetch_failed}, "degraded": bool(rate_days_fetch_failed)}
 
 
 def valid(ticker: str, option_inputs: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -41,15 +37,16 @@ def test_every_requested_member_is_in_exactly_one_of_evaluated_or_excluded_and_t
     assert block["complete"] is False
 
 
-def test_a_member_in_the_statistics_is_degraded_for_an_unanswered_request_or_a_fred_outage_and_the_universe_is_then_not_complete():
-    rows = [valid("SPY"), valid("QQQ", inputs(failures=2)), valid("IWM", inputs(rate_days_fetch_failed=5))]
+def test_a_member_in_the_statistics_is_degraded_for_a_fred_outage_and_the_universe_is_then_not_complete():
+    """FRED is the one live input left; every option input the lake supplies either arrives whole or excludes the member."""
+    rows = [valid("SPY"), valid("QQQ", inputs(rate_days_fetch_failed=5)), valid("IWM", inputs(rate_days_fetch_failed=2))]
 
     block = universe_of_rows(["SPY", "QQQ", "IWM"], rows)
 
     assert block["evaluated"] == ["SPY", "QQQ", "IWM"] and block["excluded"] == []
     assert block["degraded"] == [
-        {"ticker": "QQQ", "failures_total": 2, "rate_days_fetch_failed": 0},
-        {"ticker": "IWM", "failures_total": 0, "rate_days_fetch_failed": 5},
+        {"ticker": "QQQ", "rate_days_fetch_failed": 5},
+        {"ticker": "IWM", "rate_days_fetch_failed": 2},
     ]
     assert block["complete"] is False
 

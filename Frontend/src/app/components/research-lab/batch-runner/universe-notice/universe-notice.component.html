@@ -5,7 +5,7 @@
     <strong>{{ lead() }}</strong>
     {{ text() }}
     @for (e of uni.excluded; track e.ticker) {
-      <span class="block"><app-asset-identity [symbol]="e.ticker" size="xs" /> — {{ e.reason }}</span>
+      <span class="block"><app-asset-identity [symbol]="e.ticker" size="xs" /> — {{ stageLabel(e.stage) }}: {{ e.reason }}</span>
     }
     @for (d of uni.degraded; track d.ticker) {
       <span class="block">

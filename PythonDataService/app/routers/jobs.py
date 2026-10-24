@@ -608,8 +608,8 @@ async def start_cross_sectional_job(req: CrossSectionalJobRequest) -> dict:
     """Kick off a cross-sectional study in a worker thread. Returns 202.
 
     The worker admits each member's daily stock bars from the data lake
-    (materializing what it lacks), then runs the members one after another —
-    ~30–90 seconds each on the provider's option endpoints — wiring
+    (materializing what it lacks) and then its option inputs (saving what the
+    lake lacks), then runs the members one after another, wiring
     ``ProgressEmitter`` into the runner's ``on_phase`` / ``on_log`` /
     ``on_progress`` callbacks so the run-dock shows each ticker as it lands.
     A member the lake cannot admit is excluded with its reason; when none can
@@ -635,9 +635,7 @@ async def start_cross_sectional_job(req: CrossSectionalJobRequest) -> dict:
     )
 
     def work(emit: ProgressEmitter, cancel) -> dict | None:
-        return run_cross_sectional_job(
-            params, job_id=req.job_id, force=req.force, emit=emit, cancel=cancel, polygon_client=polygon_client
-        )
+        return run_cross_sectional_job(params, job_id=req.job_id, force=req.force, emit=emit, cancel=cancel)
 
     run_in_thread(
         req.job_id,

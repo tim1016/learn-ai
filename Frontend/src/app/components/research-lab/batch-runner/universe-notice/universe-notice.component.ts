@@ -1,7 +1,15 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
-import { StudyUniverse } from '../../../../services/research.service';
+import { MemberExclusion, StudyUniverse } from '../../../../services/research.service';
 import { AssetIdentityComponent } from '../../../../shared/asset-identity/asset-identity.component';
+
+const STAGE_LABELS: Record<MemberExclusion['stage'], string> = {
+  stock_bars: 'stock bars',
+  option_inputs: 'option inputs',
+  iv_inputs: 'IV history',
+  iv_diagnostics: 'IV diagnostics',
+  computation: 'computation',
+};
 
 /**
  * Every requested member of a universe that is not fully evaluated (#3524): how many are in the statistics, the
@@ -32,13 +40,13 @@ export class CrossSectionalUniverseNoticeComponent {
       : `${counts}. ${uni.inclusionPolicy.description}`;
   });
 
-  /** What left a member short of what was asked, in words. */
-  protected degradedReason(d: { failuresTotal: number; rateDaysFetchFailed: number }): string {
-    const parts: string[] = [];
-    if (d.failuresTotal > 0) parts.push(`${d.failuresTotal} option request(s) went unanswered while its IV history was built`);
-    if (d.rateDaysFetchFailed > 0) {
-      parts.push(`${d.rateDaysFetchFailed} day(s) were priced at the default risk-free rate because FRED did not answer`);
-    }
-    return parts.join(' and ');
+  /** What left a member short of what was asked, in words: FRED, the one live input, did not answer. */
+  protected degradedReason(d: { rateDaysFetchFailed: number }): string {
+    return `${d.rateDaysFetchFailed} day(s) were priced at the default risk-free rate because FRED did not answer`;
+  }
+
+  /** The step of the study a member was left out at, in the words the page uses for its inputs. */
+  protected stageLabel(stage: MemberExclusion['stage']): string {
+    return STAGE_LABELS[stage];
   }
 }

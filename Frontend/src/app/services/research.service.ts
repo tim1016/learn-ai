@@ -521,8 +521,6 @@ export interface TickerBatchResult {
   lowConfidence?: boolean;
   /** Set when the ticker is left out of the statistics: where, why, and whether asking again could answer differently. */
   exclusion?: MemberExclusion;
-  /** Option requests the provider did not answer while this ticker's IV history was built. */
-  optionRequestsFailed?: number;
 }
 
 export interface ValiditySummary {
@@ -533,7 +531,7 @@ export interface ValiditySummary {
 }
 
 /** Where in the study a requested member was left out of the statistics. */
-export type MemberExclusionStage = 'stock_bars' | 'iv_inputs' | 'iv_diagnostics' | 'computation';
+export type MemberExclusionStage = 'stock_bars' | 'option_inputs' | 'iv_inputs' | 'iv_diagnostics' | 'computation';
 
 /** A requested member that is not in the statistics: where, the typed code, the plain reason, and whether asking again could answer differently. */
 export interface MemberExclusion {
@@ -556,50 +554,96 @@ export interface StudyUniverse {
   excluded: MemberExclusion[];
   excludedCount: number;
   /**
-   * In the statistics, but short of what was asked: provider requests went unanswered while the IV history was
-   * built, or days were priced at the default risk-free rate because FRED did not answer.
+   * In the statistics, but short of what was asked: days were priced at the default risk-free rate because FRED, the
+   * one live input, did not answer.
    */
-  degraded: { ticker: string; failuresTotal: number; rateDaysFetchFailed: number }[];
+  degraded: { ticker: string; rateDaysFetchFailed: number }[];
   denominator: number;
   inclusionPolicy: { name: string; description: string };
   /** True only when every requested member is evaluated and none is degraded. */
   complete: boolean;
 }
 
-/** One provider-sourced option input: named, counted, and fingerprinted by what the provider answered. */
-export interface ProviderInputSource {
-  provider: string;
-  endpoint?: string;
-  attempted?: number;
-  failed?: number;
-  observationDigest?: string | null;
-  reproducible: boolean;
+/** What the lake held or was asked to save for one kind of option input: stored before the run, added by it. */
+export interface OptionInputCounts {
+  expected: number;
+  reused: number;
+  added: number;
+}
+
+/** Where a member's contract days were read from: the nightly archive's session containers, files this study keeps, or both. */
+export type OptionInputsSource = 'archive' | 'kept' | 'mixed';
+
+/** One option input the lake could not supply: which, on which session, and why, in the lake's words and as its code. */
+export interface OptionInputIssue {
+  kind: 'listing' | 'contract_day';
+  /** The session's open, `int64 ms UTC`. */
+  tradingDateMs: number;
+  subject: string;
+  outcome: string;
+  reason: string;
+  failureReason: string | null;
+  retryable: boolean;
+}
+
+/** A member's option inputs: its stored files' receipt when admitted, or the typed reason it was left out. */
+export interface OptionInputsMember {
+  ticker: string;
+  status: 'admitted' | 'excluded';
+  /** Admitted: the digest of the stored files the inputs were read from, and where the contract days came from. */
+  digest?: string;
+  source?: OptionInputsSource;
+  listings?: OptionInputCounts;
+  contractDays?: OptionInputCounts & { fromArchive: number };
+  /** Excluded: the code, the plain reason, whether asking again could change it, and the first issues behind it. */
+  code?: string;
+  reason?: string;
+  retryable?: boolean;
+  issues?: OptionInputIssue[];
+  issuesTotal?: number;
 }
 
 /**
- * Where a cross-sectional study's inputs came from (#3524). The result as a whole is not "lake": the stock bars are
- * the lake's, admitted per member; the option inputs are the provider's, live and not archived.
+ * A study's option inputs, read from the data lake (#3540): the listings and the contract bars the IV history is built
+ * from, saved into the lake first if it lacked them. The archive's SPY, QQQ and IWM sessions are read; anything else is
+ * fetched once and kept.
+ */
+export interface LakeOptionInputsSource {
+  kind: 'lake';
+  policy: string;
+  /** The rule that prices a contract on a session, in words. */
+  priceRuleWords: string;
+  digest: string | null;
+  listings: OptionInputCounts;
+  contractDays: OptionInputCounts & { fromArchive: number };
+  members: OptionInputsMember[];
+}
+
+/** The risk-free rate: FRED, asked live and not archived, so the only input of the study the lake does not hold. */
+export interface RiskFreeRateSource {
+  kind: 'provider';
+  provider: string;
+  daysFromFred: number;
+  daysFromDefault: number;
+  /** Days priced at the default only because FRED, with a key configured, gave no rate. */
+  daysFetchFailed: number;
+  valuesDigest: string | null;
+}
+
+/**
+ * Where a cross-sectional study's inputs came from (#3524, #3540). The stock bars and the option inputs are the lake's,
+ * admitted per member; the risk-free rate is the one live input.
  */
 export interface CrossSectionalDataSource {
-  kind: 'composite';
+  kind: 'lake';
   calculationVersion: string;
   /**
    * The lake part, mapped by the mapper every lake study shares. It names the universe as its subject and counts
    * member-sessions; its `cache` is the whole result's.
    */
   stockBars: LakeStudyDataSource | null;
-  optionInputs: {
-    inputs: Record<'option_expiries' | 'option_contracts' | 'option_bars', ProviderInputSource>;
-    riskFreeRate: {
-      provider: string;
-      daysFromFred: number;
-      daysFromDefault: number;
-      /** Days priced at the default only because FRED, with a key configured, gave no rate. */
-      daysFetchFailed: number;
-      reproducible: boolean;
-    };
-    failuresTotal: number;
-  } | null;
+  optionInputs: LakeOptionInputsSource | null;
+  riskFreeRate: RiskFreeRateSource | null;
 }
 
 /**

@@ -58,15 +58,14 @@ from app.config import settings
 from app.lean_sidecar.trading_calendar import expected_sessions, session_close_ms_utc, session_open_ms_utc
 from app.research.batch_runner import _extract_daily_returns
 from app.research.cross_sectional_inputs import admit_universe, cross_sectional_identity
-from app.research.options.contract_finder import find_bracket_contracts
 from app.research.options.iv_builder import build_iv_history
-from app.research.options.option_input_ledger import OptionInputLedger
+from app.research.options.option_inputs import RateTally
 from app.research.options_runner import _compute_daily_forward_return
 from app.services.polygon_client import PolygonClientService
 from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 from app.utils.session_anchors import et_midnight_ms
 from tests._helpers.fake_lake_catalog import install_fake_catalog, mock_launcher, point_lake_writer_at_tmp
-from tests._helpers.option_chain import OptionChain
+from tests._helpers.option_chain import OptionChain, member_inputs
 from tests._helpers.pinned_vendor import VendorBar, VendorCalls, mock_vendor, scaled, vendor_history
 from tests.fixtures.golden_support.registry import default as registry
 
@@ -279,10 +278,8 @@ def option_side(
         chain = OptionChain(
             "SPY", true_closes, rate=DEFAULT_RISK_FREE_RATE, expiries=(LOW_EXPIRY, HIGH_EXPIRY), strike_step=strike_step
         )
-        service = PolygonClientService()
-        service.client = chain  # type: ignore[assignment]
-        args = ("SPY", window[0].isoformat(), window[-1].isoformat(), service, rows)
-        return find_bracket_contracts(*args, OptionInputLedger()), build_iv_history(*args, OptionInputLedger())
+        inputs = member_inputs(chain, rows, window)
+        return inputs.bracket, build_iv_history("SPY", inputs, RateTally())
 
     (contracts_p, iv_p), (contracts_l, iv_l) = run(provider), run(lake)
     atm = lambda frame: frame.set_index("date")["low_dte_atm_contract"]  # noqa: E731

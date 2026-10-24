@@ -241,12 +241,6 @@
       <tr>
         <td colspan="8" class="text-red-500 text-sm">{{ row.error }}</td>
       </tr>
-    } @else if (row.optionRequestsFailed) {
-      <tr>
-        <td colspan="8" class="text-sm text-color-secondary">
-          {{ row.optionRequestsFailed }} option request(s) went unanswered while this ticker's IV history was built.
-        </td>
-      </tr>
     }
   </ng-template>
 </p-table>

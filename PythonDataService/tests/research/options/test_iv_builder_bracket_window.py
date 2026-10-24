@@ -1,22 +1,23 @@
-"""``build_iv_history`` over a window longer than the first session's bracket (#3528).
+"""``build_iv_history`` over a window longer than the first session's bracket (#3528, #3540).
 
 ``find_bracket_contracts`` used to look the two expiries around 30 days up once per month and reuse them for the
 whole month, so ``k`` days in both DTEs had fallen by ``k``. ``variance_interpolated_iv`` (#3484) raises when 30 days
 is outside ``[dte_low, dte_high]``, so any session more than ``dte_high - 30`` days after its month's first session
-raised, and the whole ticker was lost. A month still costs one expiry lookup, taken as of its first session; a date
+raised, and the whole ticker was lost. A month still costs one expiry list, read as of its first session; a date
 keeps the previous date's pair while it still brackets 30 days and its near expiry is 7 or more days out, picks afresh
-when it does not, and takes a new lookup as of that date when the fresh pick finds no near or no far expiry in a list
-taken earlier (an expiry listed after the first session is invisible to it), or when the month's first lookup raised.
+when it does not, and reads the listing as of that date when the fresh pick finds no near or no far expiry in a list
+taken earlier (an expiry listed after the first session is invisible to it).
 
-The chain is a pinned listed weekly-Friday chain priced with a known volatility, served in place of
-``PolygonClientService`` (``list_options_contracts`` and ``fetch_aggregates``; the underlying's own bars are the
-``stock_bars`` argument and a request for them fails the test). The real contract finder, IV builder and solver run
-over it, so what comes back is checked against the number that generated the prices.
+The chain is a pinned listed weekly-Friday chain priced with a known volatility, held in memory as the contract finder's
+``ChainSource`` and as each contract's price on each session (the underlying's own bars are the ``stock_bars`` argument).
+The real contract finder, IV builder and solver run over it, so what comes back is checked against the number that
+generated the prices. The lake side of the same selection is tested in ``test_option_inputs_lake.py``.
 """
 
 from __future__ import annotations
 
 import math
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -29,9 +30,10 @@ import pytest
 from app.research.options import contract_finder, iv_builder
 from app.research.options.contract_finder import find_bracket_contracts
 from app.research.options.iv_builder import build_iv_history
-from app.research.options.option_input_ledger import OptionInputLedger
+from app.research.options.option_inputs import ListedOption, RateTally
 from app.services.bs_greeks import bs_european_price
 from app.services.fred_service import RATE_SOURCE_FRED, RateResolution
+from tests._helpers.option_chain import member_inputs
 
 RATE = 0.043
 
@@ -84,66 +86,36 @@ def sloped_sigma(day: date, dte: int) -> float:
 
 @dataclass
 class ChainClient:
-    """The slice of ``PolygonClientService`` the contract finder and IV builder call, over a pinned chain."""
+    """A pinned chain: the contract finder's ``ChainSource`` and each contract's price on each session."""
 
     expiries: tuple[date, ...]
     spots: dict[date, float]
     sigma: Callable[[date, int], float] = flat_sigma
-    expiry_lookup_error: Exception | None = None
     skew: float = 0.0  # volatility lost per unit of ln(strike / spot): lower strikes carry the higher volatility
-    failing_lookups: frozenset[int] | None = None  # 1-based numbers of the expiry lookups that raise; None: every one
     listed_on: dict[date, date] = field(default_factory=dict)  # an expiry is visible as of its listing date onward
-    expiry_lookups: list[dict[str, Any]] = field(default_factory=list)
+    listing_requests: list[date] = field(default_factory=list)
+    underlying: str = "SPY"
 
-    def list_options_contracts(self, **kw: Any) -> list[dict[str, Any]]:
-        is_expiry_lookup = kw.get("expiration_date") is None
-        if is_expiry_lookup:
-            self.expiry_lookups.append(kw)
-            if self.expiry_lookup_error is not None and (
-                self.failing_lookups is None or len(self.expiry_lookups) in self.failing_lookups
-            ):
-                raise self.expiry_lookup_error
-        as_of = date.fromisoformat(kw["as_of_date"]) if kw.get("as_of_date") else None
-        out: list[dict[str, Any]] = []
-        for expiry in sorted(self.expiries):
-            iso = expiry.isoformat()
-            if kw.get("expiration_date") not in (None, iso):
-                continue
-            if (kw.get("expiration_date_gte") or "") > iso or iso > (kw.get("expiration_date_lte") or "9999"):
-                continue
-            if as_of is not None and (expiry < as_of or self.listed_on.get(expiry, date.min) > as_of):
-                continue
-            for strike in np.arange(100.0, 201.0, 1.0):
-                if not (kw.get("strike_price_gte") or 0) <= strike <= (kw.get("strike_price_lte") or 1e9):
-                    continue
-                for kind in ("call", "put"):
-                    if kw.get("contract_type") in (None, kind):
-                        out.append(
-                            {
-                                "ticker": option_ticker(expiry, kind, strike),
-                                "contract_type": kind,
-                                "strike_price": float(strike),
-                                "expiration_date": iso,
-                            }
-                        )
-        return out[: kw["limit"]]
+    def listing_as_of(self, day: date) -> tuple[ListedOption, ...]:
+        self.listing_requests.append(day)
+        listed = [
+            ListedOption(option_ticker(expiry, kind, strike), kind, float(strike), expiry)
+            for expiry in sorted(self.expiries)
+            if expiry >= day and self.listed_on.get(expiry, date.min) <= day
+            for strike in np.arange(100.0, 201.0, 1.0)
+            for kind in ("call", "put")
+        ]
+        return tuple(sorted(listed, key=lambda option: option.ticker))
 
-    def fetch_aggregates(self, *, ticker: str, from_date: str, to_date: str, **_: Any) -> list[dict[str, Any]]:
-        if not ticker.startswith("O:"):
-            raise AssertionError(f"the underlying's bars are passed in, not fetched: asked for {ticker}")
+    def daily_price(self, ticker: str, day: date) -> float | None:
         expiry, kind, strike = parse_option_ticker(ticker)
-        bars = []
-        for day, spot in sorted(self.spots.items()):
-            if not (from_date <= day.isoformat() <= to_date) or day >= expiry:
-                continue
-            dte = (expiry - day).days
-            vol = self.sigma(day, dte) - self.skew * np.log(strike / spot)
-            price = bs_european_price(spot, strike, dte / 365.0, RATE, vol, kind == "call")
-            if price < 0.05:
-                continue
-            price = round(price, 4)
-            bars.append({"timestamp": noon_utc_ms(day), "close": price, "vw": price, "volume": 1000})
-        return bars
+        if day not in self.spots or day >= expiry:
+            return None
+        spot = self.spots[day]
+        dte = (expiry - day).days
+        vol = self.sigma(day, dte) - self.skew * np.log(strike / spot)
+        price = bs_european_price(spot, strike, dte / 365.0, RATE, vol, kind == "call")
+        return None if price < 0.05 else round(price, 4)
 
 
 @pytest.fixture(autouse=True)
@@ -157,7 +129,7 @@ def stock_rows(sessions: list[date]) -> list[dict[str, Any]]:
 
 
 def build(sessions: list[date], client: ChainClient) -> Any:
-    return build_iv_history("SPY", sessions[0].isoformat(), sessions[-1].isoformat(), client, stock_rows(sessions), OptionInputLedger())
+    return build_iv_history("SPY", member_inputs(client, stock_rows(sessions), sessions, volume=1000), RateTally())
 
 
 def chain(sessions: list[date], **options: Any) -> ChainClient:
@@ -169,6 +141,26 @@ def chain(sessions: list[date], **options: Any) -> ChainClient:
 def sessions_of(frame: Any, sessions: list[date]) -> Any:
     """The rows for real sessions: ``build_iv_history`` pads the frame to business days, holidays included."""
     return frame[frame["date"].isin([day.isoformat() for day in sessions])].reset_index(drop=True)
+
+
+def first_uses(bracket: pd.DataFrame) -> list[date]:
+    """The session each expiry is first in a pair: when its contracts are read, once, and kept for the run."""
+    seen: dict[date, date] = {}
+    for row in bracket.itertuples():
+        if pd.isna(row.low_dte):
+            continue
+        day = date.fromisoformat(row.date)
+        for dte in (row.low_dte, row.high_dte):
+            seen.setdefault(day + timedelta(days=int(dte)), day)
+    return sorted(seen.values())
+
+
+def list_reads(client: ChainClient, bracket: pd.DataFrame) -> list[date]:
+    """The sessions a month's expiry list was read as of: every read of the chain, less the one read each expiry's contracts take."""
+    left = Counter(client.listing_requests)
+    left.subtract(Counter(first_uses(bracket)))
+    assert min(left.values()) >= 0, "every expiry's contracts were read as of its first use"
+    return sorted(day for day, count in left.items() for _ in range(count))
 
 
 # ---------------------------------------------------------------------------
@@ -228,18 +220,41 @@ def test_the_thirty_day_vol_follows_the_pair_chosen_for_that_date():
         assert math.isclose(row.iv_30d_atm, math.sqrt(total_variance / 30), abs_tol=IV_ATOL, rel_tol=0), day
 
 
-def test_a_month_costs_one_expiry_lookup():
+def test_a_month_costs_one_listing():
     sessions = MAY_SESSIONS + JUNE_SESSIONS
     client = chain(sessions)
 
-    frame = sessions_of(build(sessions, client), sessions)
+    bracket = find_bracket_contracts("SPY", sessions[0].isoformat(), sessions[-1].isoformat(), client, stock_rows(sessions))
 
-    assert len(client.expiry_lookups) == 2, "one wide lookup for May and one for June, not one per session"
-    assert (frame["iv_quality"] != "missing").all()
-    first, last = client.expiry_lookups[0], client.expiry_lookups[1]
-    assert first["as_of_date"] == "2024-05-01" and last["as_of_date"] == "2024-06-03"
-    assert first["expiration_date_gte"] == "2024-05-08", "the near end is the first session's 7 days"
-    assert first["expiration_date_lte"] == "2024-07-15", "the far end reaches 45 days past the month's last session"
+    assert bracket["bracket_gap"].isna().all()
+    assert list_reads(client, bracket) == [date(2024, 5, 1), date(2024, 6, 3)], (
+        "one list for May and one for June, each as of the month's first session, not one per session"
+    )
+
+
+def test_a_month_list_reaches_from_7_days_after_the_first_session_to_45_days_after_the_last():
+    """A call within 5% of the money expiring 7 days after the first session is listed; 6 days after is not. 45 and 46 days past the last."""
+    first, last = date(2024, 5, 1), date(2024, 5, 31)
+    expiries = (first + timedelta(days=6), first + timedelta(days=7), last + timedelta(days=45), last + timedelta(days=46))
+    client = chain(MAY_SESSIONS, expiries=expiries)
+
+    month = contract_finder._list_month_expiries(client, first, last, 150.0)
+
+    assert month == frozenset(e.isoformat() for e in (first + timedelta(days=7), last + timedelta(days=45)))
+
+
+def test_a_month_list_holds_calls_within_five_percent_of_the_close_only():
+    """The strike band is the provider's old query, float for float: ``close - close * 0.05`` to ``close + close * 0.05``."""
+    near, far = date(2024, 5, 17), date(2024, 5, 24)
+    client = chain(MAY_SESSIONS, expiries=(near, far))  # strikes 100 to 200
+    month = contract_finder._list_month_expiries(client, date(2024, 5, 1), date(2024, 5, 1), 100.0)
+    in_band = contract_finder._list_month_expiries(client, date(2024, 5, 1), date(2024, 5, 1), 150.0)
+
+    assert month == frozenset({"2024-05-17", "2024-05-24"}), "a 100 strike is listed, so a close of 100 finds both expiries"
+    assert in_band == frozenset({"2024-05-17", "2024-05-24"})
+    assert contract_finder._list_month_expiries(client, date(2024, 5, 1), date(2024, 5, 1), 250.0) == frozenset(), (
+        "no listed call is within 5% of a close of 250"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -251,43 +266,21 @@ def test_an_expiry_listed_after_the_months_first_session_still_pairs_the_late_da
     """Weeklies listed six weeks ahead: on May 1 nothing past Jun 12 exists, so Jun 14 and later are listed in May."""
     expiries = fridays(date(2024, 4, 1), date(2024, 9, 1))
     client = chain(MAY_SESSIONS, listed_on={expiry: expiry - timedelta(weeks=6) for expiry in expiries})
+    inputs = member_inputs(client, stock_rows(MAY_SESSIONS), MAY_SESSIONS, volume=1000)
 
-    frame = sessions_of(build(MAY_SESSIONS, client), MAY_SESSIONS)
+    frame = sessions_of(build_iv_history("SPY", inputs, RateTally()), MAY_SESSIONS)
 
-    assert frame["missing_reason"].isna().all(), "every session has a pair: the late ones re-list as of their own date"
+    assert frame["missing_reason"].isna().all(), "every session has a pair: the late ones list again as of their own date"
     assert (frame["dte_low"] <= 30).all() and (frame["dte_high"] >= 30).all()
     expected = [flat_sigma(day, 30) for day in MAY_SESSIONS]
     np.testing.assert_allclose(frame["iv_30d_atm"].to_numpy(dtype=float), expected, atol=IV_ATOL, rtol=0)
-    assert [lookup["as_of_date"] for lookup in client.expiry_lookups] == [
-        "2024-05-01",  # the month's first session
-        "2024-05-09",  # Jun 14 is the far expiry from here and was not yet listed on May 1
-        "2024-05-16",  # Jun 21
-        "2024-05-23",  # Jun 28
-        "2024-05-30",  # Jul 5
+    assert list_reads(client, inputs.bracket) == [
+        date(2024, 5, 1),  # the month's first session
+        date(2024, 5, 9),  # Jun 14 is the far expiry from here and was not yet listed on May 1
+        date(2024, 5, 16),  # Jun 21
+        date(2024, 5, 23),  # Jun 28
+        date(2024, 5, 30),  # Jul 5
     ], "a re-list is taken only on a date whose pick found no far expiry in the earlier list"
-
-
-def test_a_failed_re_list_costs_that_date_only_and_the_earlier_list_stays_for_the_month():
-    expiries = fridays(date(2024, 4, 1), date(2024, 9, 1))
-    client = chain(
-        MAY_SESSIONS,
-        listed_on={expiry: expiry - timedelta(weeks=6) for expiry in expiries},
-        expiry_lookup_error=RuntimeError("vendor down"),
-        failing_lookups=frozenset({2}),
-    )
-
-    frame = sessions_of(build(MAY_SESSIONS, client), MAY_SESSIONS)
-
-    reasons = dict(zip(frame["date"], frame["missing_reason"], strict=True))
-    assert reasons.pop("2024-05-09") == "expiry_lookup_failed", "the re-list that raised"
-    assert all(pd.isna(reason) for reason in reasons.values()), "May 10 re-lists again and the month goes on"
-    assert [lookup["as_of_date"] for lookup in client.expiry_lookups] == [
-        "2024-05-01",
-        "2024-05-09",  # raised
-        "2024-05-10",  # the next date tries again, and its list reaches a week further than May 9's would have
-        "2024-05-23",
-        "2024-05-30",
-    ]
 
 
 #: ``build_iv_history`` on origin/master (e02a461e) for the window and chain below, whose volatility depends on strike
@@ -328,7 +321,7 @@ def test_ivs_on_dates_master_computed_are_unchanged_across_a_month_edge():
     )
     stock_bars = [{"timestamp": noon_utc_ms(day), "close": spots[day]} for day in sessions]
 
-    frame = build_iv_history("SPY", "2024-07-24", "2024-08-07", client, stock_bars, OptionInputLedger())
+    frame = build_iv_history("SPY", member_inputs(client, stock_bars, sessions, volume=1000), RateTally())
 
     assert list(frame["date"]) == list(MASTER_ACROSS_THE_JULY_AUGUST_EDGE)
     expected = pd.DataFrame.from_dict(
@@ -350,7 +343,7 @@ def test_a_carried_pair_is_dropped_once_its_near_expiry_is_under_seven_days_out_
     monthlies = (date(2024, 4, 19), date(2024, 5, 17), date(2024, 6, 21), date(2024, 7, 19), date(2024, 8, 16))
     client = chain(JUNE_SESSIONS, expiries=monthlies)
 
-    frame = find_bracket_contracts("SPY", "2024-06-03", "2024-06-28", client, stock_rows(JUNE_SESSIONS), OptionInputLedger())
+    frame = find_bracket_contracts("SPY", "2024-06-03", "2024-06-28", client, stock_rows(JUNE_SESSIONS))
 
     rows = {row.date: (row.low_dte, row.high_dte, row.bracket_gap) for row in frame.itertuples()}
     assert rows["2024-06-03"][2] == "no_far_expiry", "Jul 19 is 46 days out"
@@ -369,15 +362,15 @@ def test_a_date_that_finds_no_near_expiry_lists_again_and_picks_up_one_listed_si
     sessions = [day for day in JUNE_SESSIONS if day <= date(2024, 6, 18)]
     client = chain(sessions, expiries=expiries, listed_on={date(2024, 6, 28): date(2024, 6, 12)})
 
-    frame = find_bracket_contracts("SPY", "2024-06-03", "2024-06-18", client, stock_rows(sessions), OptionInputLedger())
+    frame = find_bracket_contracts("SPY", "2024-06-03", "2024-06-18", client, stock_rows(sessions))
 
     rows = {row.date: (row.low_dte, row.high_dte, row.bracket_gap) for row in frame.itertuples()}
     assert rows["2024-06-14"][:2] == (7, 35), "Jun 21 is 7 days out: its last day"
     assert rows["2024-06-17"][:2] == (11, 32) and pd.isna(rows["2024-06-17"][2]), "Jun 28 and Jul 19 bracket Jun 30"
     assert rows["2024-06-18"][:2] == (10, 31) and pd.isna(rows["2024-06-18"][2]), "carried: still brackets 30 days"
-    assert [lookup["as_of_date"] for lookup in client.expiry_lookups] == [
-        "2024-06-03",
-        "2024-06-17",  # the first date whose fresh pick found no near expiry in the June 3 list
+    assert list_reads(client, frame) == [
+        date(2024, 6, 3),
+        date(2024, 6, 17),  # the first date whose fresh pick found no near expiry in the June 3 list
     ]
 
 
@@ -406,41 +399,3 @@ def test_sessions_no_listed_pair_brackets_are_typed_missing_days_not_a_raise_for
     may_15 = frame[frame["date"] == "2024-05-15"].iloc[0]
     assert (may_15["dte_low"], may_15["dte_high"]) == (23, 30), "Jun 14 is 30 days out: it is the high end of (Jun 7, Jun 14)"
     assert math.isclose(may_15["iv_30d_atm"], flat_sigma(date(2024, 5, 15), 30), abs_tol=IV_ATOL, rel_tol=0)
-
-
-def test_a_month_whose_every_expiry_lookup_fails_is_missing_with_its_own_reason():
-    client = chain(MAY_SESSIONS, expiry_lookup_error=RuntimeError("vendor down"))
-
-    frame = sessions_of(build(MAY_SESSIONS, client), MAY_SESSIONS)
-
-    assert (frame["iv_quality"] == "missing").all()
-    assert (frame["missing_reason"] == "expiry_lookup_failed").all(), "a lookup that failed is not an empty chain"
-    assert len(client.expiry_lookups) == len(MAY_SESSIONS), "each date asks again, and costs itself only"
-
-
-def test_a_failed_first_lookup_costs_its_date_only_and_the_next_date_lists_again():
-    client = chain(MAY_SESSIONS, expiry_lookup_error=RuntimeError("vendor down"), failing_lookups=frozenset({1}))
-
-    frame = sessions_of(build(MAY_SESSIONS, client), MAY_SESSIONS)
-
-    reasons = dict(zip(frame["date"], frame["missing_reason"], strict=True))
-    assert reasons.pop("2024-05-01") == "expiry_lookup_failed", "the first lookup that raised"
-    assert all(pd.isna(reason) for reason in reasons.values()), "the month is not lost with its first date"
-    assert [lookup["as_of_date"] for lookup in client.expiry_lookups] == ["2024-05-01", "2024-05-02"], (
-        "one more lookup, as of the next date, and the month's list is that one"
-    )
-    expected = [flat_sigma(day, 30) for day in MAY_SESSIONS[1:]]
-    np.testing.assert_allclose(
-        frame["iv_30d_atm"].to_numpy(dtype=float)[1:], expected, atol=IV_ATOL, rtol=0, err_msg="iv_30d_atm"
-    )
-
-
-def test_a_lookup_that_hits_its_cap_marks_the_month_instead_of_picking_from_a_cut_list(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(contract_finder, "EXPIRY_LOOKUP_CONTRACTS_PER_DAY", 1)
-    client = chain(MAY_SESSIONS)
-
-    frame = sessions_of(build(MAY_SESSIONS, client), MAY_SESSIONS)
-
-    assert (frame["missing_reason"] == "expiry_lookup_truncated").all(), "a cut list does not pass as the chain"
-    assert (frame["iv_quality"] == "missing").all()
-    assert len(client.expiry_lookups) == 1, "a cut list is not re-listed day after day"

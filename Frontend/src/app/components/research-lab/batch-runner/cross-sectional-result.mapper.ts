@@ -3,8 +3,13 @@ import {
   CrossSectionalCriterion,
   CrossSectionalDataSource,
   CrossSectionalFailure,
+  LakeOptionInputsSource,
   MemberExclusion,
-  ProviderInputSource,
+  OptionInputCounts,
+  OptionInputIssue,
+  OptionInputsMember,
+  OptionInputsSource,
+  RiskFreeRateSource,
   StudyUniverse,
   TickerValidity,
 } from '../../../services/research.service';
@@ -14,31 +19,60 @@ import {
   type LakeDataSourceRaw,
 } from '../../../shared/lake-study/lake-study';
 
-interface ProviderInputSourceRaw {
-  provider: string;
-  endpoint?: string;
-  attempted?: number;
-  failed?: number;
-  observation_digest?: string | null;
-  reproducible: boolean;
+interface OptionInputCountsRaw {
+  expected: number;
+  reused: number;
+  added: number;
+}
+
+interface OptionInputIssueRaw {
+  kind: 'listing' | 'contract_day';
+  trading_date_ms: number;
+  subject: string;
+  outcome: string;
+  reason: string;
+  failure_reason: string | null;
+  retryable: boolean;
+}
+
+interface OptionInputsMemberRaw {
+  ticker: string;
+  status: 'admitted' | 'excluded';
+  digest?: string;
+  source?: OptionInputsSource;
+  listings?: OptionInputCountsRaw;
+  contract_days?: OptionInputCountsRaw & { from_archive: number };
+  code?: string;
+  reason?: string;
+  retryable?: boolean;
+  issues?: OptionInputIssueRaw[];
+  issues_total?: number;
 }
 
 /** The ``data_source`` block (``cross_sectional_study_service.data_source_block``). */
 export interface CrossSectionalDataSourceRaw {
-  kind: 'composite';
+  kind: 'lake';
   calculation_version: string;
   /** The block every lake study writes; a universe's counts are member-sessions. */
   stock_bars: LakeDataSourceRaw | null;
+  /** The listings and contract bars the IV history is built from (``option_inputs.option_inputs_block``). */
   option_inputs: {
-    inputs: Record<'option_expiries' | 'option_contracts' | 'option_bars', ProviderInputSourceRaw>;
-    risk_free_rate: {
-      provider: string;
-      days_from_fred: number;
-      days_from_default: number;
-      days_fetch_failed: number;
-      reproducible: boolean;
-    };
-    failures_total: number;
+    kind: 'lake';
+    policy: string;
+    price_rule_words: string;
+    digest: string | null;
+    listings: OptionInputCountsRaw;
+    contract_days: OptionInputCountsRaw & { from_archive: number };
+    members: OptionInputsMemberRaw[];
+  } | null;
+  /** FRED, asked live: the one input the lake does not hold. */
+  risk_free_rate: {
+    kind: 'provider';
+    provider: string;
+    days_from_fred: number;
+    days_from_default: number;
+    days_fetch_failed: number;
+    values_digest: string | null;
   } | null;
 }
 
@@ -49,7 +83,7 @@ export interface StudyUniverseRaw {
   evaluated_count: number;
   excluded: MemberExclusion[];
   excluded_count: number;
-  degraded: { ticker: string; failures_total: number; rate_days_fetch_failed: number }[];
+  degraded: { ticker: string; rate_days_fetch_failed: number }[];
   denominator: number;
   inclusion_policy: { name: string; description: string };
   complete: boolean;
@@ -142,7 +176,6 @@ export interface CrossSectionalJobResultRaw {
     validity?: TickerValidity;
     low_confidence?: boolean;
     exclusion?: MemberExclusion | null;
-    option_inputs?: { failures_total: number } | null;
   }[];
   summary: string;
 }
@@ -173,7 +206,6 @@ export function toBatchResearchResult(raw: CrossSectionalJobResultRaw): BatchRes
       validity: r.validity,
       lowConfidence: r.low_confidence,
       exclusion: r.exclusion ?? undefined,
-      optionRequestsFailed: r.option_inputs?.failures_total || undefined,
     })),
     summary: raw.summary,
     status: raw.status,
@@ -237,54 +269,83 @@ function toUniverse(u: StudyUniverseRaw): StudyUniverse {
     evaluatedCount: u.evaluated_count,
     excluded: u.excluded,
     excludedCount: u.excluded_count,
-    degraded: u.degraded.map((d) => ({
-      ticker: d.ticker,
-      failuresTotal: d.failures_total,
-      rateDaysFetchFailed: d.rate_days_fetch_failed,
-    })),
+    degraded: u.degraded.map((d) => ({ ticker: d.ticker, rateDaysFetchFailed: d.rate_days_fetch_failed })),
     denominator: u.denominator,
     inclusionPolicy: u.inclusion_policy,
     complete: u.complete,
   };
 }
 
+function toCounts(c: OptionInputCountsRaw): OptionInputCounts {
+  return { expected: c.expected, reused: c.reused, added: c.added };
+}
+
+function toIssue(i: OptionInputIssueRaw): OptionInputIssue {
+  return {
+    kind: i.kind,
+    tradingDateMs: i.trading_date_ms,
+    subject: i.subject,
+    outcome: i.outcome,
+    reason: i.reason,
+    failureReason: i.failure_reason,
+    retryable: i.retryable,
+  };
+}
+
+function toOptionMember(m: OptionInputsMemberRaw): OptionInputsMember {
+  return {
+    ticker: m.ticker,
+    status: m.status,
+    digest: m.digest,
+    source: m.source,
+    listings: m.listings ? toCounts(m.listings) : undefined,
+    contractDays: m.contract_days ? { ...toCounts(m.contract_days), fromArchive: m.contract_days.from_archive } : undefined,
+    code: m.code,
+    reason: m.reason,
+    retryable: m.retryable,
+    issues: m.issues?.map(toIssue),
+    issuesTotal: m.issues_total,
+  };
+}
+
 function toDataSource(raw: CrossSectionalDataSourceRaw): CrossSectionalDataSource {
-  const provider = (p: ProviderInputSourceRaw): ProviderInputSource => ({
-    provider: p.provider,
-    endpoint: p.endpoint,
-    attempted: p.attempted,
-    failed: p.failed,
-    observationDigest: p.observation_digest,
-    reproducible: p.reproducible,
-  });
   const options = raw.option_inputs;
+  const rate = raw.risk_free_rate;
   return {
     kind: raw.kind,
     calculationVersion: raw.calculation_version,
     stockBars: raw.stock_bars ? mapLakeStudyDataSource(raw.stock_bars) : null,
-    optionInputs: options
-      ? {
-          inputs: {
-            option_expiries: provider(options.inputs.option_expiries),
-            option_contracts: provider(options.inputs.option_contracts),
-            option_bars: provider(options.inputs.option_bars),
-          },
-          riskFreeRate: {
-            provider: options.risk_free_rate.provider,
-            daysFromFred: options.risk_free_rate.days_from_fred,
-            daysFromDefault: options.risk_free_rate.days_from_default,
-            daysFetchFailed: options.risk_free_rate.days_fetch_failed,
-            reproducible: options.risk_free_rate.reproducible,
-          },
-          failuresTotal: options.failures_total,
-        }
-      : null,
+    optionInputs: options ? toOptionInputs(options) : null,
+    riskFreeRate: rate ? toRiskFreeRate(rate) : null,
+  };
+}
+
+function toOptionInputs(options: NonNullable<CrossSectionalDataSourceRaw['option_inputs']>): LakeOptionInputsSource {
+  return {
+    kind: options.kind,
+    policy: options.policy,
+    priceRuleWords: options.price_rule_words,
+    digest: options.digest,
+    listings: toCounts(options.listings),
+    contractDays: { ...toCounts(options.contract_days), fromArchive: options.contract_days.from_archive },
+    members: options.members.map(toOptionMember),
+  };
+}
+
+function toRiskFreeRate(rate: NonNullable<CrossSectionalDataSourceRaw['risk_free_rate']>): RiskFreeRateSource {
+  return {
+    kind: rate.kind,
+    provider: rate.provider,
+    daysFromFred: rate.days_from_fred,
+    daysFromDefault: rate.days_from_default,
+    daysFetchFailed: rate.days_fetch_failed,
+    valuesDigest: rate.values_digest,
   };
 }
 
 /**
  * Why a run that ended without a result has none, from the payload the failed job parked: the lake's refusal (the
- * source it is read against is the lake part of the composite block), the universe, and the source.
+ * source it is read against is the stock-bars part of the block), the universe, and the source.
  */
 export function toCrossSectionalFailure(raw: CrossSectionalFailedResultRaw): CrossSectionalFailure {
   return {
