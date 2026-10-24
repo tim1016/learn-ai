@@ -836,6 +836,33 @@ def test_raw_and_split_adjusted_windows_are_different_identities_with_different_
 
 
 @respx.mock
+def test_a_capture_that_rebuilds_a_held_adjusted_day_reads_the_whole_window_on_the_new_basis(catalog, lake):
+    """A split lands after the window's first session was captured; capturing the rest rebuilds that session too.
+
+    The held session read as ready, on the old basis, before the capture ran. Admission reads the window again on the
+    basis the capture left, where it used to refuse the window as 'mixed' (the reader pins the first basis it sees).
+    """
+    mock_launcher()
+    raw = vendor_history(MARCH, start_price=1000.0)
+    mock_vendor("SPY", raw, adjusted=raw)
+    admit(identity(MARCH[:3], mode="polygon_split_adjusted"))  # held before the split exists
+    respx.mock.reset()
+    mock_launcher()
+    split_day = MARCH[3]
+    adjusted = {day: (scaled({day: bars}, 0.1)[day] if day < split_day else bars) for day, bars in raw.items()}
+    split = {"ticker": "SPY", "execution_date": split_day.isoformat(), "split_from": 1, "split_to": 10}
+    mock_vendor("SPY", raw, adjusted=adjusted, splits=[split])
+
+    admitted = admit(identity(MARCH[2:], mode="polygon_split_adjusted"))  # MARCH[2] is held; the rest is captured now
+
+    assert counts(admitted.coverage.window) == (1, len(MARCH) - 3, 0, 0), "the held day is still reused, not added"
+    held_close = float(admitted.window_bars[0].close)
+    assert held_close == pytest.approx(adjusted[MARCH[2]][0]["c"], abs=0.01), "the held day carries the new basis"
+    assert held_close != pytest.approx(raw[MARCH[2]][0]["c"], abs=0.01)
+    assert len(admitted.snapshot.corporate_action_versions) == 1, "one basis for the whole window"
+
+
+@respx.mock
 def test_warmup_sessions_are_the_calendars_sessions_before_the_window_and_counted_apart(catalog, lake):
     mock_launcher()
     window = expected_sessions(date(2024, 3, 11), date(2024, 3, 13))
