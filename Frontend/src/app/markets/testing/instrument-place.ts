@@ -88,10 +88,10 @@ export function idleRunSession() {
 }
 
 /** The lake notice's reader, answering that nothing needs a note: a spec about another tab asks the data plane nothing. */
-const QUIET_HEALTH = { read: async () => ({ generated_ms: 0, items: [] }) };
+export const QUIET_HEALTH = { read: async () => ({ generated_ms: 0, items: [] }) };
 
 /** The header's facts reader, answering each symbol with a quote: a spec about a tab asks the data plane nothing about the header. */
-const QUIET_FACTS = {
+export const QUIET_FACTS = {
   read: async (symbols: readonly string[]): Promise<FactsRead> => ({ kind: 'ok', facts: new Map(symbols.map((symbol) => [symbol, facts(symbol)])) }),
 };
 

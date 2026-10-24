@@ -21,6 +21,10 @@ import type { OptionsChainSnapshotResult, SnapshotContractResult } from '../../s
 import { DataLabRangePresetsService, type ChartRangePreset } from '../../services/data-lab-range-presets.service';
 import { optionExpiryAnchorMs } from '../../shared/option-contract/option-expiry-date';
 import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
+import { RunSessionService } from '../../services/run-session.service';
+import { ScopedHealthService } from '../../shared/scoped-health/scoped-health.service';
+import { InstrumentFactsService } from '../facts/instrument-facts.service';
+import { QUIET_FACTS, QUIET_HEALTH, idleRunSession } from '../testing/instrument-place';
 import { InstrumentContextService } from '../instrument-context.service';
 import { MARKETS_ROUTES } from '../markets.routes';
 import { InstrumentWorkspaceComponent } from '../workspace/instrument-workspace.component';
@@ -84,6 +88,10 @@ async function open(url: string, market = { chain: vi.fn(() => of(snapshotReply(
       provideHttpClientTesting(),
       ...pickers.providers,
       { provide: DataLabRangePresetsService, useValue: { presets: vi.fn(async () => [PRESET_1Y]) } },
+      // The place's header, dock and lake notice read the data plane; this spec is about the Options tab, so each is told nothing.
+      { provide: RunSessionService, useValue: idleRunSession() },
+      { provide: ScopedHealthService, useValue: QUIET_HEALTH },
+      { provide: InstrumentFactsService, useValue: QUIET_FACTS },
       {
         provide: MarketDataService,
         useValue: {
@@ -117,13 +125,13 @@ const facts = () => reads(document.querySelector('app-chain-facts'));
 describe('the Options tab of an instrument', () => {
   afterEach(() => vi.useRealTimers());
 
-  it('is routed beside Chart: Options is open, the Chain view is open, and Surface and Pricing are views beside it', async () => {
+  it('is routed beside Chart: Options is open, the Chain view is open, and Surface and Pricing are views beside it that keep the expiry the chain opened on', async () => {
     await open('/markets/SPY/options/chain');
 
     expect(screen.getByRole('link', { name: 'Options' }).getAttribute('aria-current')).toBe('page');
     expect(screen.getByRole('link', { name: 'Chain' }).getAttribute('aria-current')).toBe('page');
-    expect(screen.getByRole('link', { name: 'Surface' }).getAttribute('href')).toBe('/markets/SPY/options/surface');
-    expect(screen.getByRole('link', { name: 'Pricing' }).getAttribute('href')).toBe('/markets/SPY/options/pricing');
+    await waitFor(() => expect(screen.getByRole('link', { name: 'Surface' }).getAttribute('href')).toBe(`/markets/SPY/options/surface?expiry=${NEAR}`));
+    expect(screen.getByRole('link', { name: 'Pricing' }).getAttribute('href')).toBe(`/markets/SPY/options/pricing?expiry=${NEAR}`);
   });
 
   it('explains itself with the manual chapter on the chain, not the chart\'s reference', async () => {

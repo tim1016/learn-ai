@@ -10,7 +10,6 @@ import {
 import { RouterLink } from '@angular/router';
 
 import { RunSessionService } from '../../../services/run-session.service';
-import { instrumentCommands } from '../../instrument-address';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
 
 import { DataLabWorkspaceStore } from '../../../components/data-lab/data-lab-workspace-store';

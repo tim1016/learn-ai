@@ -1,5 +1,3 @@
-import { provideHttpClient } from '@angular/common/http';
-import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { signal, type Provider, type WritableSignal } from '@angular/core';
 import { render, screen, waitFor } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
@@ -10,6 +8,7 @@ import { BrokerHealthService } from '../../../../../services/broker-health.servi
 import { MarketDataFeedService } from '../../../../../services/market-data-feed.service';
 import type { QuantLibEngine, QuantLibPriceResult } from '../../../../../services/market-data.types';
 import { QuantLibService } from '../../../../../services/quantlib.service';
+import { ScopedHealthService } from '../../../../../shared/scoped-health/scoped-health.service';
 import { connectedHealth, engineReply, fakeIbkrFeed, FAR, NEAR } from './fake-ibkr';
 import { LiveHostComponent } from './live-host.component';
 
@@ -44,13 +43,12 @@ export function liveWorld(spy: Spy, changes: Partial<LiveWorld> = {}): LiveWorld
 
 /**
  * Renders the live chain behind a host that plays the address, with IBKR, the engine and the stream all faked.
- * The scoped-health notice above the controls reads over HTTP, which no spec answers unless it passes `more`.
+ * The scoped-health notice above the controls is told nothing needs a note, unless a spec passes its own reader in `more`.
  */
 export async function renderLive(spy: Spy, world: LiveWorld, start: { symbol?: string; expiryMs?: number } = {}, more: readonly Provider[] = []) {
   const view = await render(LiveHostComponent, {
     providers: [
-      provideHttpClient(),
-      provideHttpClientTesting(),
+      { provide: ScopedHealthService, useValue: { read: async () => ({ generated_ms: 0, items: [] }) } },
       { provide: BrokerHealthService, useValue: { health: world.health, lastError: world.healthFailure, start: spy.fn() } },
       { provide: MarketDataFeedService, useValue: { expirations: world.expirations, strikes: world.strikes } },
       { provide: QuantLibService, useValue: { selectedEngine: world.engine, priceOption: world.price } },
