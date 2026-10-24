@@ -29,8 +29,8 @@ export interface GridSearchLaunch {
 export class GridSearchFormComponent {
   private readonly service = inject(GridSearchService);
 
-  readonly strategies = input.required<readonly StrategyInfo[]>();
-  readonly strategyLocked = input(false);
+  /** The strategy this search is for. */
+  readonly strategy = input.required<StrategyInfo>();
   /** A request to start from: a handoff from the tool before this one. The form only fills itself in; nothing starts. */
   readonly prefill = input<GridSearchSpecRequest | null>(null);
   /** Debounce between an edit and the server preflight; tests set 0. */

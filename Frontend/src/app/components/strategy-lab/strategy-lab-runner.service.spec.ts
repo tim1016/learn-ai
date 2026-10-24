@@ -14,7 +14,7 @@ import { JobsService } from "../../services/jobs.service";
 import type { JobState, JobStatus } from "../../services/jobs.service";
 import { LeanSidecarService } from "../../services/lean-sidecar.service";
 import { BacktestRunsService } from "../../services/backtest-runs.service";
-import { StrategyLabConfigStore } from "./strategy-lab-config.store";
+import { STRATEGY_LAB_PINNED_STRATEGY, StrategyLabConfigStore } from "./strategy-lab-config.store";
 import { StrategyLabRunner } from "./strategy-lab-runner.service";
 import { inputsFromBacktestJob, type StrategyInfo } from "./strategy-lab.models";
 
@@ -95,6 +95,8 @@ describe("StrategyLab configuration and runner", () => {
   let diagnose: ReturnType<typeof vi.fn>;
   let jobsById: ReturnType<typeof signal<Map<string, JobState>>>;
   let resumed: ReturnType<typeof signal<boolean>>;
+  /** The strategy the workbench is for: a test that exercises another strategy pins it first. */
+  let pinned: ReturnType<typeof signal<string>>;
 
   /** Adds/replaces a job the way `JobsService` itself would — used to
    *  simulate a job `resumeActive()` discovered rather than one this
@@ -119,6 +121,7 @@ describe("StrategyLab configuration and runner", () => {
         { provide: HeldGapsService, useValue: { gapsFor } },
         StrategyLabConfigStore,
         StrategyLabRunner,
+        { provide: STRATEGY_LAB_PINNED_STRATEGY, useValue: pinned.asReadonly() },
         { provide: ActivatedRoute, useValue: { queryParamMap: of(convertToParamMap({})) } },
         {
           provide: JobsService,
@@ -158,6 +161,7 @@ describe("StrategyLab configuration and runner", () => {
     refreshActive = vi.fn(async () => undefined);
     jobsById = signal(new Map<string, JobState>());
     resumed = signal(false);
+    pinned = signal(STRATEGY.name);
     diagnose = vi.fn(async () => ({
       overall_status: "pass",
       checks: [{ name: "launcher_healthz", status: "pass", detail: "ready" }],
@@ -254,17 +258,6 @@ describe("StrategyLab configuration and runner", () => {
     expect(JSON.stringify(submittedPayload)).not.toContain("extra_field");
   });
 
-  it("selects a runnable strategy after an ordinary engine change", () => {
-    const pythonOnly = { ...STRATEGY, name: "python_only", lean_twin: null };
-    config.strategies.set([pythonOnly, STRATEGY]);
-    config.selectStrategy(pythonOnly.name);
-
-    config.changeEngine("lean");
-    TestBed.tick();
-
-    expect(config.selectedStrategyName()).toBe(STRATEGY.name);
-  });
-
   it.each(["lean", "python"] as const)("releases a restored raw Both snapshot when switching to %s", async (engine) => {
     config.engine.set("both");
     config.range.update((range) => ({ ...range, autoFetch: false }));
@@ -324,6 +317,7 @@ describe("StrategyLab configuration and runner", () => {
       },
       strategy_bars: { timespan: "minute" as const, multiplier: 15, parameter: "resolution_minutes" },
     };
+    pinned.set(strategy.name);
     config.strategies.set([strategy]);
     config.selectStrategy(strategy.name);
     config.updateParameter("resolution_minutes", "30", "integer");
@@ -349,6 +343,7 @@ describe("StrategyLab configuration and runner", () => {
 
   describe("a LEAN-only run with changed settings (#2904)", () => {
     function selectForLean(strategy: StrategyInfo): void {
+      pinned.set(strategy.name);
       config.strategies.set([strategy]);
       config.selectStrategy(strategy.name);
       config.engine.set("lean");

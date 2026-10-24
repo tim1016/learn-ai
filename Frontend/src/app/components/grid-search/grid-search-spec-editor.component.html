@@ -4,21 +4,10 @@
       <app-symbol-picker appearance="field" label="Symbol" [symbol]="symbol()" (symbolChange)="setSymbol($event)" />
     </div>
 
-    @if (strategyLocked()) {
-      <div class="field">
-        <span>Strategy</span>
-        <strong>{{ selectedStrategy()?.display_name ?? strategies()[0]?.display_name }}</strong>
-      </div>
-    } @else {
-      <label class="field">
-        <span>Strategy</span>
-        <select [value]="strategyKey() ?? ''" (change)="onStrategyEvent($event)" aria-label="Strategy">
-          @for (strategy of eligible(); track strategy.name) {
-            <option [value]="strategy.name">{{ strategy.display_name }}</option>
-          }
-        </select>
-      </label>
-    }
+    <div class="field">
+      <span>Strategy</span>
+      <strong>{{ strategy().display_name }}</strong>
+    </div>
 
     <div class="field field--window">
       <span>Window</span>
@@ -26,25 +15,23 @@
     </div>
   </div>
 
-  @if (ineligible().length > 0) {
-    <ul class="ineligible" aria-label="Strategies that cannot be swept">
-      @for (strategy of ineligible(); track strategy.name) {
-        <li>
-          <strong>{{ strategy.display_name }}</strong>
-          @if (strategy.sweep_eligibility; as eligibility) {
-            @for (code of eligibility.reason_codes; track code) {
-              <span class="tag">{{ code | receiptLabel }}</span>
-            }
-            @if (eligibility.offending_parameters.length > 0) {
-              <span class="muted">({{ eligibility.offending_parameters.join(', ') }})</span>
-            }
+  @if (!sweepable()) {
+    <ul class="ineligible" aria-label="Why this strategy cannot be swept">
+      <li>
+        <strong>{{ strategy().display_name }}</strong>
+        @if (strategy().sweep_eligibility; as eligibility) {
+          @for (code of eligibility.reason_codes; track code) {
+            <span class="tag">{{ code | receiptLabel }}</span>
           }
-        </li>
-      }
+          @if (eligibility.offending_parameters.length > 0) {
+            <span class="muted">({{ eligibility.offending_parameters.join(', ') }})</span>
+          }
+        }
+      </li>
     </ul>
   }
 
-  @if (selectedStrategy(); as strategy) {
+  @if (sweepable()) {
     <fieldset class="params">
       <legend>Settings — tick the ones to vary ({{ variedCount() }} varied)</legend>
       @for (row of params(); track row.name) {

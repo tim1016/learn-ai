@@ -39,9 +39,8 @@ export class StrategyLabConfigRailComponent {
   readonly engine = input.required<EngineChoice>();
   readonly range = model.required<TickerRange>();
   readonly dataPolicy = input.required<DataPolicy>();
-  readonly strategies = input<readonly StrategyInfo[]>([]);
-  /** The strategy is the page's, not the rail's to change: it is named, not offered as a choice. */
-  readonly strategyLocked = input(false);
+  /** The strategy this rail configures, or `null` while it cannot run on the engine and resolution chosen. */
+  readonly strategy = input.required<StrategyInfo | null>();
   /** Engines the strategy cannot run, each with why. They stay in the choice, greyed. */
   readonly engineRestrictions = input<Readonly<Partial<Record<EngineChoice, string>>>>({});
   readonly selectedStrategyName = input<string | null>(null);
@@ -69,7 +68,6 @@ export class StrategyLabConfigRailComponent {
 
   readonly collapseToggled = output();
   readonly engineChanged = output<EngineChoice>();
-  readonly strategySelected = output<string>();
   readonly parameterChanged = output<StrategyParameterChange>();
   readonly fillModeChanged = output<FillModeName>();
   readonly initialCashChanged = output<number>();
@@ -78,20 +76,17 @@ export class StrategyLabConfigRailComponent {
   readonly runRequested = output();
   readonly leanSourceRequested = output();
 
-  readonly selectedStrategy = computed(() =>
-    this.strategies().find((strategy) => strategy.name === this.selectedStrategyName()) ?? null,
-  );
   readonly engineLabel = computed(() => {
     const engine = this.engine();
     return engine === "lean" ? "LEAN" : engine === "both" ? "Both" : "Python";
   });
   readonly strategyLabel = computed(() =>
-    this.selectedStrategy()?.display_name ?? this.selectedStrategyName() ?? "No strategy",
+    this.strategy()?.display_name ?? this.selectedStrategyName() ?? "No strategy",
   );
   readonly windowLabel = computed(() => `${this.range().from} → ${this.range().to}`);
 
   readonly parameterEntries = computed(() => {
-    const properties = this.selectedStrategy()?.params_schema.properties ?? {};
+    const properties = this.strategy()?.params_schema.properties ?? {};
     return Object.entries(properties)
       .filter(([field]) => field !== "symbol")
       .map(([field, property]) => ({ field, property }));
@@ -120,7 +115,7 @@ export class StrategyLabConfigRailComponent {
   readonly launcherBlocksRun = computed(() => this.launcherPlacement() === "rail");
 
   readonly primaryAction = computed<StrategyLabPrimaryAction>(() => {
-    const unavailableStrategy = this.selectedStrategy() === null;
+    const unavailableStrategy = this.strategy() === null;
     const recoveryDisabled = this.running() || !this.selectedStrategyName();
     if (this.launcherBlocksRun()) {
       return {
@@ -147,11 +142,6 @@ export class StrategyLabConfigRailComponent {
 
   selectEngine(engine: EngineChoice): void {
     this.engineChanged.emit(engine);
-  }
-
-  onStrategyEvent(event: Event): void {
-    const target = event.target;
-    if (target instanceof HTMLSelectElement && target.value) this.strategySelected.emit(target.value);
   }
 
   onParameterEvent(field: string, type: string | undefined, event: Event): void {

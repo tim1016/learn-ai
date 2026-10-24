@@ -1,7 +1,7 @@
 <section class="grid-search" aria-label="Sweep">
   @if (blocked(); as state) {
     <app-workspace-state-block [state]="state" (actionTriggered)="onAction($event)" />
-  } @else {
+  } @else if (strategy(); as strategy) {
     <p-tabs [value]="activeTab()" (valueChange)="setTab($event)">
       <p-tablist>
         <p-tab value="new"><i class="pi pi-sliders-h" aria-hidden="true"></i> New Search</p-tab>
@@ -18,7 +18,7 @@
               <app-explore-handoff-notice [handoff]="source.handoff" />
             }
           }
-          <app-grid-search-form [strategies]="strategies()" [strategyLocked]="true" [prefill]="seed()" (launched)="onLaunched($event)" />
+          <app-grid-search-form [strategy]="strategy" [prefill]="seed()" (launched)="onLaunched($event)" />
         </p-tabpanel>
         <p-tabpanel value="history">
           @if (lookupMessage(); as message) { <p class="notice" role="status">{{ message }}</p> }

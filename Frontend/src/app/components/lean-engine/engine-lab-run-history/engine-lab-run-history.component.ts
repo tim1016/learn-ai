@@ -17,13 +17,6 @@ import { toRunHistoryRow, type BacktestRunSummary, type Engine, runWindowDate } 
 import { JobsService } from "../../../services/jobs.service";
 import { GOLDEN_VALIDATION_LIST_LIMIT, GoldenValidationService } from "../../../services/golden-validation.service";
 
-/**
- * How many of the newest saved runs a strategy's history scans for its own: the
- * run list has no strategy filter, so a strategy's history is the runs of that
- * strategy among this many (the most the list will return).
- */
-const STRATEGY_HISTORY_SCAN = 500;
-
 /** Persisted filter selection. ``ALL`` asks for every engine. */
 type EngineFilter = "ALL" | Engine;
 
@@ -63,8 +56,8 @@ export class EngineLabRunHistoryComponent {
   /** Active engine filter — drives the list's ``engine`` parameter. */
   readonly engineFilter = signal<EngineFilter>("ALL");
 
-  /** The strategy whose runs this history shows. Unset, it shows every strategy's. */
-  readonly strategyKey = input<string | null>(null);
+  /** The strategy whose runs this history shows. */
+  readonly strategyKey = input.required<string>();
 
   /** Emitted when a row is clicked — the parent component routes this to
    *  the Results tab. The id is the run's numeric id as a string. */
@@ -80,27 +73,13 @@ export class EngineLabRunHistoryComponent {
   /** Drives the column-chooser dropdown open state. */
   readonly chooserOpen = signal(false);
 
-  private readonly history = resource<BacktestRunSummary[], { engine: Engine | null; limit: number }>({
+  private readonly history = resource<BacktestRunSummary[], { engine: Engine | null; strategy: string }>({
     params: () => ({
       engine: this.engineFilter() === "ALL" ? null : (this.engineFilter() as Engine),
-      limit: this.strategyKey() === null ? HISTORY_PAGE_SIZE : STRATEGY_HISTORY_SCAN,
+      strategy: this.strategyKey(),
     }),
-    loader: ({ params }) => firstValueFrom(this.runs.list(params.engine, params.limit)),
+    loader: ({ params }) => firstValueFrom(this.runs.list(params.engine, HISTORY_PAGE_SIZE, params.strategy)),
   });
-
-  /** The runs read, narrowed to the strategy this history is for. */
-  private readonly strategyRuns = computed(() => {
-    const runs = this.history.hasValue() ? this.history.value() : [];
-    const key = this.strategyKey();
-    return key === null ? runs : runs.filter((run) => run.strategyName === key);
-  });
-
-  /** A strategy's history reaches back only as far as the newest saved runs; it says so when it may be cut short. */
-  readonly scanNote = computed(() =>
-    this.strategyKey() !== null && this.history.hasValue() && this.history.value().length >= STRATEGY_HISTORY_SCAN
-      ? `Showing this strategy's runs among the newest ${STRATEGY_HISTORY_SCAN} saved runs; an older run of it may not be listed.`
-      : null,
-  );
 
   private readonly goldenCatalog = resource({
     loader: () => firstValueFrom(this.goldenValidation.list()),
@@ -119,7 +98,7 @@ export class EngineLabRunHistoryComponent {
     const goldenByRunId = new Map(
       (this.goldenCatalog.hasValue() ? this.goldenCatalog.value() : []).map((entry) => [entry.source_run_id, entry]),
     );
-    return this.strategyRuns().map((run) => {
+    return (this.history.hasValue() ? this.history.value() : []).map((run) => {
       const golden = goldenByRunId.get(run.id);
       return {
         ...toRunHistoryRow(run),

@@ -54,8 +54,8 @@ function defaultWindow(bounds: DateBounds): { from: string; to: string } | null 
 
 /**
  * The grid-search spec editor (PRD #1926 "Frontend"), shared by Grid Search
- * and Walk-Forward: symbol, strategy from the sweepable catalogue with
- * ineligible entries explained, the window (bounded by the days the lake
+ * and Walk-Forward: symbol, the one strategy it is for (explained when the
+ * catalogue does not allow sweeping it), the window (bounded by the days the lake
  * holds for the symbol, since these runs read the lake as it stands), costs
  * and ranking, and per-parameter vary toggles with the shared range editor. It owns no
  * preflight and no service: every (debounced) edit is emitted as
@@ -73,9 +73,8 @@ export class GridSearchSpecEditorComponent {
   private readonly catalog = inject(TickerCatalogService);
   private readonly heldGaps = inject(HeldGapsService);
 
-  readonly strategies = input.required<readonly StrategyInfo[]>();
-  /** The strategy is the host's, not the form's to change: it is named, not offered as a choice. */
-  readonly strategyLocked = input(false);
+  /** The strategy this editor is for: the host's, never the form's to change. */
+  readonly strategy = input.required<StrategyInfo>();
   /** A spec to start from (a stored request); applied once its strategy is in the catalogue. */
   readonly initial = input<GridSearchSpecRequest | null>(null);
   /** Debounce between an edit and its `specChanged`; tests set 0. */
@@ -87,7 +86,6 @@ export class GridSearchSpecEditorComponent {
   readonly specChanged = output<GridSpecEdit>();
 
   readonly symbol = signal('SPY');
-  readonly strategyKey = signal<string | null>(null);
   /** Empty until the lake has said which days it holds for the symbol; then the window opens on its last whole months. */
   readonly fromDate = signal('');
   readonly toDate = signal('');
@@ -102,10 +100,8 @@ export class GridSearchSpecEditorComponent {
 
   protected readonly measures = RANKING_MEASURES;
   protected readonly fillModes = FILL_MODE_OPTIONS;
-  protected readonly eligible = computed(() => this.strategies().filter((s) => s.sweep_eligibility?.eligible === true));
-  protected readonly ineligible = computed(() => this.strategies().filter((s) => s.sweep_eligibility?.eligible !== true));
-  protected readonly resolutions = computed(() => this.selectedStrategy()?.supported_resolutions ?? ['minute']);
-  protected readonly selectedStrategy = computed(() => this.strategies().find((s) => s.name === this.strategyKey()) ?? null);
+  protected readonly sweepable = computed(() => this.strategy().sweep_eligibility?.eligible === true);
+  protected readonly resolutions = computed(() => this.strategy().supported_resolutions);
   protected readonly variedCount = computed(() => this.params().filter((p) => p.vary).length);
 
   /** The days a search over this symbol can read: what the default tree holds for it. */
@@ -122,19 +118,22 @@ export class GridSearchSpecEditorComponent {
 
   private debounce: ReturnType<typeof setTimeout> | null = null;
   private appliedInitial: GridSearchSpecRequest | null = null;
+  /** The strategy the settings rows were built for, so a re-read catalogue entry never resets what the owner edited. */
+  private rowsBuiltFor: string | null = null;
   /** Whether the window has held dates yet; it is opened once, never again after anything has set it. */
   private windowOpened = false;
 
   constructor() {
     effect(() => {
-      const strategies = this.eligible();
+      const strategy = this.strategy();
       const initial = this.initial();
-      if (initial !== null && initial !== this.appliedInitial && strategies.some((s) => s.name === initial.strategy_key)) {
+      if (!this.sweepable()) return;
+      if (initial !== null && initial !== this.appliedInitial && initial.strategy_key === strategy.name) {
         this.appliedInitial = initial;
-        untracked(() => this.applyInitial(initial));
+        untracked(() => this.applyInitial(initial, strategy));
         return;
       }
-      if (this.strategyKey() === null && strategies.length > 0) untracked(() => this.selectStrategy(strategies[0].name));
+      if (this.rowsBuiltFor !== strategy.name) untracked(() => this.openOn(strategy));
     });
     effect(() => {
       if (this.fromDate() !== '' || this.toDate() !== '') this.windowOpened = true;
@@ -150,14 +149,13 @@ export class GridSearchSpecEditorComponent {
 
   /** The exact wire body the server preflights and launches; throws while a date is empty. */
   spec(): GridSearchSpecRequest | null {
-    const strategy = this.strategyKey();
-    if (strategy === null) return null;
+    if (!this.sweepable() || this.rowsBuiltFor === null) return null;
     const param_ranges: Record<string, ParamRange> = {};
     for (const row of this.params()) {
       param_ranges[row.name] = row.vary ? row.range : { type: 'value_list', values: [row.fixedValue] };
     }
     return {
-      strategy_key: strategy,
+      strategy_key: this.strategy().name,
       symbol: this.symbol().trim().toUpperCase(),
       param_ranges,
       start_ms: etMidnightMs(this.fromDate()),
@@ -172,28 +170,22 @@ export class GridSearchSpecEditorComponent {
     };
   }
 
-  selectStrategy(name: string): void {
-    this.strategyKey.set(name);
-    const strategy = this.strategies().find((s) => s.name === name);
-    if (strategy && !strategy.supported_resolutions.includes(this.resolution())) {
+  /** Build the settings rows for the strategy, every one fixed at its default. */
+  private openOn(strategy: StrategyInfo): void {
+    this.rowsBuiltFor = strategy.name;
+    if (!strategy.supported_resolutions.includes(this.resolution())) {
       this.resolution.set(strategy.supported_resolutions.includes('daily') ? 'daily' : 'minute');
     }
     this.params.set(
-      strategy
-        ? numericStrategyParams(strategy).map(([paramName, property]) => ({
-            name: paramName,
-            property,
-            vary: false,
-            range: { type: 'value_list', values: [defaultNumericValue(property)] },
-            fixedValue: defaultNumericValue(property),
-          }))
-        : [],
+      numericStrategyParams(strategy).map(([paramName, property]) => ({
+        name: paramName,
+        property,
+        vary: false,
+        range: { type: 'value_list', values: [defaultNumericValue(property)] },
+        fixedValue: defaultNumericValue(property),
+      })),
     );
     this.scheduleEmit();
-  }
-
-  onStrategyEvent(event: Event): void {
-    if (event.target instanceof HTMLSelectElement) this.selectStrategy(event.target.value);
   }
 
   setSymbol(raw: string): void {
@@ -277,7 +269,7 @@ export class GridSearchSpecEditorComponent {
   }
 
   /** Seed every control from a stored request, then report it once like any other edit. */
-  private applyInitial(initial: GridSearchSpecRequest): void {
+  private applyInitial(initial: GridSearchSpecRequest, strategy: StrategyInfo): void {
     this.symbol.set(initial.symbol);
     this.fromDate.set(etIsoDate(initial.start_ms));
     this.toDate.set(etIsoDate(initial.end_ms - 1));
@@ -289,7 +281,7 @@ export class GridSearchSpecEditorComponent {
     this.initialCash.set(initial.initial_cash);
     this.measure.set(initial.measure);
     this.minTrades.set(initial.min_trades);
-    this.selectStrategy(initial.strategy_key);
+    this.openOn(strategy);
     this.params.update((rows) =>
       rows.map((row) => {
         const range = initial.param_ranges[row.name];

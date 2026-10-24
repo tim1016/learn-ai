@@ -27,7 +27,7 @@ function strategy(name: string, overrides: Partial<StrategyInfo> = {}): Strategy
   };
 }
 
-function configure(pinned: string | null, query: Record<string, string> = {}) {
+function configure(pinned: string, query: Record<string, string> = {}) {
   const queryParamMap = new BehaviorSubject(convertToParamMap(query));
   TestBed.configureTestingModule({
     providers: [
@@ -47,7 +47,7 @@ afterEach(() => {
   TestBed.resetTestingModule();
 });
 
-describe("a workbench pinned to one strategy", () => {
+describe("a workbench for one strategy", () => {
   it("offers and selects only that strategy, though the catalog lists others first", async () => {
     const { store, http } = configure(RSI);
     const loaded = store.loadStrategies();
@@ -101,15 +101,5 @@ describe("a workbench pinned to one strategy", () => {
 
     expect(store.engine()).toBe("python");
     expect(store.configurationWarning()).toContain("The link's both engine was not applied");
-  });
-
-  it("is open to every strategy when nothing pins it", async () => {
-    const { store, http } = configure(null);
-    const loaded = store.loadStrategies();
-    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush([strategy(EMA), strategy(RSI)]);
-    await loaded;
-
-    expect(store.selectableStrategies().map((candidate) => candidate.name)).toEqual([EMA, RSI]);
-    expect(store.engineRestrictions()).toEqual({});
   });
 });

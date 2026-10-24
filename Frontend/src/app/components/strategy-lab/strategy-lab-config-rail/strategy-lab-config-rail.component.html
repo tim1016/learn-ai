@@ -15,7 +15,7 @@
       <div><dt>Strategy</dt><dd>{{ strategyLabel() }}</dd></div>
       <div><dt>Window</dt><dd>{{ windowLabel() }}</dd></div>
     </dl>
-    @if (selectedStrategy()?.experimental_notice; as notice) {
+    @if (strategy()?.experimental_notice; as notice) {
       <app-experimental-notice [notice]="notice" />
     }
   </section>
@@ -52,21 +52,9 @@
     <app-time-window-card [(value)]="range" appearance="flat" [bounds]="dateBounds()" [gaps]="dateGaps()" />
 
     <section class="rail-field rail-field--strategy" aria-labelledby="strategy-label">
-      @if (strategyLocked()) {
-        <div class="rail-field__label" id="strategy-label">Strategy</div>
-        <strong class="rail-field__locked" aria-labelledby="strategy-label">{{ strategyLabel() }}</strong>
-      } @else {
-        <label class="rail-field__label" id="strategy-label" for="strategy-picker">Strategy</label>
-        <select id="strategy-picker" (change)="onStrategyEvent($event)">
-          @for (strategy of strategies(); track strategy.name) {
-            <option
-              [value]="strategy.name"
-              [selected]="strategy.name === selectedStrategyName()"
-            >{{ strategy.display_name }}{{ strategy.experimental_notice ? ' — ' + strategy.experimental_notice : '' }}</option>
-          }
-        </select>
-      }
-      @if (selectedStrategy()?.experimental_notice; as notice) {
+      <div class="rail-field__label" id="strategy-label">Strategy</div>
+      <strong class="rail-field__locked" aria-labelledby="strategy-label">{{ strategyLabel() }}</strong>
+      @if (strategy()?.experimental_notice; as notice) {
         <app-experimental-notice [notice]="notice" />
       }
     </section>

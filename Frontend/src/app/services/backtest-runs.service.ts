@@ -19,10 +19,11 @@ export class BacktestRunsService {
   private readonly http = inject(HttpClient);
   private readonly base = `${environment.pythonServiceUrl}/api/research/backtest-runs`;
 
-  /** Run history newest-first, optionally one engine's. */
-  list(engine: Engine | null, limit = HISTORY_PAGE_SIZE): Observable<BacktestRunSummary[]> {
+  /** Run history newest-first, optionally one engine's and one strategy's; the limit applies after both filters. */
+  list(engine: Engine | null, limit = HISTORY_PAGE_SIZE, strategyName: string | null = null): Observable<BacktestRunSummary[]> {
     let params = new HttpParams({ fromObject: { limit: String(limit) } });
     if (engine !== null) params = params.set("engine", engine);
+    if (strategyName !== null) params = params.set("strategy_name", strategyName);
     return this.http.get<BacktestRunSummary[]>(this.base, { params });
   }
 

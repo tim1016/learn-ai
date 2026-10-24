@@ -309,9 +309,4 @@ export class ExploreBacktestComponent {
     this.config.commissionPerOrder.set(inputs.commissionPerOrder);
     this.config.restoreDataPolicy(inputs.dataPolicy);
   }
-
-  selectStrategy(name: string): void {
-    this.config.selectStrategy(name);
-    this.runs.clearRunError();
-  }
 }

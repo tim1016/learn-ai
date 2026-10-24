@@ -56,10 +56,6 @@
   </button>
 </div>
 
-@if (scanNote(); as note) {
-  <p class="golden-note" role="status">{{ note }}</p>
-}
-
 @if (goldenCatalogFailed()) {
   <p class="golden-note" role="alert">The selected baseline runs could not be read, so baseline badges and Select baseline run are unavailable.</p>
 } @else if (goldenCatalogCapped()) {

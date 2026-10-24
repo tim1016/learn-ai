@@ -61,9 +61,15 @@ export class ExploreWalkForwardComponent {
 
   private readonly history = viewChild(WalkForwardStudyHistoryComponent);
 
-  protected readonly strategies = computed(() => {
+  /** Strategy Lab's entry for this strategy, once it has been read. */
+  protected readonly strategy = computed(() => {
     const catalog = this.session.catalog();
-    return catalog.kind === 'ready' && catalog.value !== null ? [catalog.value] : [];
+    return catalog.kind === 'ready' ? catalog.value : null;
+  });
+  /** The same entry as a list, for the result and history views that name strategies. */
+  protected readonly strategies = computed(() => {
+    const strategy = this.strategy();
+    return strategy === null ? [] : [strategy];
   });
 
   private readonly fromSweep = injectSweepHandoff(this.search);

@@ -27,9 +27,10 @@ const STATUSES: readonly GridSearchStatus[] = ['queued', 'running', 'completed',
 export class GridSearchHistoryComponent {
   private readonly service = inject(GridSearchService);
 
+  /** Names the strategy's rows by its display name rather than its key. */
   readonly strategies = input<readonly StrategyInfo[]>([]);
-  /** The one strategy this history is for. Unset, it lists every strategy's searches. */
-  readonly strategyKey = input<string | null>(null);
+  /** The one strategy this history is for. */
+  readonly strategyKey = input.required<string>();
   readonly opened = output<string>();
 
   readonly rows = signal<GridSearchSummary[]>([]);
@@ -41,7 +42,7 @@ export class GridSearchHistoryComponent {
   protected readonly displayNames = computed(() => new Map(this.strategies().map((s) => [s.name, s.display_name])));
 
   constructor() {
-    // Read once the inputs are in: a history pinned to a strategy must not first list every strategy's.
+    // Read once the strategy is in, and again if it ever changes.
     effect(() => {
       this.strategyKey();
       untracked(() => void this.refresh());
@@ -55,8 +56,7 @@ export class GridSearchHistoryComponent {
     const revision = ++this.revision;
     this.loading.set(true);
     try {
-      const key = this.strategyKey();
-      const rows = await this.service.list(key === null ? this.filters() : { ...this.filters(), strategy_key: key });
+      const rows = await this.service.list({ ...this.filters(), strategy_key: this.strategyKey() });
       if (revision !== this.revision) return;
       this.rows.set(rows);
       this.error.set(null);
