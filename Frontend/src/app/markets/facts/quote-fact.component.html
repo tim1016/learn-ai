@@ -1,0 +1,41 @@
+@if (quote(); as available) {
+  <span class="quote-fact__figures" [attr.title]="detail() || null">
+    <span class="quote-fact__price">${{ available.price | number: '1.2-2' }}</span>
+    @if (available.move; as move) {
+      <span class="quote-fact__move" [class.positive]="moveTone() === 'positive'" [class.negative]="moveTone() === 'negative'">
+        {{ moveSign() }}{{ move.change | number: '1.2-2' }} ({{ moveSign() }}{{ move.change_percent | number: '1.2-2' }}%)
+      </span>
+    } @else {
+      <span class="quote-fact__move quote-fact__move--unavailable" [attr.title]="available.move_unavailable_reason">Move unavailable</span>
+    }
+  </span>
+  <span class="quote-fact__source">
+    {{ basisLabel() }}, as of <app-timestamp-display [value]="available.as_of_ms" />
+    @if (available.move; as move) {
+      · day move from the
+      <app-timestamp-display [value]="move.comparison_close.session_close_ms" mode="date-et" granularity="short-date" />
+      close of ${{ move.comparison_close.price | number: '1.2-2' }}
+    }
+  </span>
+  @if (layout() === 'header') {
+    @if (notLive(); as reason) {
+      <span class="quote-fact__note">Not live: {{ reason }}</span>
+    }
+    @if (!available.move && available.move_unavailable_reason) {
+      <span class="quote-fact__note">{{ available.move_unavailable_reason }}</span>
+    }
+  }
+} @else if (unavailable(); as reasons) {
+  <span class="quote-fact__figures" [attr.title]="detail() || null">
+    <span class="quote-fact__price quote-fact__price--unavailable">Price unavailable</span>
+    <span class="quote-fact__move quote-fact__move--unavailable">Move unavailable</span>
+  </span>
+  @if (layout() === 'header') {
+    @for (reason of reasons; track $index) {
+      <span class="quote-fact__note">{{ reason }}</span>
+    }
+    <button type="button" class="quote-fact__retry" (click)="retry.emit()">Read the price again</button>
+  }
+} @else if (loading()) {
+  <span class="quote-fact__note">Reading the price…</span>
+}

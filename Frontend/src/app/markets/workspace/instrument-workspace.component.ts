@@ -2,7 +2,6 @@ import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/c
 import { RouterOutlet } from '@angular/router';
 
 import { DataLabWorkspaceStore, createDataLabWorkspaceStore, seedDefaultIndicators } from '../../components/data-lab/data-lab-workspace-store';
-import { AssetIdentityComponent } from '../../shared/asset-identity';
 import { HowThisWorksLinkComponent } from '../../shared/help/how-this-works-link.component';
 import { formatReceiptLabel } from '../../shared/pipes/receipt-label.pipe';
 import { WorkspaceHeaderComponent, type WorkspaceBreadcrumbItem } from '../../shared/workspace/workspace-header.component';
@@ -13,6 +12,7 @@ import { CurrentUrlService } from '../../shell/current-url.service';
 import { menuLabelFor } from '../../shell/app-menu';
 import { MARKETS_ROUTE, instrumentCommands, instrumentTabOf } from '../instrument-address';
 import { InstrumentAdmissionService, type InstrumentAdmission } from '../instrument-admission.service';
+import { InstrumentFactsHeaderComponent } from '../facts/instrument-facts-header.component';
 import { InstrumentContextService } from '../instrument-context.service';
 import { INSTRUMENT_TABS, UNAVAILABLE_INSTRUMENT_TABS } from '../instrument-tabs';
 import { InstrumentContextBarComponent } from './instrument-context-bar.component';
@@ -36,7 +36,7 @@ const BACK_TO_MARKETS = { id: 'markets', label: 'Back to Markets', route: [MARKE
   selector: 'app-instrument-workspace',
   imports: [
     RouterOutlet,
-    AssetIdentityComponent,
+    InstrumentFactsHeaderComponent,
     HowThisWorksLinkComponent,
     WorkspaceHeaderComponent,
     WorkspaceStateBlockComponent,
@@ -60,9 +60,10 @@ export class InstrumentWorkspaceComponent {
 
   protected readonly symbol = this.context.symbol;
   protected readonly admitted = this.admission.state;
-  protected readonly admittedName = computed(() => {
+  /** The instrument's catalog row once the place can open; its identity and held span come from it. */
+  protected readonly admittedRow = computed(() => {
     const admitted = this.admitted();
-    return admitted.kind === 'ready' ? admitted.row.name : null;
+    return admitted.kind === 'ready' ? admitted.row : null;
   });
   protected readonly contextProblems = computed(() => {
     const read = this.context.read();

@@ -1,8 +1,14 @@
 <app-workspace-header [title]="symbol()" [breadcrumb]="breadcrumb()">
   <app-how-this-works workspaceHelp route="/data-lab-docs" />
   <div workspaceFacts class="instrument-facts">
-    @if (admitted().kind === 'ready') {
-      <app-asset-identity [symbol]="symbol()" [name]="admittedName()" size="sm" />
+    @if (admittedRow(); as row) {
+      <app-instrument-facts-header
+        [symbol]="symbol()"
+        [name]="row.name"
+        [firstHeld]="row.firstHeld"
+        [lastHeld]="row.lastHeld"
+        [delisted]="row.delisted"
+      />
     }
   </div>
 </app-workspace-header>

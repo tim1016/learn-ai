@@ -32,6 +32,11 @@
   }
 }
 
+// A span is two dates; wrapping it between them reads as two facts.
+.markets__span {
+  white-space: nowrap;
+}
+
 .markets__caption {
   padding: var(--space-2) var(--space-4);
   color: var(--text-subtle);
@@ -52,4 +57,14 @@
   margin: var(--space-2) var(--space-4);
   color: var(--text-subtle);
   font-size: var(--fs-xs);
+}
+
+.markets__link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-text);
+  font-size: inherit;
+  text-decoration: underline;
+  cursor: pointer;
 }

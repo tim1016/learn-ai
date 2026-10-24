@@ -4,7 +4,7 @@ import { TestBed } from '@angular/core/testing';
 import { By } from '@angular/platform-browser';
 import { Router, provideRouter, withComponentInputBinding, withRouterConfig } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
-import { fireEvent, screen, waitFor } from '@testing-library/angular';
+import { fireEvent, screen, waitFor, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -12,8 +12,11 @@ import { environment } from '../../../environments/environment';
 import { DataLabRangePresetsService, type ChartRangePreset } from '../../services/data-lab-range-presets.service';
 import { DataLabWorkspaceStore } from '../../components/data-lab/data-lab-workspace-store';
 import { fakePickerWorld, pickSymbol } from '../../shared/symbol-picker/testing/fake-picker-world';
+import { formatTimestampDisplay } from '../../shared/timestamp';
 import type { VendorSymbolEntry } from '../../shared/symbol-catalog/vendor-catalog.service';
 import { DataLabChartComponent } from '../chart/data-lab-chart/data-lab-chart.component';
+import { InstrumentFactsService, type FactsRead } from '../facts/instrument-facts.service';
+import { CLOSE_MS, OBSERVED_MS, UNAVAILABLE, archive, facts, quote } from '../facts/testing/facts-fixtures';
 import { InstrumentContextService } from '../instrument-context.service';
 import { MARKETS_ROUTES } from '../markets.routes';
 import { InstrumentWorkspaceComponent } from './instrument-workspace.component';
@@ -108,9 +111,22 @@ function chartResponse(close: number) {
   };
 }
 
-async function open(url: string, pickers = world(), presets: () => Promise<readonly ChartRangePreset[]> = async () => [PRESET_1Y]) {
+/** A header's facts as the data plane answers them, one per symbol asked for, unless a spec says otherwise. */
+const answerEachSymbol = async (symbols: readonly string[]): Promise<FactsRead> => ({
+  kind: 'ok',
+  facts: new Map(symbols.map((symbol) => [symbol, facts(symbol, quote(), symbol === 'SPY' ? archive() : null)])),
+});
+
+async function open(
+  url: string,
+  pickers = world(),
+  presets: () => Promise<readonly ChartRangePreset[]> = async () => [PRESET_1Y],
+  readFacts: (symbols: readonly string[]) => Promise<FactsRead> = answerEachSymbol,
+) {
+  const read = vi.fn(readFacts);
   TestBed.configureTestingModule({
     providers: [
+      { provide: InstrumentFactsService, useValue: { read } },
       provideRouter(
         [{ path: 'markets', loadChildren: () => MARKETS_ROUTES }],
         withComponentInputBinding(),
@@ -133,6 +149,7 @@ async function open(url: string, pickers = world(), presets: () => Promise<reado
     http,
     router,
     pickers,
+    readFacts: read,
     context: () => workspace().injector.get(InstrumentContextService),
     store: () => workspace().injector.get(DataLabWorkspaceStore),
   };
@@ -214,7 +231,7 @@ describe('an instrument\'s place', () => {
       expect(screen.getByRole('link', { name: 'Chart' }).getAttribute('href')).toBe(`/markets/SPY/chart?${WINDOW_QUERY}`);
       for (const name of ['Returns', 'Data', 'Options']) {
         expect(screen.queryByRole('link', { name }), `${name} is not a link`).toBeNull();
-        expect(screen.getByText(new RegExp(`^${name}`)).getAttribute('title'), `${name} says why`).toContain('Not in this place yet');
+        expect(within(strip).getByText(new RegExp(`^${name}`)).getAttribute('title'), `${name} says why`).toContain('Not in this place yet');
       }
     });
   });
@@ -368,6 +385,108 @@ describe('an instrument\'s place', () => {
 
       const [request] = await chartRequests(opened.http, 1);
       expect(request.request.body).toMatchObject({ ticker: 'SPY', start_ms_utc: Date.UTC(2026, 3, 1) });
+    });
+  });
+
+  describe('the header facts (PRD #3490 R08)', () => {
+    const text = (element: HTMLElement) => (element.textContent ?? '').replace(/\s+/g, ' ').trim();
+
+    it('states the price with its basis, as-of time and comparison close, the held span as a span, and the archive as stored days', async () => {
+      const opened = await openLoaded(`/markets/SPY/chart?${WINDOW_QUERY}`);
+
+      expect(await screen.findByText('$759.97')).toBeTruthy();
+      expect(screen.getByText(/-6\.92 \(-0\.90%\)/)).toBeTruthy();
+      expect(text(screen.getByText(/Delayed snapshot, as of/))).toBe(
+        `Delayed snapshot, as of ${formatTimestampDisplay(OBSERVED_MS, { mode: 'local' })} · day move from the ${formatTimestampDisplay(CLOSE_MS, { mode: 'date-et', granularity: 'short-date' })} close of $766.89`,
+      );
+      expect(screen.getByText(/Not live: No live line is streaming/)).toBeTruthy();
+      expect(text(screen.getByText(/^Held span/))).toBe('Held span 2024-01-02 to 2026-09-18');
+      expect(screen.getByText(/Options archive: some days stored/)).toBeTruthy();
+      expect(opened.readFacts).toHaveBeenCalledExactlyOnceWith(['SPY']);
+    });
+
+    it('never lets the chart window change the latest price or ask for it again', async () => {
+      const opened = await openLoaded(`/markets/SPY/chart?${WINDOW_QUERY}`, 500.5);
+      await screen.findByText('$759.97');
+
+      fireEvent.change(screen.getByRole('textbox', { name: 'Start date' }), { target: { value: '2026-04-20' } });
+      const [request] = await chartRequests(opened.http, 1);
+      request.flush(chartResponse(501.25));
+      await waitFor(() => expect(opened.store().chartStale()).toBe(false));
+      await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Timeframe' }), '15m');
+      const [second] = await chartRequests(opened.http, 1);
+      second.flush(chartResponse(502.75));
+      await waitFor(() => expect(opened.store().chartStale()).toBe(false));
+
+      expect(screen.getByText('$759.97')).toBeTruthy();
+      for (const inWindow of ['$500.50', '$501.25', '$502.75']) expect(screen.queryByText(inWindow)).toBeNull();
+      expect(opened.readFacts).toHaveBeenCalledTimes(1);
+    });
+
+    it('says unavailable for the price and the move alone when the facts cannot be read, and the place still opens', async () => {
+      const opened = await open(`/markets/SPY/chart?${WINDOW_QUERY}`, world(), undefined, async () => ({ kind: 'failed', message: 'The data plane is down.' }));
+
+      expect(await screen.findByText('Price unavailable')).toBeTruthy();
+      expect(screen.getByText('Move unavailable')).toBeTruthy();
+      expect(screen.getByText('The data plane is down.')).toBeTruthy();
+      // The instrument, its held span, its tabs and its chart are all there.
+      expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('SPY');
+      expect(text(screen.getByText(/^Held span/))).toBe('Held span 2024-01-02 to 2026-09-18');
+      expect(screen.getByRole('navigation', { name: 'Instrument sections' })).toBeTruthy();
+      const [request] = await chartRequests(opened.http, 1);
+      expect(request.request.body['ticker']).toBe('SPY');
+    });
+
+    it('says unavailable, with each source\'s reason, when no source supplied a price', async () => {
+      await open(`/markets/SPY/chart?${WINDOW_QUERY}`, world(), undefined, async (symbols) => ({
+        kind: 'ok',
+        facts: new Map(symbols.map((symbol) => [symbol, facts(symbol, UNAVAILABLE)])),
+      }));
+
+      expect(await screen.findByText('Price unavailable')).toBeTruthy();
+      expect(screen.getByText('Delayed snapshot: The vendor snapshot could not be read (ConnectionError).')).toBeTruthy();
+      expect(screen.getByText('Last completed close: The lake holds no regular-hours bars for SPY on 2026-10-22.')).toBeTruthy();
+    });
+
+    it('reads the price again only when asked after it failed', async () => {
+      let healthy = false;
+      const opened = await open(`/markets/SPY/chart?${WINDOW_QUERY}`, world(), undefined, async (symbols) =>
+        healthy ? answerEachSymbol(symbols) : { kind: 'failed', message: 'The data plane is down.' },
+      );
+      await screen.findByText('Price unavailable');
+      expect(opened.readFacts).toHaveBeenCalledTimes(1);
+
+      healthy = true;
+      await userEvent.click(screen.getByRole('button', { name: 'Read the price again' }));
+
+      expect(await screen.findByText('$759.97')).toBeTruthy();
+      expect(opened.readFacts).toHaveBeenCalledTimes(2);
+    });
+
+    it('drops the old instrument\'s price the moment the instrument changes, and shows the new one\'s when it answers', async () => {
+      let answerQqq: (read: FactsRead) => void = () => undefined;
+      const opened = await open(`/markets/SPY/chart?${WINDOW_QUERY}`, world(), undefined, (symbols) =>
+        symbols[0] === 'QQQ' ? new Promise<FactsRead>((resolve) => { answerQqq = resolve; }) : answerEachSymbol(symbols),
+      );
+      await screen.findByText('$759.97');
+
+      pickSymbol(opened.harness.fixture, 'QQQ');
+      await waitFor(() => expect(opened.router.url).toBe(`/markets/QQQ/chart?${WINDOW_QUERY}`));
+
+      await waitFor(() => expect(screen.getByText('Reading the price…')).toBeTruthy());
+      expect(screen.queryByText('$759.97')).toBeNull();
+      expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('QQQ');
+      answerQqq({ kind: 'ok', facts: new Map([['QQQ', facts('QQQ', quote({ price: 612.4, basis: 'last_close' }))]]) });
+      expect(await screen.findByText('$612.40')).toBeTruthy();
+      expect(screen.getByText(/Last completed close, as of/)).toBeTruthy();
+      expect(opened.readFacts.mock.calls.map(([symbols]) => symbols)).toEqual([['SPY'], ['QQQ']]);
+    });
+
+    it('asks for the facts of no instrument the lake cannot open', async () => {
+      const opened = await open(`/markets/ZZZZ/chart?${WINDOW_QUERY}`);
+
+      expect(await screen.findByText(/not in the lake and is not a listed US-equity symbol/)).toBeTruthy();
+      expect(opened.readFacts).not.toHaveBeenCalled();
     });
   });
 
