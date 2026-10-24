@@ -116,7 +116,7 @@ previously tracked items (issues #1655, #1671, #1672, #1674, #1677, #1664,
   compared (in the chain stream or a batch pricing call), and Angular draws them. That
   also retires the `POST /api/quantlib/price` per contract that
   `live-engine-reads.service.ts` makes whenever a contract's spot, volatility or midpoint
-  moves. #TBD
+  moves. #3533
 - **Frontend naive `new Date(string)` — Tier 2 (medium).** Eighteen production
   calls still parse date-only or local-wall strings across validation,
   option-expiry, Options Lab, Strategy Builder, ticker ranges, Data Lab, Past
