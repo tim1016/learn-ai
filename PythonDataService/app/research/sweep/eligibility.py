@@ -58,6 +58,22 @@ def non_numeric_parameters(schema: Mapping[str, Any]) -> tuple[str, ...]:
     )
 
 
+_REASON_COPY = {
+    REASON_NOT_PRODUCTION_CANDIDATE: "This strategy is an operational harness, not a production candidate.",
+    REASON_NO_SIGNAL_PROGRAM: "This strategy has no Signal Program, so its warmup cannot be measured.",
+}
+
+
+def ineligibility_reason(eligibility: SweepEligibility) -> str | None:
+    """The plain-English reason a sweep is refused, or ``None`` when it is allowed."""
+    if eligibility.eligible:
+        return None
+    reasons = [_REASON_COPY[code] for code in eligibility.reason_codes if code in _REASON_COPY]
+    if REASON_NON_NUMERIC_PUBLIC_PARAMETER in eligibility.reason_codes:
+        reasons.append(f"Some parameters are not plain numbers: {', '.join(eligibility.offending_parameters)}.")
+    return " ".join(reasons)
+
+
 def sweep_eligibility(registration: StrategyRegistration) -> SweepEligibility:
     """The structured answer for one registration."""
     reasons: list[str] = []

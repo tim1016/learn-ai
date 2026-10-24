@@ -8005,6 +8005,33 @@
         "title": "Candidate",
         "type": "object"
       },
+      "CapabilityAnswer": {
+        "additionalProperties": false,
+        "description": "Whether the registry allows one action for a strategy; ``reason`` says why not.",
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set exactly when the action is not supported.",
+            "title": "Reason"
+          },
+          "supported": {
+            "title": "Supported",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "supported"
+        ],
+        "title": "CapabilityAnswer",
+        "type": "object"
+      },
       "CaptureReceiptModel": {
         "description": "What the on-demand lake capture did for this request.\n\n``status`` is the closed contract of\n``app.services.return_distribution_service.CaptureStatus``; clients\nmust render every state (the generated union type enforces it).",
         "properties": {
@@ -62051,6 +62078,43 @@
         "title": "StrategyBehavioralEquivalence",
         "type": "object"
       },
+      "StrategyCapabilities": {
+        "additionalProperties": false,
+        "description": "What the registry allows. Allowed is not approved: proof, qualification and admission are judged elsewhere.",
+        "properties": {
+          "golden": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CapabilityAnswer"
+              }
+            ],
+            "description": "A Golden Search study."
+          },
+          "live": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CapabilityAnswer"
+              }
+            ],
+            "description": "A bot of this strategy on a Live account."
+          },
+          "sweep": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CapabilityAnswer"
+              }
+            ],
+            "description": "Sweep, Walk-forward and Recency Chart, which share one eligibility rule."
+          }
+        },
+        "required": [
+          "sweep",
+          "golden",
+          "live"
+        ],
+        "title": "StrategyCapabilities",
+        "type": "object"
+      },
       "StrategyEvidenceSnapshot": {
         "properties": {
           "audit_copy_ref": {
@@ -62657,6 +62721,122 @@
           "source"
         ],
         "title": "StrategyReferenceCode",
+        "type": "object"
+      },
+      "StrategyRegistryEntry": {
+        "additionalProperties": false,
+        "description": "One registered strategy, as its registry entry declares it.",
+        "properties": {
+          "capabilities": {
+            "$ref": "#/components/schemas/StrategyCapabilities"
+          },
+          "catalog_visible": {
+            "title": "Catalog Visible",
+            "type": "boolean"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "experimental_notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Experimental Notice"
+          },
+          "parameter_units": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Parameter Units",
+            "type": "object"
+          },
+          "program_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Program Version"
+          },
+          "rule_statement": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule Statement"
+          },
+          "strategy_category": {
+            "enum": [
+              "production_candidate",
+              "operational_validation_harness"
+            ],
+            "title": "Strategy Category",
+            "type": "string"
+          },
+          "strategy_key": {
+            "title": "Strategy Key",
+            "type": "string"
+          },
+          "validated_settings": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            },
+            "title": "Validated Settings",
+            "type": "object"
+          },
+          "validated_symbols": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Validated Symbols",
+            "type": "array"
+          }
+        },
+        "required": [
+          "strategy_key",
+          "display_name",
+          "description",
+          "strategy_category",
+          "experimental_notice",
+          "catalog_visible",
+          "program_version",
+          "rule_statement",
+          "validated_settings",
+          "validated_symbols",
+          "parameter_units",
+          "capabilities"
+        ],
+        "title": "StrategyRegistryEntry",
         "type": "object"
       },
       "StrategyRunListResponse": {
@@ -87763,6 +87943,32 @@
           }
         },
         "summary": "Get Strategy Lean Source",
+        "tags": [
+          "engine"
+        ]
+      }
+    },
+    "/api/engine/strategy-registry": {
+      "get": {
+        "description": "Every registered strategy with what the registry allows for it (#3508).\n\nUnlike ``GET /strategies`` this lists the compatibility entries the picker\nhides, and it answers Sweep, Golden Search and Live for each, with the\nreason when one is not allowed. Allowed never means proven, approved or\ndeployable: those are judged by their own reads.",
+        "operationId": "list_strategy_registry_api_engine_strategy_registry_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/StrategyRegistryEntry"
+                  },
+                  "title": "Response List Strategy Registry Api Engine Strategy Registry Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Strategy Registry",
         "tags": [
           "engine"
         ]

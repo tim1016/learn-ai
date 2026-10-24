@@ -4838,6 +4838,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/engine/strategy-registry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Strategy Registry
+         * @description Every registered strategy with what the registry allows for it (#3508).
+         *
+         *     Unlike ``GET /strategies`` this lists the compatibility entries the picker
+         *     hides, and it answers Sweep, Golden Search and Live for each, with the
+         *     reason when one is not allowed. Allowed never means proven, approved or
+         *     deployable: those are judged by their own reads.
+         */
+        get: operations["list_strategy_registry_api_engine_strategy_registry_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/golden-fixtures": {
         parameters: {
             query?: never;
@@ -10828,6 +10853,19 @@ export interface components {
              * @enum {string}
              */
             verdict: "meets_rules" | "does_not_meet_rules" | "not_enough_evidence" | "could_not_evaluate";
+        };
+        /**
+         * CapabilityAnswer
+         * @description Whether the registry allows one action for a strategy; ``reason`` says why not.
+         */
+        CapabilityAnswer: {
+            /**
+             * Reason
+             * @description Set exactly when the action is not supported.
+             */
+            reason?: string | null;
+            /** Supported */
+            supported: boolean;
         };
         /**
          * CaptureReceiptModel
@@ -32357,6 +32395,18 @@ export interface components {
              */
             verdict: "accepted_for_deploy" | "evidence_only" | "rejected";
         };
+        /**
+         * StrategyCapabilities
+         * @description What the registry allows. Allowed is not approved: proof, qualification and admission are judged elsewhere.
+         */
+        StrategyCapabilities: {
+            /** @description A Golden Search study. */
+            golden: components["schemas"]["CapabilityAnswer"];
+            /** @description A bot of this strategy on a Live account. */
+            live: components["schemas"]["CapabilityAnswer"];
+            /** @description Sweep, Walk-forward and Recency Chart, which share one eligibility rule. */
+            sweep: components["schemas"]["CapabilityAnswer"];
+        };
         /** StrategyEvidenceSnapshot */
         StrategyEvidenceSnapshot: {
             /** Audit Copy Ref */
@@ -32592,6 +32642,42 @@ export interface components {
              * @enum {string}
              */
             state?: "current" | "stale" | "missing" | "unreadable";
+        };
+        /**
+         * StrategyRegistryEntry
+         * @description One registered strategy, as its registry entry declares it.
+         */
+        StrategyRegistryEntry: {
+            capabilities: components["schemas"]["StrategyCapabilities"];
+            /** Catalog Visible */
+            catalog_visible: boolean;
+            /** Description */
+            description: string;
+            /** Display Name */
+            display_name: string;
+            /** Experimental Notice */
+            experimental_notice: string | null;
+            /** Parameter Units */
+            parameter_units: {
+                [key: string]: string;
+            };
+            /** Program Version */
+            program_version: string | null;
+            /** Rule Statement */
+            rule_statement: string | null;
+            /**
+             * Strategy Category
+             * @enum {string}
+             */
+            strategy_category: "production_candidate" | "operational_validation_harness";
+            /** Strategy Key */
+            strategy_key: string;
+            /** Validated Settings */
+            validated_settings: {
+                [key: string]: string | number | boolean;
+            };
+            /** Validated Symbols */
+            validated_symbols: string[];
         };
         /**
          * StrategyRunListResponse
@@ -44045,6 +44131,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_strategy_registry_api_engine_strategy_registry_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyRegistryEntry"][];
                 };
             };
         };
