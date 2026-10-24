@@ -1,9 +1,9 @@
 import { inject } from '@angular/core';
-import { Router, type RedirectFunction } from '@angular/router';
+import { Router, type Params, type RedirectFunction } from '@angular/router';
 
 import { routePathOf } from '../../fleet/account-workspace';
-import { instrumentSymbolOf, legacyInstrumentTarget } from '../instrument-address';
-import { OPTIONS_VIEWS, type OptionsView } from './options-views';
+import { PICK_TAB_KEY, PICK_VIEW_KEY, instrumentCommands, instrumentSymbolOf, legacyInstrumentTarget } from '../instrument-address';
+import { DEFAULT_OPTIONS_VIEW, OPTIONS_VIEWS, type OptionsView } from './options-views';
 
 /*
  * Where an option view lives (ADR 0084): `/markets/:symbol/options/<view>`,
@@ -17,24 +17,46 @@ import { OPTIONS_VIEWS, type OptionsView } from './options-views';
  * A symbol in the query (`?ticker=` or `?symbol=`) leads to that instrument's
  * view in the one navigation, and the expiry and every other key go with it,
  * as does the fragment. An address that names no instrument leads to the
- * Markets list, asked to open Options on the pick: it never opens a default
- * instrument.
+ * Markets list, asked to open this view on the pick (`then=options`, and `view=`
+ * for a view other than the default); the list hands the pick every other key
+ * the address carried. It never opens a default instrument.
+ *
+ * `defaults` are keys the old page implied and its address did not spell: the
+ * old Chain (Live) page was the IBKR feed, so its address leads to `source=live`.
+ * A key the address already carries wins.
  */
-export function redirectToOptionsView(view: OptionsView): RedirectFunction {
+export function redirectToOptionsView(view: OptionsView, defaults: Params = {}): RedirectFunction {
   return ({ queryParams, fragment }) => {
     const target = legacyInstrumentTarget(queryParams, 'options', [view]);
+    const query: Params = { ...target.queryParams };
+    for (const [key, value] of Object.entries(defaults)) if (!(key in query)) query[key] = value;
     // `/markets` alone is what a query with no instrument leads to.
     const namesInstrument = target.commands.length > 1;
-    return inject(Router).createUrlTree(target.commands, {
-      queryParams: namesInstrument ? target.queryParams : { ...target.queryParams, then: 'options' },
-      fragment: fragment ?? undefined,
-    });
+    if (!namesInstrument) {
+      query[PICK_TAB_KEY] = 'options';
+      if (view !== DEFAULT_OPTIONS_VIEW) query[PICK_VIEW_KEY] = view;
+    }
+    return inject(Router).createUrlTree(target.commands, { queryParams: query, fragment: fragment ?? undefined });
   };
+}
+
+/** The view an address names in its own words (`view=pricing`), or `null` for none or one the tab does not route. */
+export function namedOptionsView(text: string | null | undefined): OptionsView | null {
+  return OPTIONS_VIEWS.tabs.find((candidate) => candidate.id === text)?.id ?? null;
+}
+
+/**
+ * Router commands for the Options tab of an instrument, on the view an address named. With none, or
+ * one the tab does not route, the tab itself, which opens its default view.
+ */
+export function optionsViewCommands(symbol: string, view: string | null | undefined): string[] {
+  const named = namedOptionsView(view);
+  return instrumentCommands(symbol, 'options', named === null ? [] : [named]);
 }
 
 /** The view an instrument address has open, or `null` for any other address or a view this place does not route. */
 export function optionsViewOf(url: string): OptionsView | null {
   if (instrumentSymbolOf(url) === null) return null;
   const [, , , tab, view] = routePathOf(url).split('/');
-  return tab === 'options' ? (OPTIONS_VIEWS.tabs.find((candidate) => candidate.id === view)?.id ?? null) : null;
+  return tab === 'options' ? namedOptionsView(view) : null;
 }

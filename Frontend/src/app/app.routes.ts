@@ -558,9 +558,10 @@ export const routes: Routes = [
     loadComponent: loadBrokerLaneUnavailable,
   },
   {
-    // Moved into an instrument's Options tab; the symbol and the expiry go with it.
+    // Moved into an instrument's Options tab; the symbol and the expiry go with it. This page was
+    // the IBKR feed, so it opens the chain on Now · Live IBKR unless its address names a source.
     path: "broker/options-chain",
-    redirectTo: redirectToOptionsView("chain"),
+    redirectTo: redirectToOptionsView("chain", { source: "live" }),
     pathMatch: "full",
   },
   {
