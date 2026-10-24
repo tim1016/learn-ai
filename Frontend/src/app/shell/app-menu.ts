@@ -84,14 +84,16 @@ export const APP_MENU: readonly AppMenuGroup[] = [
       { title: 'Realized vs implied vol', route: '/research/realized-vs-iv' },
       // The Strategy Spec builder, until its slice moves it under /research.
       { title: 'Rule sandbox', route: '/spec-strategy' },
+      // Every study's saved results, whichever store keeps them.
+      { title: 'History', route: '/research/history' },
       // Sample data, never measurements: the title says so.
       { title: 'Cross-asset demo', route: '/research/demos/cross-asset' },
       { title: 'Regimes demo', route: '/research/demos/regimes' },
       { title: 'Edge score demo', route: '/research/demos/edge-score' },
       { title: 'Trade simulator demo', route: '/research/demos/trade-simulator' },
     ],
-    // History and Strategy Runs: tabs the Research Lab shell still hosts until
-    // the slices that move them.
+    // The run detail pages the Research Lab shell still hosts until the slice
+    // that moves them.
     pages: [{ title: 'Research Lab', route: '/research-lab' }],
   },
   {

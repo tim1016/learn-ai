@@ -3,8 +3,8 @@ import type { Routes } from '@angular/router';
 import { redirectKeepingState } from '../shell/route-redirects';
 
 /**
- * The `/research` route family (ADR 0084): the study list, one page per study
- * and the Edge demonstrations.
+ * The `/research` route family (ADR 0084): the study list, one page per study,
+ * the Edge demonstrations and the History of every study's saved results.
  *
  * Each study is the existing Research Lab runner, now inside the shared study
  * layout (`app-study-page`). A study's header and steps carry their own inset,
@@ -52,6 +52,21 @@ export const RESEARCH_ROUTES: Routes = [
     data: { fullBleed: true },
     loadComponent: () =>
       import('../components/edge/realized-vs-iv/realized-vs-iv.component').then((m) => m.RealizedVsIvComponent),
+  },
+  {
+    // The History: one typed index over every store that keeps research results (R26).
+    path: 'history',
+    data: { fullBleed: true },
+    loadComponent: () =>
+      import('./history/research-history-page.component').then((m) => m.ResearchHistoryPageComponent),
+  },
+  {
+    // The detail of a History entry of kind signal study: the stored report, read and never rerun.
+    path: 'history/signal-report/:id',
+    loadComponent: () =>
+      import('../components/research-lab/signal-report-page/signal-report-page.component').then(
+        (m) => m.SignalReportPageComponent,
+      ),
   },
   {
     // Sample data throughout: each page labels what it renders (R28).

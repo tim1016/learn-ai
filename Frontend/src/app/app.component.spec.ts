@@ -56,7 +56,7 @@ describe('AppComponent', () => {
           { path: 'research-lab/walk-forward/:id', component: ShellSmokeRouteComponent },
           { path: 'research-lab/monte-carlo/:id', component: ShellSmokeRouteComponent },
           { path: 'research-lab/baselines/:id', component: ShellSmokeRouteComponent },
-          { path: 'research-lab/signal-report/:id', component: ShellSmokeRouteComponent },
+          { path: 'research/history/signal-report/:id', component: ShellSmokeRouteComponent },
           { path: 'strategy-lab/docs', component: ShellSmokeRouteComponent },
           // The workspace's own URLs, stubbed: these specs grade the window
           // title the shell computes from them, not what the tabs render.
@@ -285,7 +285,7 @@ describe('AppComponent', () => {
       '/research-lab/walk-forward/wf-42',
       '/research-lab/monte-carlo/mc-42',
       '/research-lab/baselines/baseline-42',
-      '/research-lab/signal-report/42',
+      '/research/history/signal-report/42',
     ]) {
       await router.navigateByUrl(url);
       fixture.detectChanges();

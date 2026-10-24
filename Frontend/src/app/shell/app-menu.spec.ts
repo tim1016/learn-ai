@@ -133,6 +133,8 @@ describe('app menu projections', () => {
     ['/research/realized-vs-iv', 'Research', 'Realized vs implied vol'],
     ['/research/demos/regimes', 'Research', 'Regimes demo'],
     ['/spec-strategy', 'Research', 'Rule sandbox'],
+    ['/research/history', 'Research', 'History'],
+    ['/research/history/signal-report/42', 'Research', 'History'],
     ['/golden-search/study-9', 'Signal strategies', 'Golden Search'],
     ['/options-golden-search/study-9', 'Options setups', 'Options Golden Search'],
     // Pages the menu does not list, though another place's shell still hosts them:

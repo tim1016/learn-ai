@@ -14,6 +14,18 @@ const movedStudy = (path: string, ...study: [string, ...string[]]): Routes[numbe
   pathMatch: 'full',
 });
 
+/**
+ * An old list address, straight to the Research History filtered to the kind it
+ * listed, in one redirect that keeps query and fragment. The older `inspect/*`
+ * and tab-id aliases name the final address too, as a relative redirect cannot
+ * chain through another.
+ */
+const movedList = (path: string, type: string): Routes[number] => ({
+  path,
+  redirectTo: redirectKeepingState(['/research', 'history'], { set: () => ({ type }) }),
+  pathMatch: 'full',
+});
+
 export const researchLabRoutes: Routes = [
   // Detail routes retain focused content while inheriting the root application
   // shell. Listed before the research-lab child shell so their more-specific
@@ -46,13 +58,21 @@ export const researchLabRoutes: Routes = [
         './baselines/baselines-detail-page/baselines-detail-page.component'
       ).then((m) => m.BaselinesDetailPageComponent),
   },
+  // A stored signal report is a History record: its detail is /research/history/signal-report/:id.
   {
     path: 'signal-report/:id',
-    loadComponent: () =>
-      import('./signal-report-page/signal-report-page.component').then(
-        (m) => m.SignalReportPageComponent,
-      ),
+    redirectTo: redirectKeepingState((params) => ['/research', 'history', 'signal-report', String(params['id'] ?? '')]),
+    pathMatch: 'full',
   },
+
+  // The saved lists moved into the Research History, each filtered to the kind it listed.
+  movedList('features/experiments', 'feature-experiment'),
+  movedList('inspect/experiments', 'feature-experiment'),
+  movedList('experiment-history', 'feature-experiment'),
+  movedList('signals/history', 'signal-report'),
+  movedList('inspect/signal-history', 'signal-report'),
+  movedList('backtests/strategy-runs', 'spec-run'),
+  movedList('inspect/strategy-runs', 'spec-run'),
 
   // The five studies moved to /research.
   movedStudy('features/validate', 'feature'),
@@ -68,33 +88,15 @@ export const researchLabRoutes: Routes = [
   movedStudy('signal-engine', 'signal'),
   movedStudy('cross-sectional', 'cross-sectional'),
 
-  // Sub-nav shell for the pages Research Lab still hosts: Strategy Runs and
-  // History (#3518, #3519), instrument headlines, the Recency Chart and the two
-  // data checks (the slices of the places they belong to).
+  // Sub-nav shell for the pages Research Lab still hosts: the run detail pages
+  // (#3518), instrument headlines, the Recency Chart and the two data checks
+  // (the slices of the places they belong to).
   {
     path: '',
     loadComponent: () =>
       import('./research-lab.component').then((m) => m.ResearchLabComponent),
     children: [
       { path: '', redirectTo: redirectKeepingState(['/research']), pathMatch: 'full' },
-
-      {
-        path: 'features/experiments',
-        loadComponent: () =>
-          import('./experiment-history/experiment-history.component').then(
-            (m) => m.ExperimentHistoryComponent,
-          ),
-        data: { title: 'Experiment History' },
-      },
-
-      {
-        path: 'signals/history',
-        loadComponent: () =>
-          import('./signal-history/signal-history.component').then(
-            (m) => m.SignalHistoryComponent,
-          ),
-        data: { title: 'Signal History' },
-      },
 
       // Market
       {
@@ -105,14 +107,6 @@ export const researchLabRoutes: Routes = [
       },
 
       // Backtests
-      {
-        path: 'backtests/strategy-runs',
-        loadComponent: () =>
-          import('./strategy-runs/strategy-runs.component').then(
-            (m) => m.StrategyRunsComponent,
-          ),
-        data: { title: 'Backtest Runs' },
-      },
       {
         path: 'backtests/recency-chart',
         loadComponent: () =>
@@ -140,15 +134,9 @@ export const researchLabRoutes: Routes = [
         data: { title: 'Strategy Pre-flight' },
       },
 
-      // Legacy redirects — old build/* and inspect/* paths → new canonical paths
-      { path: 'inspect/strategy-runs', redirectTo: 'backtests/strategy-runs', pathMatch: 'full' },
-      { path: 'inspect/experiments', redirectTo: 'features/experiments', pathMatch: 'full' },
-      { path: 'inspect/signal-history', redirectTo: 'signals/history', pathMatch: 'full' },
-
       // Legacy single-page tab IDs (pre-router)
       { path: 'data-divergence', redirectTo: 'inspect/data-divergence', pathMatch: 'full' },
       { path: 'strategy-preflight', redirectTo: 'inspect/pre-flight', pathMatch: 'full' },
-      { path: 'experiment-history', redirectTo: 'features/experiments', pathMatch: 'full' },
     ],
   },
 ];

@@ -50,19 +50,11 @@ describe('StudyListComponent', () => {
     }
   });
 
-  it('keeps the saved results reachable until the shared History indexes them', async () => {
+  it('links the saved results to the one History that indexes them all', async () => {
     await renderList();
 
     const section = screen.getByRole('region', { name: 'Saved results' });
-    expect(within(section).getByRole('link', { name: 'Experiment history' }).getAttribute('href')).toBe(
-      '/research-lab/features/experiments',
-    );
-    expect(within(section).getByRole('link', { name: 'Signal history' }).getAttribute('href')).toBe(
-      '/research-lab/signals/history',
-    );
-    expect(within(section).getByRole('link', { name: 'Strategy runs' }).getAttribute('href')).toBe(
-      '/research-lab/backtests/strategy-runs',
-    );
+    expect(within(section).getByRole('link', { name: 'History' }).getAttribute('href')).toBe('/research/history');
   });
 
   it('has nothing to run: opening Research starts no job', async () => {

@@ -5746,26 +5746,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/research/experiments": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Research Experiments
-         * @description A ticker's stored feature-research experiments, newest first.
-         */
-        get: operations["list_research_experiments_api_research_experiments_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/research/golden-option-setups": {
         parameters: {
             query?: never;
@@ -7199,26 +7179,6 @@ export interface paths {
          * @description One captured trading day's raw minute candles.
          */
         post: operations["run_day_candles_api_research_return_distribution_day_candles_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/research/signal-experiments": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Signal Experiments
-         * @description A ticker's stored signal-engine experiments, newest first, each as its headline without the full report.
-         */
-        get: operations["list_signal_experiments_api_research_signal_experiments_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -29217,44 +29177,6 @@ export interface components {
             detail: components["schemas"]["ResearchExperimentRefusal"];
         };
         /**
-         * ResearchExperimentResponse
-         * @description One stored feature-research (information-coefficient) experiment.
-         */
-        ResearchExperimentResponse: {
-            /** Adf P Value */
-            adf_p_value: number;
-            /** Bars Used */
-            bars_used: number;
-            /** Created At Ms */
-            created_at_ms: number;
-            /** End Date */
-            end_date: string;
-            /** Feature Name */
-            feature_name: string;
-            /** Ic P Value */
-            ic_p_value: number;
-            /** Ic T Stat */
-            ic_t_stat: number;
-            /** Id */
-            id: number;
-            /** Is Monotonic */
-            is_monotonic: boolean;
-            /** Is Stationary */
-            is_stationary: boolean;
-            /** Kpss P Value */
-            kpss_p_value: number;
-            /** Mean Ic */
-            mean_ic: number;
-            /** Monotonicity Ratio */
-            monotonicity_ratio: number;
-            /** Passed Validation */
-            passed_validation: boolean;
-            /** Start Date */
-            start_date: string;
-            /** Ticker */
-            ticker: string;
-        };
-        /**
          * ResearchHistoryEntry
          * @description One stored study or run, as its own store describes it.
          */
@@ -30995,42 +30917,6 @@ export interface components {
              */
             ticker: string;
             walk_forward: components["schemas"]["SignalReportWalkForward"] | null;
-        };
-        /**
-         * SignalExperimentResponse
-         * @description One stored signal-engine experiment: the headline of its report.
-         */
-        SignalExperimentResponse: {
-            /** Bars Used */
-            bars_used: number;
-            /** Best Cost Bps */
-            best_cost_bps: number;
-            /** Best Threshold */
-            best_threshold: number;
-            /** Created At Ms */
-            created_at_ms: number;
-            /** End Date */
-            end_date: string;
-            /** Feature Name */
-            feature_name: string;
-            /** Flip Sign */
-            flip_sign: boolean;
-            /** Id */
-            id: number;
-            /** Mean Oos Sharpe */
-            mean_oos_sharpe: number;
-            /** Overall Grade */
-            overall_grade: string;
-            /** Overall Passed */
-            overall_passed: boolean;
-            /** Regime Gate Enabled */
-            regime_gate_enabled: boolean;
-            /** Start Date */
-            start_date: string;
-            /** Status Label */
-            status_label: string;
-            /** Ticker */
-            ticker: string;
         };
         /** SignalReportAlphaDecay */
         SignalReportAlphaDecay: {
@@ -45636,38 +45522,6 @@ export interface operations {
             };
         };
     };
-    list_research_experiments_api_research_experiments_get: {
-        parameters: {
-            query: {
-                /** @description The ticker's symbol; case does not matter. */
-                ticker: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ResearchExperimentResponse"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_golden_setups_api_research_golden_option_setups_get: {
         parameters: {
             query?: {
@@ -49254,38 +49108,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DayCandlesNotCapturedResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_signal_experiments_api_research_signal_experiments_get: {
-        parameters: {
-            query: {
-                /** @description The ticker's symbol; case does not matter. */
-                ticker: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SignalExperimentResponse"][];
                 };
             };
             /** @description Validation Error */

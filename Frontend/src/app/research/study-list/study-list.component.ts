@@ -6,7 +6,7 @@ import { WorkspaceHeaderComponent } from '../../shared/workspace/workspace-heade
 import { menuLabelFor } from '../../shell/app-menu';
 import {
   RESEARCH_DEMOS,
-  RESEARCH_PAST_RESULTS,
+  RESEARCH_HISTORY,
   RESEARCH_STUDIES,
   RULE_SANDBOX,
 } from '../research-studies';
@@ -17,8 +17,7 @@ const PURPOSE =
 /**
  * Research opens here (ADR 0084): every study with the question it answers and
  * where its data comes from today, the Rule sandbox, the Edge demonstrations
- * (sample data, never measured) and the saved results the Research Lab shell
- * still hosts until the shared History indexes them.
+ * (sample data, never measured) and the History of every saved result.
  *
  * Presentation only; opening this page runs nothing.
  */
@@ -46,5 +45,5 @@ export class StudyListComponent {
     title: menuLabelFor(demo.route),
     summary: demo.summary,
   }));
-  protected readonly pastResults = RESEARCH_PAST_RESULTS;
+  protected readonly history = { ...RESEARCH_HISTORY, title: menuLabelFor(RESEARCH_HISTORY.route) };
 }

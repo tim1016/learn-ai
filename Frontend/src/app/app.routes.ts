@@ -314,8 +314,9 @@ export const routes: Routes = [
       import("./research/research.routes").then((m) => m.RESEARCH_ROUTES),
   },
   {
-    // What Research Lab still hosts until slices 28 and 29 move it; its five
-    // studies moved to /research and redirect from here.
+    // What Research Lab still hosts until slice 28 moves its run detail pages;
+    // its five studies moved to /research and its saved lists to the History,
+    // and redirect from here.
     path: "research-lab",
     loadChildren: () =>
       import("./components/research-lab/research-lab.routes").then(

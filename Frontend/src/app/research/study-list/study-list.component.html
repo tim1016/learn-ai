@@ -30,10 +30,9 @@
 
   <section class="study-section" aria-labelledby="past-heading">
     <h2 id="past-heading">Saved results</h2>
+    <p class="study-section__note">{{ history.summary }}</p>
     <ul class="study-links">
-      @for (link of pastResults; track link.route) {
-        <li><a [routerLink]="link.route">{{ link.label }}</a></li>
-      }
+      <li><a [routerLink]="history.route">{{ history.title }}</a></li>
     </ul>
   </section>
 </div>

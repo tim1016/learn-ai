@@ -249,9 +249,9 @@ export const RULE_SANDBOX = {
   summary: 'Write entry and exit rules over indicators and replay them on past prices. Nothing built here is deployed.',
 } as const;
 
-/** Saved results the Research Lab shell still hosts until the shared History (#3519) indexes them. */
-export const RESEARCH_PAST_RESULTS: readonly StudyLink[] = [
-  { label: 'Experiment history', route: '/research-lab/features/experiments' },
-  { label: 'Signal history', route: '/research-lab/signals/history' },
-  { label: 'Strategy runs', route: '/research-lab/backtests/strategy-runs' },
-];
+/** The saved results of every study, in one list: the data plane merges each store's own records (R26). */
+export const RESEARCH_HISTORY = {
+  route: '/research/history',
+  summary:
+    'Every saved study and run, from whichever store keeps it. Opening one shows what was saved; it never runs the study again.',
+} as const;
