@@ -98,7 +98,8 @@ describe('an old Golden Search address (T01)', () => {
     expect(router.url).toBe('/golden-search?tab=history');
     expect(await screen.findByRole('heading', { name: 'Choose a strategy to open its Golden studies' })).toBeTruthy();
     const list = screen.getByRole('region', { name: 'Strategies' });
-    expect(within(list).getByRole('link', { name: 'EMA Crossover Signal' }).getAttribute('href')).toBe(`/signal-strategies/${EMA}/golden/studies`);
+    // The address's own query goes with each choice, so choosing a strategy opens the tab the link asked for.
+    expect(within(list).getByRole('link', { name: 'EMA Crossover Signal' }).getAttribute('href')).toBe(`/signal-strategies/${EMA}/golden/studies?tab=history`);
     // The registry rules Golden Search out for a harness, and the chooser says so instead of linking it.
     expect(within(list).queryByRole('link', { name: 'Deployment Validation' })).toBeNull();
     expect(within(list).getByText('This strategy is an operational harness, not a production candidate.')).toBeTruthy();
@@ -183,7 +184,14 @@ describe('an old Strategy Validation address (T01)', () => {
     await show('/strategy-validation?case=3');
 
     expect(await screen.findByRole('heading', { name: 'Choose a strategy to review a configuration' })).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'EMA Crossover Signal' }).getAttribute('href')).toBe(`/signal-strategies/${EMA}/golden/configuration`);
+    expect(screen.getByRole('link', { name: 'EMA Crossover Signal' }).getAttribute('href')).toBe(`/signal-strategies/${EMA}/golden/configuration?case=3`);
+  });
+
+  it('keeps the rest of the address’s query on the chooser’s links, less the keys the new address restates', async () => {
+    await show('/strategy-validation?strategy=no_such_thing&view=configuration&case=3');
+
+    expect(await screen.findByText(/"no_such_thing" is not a registered strategy/)).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'EMA Crossover Signal' }).getAttribute('href')).toBe(`/signal-strategies/${EMA}/golden/configuration?case=3`);
   });
 
   it('names a strategy the registry does not list instead of opening its page', async () => {

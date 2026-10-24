@@ -25,6 +25,11 @@ function refused(target: GoldenEntryTarget, refusal: GoldenEntryRefusal): Golden
   return { kind: 'refused', target, refusal };
 }
 
+/** The old address's query, less the keys the new address restates or nothing reads. */
+function keptQuery(route: ActivatedRouteSnapshot, spent: ReadonlySet<string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(route.queryParams).filter(([name]) => !spent.has(name)));
+}
+
 /**
  * One redirect, straight to the strategy's page: the old address's query and
  * fragment go with it, less the keys the new address restates or nothing reads.
@@ -36,9 +41,8 @@ function redirectTo(
   spent: ReadonlySet<string>,
   native: Readonly<Record<string, string>> = {},
 ): RedirectCommand {
-  const kept = Object.fromEntries(Object.entries(route.queryParams).filter(([name]) => !spent.has(name)));
   return new RedirectCommand(
-    router.createUrlTree([...commands], { queryParams: { ...kept, ...native }, fragment: route.fragment ?? undefined }),
+    router.createUrlTree([...commands], { queryParams: { ...keptQuery(route, spent), ...native }, fragment: route.fragment ?? undefined }),
   );
 }
 
@@ -89,9 +93,9 @@ export const resolveGoldenStudiesEntry: GoldenEntryResolver = async (route) => {
   if (claimed !== null) {
     const named = registered(entries, claimed);
     if (named !== undefined) return redirectTo(route, router, goldenTabRoute(named.strategy_key, 'studies'), STUDIES_SPENT);
-    return { kind: 'choose', target, unknownStrategy: claimed, strategies: entries };
+    return { kind: 'choose', target, unknownStrategy: claimed, strategies: entries, query: keptQuery(route, STUDIES_SPENT) };
   }
-  return { kind: 'choose', target, unknownStrategy: null, strategies: entries };
+  return { kind: 'choose', target, unknownStrategy: null, strategies: entries, query: keptQuery(route, STUDIES_SPENT) };
 };
 
 /**
@@ -128,7 +132,7 @@ export const resolveValidationEntry: GoldenEntryResolver = async (route) => {
         VALIDATION_SPENT,
       );
     }
-    return { kind: 'choose', target, unknownStrategy: claimed, strategies: entries };
+    return { kind: 'choose', target, unknownStrategy: claimed, strategies: entries, query: keptQuery(route, VALIDATION_SPENT) };
   }
-  return { kind: 'choose', target, unknownStrategy: null, strategies: entries };
+  return { kind: 'choose', target, unknownStrategy: null, strategies: entries, query: keptQuery(route, VALIDATION_SPENT) };
 };

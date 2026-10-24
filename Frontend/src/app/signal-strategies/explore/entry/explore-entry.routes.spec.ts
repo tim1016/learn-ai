@@ -113,6 +113,15 @@ describe('an old Strategy Lab address (T01)', () => {
     expect(screen.getByRole('link', { name: 'RSI Mean Reversion' }).getAttribute('href')).toBe(`/signal-strategies/${RSI}/explore/backtest`);
   });
 
+  it('carries the rest of the address’s query on each choice, so a launch link’s window and engine survive the choosing', async () => {
+    await show('/strategy-lab?strategy=no_such_thing&symbol=QQQ&engine=python&tab=history');
+
+    expect(await screen.findByRole('heading', { name: 'Choose a strategy to backtest' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'EMA Crossover Signal' }).getAttribute('href')).toBe(
+      `/signal-strategies/${EMA}/explore/backtest?symbol=QQQ&engine=python&tab=history`,
+    );
+  });
+
   it('opens the chooser, saying so, for a strategy the registry does not list, and picks none', async () => {
     const router = await show('/strategy-lab?strategy=no_such_thing');
 

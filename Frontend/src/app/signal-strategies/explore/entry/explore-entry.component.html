@@ -17,7 +17,7 @@
       @for (choice of choices(); track choice.key) {
         <li class="entry__item">
           @if (choice.closedReason === null) {
-            <a [routerLink]="choice.route">{{ choice.name }}</a>
+            <a [routerLink]="choice.route" [queryParams]="choice.query">{{ choice.name }}</a>
           } @else {
             <span class="entry__closed">{{ choice.name }}</span>
             <app-signal-strategy-chip tone="degraded">not allowed</app-signal-strategy-chip>

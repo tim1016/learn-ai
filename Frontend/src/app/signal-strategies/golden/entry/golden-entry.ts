@@ -32,6 +32,8 @@ export type GoldenEntry =
       /** A strategy the address named that the registry does not list. */
       readonly unknownStrategy: string | null;
       readonly strategies: readonly StrategyRegistryEntry[];
+      /** The address's query, less the keys the new address restates: what each strategy's link carries on. */
+      readonly query: Readonly<Record<string, string>>;
     }
   | {
       readonly kind: 'refused';

@@ -96,9 +96,9 @@ function resolveRunEntry(whereUnregistered: 'show' | 'redirect'): ExploreEntryRe
     if (claimed !== null) {
       const named = registered(entries, claimed);
       if (named !== undefined) return redirectTo(route, router, named.strategy_key, target);
-      return { kind: 'choose', target, unknownStrategy: claimed, strategies: entries };
+      return { kind: 'choose', target, unknownStrategy: claimed, strategies: entries, query: keptQuery(route) };
     }
-    return { kind: 'choose', target, unknownStrategy: null, strategies: entries };
+    return { kind: 'choose', target, unknownStrategy: null, strategies: entries, query: keptQuery(route) };
   };
 }
 
@@ -148,9 +148,9 @@ function resolveSearchEntry(target: Extract<ExploreTabId, 'sweep' | 'walk-forwar
     if (claimed !== null) {
       const named = registered(entries, claimed);
       if (named !== undefined) return redirectTo(route, router, named.strategy_key, target);
-      return { kind: 'choose', target, unknownStrategy: claimed, strategies: entries };
+      return { kind: 'choose', target, unknownStrategy: claimed, strategies: entries, query: keptQuery(route) };
     }
-    return { kind: 'choose', target, unknownStrategy: null, strategies: entries };
+    return { kind: 'choose', target, unknownStrategy: null, strategies: entries, query: keptQuery(route) };
   };
 }
 

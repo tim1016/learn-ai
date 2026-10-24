@@ -157,6 +157,7 @@ export class ExploreEntryComponent {
           key: strategy.strategy_key,
           name: strategy.display_name,
           route: exploreTabRoute(strategy.strategy_key, entry.target),
+          query: entry.query,
           closedReason: sweeping && !capability.supported ? (capability.reason ?? 'The registry does not allow it.') : null,
         };
       });

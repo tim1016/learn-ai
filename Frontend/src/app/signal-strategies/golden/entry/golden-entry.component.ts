@@ -101,6 +101,7 @@ export class GoldenEntryComponent {
           key: strategy.strategy_key,
           name: strategy.display_name,
           route: target === 'proof' ? proofRoute(strategy.strategy_key) : goldenTabRoute(strategy.strategy_key, target),
+          query: entry.query,
           // Golden Search is the registry's to rule out; a configuration review and a proof are open to every strategy.
           closedReason: target === 'studies' && !golden.supported ? (golden.reason ?? 'The registry does not allow it.') : null,
         };
