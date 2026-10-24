@@ -132,7 +132,7 @@ def test_a_completed_study_carries_a_lake_data_source_with_its_coverage_counts(h
     assert source["price_adjustment_mode"] == "polygon_split_adjusted"
     assert source["coverage"]["window"] == {
         "expected_sessions": len(WINDOW), "reused": 0, "added": len(WINDOW), "missing": 0, "failed": 0,
-        "building": 0, "corrupt": 0, "unavailable_from_provider": 0,
+        "building": 0, "corrupt": 0, "captured_before_final": 0, "unavailable_from_provider": 0,
     }
     assert source["coverage"]["warmup"]["expected_sessions"] == 0
     assert len(source["snapshot_digest"]) == 64 and len(source["identity_digest"]) == 64

@@ -120,7 +120,7 @@ describe('SignalRunnerComponent job wiring', () => {
 
   const group = (over: Record<string, number>) => ({
     expected_sessions: 82, reused: 0, added: 82, missing: 0, failed: 0,
-    building: 0, corrupt: 0, unavailable_from_provider: 0, ...over,
+    building: 0, corrupt: 0, captured_before_final: 0, unavailable_from_provider: 0, ...over,
   });
 
   beforeEach(async () => {
