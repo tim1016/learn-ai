@@ -18,6 +18,8 @@ import {
   type ChartDataResponse,
 } from './data-lab-chart.component';
 
+const harness = vi.hoisted(() => ({ visibleRanges: [] as { from: number; to: number }[] }));
+
 // The DOM chart is not exercised here — only the notice above it.
 vi.mock('lightweight-charts', () => {
   const series = () => ({
@@ -37,7 +39,7 @@ vi.mock('lightweight-charts', () => {
       fitContent: vi.fn(),
       getVisibleLogicalRange: vi.fn(() => null),
       setVisibleLogicalRange: vi.fn(),
-      setVisibleRange: vi.fn(),
+      setVisibleRange: vi.fn((range: { from: number; to: number }) => harness.visibleRanges.push(range)),
       subscribeVisibleLogicalRangeChange: vi.fn(),
     })),
     subscribeCrosshairMove: vi.fn(),
@@ -441,5 +443,55 @@ describe('DataLabChartComponent latest request', () => {
     expect(fixture.componentInstance.loading()).toBe(false);
     expect(loaded).toEqual([]);
     expect(fixture.componentInstance.hasData()).toBe(true);
+  });
+});
+
+describe('DataLabChartComponent visible range', () => {
+  const DAY = 86_400_000;
+  const WINDOW_START = Date.UTC(2026, 3, 15);
+  const WINDOW_END = Date.UTC(2026, 4, 15) + DAY - 1;
+
+  async function renderWindowed(bars: readonly number[], inputs: { startMsUtc?: number | null; endMsUtc?: number | null } = {}) {
+    harness.visibleRanges.length = 0;
+    const { fixture } = await render(DataLabChartComponent, {
+      inputs: {
+        ticker: 'SPY',
+        fromDate: '2026-04-15',
+        toDate: '2026-05-15',
+        startMsUtc: WINDOW_START,
+        endMsUtc: WINDOW_END,
+        session: 'rth',
+        forwardFill: false,
+        timeframe: '1D',
+        ...inputs,
+      },
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    });
+    const http = TestBed.inject(HttpTestingController);
+    fixture.componentInstance.fetchData();
+    const response = chartResponse();
+    http
+      .expectOne((candidate) => candidate.url.endsWith('/api/chart/data'))
+      .flush({ ...response, bars: bars.map((t) => ({ ...response.bars[0], t })) });
+    await waitFor(() => expect(harness.visibleRanges.length).toBeGreaterThan(0));
+    return harness.visibleRanges.at(-1);
+  }
+
+  it('is clamped to the committed window in int64 ms UTC when bars run past both ends of it', async () => {
+    const range = await renderWindowed([WINDOW_START - 5 * DAY, WINDOW_START + 10 * DAY, WINDOW_END + 5 * DAY]);
+
+    expect(range).toEqual({ from: WINDOW_START / 1000, to: Math.floor(WINDOW_END / 1000) });
+  });
+
+  it('follows the bars when they lie inside the window', async () => {
+    const range = await renderWindowed([WINDOW_START + 2 * DAY, WINDOW_START + 9 * DAY]);
+
+    expect(range).toEqual({ from: (WINDOW_START + 2 * DAY) / 1000, to: (WINDOW_START + 9 * DAY) / 1000 });
+  });
+
+  it('builds the same anchors from the dates when the host gave no numeric window, in no viewer zone', async () => {
+    const range = await renderWindowed([WINDOW_START - 5 * DAY, WINDOW_END + 5 * DAY], { startMsUtc: null, endMsUtc: null });
+
+    expect(range).toEqual({ from: WINDOW_START / 1000, to: Math.floor(WINDOW_END / 1000) });
   });
 });
