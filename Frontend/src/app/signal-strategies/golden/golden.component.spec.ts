@@ -246,6 +246,7 @@ describe('Golden → Studies', () => {
     await open(`/signal-strategies/${EMA}/golden`, { services: { golden } });
 
     expect(await screen.findByRole('tab', { name: /new study/i })).toBeTruthy();
+    expect(screen.getByText(/Opening a study or a plan starts nothing/)).toBeTruthy();
     const setup = await screen.findByRole('region', { name: 'Strategy, instrument and starting point' });
     expect(within(setup).getByText('EMA Crossover Signal')).toBeTruthy();
     expect(within(setup).queryByRole('combobox', { name: 'Strategy' })).toBeNull();
@@ -420,6 +421,8 @@ describe('Golden → one study', () => {
 
     expect(await screen.findByRole('navigation', { name: 'Research steps' })).toBeTruthy();
     expect(screen.getByRole('link', { name: /All studies/ }).getAttribute('href')).toBe(`/signal-strategies/${EMA}/golden/studies`);
+    // The study says what it is itself; the strip's one-line purpose is for the pages that list and plan.
+    expect(screen.queryByText(/Opening a study or a plan starts nothing/)).toBeNull();
     expect(screen.getByRole('link', { name: 'How this works' }).getAttribute('href')).toBe('/docs/golden-search-manual?study=study-0001-aaaa');
   });
 

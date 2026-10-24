@@ -61,14 +61,16 @@ export class SignalStrategyGoldenComponent {
   private readonly store = inject(SignalStrategyWorkspaceStore);
   private readonly currentUrl = inject(CurrentUrlService).url;
 
-  protected readonly activeTab = computed(() => goldenLocation(this.currentUrl())?.tab ?? null);
+  private readonly location = computed(() => goldenLocation(this.currentUrl()));
+  protected readonly activeTab = computed(() => this.location()?.tab ?? null);
 
   protected readonly tabs = computed<readonly WorkspaceTabItem[]>(() =>
     GOLDEN_TABS.tabs.map((tab) => ({ ...tab, route: goldenTabRoute(this.store.key(), tab.id) })),
   );
 
+  /** What the page is for, except beside a study's own workbench, which says what it is itself. */
   protected readonly purpose = computed(() => {
     const tab = this.activeTab();
-    return tab === null ? null : PURPOSE[tab];
+    return tab === null || this.location()?.studyId != null ? null : PURPOSE[tab];
   });
 }
