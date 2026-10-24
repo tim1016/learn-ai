@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 import respx
 
+from app.config import settings
 from app.jobs import cache as result_cache
 from app.jobs.progress import CancellationCheck, JobCancelled, ProgressEmitter
 from app.jobs.runner import run_in_thread
@@ -24,6 +25,7 @@ from app.research.lake_study import FoldedStudyIdentity, LakeStudy, StudyRun, ru
 from app.research.study_inputs import MinuteWindowIdentity, StudyInputRefusal
 from app.utils.session_anchors import et_midnight_ms
 from tests._helpers.fake_lake_catalog import install_fake_catalog, mock_launcher, point_lake_writer_at_tmp
+from tests._helpers.lake_study import commit_bars, corrected_day
 from tests._helpers.pinned_vendor import mock_vendor, vendor_history
 from tests.jobs.conftest import _FakeRedis
 
@@ -37,7 +39,9 @@ class Toy:
     def __init__(self) -> None:
         self.runs: list[StudyRun] = []
 
-    def study(self, *, knob: int = 3) -> LakeStudy:
+    def study(
+        self, *, knob: int = 3, subject: dict[str, Any] | None = None, cache_extra: dict[str, Any] | None = None
+    ) -> LakeStudy:
         def compute(run: StudyRun) -> dict[str, Any]:
             self.runs.append(run)
             return {"success": True, "bars": len(run.rows), "first_bar_ms": run.rows[0]["timestamp"]}
@@ -47,11 +51,11 @@ class Toy:
             cache_namespace="toy:lake:v1",
             calculation_version="toy/1",
             requester="toy",
-            subject={"ticker": "SPY"},
+            subject=subject if subject is not None else {"ticker": "SPY"},
             admit_message="Checking the lake",
             load_message="Loading bars",
             compute=compute,
-            cache_extra={"knob": knob},
+            cache_extra=cache_extra if cache_extra is not None else {"knob": knob},
         )
 
     @staticmethod
@@ -159,6 +163,27 @@ def test_a_study_refused_before_anything_was_read_names_no_data_source(fake, lak
     assert payload["refusal"]["coverage"] is None and payload["ticker"] == "SPY"
 
 
+def test_a_subject_named_like_a_log_record_field_is_echoed_and_does_not_break_the_refusal(fake, lake_world, toy):
+    """The refusal is logged with the subject beside it; a subject key such as ``name`` once raised inside the log call
+    and the job ended in an internal error instead of the typed refusal."""
+
+    def refuse() -> FoldedStudyIdentity:
+        raise StudyInputRefusal("resolution_unsupported", "60-minute bars cannot form the target")
+
+    state = run_job(fake, toy.study(subject={"name": "momentum", "module": "m", "args": 5}), refuse, "log-fields")
+
+    payload = result_of(fake, "log-fields")
+    assert state["error_code"] == "resolution_unsupported", "the refusal, not an internal error"
+    assert (payload["name"], payload["module"], payload["args"]) == ("momentum", "m", 5), "the echo is unchanged"
+    assert payload["status"] == "refused"
+
+
+@pytest.mark.parametrize("key", sorted(lake_study.RESULT_KEYS))
+def test_a_subject_cannot_name_a_key_the_run_sets_in_its_own_payload(toy, key):
+    with pytest.raises(ValueError, match=key):
+        toy.study(subject={"ticker": "SPY", key: "x"})
+
+
 # ---------------------------------------------------------------------------
 # T09: cache identity
 # ---------------------------------------------------------------------------
@@ -174,6 +199,21 @@ def test_the_cache_key_carries_the_study_s_own_inputs_and_the_admitted_bytes(fak
     assert all(key.startswith("result:toy:lake:v1:") for key in fake.strings if key.startswith("result:")), (
         "every entry is under the study's own namespace"
     )
+
+
+def test_a_study_s_inputs_named_like_the_cache_identity_cannot_hide_a_repair_of_the_lake(fake, lake_world, toy):
+    """``cache_extra`` is the study's; the digest of the admitted bytes is the run's. A study input that happens to be
+    named ``snapshot_digest`` once replaced it, and a repaired day then hit the entry computed on the old bytes."""
+    greedy = {"snapshot_digest": "same", "identity": "same", "data_root_id": "same", "calculation_version": "same"}
+    catalog, tape = lake_world
+    run_job(fake, toy.study(cache_extra=greedy), lambda: toy.identity(), "before")
+    day = WINDOW[2]
+    commit_bars(catalog, Path(settings.LEAN_DATA_WRITE_ROOT), day, corrected_day(day, tape[day]))
+
+    state = run_job(fake, toy.study(cache_extra=greedy), lambda: toy.identity(), "after-repair")
+
+    assert state.get("cached") != "1", "different bytes are a different revision, whatever the study calls its inputs"
+    assert len(toy.runs) == 2
 
 
 def test_a_cache_entry_that_never_recorded_its_time_reports_it_as_unknown_not_as_zero(fake, lake_world, toy):

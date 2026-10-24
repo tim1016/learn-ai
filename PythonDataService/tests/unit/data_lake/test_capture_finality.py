@@ -11,8 +11,10 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from app.data_lake import ensure_data
 from app.data_lake.capture_finality import (
     AFTER_HOURS_TAIL_MS,
+    CLAIM_LEASE_MS,
     VENDOR_DELAY_MS,
     capture_final_ms,
     captured_early,
@@ -51,16 +53,24 @@ def test_an_early_close_ends_its_tape_early():
     assert _wall_clock(capture_final_ms(EARLY_CLOSE, "extended")) == "17:15"
 
 
-def test_a_capture_is_early_up_to_the_final_instant_and_final_from_it():
+def test_a_capture_is_early_while_the_vendor_may_have_been_asked_before_the_final_instant():
+    """``CompletedAtMs`` is when the artifact was published. The writer held its claim for at most the lease, so the
+    request went out no earlier than that before: a capture published within a lease of the final instant may have
+    been asked for before the last minute was delivered, and is early."""
     final = capture_final_ms(WINTER, "extended")
 
     assert captured_early(final - 1, WINTER, "extended") is True
-    assert captured_early(final, WINTER, "extended") is False
-    assert captured_early(final + 1, WINTER, "extended") is False
+    assert captured_early(final + CLAIM_LEASE_MS - 1, WINTER, "extended") is True
+    assert captured_early(final + CLAIM_LEASE_MS, WINTER, "extended") is False
+    assert captured_early(final + CLAIM_LEASE_MS + 1, WINTER, "extended") is False
+
+
+def test_the_claim_lease_is_the_lease_the_lake_writer_holds():
+    assert CLAIM_LEASE_MS == ensure_data._LEASE_TTL_MS
 
 
 def test_the_same_capture_can_be_final_for_a_regular_reader_and_early_for_an_extended_one():
-    between = capture_final_ms(WINTER, "regular") + 1
+    between = capture_final_ms(WINTER, "regular") + CLAIM_LEASE_MS
 
     assert captured_early(between, WINTER, "regular") is False
     assert captured_early(between, WINTER, "extended") is True

@@ -34,7 +34,7 @@ import pytest
 import respx
 
 from app.data_lake.admission import read_committed_bytes
-from app.data_lake.capture_finality import VENDOR_DELAY_MS, capture_final_ms
+from app.data_lake.capture_finality import CLAIM_LEASE_MS, VENDOR_DELAY_MS, capture_final_ms
 from app.engine.data.lean_format import LeanMinuteDataReader
 from app.engine.data.policy_store import resolve_data_roots
 from app.lean_sidecar.trading_calendar import expected_sessions, session_close_ms_utc
@@ -353,12 +353,13 @@ def test_a_split_announced_after_capture_is_not_in_a_held_window_until_the_lake_
     assert calls.count > 0
 
 
-def test_a_day_captured_before_its_after_hours_tape_finished_is_a_shorter_sample_until_it_is_captured_again(world):
+def test_a_day_captured_before_its_after_hours_tape_finished_was_a_shorter_sample_and_is_refused_now(world):
     """Cause: ``data-quality`` (capture time). A regular-hours chart opened at 16:30 ET leaves the day with its
     after-hours tape cut at 16:15, and the lake reads it as complete. The provider path re-fetched the whole day on
-    every run. Admission now sees when the day was captured and captures it again, so the difference exists only in
-    what the lake holds, not in what a study computes on. A day with no recorded capture time cannot be judged: that
-    is the residual (``docs/known-gaps.md``).
+    every run, so the lake path would compute on a shorter sample. Admission sees when the day was captured and refuses
+    it (``captured_before_final``): it neither computes on the short tape nor rewrites a day other readers share. Until
+    the owner decides how a held day is captured again (``docs/known-gaps.md``), the divergence is a refusal. A day with
+    no recorded capture time cannot be judged: that is the residual.
     """
     tape = tape_for(DST_WINDOW)
     mock_vendor("SPY", tape, adjusted=tape)
@@ -370,11 +371,12 @@ def test_a_day_captured_before_its_after_hours_tape_finished_is_a_shorter_sample
         corrected_day(day, [b for b in tape[day] if b["t"] < cut], bump="0"), mode="polygon_split_adjusted",
     )
     row = next(r for r in world.catalog.rows.values() if r["trading_date"] == day and r["price_adjustment_mode"] == "polygon_split_adjusted")
-    row["completed_at_ms"] = capture_final_ms(day, "regular") + 1
+    row["completed_at_ms"] = capture_final_ms(day, "regular") + CLAIM_LEASE_MS
     provider = provider_rows(tape, DST_WINDOW)
 
     held = compare(provider, held_rows(world, DST_WINDOW), DST_WINDOW)
-    after_admission = compare(provider, lake_rows(DST_WINDOW), DST_WINDOW)
+    with pytest.raises(StudyInputRefusal) as raised:
+        lake_rows(DST_WINDOW)
 
     assert held.errors == (None, None)
     assert held.causes == ["data-quality"] and held.only_lake == 0
@@ -382,9 +384,8 @@ def test_a_day_captured_before_its_after_hours_tape_finished_is_a_shorter_sample
     assert held.prices_changed == 0, "what remains is the vendor's own"
     assert held.feature_max_diff["rsi_14"] > 1e-9 or held.feature_valid_moved > 0, "a feature remembers the shorter sample"
     assert held.target_valid[1] < held.target_valid[0], "and the last bars of that day lose their forward label"
-    assert after_admission.timestamps_changed == 0 and after_admission.prices_changed == 0
-    assert max(after_admission.feature_max_diff.values()) <= 1e-9
-    assert after_admission.mean_ic[1] == pytest.approx(after_admission.mean_ic[0], abs=1e-9, rel=0)
+    assert raised.value.code == "captured_before_final", "admission refuses that sample instead of computing on it"
+    assert [(i.trading_date, i.outcome) for i in raised.value.coverage.issues] == [(day, "captured_before_final")]
 
 
 def test_a_window_that_starts_before_the_symbol_traded_was_computed_on_fewer_bars_and_is_refused_now(world):
