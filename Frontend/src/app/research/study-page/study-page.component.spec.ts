@@ -97,7 +97,7 @@ describe('StudyPageComponent', () => {
   it.each([
     ['feature', 'Data lake, Polygon'],
     ['signal', 'Polygon'],
-    ['indicator-reliability', 'Polygon'],
+    ['indicator-reliability', 'Data lake, Polygon'],
     ['cross-sectional', 'Polygon stock bars, Polygon option bars, FRED risk-free rate'],
     ['realized-vs-iv', 'Polygon aggregates, IV recorder (recorded IV30), Polygon option snapshot (current IV marker)'],
   ] as const)(
