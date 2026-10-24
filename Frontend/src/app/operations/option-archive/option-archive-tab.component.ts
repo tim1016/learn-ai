@@ -8,8 +8,9 @@ import { TimestampDisplayComponent } from '../../shared/timestamp/timestamp-disp
  * Operations → Option archive: whether the sessions an options run needs are
  * preserved, per underlying, with capture and evening-observation health.
  *
- * Read-only: the status is read when the tab opens and again on Refresh. Backup
- * and restore-check evidence is the Backups tab's, from the same status.
+ * Read-only: the status is read every time the tab opens and again on Refresh,
+ * and says when it was read. Backup and restore-check evidence is the Backups
+ * tab's, from the same status.
  */
 @Component({
   selector: 'app-operations-option-archive',
@@ -21,4 +22,8 @@ import { TimestampDisplayComponent } from '../../shared/timestamp/timestamp-disp
 export class OptionArchiveTabComponent {
   readonly archive = inject(OptionArchiveService);
   readonly needsAttention = needsAttention;
+
+  constructor() {
+    this.archive.refresh();
+  }
 }

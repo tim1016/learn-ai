@@ -2,7 +2,7 @@
   <h2>Option archive</h2>
   @if (archive.unavailable()) {
     <p role="status">Archive status is unavailable. Check the data service connection.</p>
-    <button type="button" (click)="archive.retry()">Retry status</button>
+    <button type="button" (click)="archive.refresh()">Retry status</button>
   } @else if (archive.health(); as health) {
     @if (!health.enabled) { <p>Preservation is awaiting operator activation.</p> }
     @for (item of health.underlyings; track item.underlying) {
@@ -31,7 +31,8 @@
       </article>
     }
     <p>Vendor retention permission is awaiting a reply. Capture and backup stay on this Mac.</p>
-    <button type="button" (click)="archive.retry()">Refresh status</button>
+    <p>Status read <app-timestamp-display [value]="health.generated_ms" mode="local" />.</p>
+    <button type="button" (click)="archive.refresh()">Refresh status</button>
   } @else {
     <p role="status">Reading archive status…</p>
   }

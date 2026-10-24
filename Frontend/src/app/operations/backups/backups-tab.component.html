@@ -2,7 +2,7 @@
   <h2>Backups</h2>
   @if (archive.unavailable()) {
     <p role="status">Archive status is unavailable. Check the data service connection.</p>
-    <button type="button" (click)="archive.retry()">Retry status</button>
+    <button type="button" (click)="archive.refresh()">Retry status</button>
   } @else if (archive.health(); as health) {
     <article id="option-archive-backup">
       <h3>Lake backup</h3><p>{{ health.backup.reason }}</p>
@@ -16,7 +16,8 @@
       <h3>Weekly restore check</h3><p>{{ health.test_restore.reason }}</p>
       <p>Last passed: <app-timestamp-display [value]="health.test_restore.last_success_ms" mode="local" /></p>
     </article>
-    <button type="button" (click)="archive.retry()">Refresh status</button>
+    <p>Status read <app-timestamp-display [value]="health.generated_ms" mode="local" />.</p>
+    <button type="button" (click)="archive.refresh()">Refresh status</button>
   } @else {
     <p role="status">Reading archive status…</p>
   }

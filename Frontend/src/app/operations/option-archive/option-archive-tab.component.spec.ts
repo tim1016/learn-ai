@@ -16,7 +16,7 @@ function status(): OptionArchiveHealth {
     test_restore: { severity: 'healthy', reason: 'Restored and decoded.', last_success_ms: 1792558800000 } };
 }
 function world(initial: OptionArchiveHealth | null = status()) {
-  return { health: signal(initial), unavailable: signal(false), retry: vi.fn() };
+  return { health: signal(initial), unavailable: signal(false), refresh: vi.fn() };
 }
 function renderTab(archive: ReturnType<typeof world>) {
   return render(OptionArchiveTabComponent, { providers: [{ provide: OptionArchiveService, useValue: archive }] });
@@ -40,11 +40,21 @@ describe('Operations → Option archive', () => {
     expect(screen.getByText(/The vendor no longer serves this session/)).toBeTruthy();
     expect(screen.getByText(/Capture is paused/)).toBeTruthy();
   });
+  it('reads the status again as the tab opens, so it never shows an earlier visit\'s status as current', async () => {
+    const archive = world();
+    await renderTab(archive);
+    expect(archive.refresh).toHaveBeenCalledOnce();
+  });
+  it('says when the status was read', async () => {
+    await renderTab(world());
+    expect(screen.getByText(/Status read/).textContent).toContain(formatTimestampDisplay(1792558800000, { mode: 'local' }));
+  });
   it('shows unavailable status and retry without inventing health', async () => {
     const archive = world(null); archive.unavailable.set(true);
     await renderTab(archive);
+    archive.refresh.mockClear();
     screen.getByRole('button', { name: 'Retry status' }).click();
-    expect(archive.retry).toHaveBeenCalledOnce();
+    expect(archive.refresh).toHaveBeenCalledOnce();
     expect(screen.queryByText('Every requested session is preserved.')).toBeNull();
   });
   it('renders deadlines, failure and capture freshness from server evidence', async () => {

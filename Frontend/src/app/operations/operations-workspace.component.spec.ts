@@ -1,5 +1,5 @@
 import { provideHttpClient, withInterceptors } from '@angular/common/http';
-import { provideHttpClientTesting } from '@angular/common/http/testing';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter, Router, withComponentInputBinding } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
@@ -8,6 +8,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { routes } from '../app.routes';
 import { routeTreeHasData } from '../shell/current-url.service';
+import type { OptionArchiveHealth } from '../shared/option-archive/option-archive.service';
+import { formatTimestampDisplay } from '../shared/timestamp/timestamp-display';
 import { ScopedHealthService } from '../shared/scoped-health/scoped-health.service';
 import { allHealthy, fakeScopedHealth, healthItem, projection } from '../shared/scoped-health/testing/scoped-health-fixtures';
 import { DATA_CHECKS } from './data-checks/data-checks';
@@ -34,7 +36,7 @@ async function open(url: string) {
   const harness = await RouterTestingHarness.create();
   await harness.navigateByUrl(url);
   harness.detectChanges();
-  return { requests };
+  return { requests, harness };
 }
 
 describe('the Operations place', () => {
@@ -99,7 +101,31 @@ describe('the Operations place', () => {
       'IBKR feed OK',
     ]);
     expect(within(chips[2]).getByRole('link').getAttribute('href')).toBe('/operations/backups#option-archive-backup');
-    expect(health.read).toHaveBeenCalledWith();
+    expect(health.read).toHaveBeenCalledWith({});
+  });
+
+  it('reads the archive status again each time its tabs open, and dates what it shows', async () => {
+    const firstReadMs = 1_792_558_800_000;
+    const laterReadMs = firstReadMs + 3_600_000;
+    const status = (generatedMs: number): OptionArchiveHealth => ({
+      enabled: true,
+      generated_ms: generatedMs,
+      underlyings: [],
+      backup: { severity: 'healthy', reason: 'Generation checked.' },
+      test_restore: { severity: 'healthy', reason: 'Restored and decoded.' },
+    });
+    const { harness } = await open('/operations/backups');
+    const http = TestBed.inject(HttpTestingController);
+    await vi.waitFor(() => http.expectOne('/api/option-archive/status').flush(status(firstReadMs)));
+    expect((await screen.findByText(/Status read/)).textContent).toContain(formatTimestampDisplay(firstReadMs, { mode: 'local' }));
+
+    await harness.navigateByUrl('/operations/option-archive');
+
+    // The Option archive tab asked again: it does not present the Backups visit's read as current.
+    await vi.waitFor(() => http.expectOne('/api/option-archive/status').flush(status(laterReadMs)));
+    await vi.waitFor(() =>
+      expect(screen.getByText(/Status read/).textContent).toContain(formatTimestampDisplay(laterReadMs, { mode: 'local' })),
+    );
   });
 
   it('fails in place on a tab it does not have, rather than opening the Lake', async () => {

@@ -14,6 +14,11 @@ export function needsAttention(severity: ArchiveSeverity): boolean {
   return ATTENTION.has(severity);
 }
 
+/**
+ * The option archive's status, held for the session. A view that shows it reads
+ * it again when it opens (`refresh`), so what it shows is never an earlier
+ * visit's status presented as current; the status carries when it was read.
+ */
 @Injectable({ providedIn: 'root' })
 export class OptionArchiveService {
   private readonly http = inject(HttpClient, { optional: true });
@@ -26,5 +31,6 @@ export class OptionArchiveService {
   readonly health = computed(() => this.request.hasValue() ? this.request.value() : null);
   readonly unavailable = computed(() => this.request.error() !== undefined);
 
-  retry(): void { this.request.reload(); }
+  /** Reads the status again; a read already under way is left to finish. A failed read can be retried the same way. */
+  refresh(): void { this.request.reload(); }
 }

@@ -8,9 +8,10 @@ import { TimestampDisplayComponent } from '../../shared/timestamp/timestamp-disp
  * with its generation and destination space, and the weekly restore check with
  * the last time it passed.
  *
- * Read-only, from the same status the Option archive tab reads. A backup that
- * is behind concerns recoverability; it does not by itself make a stored price
- * wrong, so this tab never speaks for current data.
+ * Read-only, from the same status the Option archive tab reads, read again every
+ * time the tab opens and dated. A backup that is behind concerns recoverability;
+ * it does not by itself make a stored price wrong, so this tab never speaks for
+ * current data.
  */
 @Component({
   selector: 'app-operations-backups',
@@ -21,4 +22,8 @@ import { TimestampDisplayComponent } from '../../shared/timestamp/timestamp-disp
 })
 export class BackupsTabComponent {
   readonly archive = inject(OptionArchiveService);
+
+  constructor() {
+    this.archive.refresh();
+  }
 }
