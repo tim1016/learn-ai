@@ -58960,7 +58960,7 @@
       },
       "SignalEngineJobRequest": {
         "additionalProperties": false,
-        "description": "Body of POST /api/jobs-internal/signal-engine.\n\n**Default override**: ``multiplier=15`` to preserve the\npre-migration default. Signal-engine processing operates on\n15-minute bars by default; the inherited base default of 1 would\nsilently switch every caller to 1-minute bars.\n\nThe worker reads the study's bars from the data lake itself, materializing\nwhat the lake lacks (``app.services.signal_study_service``). Only minute\nbars short enough to reach the study's validity gate are accepted; longer\nbars are refused with a reason.\n\n``session`` is the base request's legacy label (the browser sends\n``\"rth\"``) and has never been read; it stays inert so no caller's sample\nchanges silently. ``session_policy`` is the real control and defaults to\nthe session the study has always computed on: ``extended``, 04:00-20:00\nET. ``regular`` is opt-in.",
+        "description": "Body of POST /api/jobs-internal/signal-engine.\n\n**Default override**: ``multiplier=15`` to preserve the\npre-migration default. Signal-engine processing operates on\n15-minute bars by default; the inherited base default of 1 would\nsilently switch every caller to 1-minute bars.\n\nThe worker reads the study's bars from the data lake itself, materializing\nwhat the lake lacks (``app.services.signal_study_service``). Only minute\nbars that divide the hour and are short enough to reach the study's\nvalidity gate for the session are accepted; other sizes are refused with a\nreason before the lake is touched.\n\n**Default override**: ``session=\"extended\"``. ``session`` is the one\ncontrol for which bars the study computes on: ``extended`` is every bar the\nprovider served, 04:00-20:00 ET, which is what the study has always read;\n``rth`` is the scheduled session. The base default (``rth``) would have\nsilently moved every caller that omits it onto a different sample (D02).",
         "properties": {
           "featureName": {
             "minLength": 1,
@@ -58999,21 +58999,12 @@
             "type": "boolean"
           },
           "session": {
-            "default": "rth",
+            "default": "extended",
             "enum": [
               "rth",
               "extended"
             ],
             "title": "Session",
-            "type": "string"
-          },
-          "sessionPolicy": {
-            "default": "extended",
-            "enum": [
-              "extended",
-              "regular"
-            ],
-            "title": "Sessionpolicy",
             "type": "string"
           },
           "symbol": {

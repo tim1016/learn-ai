@@ -30702,14 +30702,15 @@ export interface components {
          *
          *     The worker reads the study's bars from the data lake itself, materializing
          *     what the lake lacks (``app.services.signal_study_service``). Only minute
-         *     bars short enough to reach the study's validity gate are accepted; longer
-         *     bars are refused with a reason.
+         *     bars that divide the hour and are short enough to reach the study's
+         *     validity gate for the session are accepted; other sizes are refused with a
+         *     reason before the lake is touched.
          *
-         *     ``session`` is the base request's legacy label (the browser sends
-         *     ``"rth"``) and has never been read; it stays inert so no caller's sample
-         *     changes silently. ``session_policy`` is the real control and defaults to
-         *     the session the study has always computed on: ``extended``, 04:00-20:00
-         *     ET. ``regular`` is opt-in.
+         *     **Default override**: ``session="extended"``. ``session`` is the one
+         *     control for which bars the study computes on: ``extended`` is every bar the
+         *     provider served, 04:00-20:00 ET, which is what the study has always read;
+         *     ``rth`` is the scheduled session. The base default (``rth``) would have
+         *     silently moved every caller that omits it onto a different sample (D02).
          */
         SignalEngineJobRequest: {
             /** Featurename */
@@ -30740,16 +30741,10 @@ export interface components {
             regimeGateEnabled?: boolean;
             /**
              * Session
-             * @default rth
-             * @enum {string}
-             */
-            session?: "rth" | "extended";
-            /**
-             * Sessionpolicy
              * @default extended
              * @enum {string}
              */
-            sessionPolicy?: "extended" | "regular";
+            session?: "rth" | "extended";
             /** Symbol */
             symbol: string;
             /**
