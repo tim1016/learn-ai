@@ -1,0 +1,44 @@
+<section class="data-tab" aria-label="Data in the lake">
+  <p class="data-tab__lead">
+    What the lake holds for this window, session by session. Reading it fetches nothing:
+    the only thing here that writes is Fill, and only when you press it.
+  </p>
+
+  <label class="data-tab__tree">
+    <span>Price adjustment</span>
+    <select (change)="onTreePicked($event)">
+      @for (choice of treeChoices; track choice.value) {
+        <option [value]="choice.value" [selected]="choice.value === tree()">{{ choice.label }}</option>
+      }
+    </select>
+  </label>
+  <p class="data-tab__note">
+    The Chart reads the tree picked here, and the choice stays in the address when you change tabs.
+    Returns measures split- and dividend-adjusted moves from the raw bars and its factor files, whichever is picked.
+  </p>
+
+  @if (contextNote(); as note) {
+    <p class="data-tab__note" role="status">{{ note }}</p>
+  }
+
+  @if (state(); as content) {
+    <app-workspace-state-block [state]="content" (actionTriggered)="onAction($event)" />
+  }
+
+  @if (inspection(); as reading) {
+    @if (reading.kind === 'read') {
+      <p class="data-tab__asof">
+        {{ reading.request.symbol }} · {{ reading.request.from }} → {{ reading.request.to }}
+        · read {{ reading.report.as_of_ms | timestampDisplay: 'local' : 'datetime' }}
+      </p>
+      <app-data-summary [report]="reading.report" />
+      <app-data-gaps [sessions]="reading.report.sessions" />
+      <app-data-fill [report]="reading.report" (checked)="check()" />
+      <app-quality-evidence
+        [symbol]="reading.request.symbol"
+        [from]="reading.request.from"
+        [to]="reading.request.to"
+      />
+    }
+  }
+</section>

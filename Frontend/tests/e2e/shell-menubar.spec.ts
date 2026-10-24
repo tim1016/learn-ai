@@ -31,7 +31,7 @@ async function requiredBox(locator: Locator) {
 test.describe('Shell menubar', () => {
   test('lays every group out inline above the collapse breakpoint', async ({ page }) => {
     await page.setViewportSize(WIDE);
-    await page.goto('/data-lab');
+    await page.goto('/markets');
 
     const menubar = page.getByRole('navigation', { name: 'Primary' });
     for (const group of GROUPS) {
@@ -43,7 +43,7 @@ test.describe('Shell menubar', () => {
 
   test('opens a panel wide enough to read below the collapse breakpoint', async ({ page }) => {
     await page.setViewportSize(NARROW);
-    await page.goto('/data-lab');
+    await page.goto('/markets');
 
     const toggle = page.getByRole('button', { name: 'Navigation' });
     await expect(toggle).toBeVisible();
@@ -71,7 +71,7 @@ test.describe('Shell menubar', () => {
 
   test('expands a group inside the collapsed panel', async ({ page }) => {
     await page.setViewportSize(NARROW);
-    await page.goto('/data-lab');
+    await page.goto('/markets');
 
     await page.getByRole('button', { name: 'Navigation' }).click();
 
@@ -84,7 +84,7 @@ test.describe('Shell menubar', () => {
 
   test('keeps navigation, brand, and the account pills in one header row', async ({ page }) => {
     await page.setViewportSize(NARROW);
-    await page.goto('/data-lab');
+    await page.goto('/markets');
 
     const header = page.getByRole('banner', { name: 'Botasur application' });
     const headerBox = await requiredBox(header);

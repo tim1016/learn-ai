@@ -1,5 +1,6 @@
 import { Routes } from '@angular/router';
 
+import { redirectToInstrument } from '../../markets/instrument-address';
 import { dataCheckRoute } from '../../operations/data-checks/data-checks';
 import { redirectKeepingState } from '../../shell/route-redirects';
 
@@ -78,8 +79,8 @@ export const researchLabRoutes: Routes = [
   movedStudy('signal-engine', 'signal'),
   movedStudy('cross-sectional', 'cross-sectional'),
 
-  // Sub-nav shell for the pages Research Lab still hosts: instrument headlines
-  // and the Recency Chart (the slices of the places they belong to).
+  // Sub-nav shell for the page Research Lab still hosts: the Recency Chart
+  // (the slice of the place it belongs to).
   {
     path: '',
     loadComponent: () =>
@@ -87,12 +88,13 @@ export const researchLabRoutes: Routes = [
     children: [
       { path: '', redirectTo: redirectKeepingState(['/research']), pathMatch: 'full' },
 
-      // Market
+      // Market: headlines moved under the instrument (ADR 0084). The old
+      // address went straight to them with no symbol in it, so it leads to the
+      // instrument its query names, or to Markets when it names none.
       {
         path: 'market/news',
-        loadComponent: () =>
-          import('./news/news-page.component').then((m) => m.NewsPageComponent),
-        data: { title: 'Ticker News' },
+        pathMatch: 'full',
+        redirectTo: redirectToInstrument('chart', ['news']),
       },
 
       // Backtests

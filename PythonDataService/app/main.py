@@ -64,6 +64,7 @@ from app.routers import (
     golden_validation,
     grid_search,
     indicator_reliability,
+    instrument_facts,
     iv30,
     iv_recorder,
     jobs,
@@ -95,6 +96,9 @@ from app.routers import (
 )
 from app.routers import (
     data_lake as data_lake_router,
+)
+from app.routers import (
+    instrument_data as instrument_data_router,
 )
 from app.routers.fleet_qualification import (
     is_qualification_coordinator_lane_from_environment,
@@ -1349,6 +1353,7 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     app.include_router(option_archive.router)
     app.include_router(scoped_health.router)
     app.include_router(snapshot.router, prefix="/api/snapshot", tags=["snapshot"])
+    app.include_router(instrument_facts.router, prefix="/api/markets", tags=["markets"])
     app.include_router(tickers.router, prefix="/api/tickers", tags=["tickers"])
     app.include_router(trading_calendar.router, prefix="/api/calendar", tags=["calendar"])
     app.include_router(news.router, prefix="/api/news", tags=["news"])
@@ -1612,6 +1617,7 @@ if _ROLE_RUNS_CLERK:
 # from the flag-dark slice that first registered the router.
 if _ROLE_RUNS_DATA_PLANE_CORE:
     app.include_router(data_lake_router.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
+    app.include_router(instrument_data_router.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 
 
 if _FLEET_COORDINATOR_SURFACE:

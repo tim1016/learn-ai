@@ -484,7 +484,7 @@ describe('AlpacaLiveBannerComponent', () => {
     });
 
     it('does not render as active outside any workspace', async () => {
-      await renderAt('/data-lab', PAPER_LANE);
+      await renderAt('/markets', PAPER_LANE);
 
       expect(screen.getByRole('status').className).not.toContain('is-active');
     });
@@ -492,7 +492,7 @@ describe('AlpacaLiveBannerComponent', () => {
 
   describe('as the way to its account (ADR 0064 Decision 3)', () => {
     it.each([
-      ['opens it from anywhere outside a workspace', '/data-lab'],
+      ['opens it from anywhere outside a workspace', '/markets'],
       // The chosen account need not run that bot, so the bot's page is never
       // carried across — the same rule the in-workspace switcher follows.
       ["lands on the chosen account's Home from a bot's own page", `${LIVE_WORKSPACE}/bots/sid-1`],
@@ -533,7 +533,7 @@ describe('AlpacaLiveBannerComponent', () => {
         display_label: 'Paper',
         provider_summary: { ...testLane().provider_summary, confirmed_account_id: null },
       });
-      await renderAt('/data-lab', unbound);
+      await renderAt('/markets', unbound);
 
       expect(screen.getByRole('link').getAttribute('href')).toBe(
         '/brokers/alpaca/clerks/clrk_paper/settings',
@@ -544,7 +544,7 @@ describe('AlpacaLiveBannerComponent', () => {
       // The link wraps the live region rather than replacing it: one element
       // cannot be both, and the real-money assumption has to keep announcing
       // as a status with its own accessible name (WCAG 1.4.1).
-      await renderAt('/data-lab', PAPER_LANE, { verdict: null, lastError: new Error('down') });
+      await renderAt('/markets', PAPER_LANE, { verdict: null, lastError: new Error('down') });
 
       const status = screen.getByRole('status');
       expect(status.className).toContain('is-undetermined');

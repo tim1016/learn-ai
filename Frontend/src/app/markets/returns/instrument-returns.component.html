@@ -1,0 +1,11 @@
+@if (refusal(); as state) {
+  <app-workspace-state-block [state]="state" (actionTriggered)="onAction($event)" />
+} @else {
+  @if (sessionNote(); as note) {
+    <p class="returns-tab__note" role="status">{{ note }}</p>
+  }
+  @if (adjustmentNote(); as note) {
+    <p class="returns-tab__note" role="status">{{ note }}</p>
+  }
+  <app-returns-distribution />
+}

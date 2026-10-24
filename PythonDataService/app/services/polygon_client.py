@@ -21,7 +21,7 @@ import logging
 import threading
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import date, timedelta
 from typing import Any
 
@@ -953,6 +953,22 @@ class PolygonClientService:
 
         except Exception as e:
             logger.error(f"Error fetching stock snapshot for {ticker}: {e!s}")
+            raise
+
+    def get_stock_snapshots(self, tickers: Sequence[str]) -> list[dict[str, Any]]:
+        """Snapshots for several stocks in one vendor request (v2 all-tickers endpoint, filtered).
+
+        The vendor answers only the tickers it holds a snapshot for, so a ticker may be
+        missing from the result. One call however many tickers: a list page costs one
+        request, not one per row, and it is paced like every other vendor request.
+        """
+        try:
+            logger.info(f"Fetching stock snapshots for {len(tickers)} tickers")
+            self._throttle.acquire(label=f"snapshots:{len(tickers)}")
+            snapshots = self.client.get_snapshot_all("stocks", tickers=list(tickers))
+            return [self._serialize_ticker_snapshot(snapshot) for snapshot in snapshots]
+        except Exception as e:
+            logger.error(f"Error fetching stock snapshots for {len(tickers)} tickers: {e!s}")
             raise
 
     @staticmethod

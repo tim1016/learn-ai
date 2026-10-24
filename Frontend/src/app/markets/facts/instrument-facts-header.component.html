@@ -1,0 +1,14 @@
+<app-asset-identity [symbol]="symbol()" [name]="name()" size="sm" />
+<app-quote-fact [state]="state()" layout="header" (retry)="readQuoteAgain()" />
+@if (span(); as span) {
+  <span
+    class="facts-chip"
+    title="The first and last day the lake holds for this instrument. It is a span, not a promise that every session between them is held."
+  >
+    Held span {{ span }}
+  </span>
+}
+@if (delisted()) {
+  <span class="facts-chip">delisted</span>
+}
+<app-archive-fact [fact]="archive()" />
