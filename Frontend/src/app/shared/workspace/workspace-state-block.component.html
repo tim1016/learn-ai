@@ -1,0 +1,30 @@
+@let content = state();
+<section class="state-block" [attr.role]="role()" [attr.data-tone]="tone()">
+  <p class="state-block__kind">{{ kindLabel() }}</p>
+  <p class="state-block__happened">{{ content.happened }}</p>
+
+  @if (content.why; as why) {
+    <p class="state-block__why">{{ why }}</p>
+  }
+
+  @if (progress(); as work) {
+    <div class="state-block__progress">
+      <span>{{ work.text }}</span>
+      @if (work.bar; as bar) {
+        <progress [value]="bar.done" [max]="bar.total"></progress>
+      }
+    </div>
+  }
+
+  @if (content.next; as next) {
+    <p class="state-block__next">{{ next }}</p>
+  }
+
+  @if (actions().length > 0) {
+    <div class="state-block__actions">
+      @for (action of actions(); track action.id) {
+        <app-workspace-action [action]="action" (triggered)="actionTriggered.emit($event)" />
+      }
+    </div>
+  }
+</section>
