@@ -4,7 +4,6 @@ import { from } from 'rxjs';
 
 import {
   BotHistoryService,
-  type BotHistoryQuery,
   type FleetBotHistoryPage,
 } from '../../components/brokers/alpaca-history/bot-history.service';
 import { GoldenSearchService } from '../../components/golden-search/golden-search.service';
@@ -57,7 +56,7 @@ function answer<T>(value: Answer<T>): Promise<T> {
 export interface SignalStrategyReads {
   readonly entries: () => void;
   readonly qualifications: () => void;
-  readonly fleet: (query: BotHistoryQuery) => void;
+  readonly fleet: (strategy: string | null, page: number) => void;
 }
 
 /**
@@ -129,8 +128,8 @@ export function provideSignalStrategyWorld(
     {
       provide: BotHistoryService,
       useValue: {
-        read: (query: BotHistoryQuery) => {
-          reads.fleet?.(query);
+        readRunning: (strategy: string | null, page: number) => {
+          reads.fleet?.(strategy, page);
           return answer(world.fleet);
         },
       },

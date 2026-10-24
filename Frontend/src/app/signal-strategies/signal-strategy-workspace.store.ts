@@ -13,7 +13,7 @@ import { StrategyValidationService } from '../services/strategy-validation.servi
 import type { StrategyValidationSummary } from '../services/strategy-validation.types';
 import { combineReads, readStateOf, type ReadState } from './read-state';
 import {
-  readRunningFleet,
+  readRunningBots,
   runningBotsFor,
   versionsBySymbol,
   type FleetRunningRead,
@@ -98,11 +98,8 @@ export class SignalStrategyWorkspaceStore {
     loader: ({ params }) => firstValueFrom(this.goldenValidations.list({ strategyName: params })),
   });
   private readonly fleetRead = resource({
-    params: () => (this.fleetWanted() ? {} : undefined),
-    loader: () =>
-      readRunningFleet((page) =>
-        this.botHistory.read({ account: null, status: 'running', world: null, symbol: null, bot: null, page }),
-      ),
+    params: () => (this.fleetWanted() ? this.key() : undefined),
+    loader: ({ params }) => readRunningBots(this.botHistory, params),
   });
   private readonly schemasRead = resource({
     params: () => (this.declarationsWanted() ? {} : undefined),

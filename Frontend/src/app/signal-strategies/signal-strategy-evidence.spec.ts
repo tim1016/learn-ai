@@ -73,6 +73,31 @@ describe('readRunningFleet', () => {
     expect(read.complete).toBe(false);
   });
 
+  it('counts a bot once when the fleet shifted between two pages, and says the read is incomplete', async () => {
+    // A bot started after page 1 was read pushed "b" onto page 2 as well: it is listed twice, and another bot is missed.
+    const pages = [
+      fleetPage({ rows: [runningBot({ strategy_instance_id: 'a' }), runningBot({ strategy_instance_id: 'b' })], total: 4, page_size: 2 }),
+      fleetPage({ rows: [runningBot({ strategy_instance_id: 'b' }), runningBot({ strategy_instance_id: 'c' })], total: 4, page: 2, page_size: 2 }),
+    ];
+
+    const read = await readRunningFleet(async (page) => pages[page - 1]);
+
+    expect(read.rows.map((row) => row.strategy_instance_id)).toEqual(['a', 'b', 'c']);
+    expect(read.complete).toBe(false);
+  });
+
+  it('is incomplete when the pages disagree about the total, though the rows add up', async () => {
+    const pages = [
+      fleetPage({ rows: [runningBot({ strategy_instance_id: 'a' })], total: 2, page_size: 1 }),
+      fleetPage({ rows: [runningBot({ strategy_instance_id: 'b' })], total: 3, page: 2, page_size: 1 }),
+    ];
+
+    const read = await readRunningFleet(async (page) => pages[page - 1]);
+
+    expect(read.rows).toHaveLength(2);
+    expect(read.complete).toBe(false);
+  });
+
   it('rejects when a page cannot be read, rather than answering with the pages it has', async () => {
     const pages = [fleetPage({ total: 2, page_size: 1 })];
 

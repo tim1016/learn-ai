@@ -20,7 +20,7 @@ import { SignalStrategyChipComponent } from './signal-strategy-chip.component';
 import {
   PROOF_TONES,
   proofSummaryOf,
-  readRunningFleet,
+  readRunningBots,
   runningBotsFor,
   versionsBySymbol,
   type FleetRunningRead,
@@ -69,12 +69,7 @@ export class SignalStrategiesListPageComponent {
   private readonly registryRead = resource({ loader: () => this.registry.entries() });
   private readonly proofRead = resource({ loader: () => this.validation.getCatalog() });
   private readonly qualificationsRead = resource({ loader: () => this.goldenSearch.listQualifications() });
-  private readonly fleetRead = resource({
-    loader: () =>
-      readRunningFleet((page) =>
-        this.botHistory.read({ account: null, status: 'running', world: null, symbol: null, bot: null, page }),
-      ),
-  });
+  private readonly fleetRead = resource({ loader: () => readRunningBots(this.botHistory, null) });
 
   protected readonly title = menuLabelFor('/signal-strategies');
   protected readonly purpose =

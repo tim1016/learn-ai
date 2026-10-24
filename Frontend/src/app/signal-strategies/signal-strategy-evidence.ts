@@ -1,5 +1,6 @@
 import {
   BOT_HISTORY_WORLDS,
+  type BotHistoryService,
   type BotHistoryWorld,
   type FleetBotHistoryPage,
   type FleetBotHistoryRow,
@@ -113,27 +114,49 @@ export interface FleetRunningRead {
 /**
  * Reads every page of running bots through `readPage`. A read that fails
  * rejects: a page missing from the middle is not a smaller fleet.
+ *
+ * Pages are read at different moments, so a bot that starts or stops between
+ * two of them can be listed twice or missed. A bot is counted once, and the
+ * read calls itself complete only when the pages agreed on the total and the
+ * bots counted are exactly that total.
  */
 export async function readRunningFleet(
   readPage: (page: number) => Promise<FleetBotHistoryPage>,
 ): Promise<FleetRunningRead> {
   const first = await readPage(1);
-  const rows = [...first.rows];
+  const bots = new Map<string, FleetBotHistoryRow>();
+  const take = (rows: readonly FleetBotHistoryRow[]): void => {
+    for (const row of rows) bots.set(`${row.clerk_id}/${row.strategy_instance_id}`, row);
+  };
+  take(first.rows);
   const gaps = new Map<string, FleetGap>(first.gaps.map((gap) => [gapKey(gap), gap]));
   let observedAtMs = first.observed_at_ms;
+  let totalsAgree = true;
   const pageCount = Math.ceil(first.total / first.page_size);
   for (let page = 2; page <= Math.min(pageCount, MAX_RUNNING_PAGES); page += 1) {
     const next = await readPage(page);
-    rows.push(...next.rows);
+    take(next.rows);
     for (const gap of next.gaps) gaps.set(gapKey(gap), gap);
     observedAtMs = Math.min(observedAtMs, next.observed_at_ms);
+    if (next.total !== first.total) totalsAgree = false;
   }
   return {
     observedAtMs,
-    rows,
+    rows: [...bots.values()],
     gaps: [...gaps.values()],
-    complete: gaps.size === 0 && pageCount <= MAX_RUNNING_PAGES && rows.length === first.total,
+    complete: gaps.size === 0 && totalsAgree && pageCount <= MAX_RUNNING_PAGES && bots.size === first.total,
   };
+}
+
+/**
+ * Every running bot of one strategy, or of every strategy when `strategyKey` is
+ * `null`: the one read the strategies list and a strategy's own pages share.
+ */
+export function readRunningBots(
+  botHistory: Pick<BotHistoryService, 'readRunning'>,
+  strategyKey: string | null,
+): Promise<FleetRunningRead> {
+  return readRunningFleet((page) => botHistory.readRunning(strategyKey, page));
 }
 
 function gapKey(gap: FleetGap): string {
