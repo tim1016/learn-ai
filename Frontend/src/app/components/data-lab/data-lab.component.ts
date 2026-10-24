@@ -13,8 +13,9 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 import { AssetIdentityComponent } from '../../shared/asset-identity';
 import { DateRangePickerComponent, ProviderBoundsService, type QuickRangeKey, type QuickRangeOffer } from '../../shared/date-picker';
-import { OptionArchiveCardComponent } from '../../shared/option-archive/option-archive-card.component';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
+import { HealthNoticeComponent } from '../../shared/scoped-health/health-notice.component';
+import { HEALTH_NEEDS } from '../../shared/scoped-health/scoped-health';
 import { TimestampDisplayPipe } from '../../shared/timestamp';
 import { SymbolPickerComponent } from '../../shared/symbol-picker/symbol-picker.component';
 import { DEFAULT_ADJUSTMENT_MODE } from '../../shared/ticker-catalog';
@@ -153,10 +154,10 @@ export function parseYmdMsUtc(s: string): number | null {
 @Component({
   selector: 'app-data-lab',
   imports: [
-    OptionArchiveCardComponent,
     RouterLink,
     RouterLinkActive,
     RouterOutlet,
+    HealthNoticeComponent,
     PageHeaderComponent,
     AssetIdentityComponent,
     RunDockComponent,
@@ -179,6 +180,16 @@ export class DataLabComponent {
   private readonly sessionService = inject(DataLabSessionService);
   private readonly rangePresetsService = inject(DataLabRangePresetsService);
   readonly store = inject(DataLabWorkspaceStore);
+  protected readonly healthNeeds = HEALTH_NEEDS.stockHistory;
+  /**
+   * The symbol the lake notice speaks for: the committed one (a lake gap in another symbol is none of this
+   * page's business), and only while the committed chart reads the split-adjusted view, the one view the
+   * health projection covers. A raw chart gets no notice rather than another tree's finding.
+   */
+  protected readonly healthInstrument = computed(() => {
+    const scope = this.store.committedScope();
+    return scope?.adjusted ? scope.ticker : null;
+  });
 
   /** The page is titled by the menu entry that leads to it (PRD #3490 R01):
    *  Stocks, or Return Distribution on its own study. */
@@ -228,13 +239,12 @@ export class DataLabComponent {
    *  the migration banner. The fetch decision belongs to Explore's mount
    *  auto-load, not to the ingress itself.
    *
-   *  The router owns the path: the legacy addresses (`/data-lab`,
-   *  `/data-quality`) redirect straight to the child their `mode` names, query
-   *  intact (`redirectLegacyDataLab`), and on a canonical child the path wins.
-   *  This never navigates. The trigger keys on a `mode` marker, the legacy
-   *  parent path, or a canonical child URL carrying legacy scope keys — that
-   *  last shape is what a `/data-quality?ticker=…` bookmark looks like once
-   *  redirected.
+   *  The router owns the path: the legacy address (`/data-lab`) redirects
+   *  straight to the child its `mode` names, query intact
+   *  (`redirectLegacyDataLab`), and on a canonical child the path wins. This
+   *  never navigates. The trigger keys on a `mode` marker, the legacy parent
+   *  path, or a canonical child URL carrying legacy scope keys — that last
+   *  shape is what a `/data-lab?ticker=…` bookmark looks like once redirected.
    *
    *  Public so the ingress spec can drive it against a stubbed
    *  `router.url`. */
@@ -250,7 +260,6 @@ export class DataLabComponent {
     const isLegacyShape =
       query.get('mode') !== null ||
       path === '/data-lab' ||
-      path === '/data-quality' ||
       (path.startsWith('/data-lab/') && hasLegacyScopeKeys);
     if (!isLegacyShape) return;
     this.ingressApplied = true;

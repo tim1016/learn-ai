@@ -16,34 +16,14 @@
         label="Refresh"
         severity="secondary"
         [loading]="loading()"
-        [disabled]="loading() || running()"
+        [disabled]="loading()"
         (onClick)="refresh()"
-      />
-      <p-button
-        icon="pi pi-play"
-        label="Run SPY EMA fixture"
-        [loading]="running()"
-        [disabled]="loading() || running()"
-        (onClick)="runFixture()"
       />
     </div>
   </header>
 
   @if (error(); as msg) {
     <p-message severity="error" class="sr-error">{{ msg }}</p-message>
-  }
-
-  @if (lastFixtureRunId(); as rid) {
-    <p-message severity="success" class="sr-flash">
-      <ng-template #content>
-        <span>
-          Fixture run completed:
-          <button type="button" class="sr-link" (click)="openById(rid)">
-            {{ shortHash(rid, 12) }}…
-          </button>
-        </span>
-      </ng-template>
-    </p-message>
   }
 
   <p-table
@@ -97,7 +77,7 @@
           @if (loading()) {
             Loading…
           } @else {
-            No runs persisted yet — try the fixture button above.
+            No runs persisted yet.
           }
         </td>
       </tr>

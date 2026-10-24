@@ -1,4 +1,5 @@
 <app-page-header title="Options Golden Search" icon="pi-search-plus"><a slot="actions" routerLink="/golden-search">Signal Golden Search</a><a slot="actions" routerLink="/options-backtest">Options setups</a></app-page-header>
+<app-health-notice [needs]="healthNeeds" />
 <main class="workbench">
   @if (error(); as message) { <p class="notice problem">{{ message }}</p> }
   @if (study(); as value) {

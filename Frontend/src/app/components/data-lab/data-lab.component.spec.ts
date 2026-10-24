@@ -16,6 +16,9 @@ import {
 import { RunSessionService } from '../../services/run-session.service';
 import { DataLabComponent } from './data-lab.component';
 import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
+import { fakeScopedHealth, healthItem, projection } from '../../shared/scoped-health/testing/scoped-health-fixtures';
+import { ScopedHealthService } from '../../shared/scoped-health/scoped-health.service';
+import { TestBed } from '@angular/core/testing';
 import { createDataLabWorkspaceStore, DataLabWorkspaceStore } from './data-lab-workspace-store';
 
 @Component({ selector: 'app-explore-stub', template: 'explore-stub' })
@@ -23,9 +26,6 @@ class ExploreStubComponent {}
 
 @Component({ selector: 'app-export-stub', template: 'export-stub' })
 class ExportStubComponent {}
-
-@Component({ selector: 'app-validate-stub', template: 'validate-stub' })
-class ValidateStubComponent {}
 
 @Component({ selector: 'app-returns-stub', template: 'returns-stub' })
 class ReturnsStubComponent {}
@@ -97,7 +97,6 @@ function shellRoutes(): Routes {
         { path: '', pathMatch: 'full', redirectTo: 'explore' },
         { path: 'explore', component: ExploreStubComponent },
         { path: 'export', component: ExportStubComponent },
-        { path: 'validate', component: ValidateStubComponent },
         { path: 'returns', component: ReturnsStubComponent },
       ],
     },
@@ -194,12 +193,11 @@ async function renderDirectShell(url: string) {
 }
 
 describe('DataLabComponent (shell)', () => {
-  it('renders the shell on first load: four route tabs, the redirect to explore, the default recipe, the quick-range chips', async () => {
+  it('renders the shell on first load: three route tabs, the redirect to explore, the default recipe, the quick-range chips', async () => {
     const { router, store } = await renderRoutedShell();
     expect.soft(router.url, 'redirects /data-lab to explore').toBe('/explore');
     expect.soft(screen.getByRole('link', { name: 'Explore' }), 'renders the Explore tab').toBeTruthy();
     expect.soft(screen.getByRole('link', { name: 'Build dataset' }), 'renders the Build dataset tab').toBeTruthy();
-    expect.soft(screen.getByRole('link', { name: 'Validate' }), 'renders the Validate tab').toBeTruthy();
     expect.soft(screen.getByRole('link', { name: 'Returns study' }), 'renders the Returns study tab').toBeTruthy();
     expect.soft(screen.getByText('explore-stub'), 'redirects /data-lab to explore: renders the explore child').toBeTruthy();
     expect.soft(store.indicators().length, 'seeds the thirteen-indicator default recipe into a fresh workspace').toBe(13);
@@ -211,10 +209,6 @@ describe('DataLabComponent (shell)', () => {
 
   it('navigates between child routes via the tabs', async () => {
     const { router } = await renderRoutedShell();
-    await userEvent.click(screen.getByRole('link', { name: 'Validate' }));
-    await waitFor(() => expect(router.url).toBe('/validate'));
-    expect(screen.getByText('validate-stub')).toBeTruthy();
-
     await userEvent.click(screen.getByRole('link', { name: 'Returns study' }));
     await waitFor(() => expect(router.url).toBe('/returns'));
     expect(screen.getByText('returns-stub')).toBeTruthy();
@@ -224,9 +218,9 @@ describe('DataLabComponent (shell)', () => {
     expect(screen.getByText('export-stub')).toBeTruthy();
   });
 
-  it('applies a redirected /data-quality bookmark where it landed, without moving again', async () => {
+  it('applies a redirected /data-lab bookmark where it landed, without moving again', async () => {
     const { navSpy, fixture } = await renderDirectShell(
-      '/data-lab/validate?ticker=AAPL&from=2026-04-15&to=2026-05-15',
+      '/data-lab/export?ticker=AAPL&from=2026-04-15&to=2026-05-15',
     );
     fixture.componentInstance.runLegacyIngress();
 
@@ -607,5 +601,55 @@ describe('DataLabComponent (symbol picker binding)', () => {
     result.fixture.componentInstance.store.patchDraft({ adjusted: false });
     result.fixture.detectChanges();
     expect(result.fixture.componentInstance.pickerAdjustmentMode()).toBe('raw');
+  });
+});
+
+describe('DataLabComponent lake health notice', () => {
+  const lakeGap = projection(
+    healthItem({
+      kind: 'stock_bars',
+      instrument: 'SPY',
+      severity: 'warning',
+      explanation: 'SPY has 3 scheduled sessions that are not in the lake.',
+      link: { tab: 'lake', query: { symbol: 'SPY', price_adjustment_mode: 'polygon_split_adjusted', data_type: 'trade' } },
+    }),
+  );
+
+  it('asks nothing until a symbol is committed, then asks about that symbol\'s stock history only', async () => {
+    const health = fakeScopedHealth(lakeGap);
+    TestBed.overrideProvider(ScopedHealthService, { useValue: { read: health.read } });
+    const { fixture } = await renderDirectShell('/data-lab/returns?ticker=SPY&from=2026-04-15&to=2026-05-15');
+
+    expect(health.read).not.toHaveBeenCalled();
+    expect(screen.queryByText(/not in the lake/)).toBeNull();
+
+    fixture.componentInstance.runLegacyIngress();
+    fixture.detectChanges();
+
+    expect(await screen.findByText(/SPY has 3 scheduled sessions/)).toBeTruthy();
+    expect(health.read).toHaveBeenCalledWith({ operations: ['stock_history'], instrument: 'SPY' });
+    expect(screen.getByRole('link', { name: 'Open Lake' }).getAttribute('href')).toBe(
+      '/operations/lake?symbol=SPY&price_adjustment_mode=polygon_split_adjusted&data_type=trade',
+    );
+  });
+
+  it('says nothing about the lake for a raw chart, which the split-adjusted health does not speak for', async () => {
+    const health = fakeScopedHealth(lakeGap);
+    TestBed.overrideProvider(ScopedHealthService, { useValue: { read: health.read } });
+    const { store, fixture } = await renderRoutedShell();
+    store.patchDraft({
+      ticker: 'SPY',
+      adjusted: false,
+      window: { startMsUtc: preset6M.start_ms_utc, endMsUtc: preset6M.end_ms_utc },
+    });
+    fixture.detectChanges();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Apply scope' }));
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    expect(store.committedTicker()).toBe('SPY');
+    expect(health.read).not.toHaveBeenCalled();
+    expect(screen.queryByText(/not in the lake/)).toBeNull();
   });
 });

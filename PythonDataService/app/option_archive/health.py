@@ -19,13 +19,10 @@ from app.schemas.option_archive import (
     ArchiveGap,
     ArchiveJobHealth,
     ArchivePhase,
-    ArchiveSeverity,
     OptionArchiveHealth,
     UnderlyingArchiveHealth,
 )
 from app.utils.session_anchors import et_date_at_ms
-
-_ATTENTION: tuple[ArchiveSeverity, ...] = ("at_risk", "failed", "unavailable")
 
 
 def _job_health(receipt: JobReceipt, *, now_ms: int, stale_ms: int, name: str, problem: str | None = None) -> ArchiveJobHealth:
@@ -140,6 +137,4 @@ def project_health(state: ArchiveStateDoc, *, now_ms: int, config: ArchiveSettin
                 if row.complete and row.ended_ms is not None and row.ended_ms > cutoff]
     backup.oldest_unbacked_capture_ms = min(unbacked, default=None)
     restore = _job_health(state.job("restore"), now_ms=now_ms, stale_ms=config.RESTORE_STALE_MS, name="test restore")
-    attention = any(item.severity in _ATTENTION for item in (*result, backup, restore))
-    return OptionArchiveHealth(enabled=config.ENABLED, generated_ms=now_ms, attention=attention,
-        underlyings=result, backup=backup, test_restore=restore)
+    return OptionArchiveHealth(enabled=config.ENABLED, generated_ms=now_ms, underlyings=result, backup=backup, test_restore=restore)

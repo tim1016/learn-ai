@@ -36,7 +36,7 @@ function toFailure(raw: unknown): BackfillFailure | null {
  * Parse one `data_lake.backfill_day` frame, or `null` for anything else.
  *
  * The one place the backfill's per-day frame is read. Two surfaces need it
- * and they need it for opposite reasons — the Observatory panel renders
+ * and they need it for opposite reasons — the Lake tab's panel renders
  * every day as a receipt row, while the picker's coverage gate only wants
  * the typed failure that explains why nothing landed — so the parse lives
  * here rather than once per consumer. A second copy is how the two would

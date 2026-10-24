@@ -656,7 +656,7 @@ async def test_run_readiness_flags_the_sessions_missing_between_a_symbols_first_
     monkeypatch.setattr(catalog_client, "select_symbol_revision_counts", _counts)
     monkeypatch.setattr(catalog_client, "select_coverage_minute_bars", _sessions)
     # The provider's floor moves with today's date; pinned, the hole stays fetchable whenever this runs.
-    monkeypatch.setattr(data_lake_router, "_provider_history_floor", lambda: date(2021, 1, 4))
+    monkeypatch.setattr(data_lake_router, "current_polygon_history_floor", lambda: date(2021, 1, 4))
     app = make_data_lake_app(include_data_lake=True)
 
     status_code, body = await _get(app, "/api/data-lake/run-readiness?price_adjustment_mode=raw")
