@@ -108,6 +108,27 @@ describe('an instrument\'s Data tab', () => {
     expect(screen.getByRole('button', { name: 'Fill 2 sessions' })).toBeTruthy();
   });
 
+  it('does not promise that a Fill leaves a no-bars session alone when it lies between two the Fill fetches', async () => {
+    const opened = await openPlace(`/markets/SPY/data?${WINDOW_QUERY}`);
+    await flushRead(
+      opened,
+      dataReport(
+        [
+          dataSession(0, 'missing', { fetchable: true }),
+          dataSession(1, 'failed', { reason: 'provider_no_data', blocked_by: 'provider_no_data' }),
+          dataSession(2, 'missing', { fetchable: true }),
+        ],
+        { fill_window: { start_trading_date_ms: Date.UTC(2026, 3, 15, 12), end_trading_date_ms: Date.UTC(2026, 3, 17, 12) } },
+      ),
+    );
+
+    const gaps = await screen.findByRole('region', { name: 'Gaps in the window' });
+    expect(within(gaps).getByText(/asks the provider again if it lies inside the span the Fill covers/)).toBeTruthy();
+    expect(screen.getByText(/A session in between that failed, or that drew no bars from the provider, is asked for again/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Fill 2 sessions' })).toBeTruthy();
+    expect(screen.queryByText(/A Fill does not ask again/)).toBeNull();
+  });
+
   it('says nothing is left to fetch, and offers no Fill, when only the provider\'s history is out of reach', async () => {
     const opened = await openPlace(`/markets/SPY/data?${WINDOW_QUERY}`);
     await flushRead(
