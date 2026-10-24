@@ -17,6 +17,3 @@ the `int64 ms UTC` timestamp convention; they are not golden trading results.
   (`_serialize_signal_report` over a report with every field set). Python tests that
   the serializer still writes it, and the Angular runner's mapper reads it, so a
   field's shape cannot change on one side only.
-- `feature-study-bar-minutes-v1.json` pins the minute-bar lengths the Feature study accepts
-  (Python's `SUPPORTED_BAR_MINUTES`), which the Feature page offers by importing this file, so the list the person
-  chooses from cannot drift from the list the server accepts.

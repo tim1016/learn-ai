@@ -48,7 +48,7 @@ from tests._helpers.pinned_vendor import mock_vendor, vendor_history
 ATOL = 1e-9
 RTOL = 0.0
 
-BAR_MINUTES_FIXTURE = Path(__file__).resolve().parents[3] / "contracts" / "fixtures" / "feature-study-bar-minutes-v1.json"
+BAR_MINUTES_CONTRACT = Path(__file__).resolve().parents[3] / "contracts" / "feature-study-bar-minutes.json"
 
 ET = ZoneInfo("America/New_York")
 NOW_MS = 1_735_689_600_000  # 2025-01-01
@@ -257,4 +257,4 @@ def test_every_bar_length_that_divides_the_target_is_accepted(multiplier):
 
 def test_the_bar_lengths_the_page_offers_are_the_ones_the_study_accepts():
     """The Feature page offers exactly the lengths in this file (it imports it); the study accepts exactly these."""
-    assert tuple(json.loads(BAR_MINUTES_FIXTURE.read_text())["bar_minutes"]) == SUPPORTED_BAR_MINUTES
+    assert tuple(json.loads(BAR_MINUTES_CONTRACT.read_text())["bar_minutes"]) == SUPPORTED_BAR_MINUTES

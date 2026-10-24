@@ -130,7 +130,7 @@ describe('describeLakeHolding', () => {
   });
 
   it('says a running capture first, with the server’s progress and a way to cancel it', () => {
-    const running: LakeCapture = { kind: 'running', symbol: 'SPY', sessions: 12 };
+    const running: LakeCapture = { kind: 'running', symbol: 'SPY', sessions: 12, cancelRefused: null };
 
     const started = describeLakeHolding(read({ sessions: 60, missing: 12 }), running, null);
     const ticking = describeLakeHolding(read({ sessions: 60, missing: 12 }), running, { done: 5, total: 20 });
@@ -140,6 +140,17 @@ describe('describeLakeHolding', () => {
     expect.soft(started?.progress).toEqual({ kind: 'phase', label: 'Starting the capture' });
     expect.soft(ticking?.progress).toEqual({ kind: 'counts', done: 5, total: 20, unit: 'days of the span' });
     expect.soft(ticking?.actions).toEqual([{ id: CANCEL_CAPTURE_ACTION_ID, label: 'Cancel the capture' }]);
+    expect.soft(ticking?.why, 'nothing was refused').toBeNull();
+  });
+
+  it('keeps saying a capture runs when the server refused to stop it, with the refusal as the why and Cancel offered again', () => {
+    const refused: LakeCapture = { kind: 'running', symbol: 'SPY', sessions: 12, cancelRefused: 'The server could not be told to stop it, so it may still be running. Network error' };
+
+    const state = describeLakeHolding(read({ sessions: 60, missing: 12 }), refused, { done: 5, total: 20 });
+
+    expect.soft(state?.kind).toBe('filling');
+    expect.soft(state?.why).toBe('The server could not be told to stop it, so it may still be running. Network error');
+    expect.soft(state?.actions).toEqual([{ id: CANCEL_CAPTURE_ACTION_ID, label: 'Cancel the capture' }]);
   });
 
   it('says a capture that stopped, what it was and that Run study still fetches the rest', () => {

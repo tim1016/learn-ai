@@ -111,7 +111,7 @@ describe('createLakeHolding', () => {
         symbol: 'SPY', price_adjustment_mode: 'polygon_split_adjusted',
         start_trading_date_ms: SPAN?.start_trading_date_ms, end_trading_date_ms: SPAN?.end_trading_date_ms,
       });
-      expect.soft(control.capture()).toEqual({ kind: 'running', symbol: 'SPY', sessions: 12 });
+      expect.soft(control.capture()).toEqual({ kind: 'running', symbol: 'SPY', sessions: 12, cancelRefused: null });
       expect.soft(control.progress()).toBeNull();
       runner.state.set({ kind: 'running', started: true, progress: { current: 5, total: 20, unit: 'days', message: null } });
       expect.soft(control.progress()).toEqual({ done: 5, total: 20 });
@@ -193,7 +193,7 @@ describe('createLakeHolding', () => {
       expect(runner.job.cancel).toHaveBeenCalledOnce();
     });
 
-    it('stops saying "capturing" when the server could not be told, and says the job may still be running', async () => {
+    it('stays running when the server could not be told, says why beside it, and offers Cancel again', async () => {
       const { runner, control, settle } = setup();
       await settle('read');
       void control.startCapture();
@@ -202,8 +202,16 @@ describe('createLakeHolding', () => {
 
       await control.cancelCapture();
 
-      const stopped = control.capture();
-      expect(stopped.kind === 'stopped' && stopped.message).toContain('may still be running');
+      const refused = control.capture();
+      expect.soft(refused.kind, 'the job may still be writing').toBe('running');
+      expect.soft(refused.kind === 'running' && refused.cancelRefused).toBe('The server could not be told to stop it, so it may still be running. Network error');
+      expect.soft(refused.kind === 'running' && refused.sessions, 'it is still the same capture').toBe(12);
+      control.dismissCapture();
+      expect.soft(control.capture().kind, 'there is no note to put away while it runs').toBe('running');
+
+      await control.cancelCapture();
+
+      expect.soft(runner.job.cancel, 'Cancel is offered again').toHaveBeenCalledTimes(2);
     });
 
     it('starts no second capture after a cancel the server refused, because the first job may still be writing', async () => {
@@ -214,15 +222,16 @@ describe('createLakeHolding', () => {
       runner.job.cancel.mockRejectedValueOnce(new Error('Network error'));
       await control.cancelCapture();
       control.dismissCapture();
-      expect(control.capture(), 'the note is put away').toEqual({ kind: 'idle' });
 
       await control.startCapture();
 
       expect.soft(runner.run, 'the first job has not ended').toHaveBeenCalledTimes(1);
       runner.end({ kind: 'completed', failure: null });
       await first;
+      expect.soft(control.capture(), 'the refusal belongs to the job that ended').toEqual({ kind: 'idle' });
       void control.startCapture();
       await vi.waitFor(() => expect(runner.run, 'once it has ended the person may capture again').toHaveBeenCalledTimes(2));
+      expect(control.capture()).toEqual({ kind: 'running', symbol: 'SPY', sessions: 12, cancelRefused: null });
       runner.end({ kind: 'completed', failure: null });
     });
   });

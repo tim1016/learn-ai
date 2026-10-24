@@ -49,7 +49,13 @@ export type LakeHoldingReading =
 /** The one capture that may be running, and how the last one ended when it did not finish. */
 export type LakeCapture =
   | { readonly kind: 'idle' }
-  | { readonly kind: 'running'; readonly symbol: string; readonly sessions: number }
+  | {
+      readonly kind: 'running';
+      readonly symbol: string;
+      readonly sessions: number;
+      /** Why the server could not be told to stop the job, when it refused a cancel; the job may still be writing. */
+      readonly cancelRefused: string | null;
+    }
   | { readonly kind: 'stopped'; readonly cancelled: boolean; readonly message: string };
 
 export const CAPTURE_ACTION_ID = 'capture';
@@ -101,6 +107,7 @@ export function describeLakeHolding(
         progress === null
           ? { kind: 'phase', label: 'Starting the capture' }
           : { kind: 'counts', done: progress.done, total: progress.total, unit: 'days of the span' },
+      why: capture.cancelRefused,
       next: 'Cancelling stops the capture; what it already wrote stays in the lake. Run study is not held up by it.',
       actions: [{ id: CANCEL_CAPTURE_ACTION_ID, label: 'Cancel the capture' }],
     };

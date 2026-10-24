@@ -66,12 +66,12 @@ export function createLakeHolding(request: Signal<InstrumentDataRequest | null>)
 
     async startCapture() {
       const held = reading();
-      // `busy` outlasts the note: after a cancel the server refused, the job may still be writing.
+      // A second press while a capture runs, including one whose cancel the server refused, starts nothing.
       if (held.kind !== 'read' || fill.busy()) return;
       const { request: counted, holding } = held;
       const span = holding.captureSpan;
       if (span === null) return;
-      capture.set({ kind: 'running', symbol: counted.symbol, sessions: holding.toCapture });
+      capture.set({ kind: 'running', symbol: counted.symbol, sessions: holding.toCapture, cancelRefused: null });
 
       const end = await fill.run(counted, span);
       switch (end.kind) {
@@ -93,8 +93,10 @@ export function createLakeHolding(request: Signal<InstrumentDataRequest | null>)
 
     async cancelCapture() {
       const refused = await fill.cancel();
-      // The page must not keep saying "capturing" for a job it could not stop; the job may still be writing.
-      if (refused !== null && capture().kind === 'running') capture.set({ kind: 'stopped', cancelled: false, message: refused });
+      // A job the server could not be told to stop is still what the capture is doing: it stays running, says why, and
+      // offers Cancel again, as the Data tab's Fill does.
+      if (refused === null) return;
+      capture.update((state) => (state.kind === 'running' ? { ...state, cancelRefused: refused } : state));
     },
 
     dismissCapture() {

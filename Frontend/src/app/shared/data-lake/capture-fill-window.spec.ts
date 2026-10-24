@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { EnvironmentInjector, createEnvironmentInjector, runInInjectionContext, signal, type WritableSignal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { describe, expect, it, vi } from 'vitest';
@@ -86,6 +87,25 @@ describe('createFillWindowCapture', () => {
     finish({ kind: 'cancelled', code: 'backfill_cancelled', message: 'The backfill was cancelled.' });
     await running;
     expect(capture.busy()).toBe(false);
+  });
+
+  it('words a cancel the server answered with an error in the server’s own words, not as an object', async () => {
+    const { capture, job, finish, run } = setup();
+    const running = capture.run(SUBJECT, WINDOW);
+    await vi.waitFor(() => expect(run).toHaveBeenCalled());
+    await vi.waitFor(() => expect(capture.busy()).toBe(true));
+    job.cancel.mockRejectedValueOnce(new HttpErrorResponse({
+      status: 409,
+      statusText: 'Conflict',
+      error: { detail: { reason: 'job_not_cancellable', message: 'The job already finished.' } },
+    }));
+
+    const refused = await capture.cancel();
+
+    expect.soft(refused).toBe('The server could not be told to stop it, so it may still be running. The job already finished.');
+    expect.soft(refused).not.toContain('[object Object]');
+    finish({ kind: 'cancelled', code: 'backfill_cancelled', message: 'The backfill was cancelled.' });
+    await running;
   });
 
   it('stops watching the job, and never stops it, when the page is left, and reads nothing for a page that has gone', async () => {

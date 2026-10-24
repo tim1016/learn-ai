@@ -60,7 +60,7 @@ import {
   type LakeSessionPolicy,
   type LakeStudyRefused,
 } from '../../../shared/lake-study/lake-study';
-import featureBarMinutes from '@repo-contracts/fixtures/feature-study-bar-minutes-v1.json';
+import featureBarMinutes from '@repo-contracts/feature-study-bar-minutes.json';
 
 /** The session a saved run computed on: the one it names, or extended, which is what the study computed on before it named one. */
 function storedSession(stored: StoredInputs): Session {

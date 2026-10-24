@@ -2,7 +2,7 @@ import { DestroyRef, computed, inject, signal, type Signal } from '@angular/core
 
 import { TickerCatalogService } from '../ticker-catalog';
 import type { BackfillJobRun } from './backfill-job-runner';
-import type { InstrumentDataReport } from './data-lake.service';
+import { classifyDataLakeError, type InstrumentDataReport } from './data-lake.service';
 import type { InstrumentDataRequest } from './instrument-data-request';
 import { TradeBackfillRunner, type TradeBackfillEnd } from './trade-backfill-runner';
 
@@ -24,8 +24,9 @@ export interface FillWindowCapture {
   /**
    * Captures `window`, the span the server's reading named, for one instrument in one tree, through the established
    * backfill job (sessions already held inside it are reused, not fetched again). Call it only while `busy` is false.
-   * When the job has ended, the catalog the pickers show is read again, because the lake was written to whether the
-   * job completed, failed or was cancelled. `detached` means this page stopped watching: the job may still be running.
+   * When the job has ended, the catalog the pickers show is read again, because an accepted job wrote what it wrote
+   * whether it completed, failed or was cancelled (a failure before submission wrote nothing; the read is then only
+   * redundant). `detached` means this page stopped watching: the job may still be running.
    */
   run(subject: Pick<InstrumentDataRequest, 'symbol' | 'tree'>, window: FillWindow): Promise<TradeBackfillEnd>;
   /** Asks the server to cancel the running job; what it already wrote stays. Resolves with why it could not, or `null`. */
@@ -78,7 +79,8 @@ export function createFillWindowCapture(): FillWindowCapture {
         );
         job.set(null);
         if (left) return { kind: 'detached' };
-        // The pickers' held spans are read off the lake, which the job wrote to, cancelled or not.
+        // The pickers' held spans are read off the lake. An accepted job wrote to it, cancelled or not; a failure before
+        // submission wrote nothing, so that read is redundant but never wrong.
         if (end.kind !== 'detached') catalog.viewFor(tree).reload();
         return end;
       } finally {
@@ -91,8 +93,8 @@ export function createFillWindowCapture(): FillWindowCapture {
         await job()?.cancel();
         return null;
       } catch (error) {
-        const why = error instanceof Error ? error.message : String(error);
-        return `The server could not be told to stop it, so it may still be running. ${why}`;
+        const { message } = classifyDataLakeError(error);
+        return `The server could not be told to stop it, so it may still be running. ${message}`;
       }
     },
   };

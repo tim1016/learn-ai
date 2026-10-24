@@ -117,8 +117,8 @@ export class InstrumentDataStore {
    */
   async startFill(): Promise<void> {
     const held = this.inspectionState();
-    // `busy` outlasts the "running" state: after a cancel the server refused, the job may still be writing.
-    if (held.kind !== 'read' || this.fillState().kind === 'running' || this.capture.busy()) return;
+    // A Fill stays `running` until its job has ended, a cancel the server refused included, so this one guard holds.
+    if (held.kind !== 'read' || this.fillState().kind === 'running') return;
     const { request, report: before } = held;
     const window = before.fill_window;
     if (window === null || window === undefined) return;

@@ -17,7 +17,7 @@ import {
 } from '../data-lake';
 import { TradeBackfillRunner, type TradeBackfillEnd } from '../data-lake/trade-backfill-runner';
 import type { TradeBackfillWindow } from '../data-lake/trade-backfill-spec';
-import type { BackfillDefaults, BackfillFailure, PriceAdjustmentMode } from '../data-lake';
+import type { BackfillDefaults, BackfillFailure, LakeTree, PriceAdjustmentMode } from '../data-lake';
 import { isRunnableSpan } from '../ticker-catalog';
 import { TickerCatalogService } from '../ticker-catalog';
 import { etIsoDate } from '../date/et-midnight';
@@ -70,11 +70,11 @@ export function fitBackfillWindow(
 }
 
 /**
- * The adjustment modes the fetch pipeline can actually write. A picker host
- * asking for any other view cannot be served by a backfill, so the gate
- * refuses loudly instead of submitting a spec that changes nothing.
+ * The adjustment modes the fetch pipeline can actually write: the lake trees (`LakeTree`, which a capture writes and
+ * an instrument-data reading is asked of). A picker host asking for any other view cannot be served by a backfill, so
+ * the gate refuses loudly instead of submitting a spec that changes nothing.
  */
-export type BackfillableMode = 'raw' | 'polygon_split_adjusted';
+export type BackfillableMode = LakeTree;
 
 /**
  * The mode narrowed to what the fetch pipeline can actually write, or `null`
