@@ -21,9 +21,11 @@ import {
  * presentation. The strike window, the money strike, the shading and every figure's format
  * are the Options Lab chain's, moved here unchanged.
  *
- * The snapshot carries a quote, a day's bar, Greeks and open interest per contract. A figure
- * the provider sent as nothing, or as zero where zero is no figure, is an absent field and
- * draws as a dash.
+ * The snapshot carries a quote, a day's bar, a last trade, Greeks and open interest per contract.
+ * A figure the provider sent as nothing, or as 0 where 0 is no figure, is an absent field with the
+ * reason that is true of it, and draws as a dash. The last price is a trade (the day's close or the
+ * last trade) and never a quote's midpoint. A contract is a row of its own, so a standard and an
+ * adjusted contract at one strike stay two rows.
  */
 
 export type ChainDensity = 'quick' | 'greeks' | 'flow';
@@ -65,37 +67,40 @@ function snapshotSpot(stock: StockTickerSnapshot | null, underlying: SnapshotUnd
   return underlying?.price ?? 0;
 }
 
-function fmtPrice(value: number | null | undefined): string | null {
-  return value != null && value > 0 ? value.toFixed(2) : null;
+/** What a figure the provider sent as a number is drawn as: its text when it is more than 0, 0 as "sent 0", and nothing sent as such. */
+function figure(value: number | null | undefined, text: (value: number) => string, bar?: number): ChainField {
+  if (value == null) return absent('not_in_snapshot');
+  if (value === 0) return absent('sent_zero');
+  return { kind: 'value', text: text(value), atMs: null, ...(bar === undefined ? {} : { bar }) };
 }
 
-/** The last price the snapshot gives: the day's close, else its last trade, else the quote's midpoint. */
-function resolveLast(contract: SnapshotContractResult | null): string | null {
-  if (!contract) return null;
-  if (contract.day?.close != null && contract.day.close > 0) return contract.day.close.toFixed(2);
-  if (contract.lastTrade?.price != null && contract.lastTrade.price > 0) return contract.lastTrade.price.toFixed(2);
-  if (contract.lastQuote?.midpoint != null && contract.lastQuote.midpoint > 0) return contract.lastQuote.midpoint.toFixed(2);
-  const bid = contract.lastQuote?.bid ?? 0;
-  const ask = contract.lastQuote?.ask ?? 0;
-  if (bid > 0 && ask > 0) return ((bid + ask) / 2).toFixed(2);
-  return null;
+const price = (value: number | null | undefined): ChainField => figure(value, (each) => each.toFixed(2));
+
+/**
+ * The last price the snapshot gives: the day's close, else its last trade. A quote is never a last
+ * price, so with no trade the field is absent and says so: bid and ask are their own fields, and a
+ * midpoint drawn as a price that traded would be a quote read as a print.
+ */
+function lastPrice(contract: SnapshotContractResult): ChainField {
+  const close = contract.day?.close;
+  if (close != null && close > 0) return { kind: 'value', text: close.toFixed(2), atMs: null };
+  const trade = contract.lastTrade;
+  if (trade == null) return absent('no_trade_in_snapshot');
+  return trade.price != null && trade.price > 0 ? { kind: 'value', text: trade.price.toFixed(2), atMs: null } : absent('no_price_sent');
 }
 
-function fmtSpread(bid: number | null | undefined, ask: number | null | undefined): string | null {
-  if (bid == null || ask == null || bid <= 0 || ask <= 0 || ask < bid) return null;
-  return (ask - bid).toFixed(2);
+/** The ask less the bid, from a two-sided quote that is not crossed. */
+function spread(bid: number | null | undefined, ask: number | null | undefined): ChainField {
+  if (bid == null || ask == null || bid <= 0 || ask <= 0 || ask < bid) return absent('no_two_sided_quote');
+  return { kind: 'value', text: (ask - bid).toFixed(2), atMs: null };
 }
 
-function fmtGreek(value: number | null | undefined): string | null {
-  return value != null ? value.toFixed(3) : null;
-}
+const greek = (value: number | null | undefined): ChainField =>
+  value == null ? absent('not_in_snapshot') : { kind: 'value', text: value.toFixed(3), atMs: null };
 
-function fmtIv(value: number | null | undefined): string | null {
-  return value != null && value > 0 ? (value * 100).toFixed(2) + '%' : null;
-}
+const iv = (value: number | null | undefined): ChainField => figure(value, (each) => (each * 100).toFixed(2) + '%');
 
-function fmtVolume(value: number | null | undefined): string | null {
-  if (value == null || value === 0) return null;
+function count(value: number): string {
   if (value >= 1_000_000) return (value / 1_000_000).toFixed(1) + 'M';
   if (value >= 1_000) return (value / 1_000).toFixed(1) + 'K';
   return value.toLocaleString();
@@ -106,31 +111,28 @@ function barWidth(volume: number | null | undefined, max: number): number {
   return Math.min(100, (volume / max) * 100);
 }
 
-function field(text: string | null, bar?: number): ChainField {
-  return text === null ? absent('not_in_snapshot') : { kind: 'value', text, atMs: null, ...(bar === undefined ? {} : { bar }) };
-}
-
 /** The snapshot holds no engine delta: only Now · Live IBKR compares one against the feed's. */
 const NO_COMPARISON = absent('not_compared', 'only Now · Live IBKR compares an engine delta');
 
-function contractCell(contract: SnapshotContractResult | null, maxVolume: number): ChainSideCell {
-  if (contract === null) return { kind: 'gap', words: 'No contract at this strike' };
+function contractCell(contract: SnapshotContractResult | null, maxVolume: number, gap: string): ChainSideCell {
+  if (contract === null) return { kind: 'gap', words: gap };
+  const quote = contract.lastQuote;
   const cell: ChainContractCell = {
     kind: 'contract',
     symbol: contract.ticker ?? '',
-    standard: null,
+    standard: contract.standard,
     fields: {
-      last: field(resolveLast(contract)),
-      bid: field(fmtPrice(contract.lastQuote?.bid)),
-      ask: field(fmtPrice(contract.lastQuote?.ask)),
-      spread: field(fmtSpread(contract.lastQuote?.bid, contract.lastQuote?.ask)),
-      delta: field(fmtGreek(contract.greeks?.delta)),
-      gamma: field(fmtGreek(contract.greeks?.gamma)),
-      theta: field(fmtGreek(contract.greeks?.theta)),
-      vega: field(fmtGreek(contract.greeks?.vega)),
-      iv: field(fmtIv(contract.impliedVolatility)),
-      volume: field(fmtVolume(contract.day?.volume), barWidth(contract.day?.volume, maxVolume)),
-      openInterest: field(fmtVolume(contract.openInterest)),
+      last: lastPrice(contract),
+      bid: price(quote?.bid),
+      ask: price(quote?.ask),
+      spread: spread(quote?.bid, quote?.ask),
+      delta: greek(contract.greeks?.delta),
+      gamma: greek(contract.greeks?.gamma),
+      theta: greek(contract.greeks?.theta),
+      vega: greek(contract.greeks?.vega),
+      iv: iv(contract.impliedVolatility),
+      volume: figure(contract.day?.volume, count, barWidth(contract.day?.volume, maxVolume)),
+      openInterest: figure(contract.openInterest, count),
       engineDelta: NO_COMPARISON,
       deltaGap: NO_COMPARISON,
     },
@@ -138,28 +140,44 @@ function contractCell(contract: SnapshotContractResult | null, maxVolume: number
   return cell;
 }
 
+/** The figure between the sides: the two implied volatilities' mean where both are sent, else the one that is. */
 function centreIv(call: SnapshotContractResult | null, put: SnapshotContractResult | null): ChainField {
-  const callIv = call?.impliedVolatility ?? 0;
-  const putIv = put?.impliedVolatility ?? 0;
-  const centre = callIv > 0 && putIv > 0 ? (callIv + putIv) / 2 : callIv || putIv;
-  return field(fmtIv(centre));
+  const sent = [call?.impliedVolatility, put?.impliedVolatility].filter((each): each is number => each != null);
+  if (sent.length === 0) return absent('not_in_snapshot');
+  const usable = sent.filter((each) => each > 0);
+  if (usable.length === 0) return absent('sent_zero');
+  return iv(usable.reduce((total, each) => total + each, 0) / usable.length);
 }
 
-/** The rows the snapshot shows: every listed strike, or those within `range` strikes of the money. */
+/** The contracts of one right at one strike, a standard one before an adjusted one so the rows keep a stable order. */
+function atStrike(contracts: readonly SnapshotContractResult[]): readonly SnapshotContractResult[] {
+  const rank = (contract: SnapshotContractResult): number => (contract.standard === true ? 0 : contract.standard === null ? 1 : 2);
+  return [...contracts].sort((a, b) => rank(a) - rank(b) || (a.ticker ?? '').localeCompare(b.ticker ?? ''));
+}
+
+interface StrikeContracts {
+  readonly calls: SnapshotContractResult[];
+  readonly puts: SnapshotContractResult[];
+}
+
+/**
+ * The rows the snapshot shows: every listed strike, or those within `range` strikes of the money.
+ * A strike lists every contract the provider sent for it: a standard and an adjusted call at one
+ * strike are two rows, never one hiding the other, as in the archive's chain.
+ */
 function snapshotRows(inputs: SnapshotChainInputs, spot: number): ChainRow[] {
   const { contracts, strikeRange, showAll } = inputs;
   if (contracts.length === 0) return [];
 
-  const callMap = new Map<number, SnapshotContractResult>();
-  const putMap = new Map<number, SnapshotContractResult>();
-  const strikeSet = new Set<number>();
+  const byStrike = new Map<number, StrikeContracts>();
   for (const contract of contracts) {
     if (contract.strikePrice == null) continue;
-    strikeSet.add(contract.strikePrice);
-    if (contract.contractType === 'call') callMap.set(contract.strikePrice, contract);
-    else if (contract.contractType === 'put') putMap.set(contract.strikePrice, contract);
+    const here = byStrike.get(contract.strikePrice) ?? { calls: [], puts: [] };
+    if (contract.contractType === 'call') here.calls.push(contract);
+    else if (contract.contractType === 'put') here.puts.push(contract);
+    byStrike.set(contract.strikePrice, here);
   }
-  const strikes = [...strikeSet].sort((a, b) => a - b);
+  const strikes = [...byStrike.keys()].sort((a, b) => a - b);
 
   let atmStrike: number | null = null;
   if (spot > 0 && strikes.length > 0) {
@@ -182,24 +200,34 @@ function snapshotRows(inputs: SnapshotChainInputs, spot: number): ChainRow[] {
   let maxCallVolume = 0;
   let maxPutVolume = 0;
   for (const strike of visible) {
-    maxCallVolume = Math.max(maxCallVolume, callMap.get(strike)?.day?.volume ?? 0);
-    maxPutVolume = Math.max(maxPutVolume, putMap.get(strike)?.day?.volume ?? 0);
+    const here = byStrike.get(strike);
+    for (const call of here?.calls ?? []) maxCallVolume = Math.max(maxCallVolume, call.day?.volume ?? 0);
+    for (const put of here?.puts ?? []) maxPutVolume = Math.max(maxPutVolume, put.day?.volume ?? 0);
   }
 
-  return visible.map<ChainRow>((strike) => {
-    const call = callMap.get(strike) ?? null;
-    const put = putMap.get(strike) ?? null;
-    const atm = strike === atmStrike;
-    return {
-      key: String(strike),
-      strike: strike.toFixed(2),
-      atm,
-      mark: atm && spot > 0 ? `ATM ${spot.toFixed(2)}` : null,
-      itm: spot > 0 && !atm ? (strike < spot ? 'call' : strike > spot ? 'put' : null) : null,
-      centre: centreIv(call, put),
-      call: contractCell(call, maxCallVolume),
-      put: contractCell(put, maxPutVolume),
-    };
+  return visible.flatMap<ChainRow>((strike) => {
+    const here = byStrike.get(strike);
+    const calls = atStrike(here?.calls ?? []);
+    const puts = atStrike(here?.puts ?? []);
+    const money = strike === atmStrike;
+    const rows: ChainRow[] = [];
+    for (let place = 0; place < Math.max(calls.length, puts.length); place += 1) {
+      const call = calls.at(place) ?? null;
+      const put = puts.at(place) ?? null;
+      const gap = place === 0 ? 'No contract at this strike' : 'No other contract at this strike';
+      const atm = money && place === 0;
+      rows.push({
+        key: `${strike}:${place}`,
+        strike: strike.toFixed(2),
+        atm,
+        mark: atm && spot > 0 ? `ATM ${spot.toFixed(2)}` : null,
+        itm: spot > 0 && !money ? (strike < spot ? 'call' : strike > spot ? 'put' : null) : null,
+        centre: centreIv(call, put),
+        call: contractCell(call, maxCallVolume, gap),
+        put: contractCell(put, maxPutVolume, gap),
+      });
+    }
+    return rows;
   });
 }
 

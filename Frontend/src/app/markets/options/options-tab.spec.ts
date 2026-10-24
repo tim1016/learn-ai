@@ -53,6 +53,7 @@ function snapshotContract(contractType: 'call' | 'put', strike: number): Snapsho
     contractType,
     strikePrice: strike,
     expirationMs: NEAR,
+    standard: null,
     breakEvenPrice: null,
     impliedVolatility: 0.2,
     openInterest: 100,

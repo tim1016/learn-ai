@@ -41,6 +41,12 @@ export type ChainAbsentReason =
   | 'no_recorded_snapshot'
   /** The provider's snapshot carried nothing for this field. */
   | 'not_in_snapshot'
+  /** The provider's snapshot sent 0 for this field, which is no price, volatility or amount to draw. */
+  | 'sent_zero'
+  /** The snapshot holds no trade for the contract: its last price is never filled from a quote. */
+  | 'no_trade_in_snapshot'
+  /** A spread needs a bid and an ask that are both sent and not crossed. */
+  | 'no_two_sided_quote'
   /** The live feed has sent nothing for this field of this contract yet. */
   | 'not_sent_yet'
   /** The source has no such field at all: its feed does not carry it. */
@@ -222,6 +228,9 @@ const ABSENT_WORDS: Readonly<Record<ChainAbsentReason, string>> = {
   no_quote_archived: 'The archive holds trade bars, not quotes',
   no_recorded_snapshot: 'No snapshot was recorded for this date',
   not_in_snapshot: 'The provider sent none',
+  sent_zero: 'The provider sent 0',
+  no_trade_in_snapshot: 'No trade in this snapshot',
+  no_two_sided_quote: 'No two-sided quote, so no spread',
   not_sent_yet: 'IBKR has sent none for this contract yet',
   not_on_feed: 'This feed does not carry it',
   not_compared: 'Not compared',

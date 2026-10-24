@@ -13,6 +13,7 @@ function contractAt(contractType: 'call' | 'put', strike: number, overrides: Par
     contractType,
     strikePrice: strike,
     expirationMs: EXPIRY,
+    standard: null,
     breakEvenPrice: null,
     impliedVolatility: 0.2,
     openInterest: 100,
@@ -93,7 +94,6 @@ describe('Now · Snapshot, as the one chain presentation', () => {
 
     expect(cell(row.call).fields.bid).toEqual({ kind: 'absent', reason: 'not_in_snapshot', detail: null });
     expect(textOf(cell(row.call).fields.volume)).toBe('5.0K');
-    expect(cell(row.put).fields.volume.kind).toBe('absent');
     expect(textOf(cell(row.call).fields.delta)).toBe('0.500');
     expect(textOf(cell(row.call).fields.openInterest)).toBe('100');
     expect(row.centre && textOf(row.centre)).toBe('20.00%');
@@ -102,17 +102,69 @@ describe('Now · Snapshot, as the one chain presentation', () => {
   it.each([
     ['the day close', contractAt('call', 720, { day: { open: 1, high: 1, low: 1, close: 1.11, volume: 1, vwap: 1 }, lastTrade: { price: 2.22, size: 1, exchange: 1, timeframe: null } }), '1.11'],
     ['the last trade', contractAt('call', 720, { day: null, lastTrade: { price: 2.22, size: 1, exchange: 1, timeframe: null } }), '2.22'],
-    ['the quote midpoint', contractAt('call', 720, { day: null, lastQuote: { bid: 3, ask: 4, bidSize: 1, askSize: 1, midpoint: 3.33, timeframe: null } }), '3.33'],
-    ['the bid and ask middle', contractAt('call', 720, { day: null, lastQuote: { bid: 3, ask: 4, bidSize: 1, askSize: 1, midpoint: null, timeframe: null } }), '3.50'],
-  ])('reads the last price from %s first', (_name, call, expected) => {
+  ])('reads the last price from %s', (_name, call, expected) => {
     expect(textOf(cell(rowOf(present({ contracts: [call] }), 720).call).fields.last)).toBe(expected);
   });
 
-  it('gives every contract every field, each filled or absent, and says nothing of whether a contract is standard', () => {
-    const row = rowOf(present({ contracts: both(720) }), 720);
+  // F07: a quote is not a trade. The bid and ask are their own fields, so a midpoint never stands in for a price that traded.
+  it.each([
+    ['no day and no trade', { day: null, lastTrade: null }, 'no_trade_in_snapshot'],
+    ['a day that closed at 0 and no trade', { day: { open: 0, high: 0, low: 0, close: 0, volume: 0, vwap: 0 }, lastTrade: null }, 'no_trade_in_snapshot'],
+    ['a trade that carries no price', { day: null, lastTrade: { price: null, size: 1, exchange: 1, timeframe: null } }, 'no_price_sent'],
+  ] as const)('leaves the last price absent, with its reason, for %s, though the quote has a midpoint', (_name, changes, reason) => {
+    const call = contractAt('call', 720, { ...changes, lastQuote: { bid: 3, ask: 4, bidSize: 1, askSize: 1, midpoint: 3.5, timeframe: null } });
+    const fields = cell(rowOf(present({ contracts: [call] }), 720).call).fields;
+
+    expect(fields.last).toEqual({ kind: 'absent', reason, detail: null });
+    expect([textOf(fields.bid), textOf(fields.ask), textOf(fields.spread)]).toEqual(['3.00', '4.00', '1.00']);
+  });
+
+  it('says what is true of a figure it does not draw: nothing sent, a 0 sent, or a quote with no two sides', () => {
+    const quote = (bid: number | null, ask: number | null) => ({ bid, ask, bidSize: 1, askSize: 1, midpoint: null, timeframe: null });
+    const call = contractAt('call', 720, {
+      lastQuote: quote(0, 4),
+      day: { open: 1, high: 1, low: 1, close: 1, volume: 0, vwap: 1 },
+      openInterest: 0,
+      impliedVolatility: 0,
+    });
+    const put = contractAt('put', 720, { lastQuote: quote(4, 3), openInterest: null, impliedVolatility: null });
+    const row = rowOf(present({ contracts: [call, put] }), 720);
+
+    expect(cell(row.call).fields.bid).toEqual({ kind: 'absent', reason: 'sent_zero', detail: null });
+    expect(cell(row.call).fields.spread).toEqual({ kind: 'absent', reason: 'no_two_sided_quote', detail: null });
+    expect(cell(row.call).fields.volume).toEqual({ kind: 'absent', reason: 'sent_zero', detail: null });
+    expect(cell(row.call).fields.openInterest).toEqual({ kind: 'absent', reason: 'sent_zero', detail: null });
+    expect(cell(row.call).fields.iv).toEqual({ kind: 'absent', reason: 'sent_zero', detail: null });
+    expect(cell(row.put).fields.spread, 'a crossed quote has no spread').toEqual({ kind: 'absent', reason: 'no_two_sided_quote', detail: null });
+    expect(cell(row.put).fields.openInterest).toEqual({ kind: 'absent', reason: 'not_in_snapshot', detail: null });
+    expect(row.centre, 'neither side sent a usable volatility').toEqual({ kind: 'absent', reason: 'sent_zero', detail: null });
+  });
+
+  it('gives every contract every field, each filled or absent, and carries whether it is standard as the wire says, null when it does not', () => {
+    const standard = contractAt('call', 721, { standard: true });
+    const row = rowOf(present({ contracts: [...both(720), standard] }), 720);
 
     expect(Object.keys(cell(row.call).fields).sort()).toEqual(['ask', 'bid', 'delta', 'deltaGap', 'engineDelta', 'gamma', 'iv', 'last', 'openInterest', 'spread', 'theta', 'vega', 'volume']);
     expect(cell(row.call).standard).toBeNull();
+    expect(cell(rowOf(present({ contracts: [standard] }), 721).call).standard).toBe(true);
+  });
+
+  // A split or a special dividend leaves an adjusted contract (a different deliverable) beside the standard one at the same strike and right.
+  it('keeps a standard and an adjusted contract at one strike as two rows, the standard one first, whichever the vendor listed first', () => {
+    const adjusted = contractAt('call', 720, { ticker: 'O:SPY1720C', standard: false, day: { open: 9, high: 9, low: 9, close: 9, volume: 10, vwap: 9 } });
+    const standard = contractAt('call', 720, { ticker: 'O:SPY720C', standard: true });
+    const put = contractAt('put', 720, { standard: true });
+
+    const rows = present({ contracts: [adjusted, standard, put] }).table.rows.filter((row) => row.strike === '720.00');
+
+    expect(rows.map((row) => row.key)).toEqual(['720:0', '720:1']);
+    expect(rows.map((row) => cell(row.call).symbol)).toEqual(['O:SPY720C', 'O:SPY1720C']);
+    expect(rows.map((row) => cell(row.call).standard)).toEqual([true, false]);
+    expect(textOf(cell(rows[0].call).fields.last), 'the adjusted contract\'s price is not the standard one\'s').toBe('1.00');
+    expect(textOf(cell(rows[1].call).fields.last)).toBe('9.00');
+    expect(cell(rows[0].put).symbol).toBe('O:SPY720P');
+    expect(rows[1].put).toEqual({ kind: 'gap', words: 'No other contract at this strike' });
+    expect(rows.filter((row) => row.atm), 'the money is marked once').toHaveLength(1);
   });
 
   it.each([

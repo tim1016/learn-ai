@@ -107,6 +107,7 @@ function buildContract(overrides: Partial<SnapshotContractResult> = {}): Snapsho
     contractType: 'call',
     strikePrice: 590,
     expirationMs: 1_771_621_200_000,
+    standard: null,
     breakEvenPrice: 595,
     impliedVolatility: 0.20,
     openInterest: 1000,

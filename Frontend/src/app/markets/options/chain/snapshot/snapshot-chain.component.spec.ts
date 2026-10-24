@@ -20,6 +20,7 @@ function contractAt(contractType: 'call' | 'put', strike: number, overrides: Par
     contractType,
     strikePrice: strike,
     expirationMs: NEAR,
+    standard: null,
     breakEvenPrice: null,
     impliedVolatility: 0.2,
     openInterest: 100,
@@ -104,6 +105,21 @@ describe('Now · Snapshot, as a source of the chain', () => {
     expect(text).toContain('Quote state Not stated: the provider does not say whether these quotes are delayed.');
     expect(text).toContain('Underlying SPY 700.00, +2.50 (+0.35%)');
     expect(text).not.toContain('9.87');
+  });
+
+  it('draws a standard and an adjusted call at one strike on two rows, the adjusted one marked non-standard, with each symbol on hover', async () => {
+    const standard = contractAt('call', 700, { ticker: 'O:SPY700C', standard: true });
+    const adjusted = contractAt('call', 700, { ticker: 'O:SPY1700C', standard: false });
+    await renderChain(market({ chain: vi.fn(() => of(chainReply(700, 700, [adjusted, standard, contractAt('put', 700, { standard: true })]))) }), { expiryMs: NEAR });
+
+    await screen.findByRole('table', { name: /Calls on the left/ });
+
+    const rows = [...document.querySelectorAll('tr.data-row')];
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.querySelector('td.call-side.delta')?.getAttribute('title'))).toEqual(['O:SPY700C', 'O:SPY1700C']);
+    expect(rows[0].textContent).not.toContain('Non-standard');
+    expect(rows[1].textContent).toContain('Non-standard');
+    expect(rows[1].textContent).toContain('No other contract at this strike');
   });
 
   it('shows a dash for the move when the stock snapshot is unavailable, and the chain still loads', async () => {
