@@ -35,9 +35,8 @@
       <div class="eyebrow">UNIVERSE</div>
       <div class="universe-chips">
         @for (a of data.assets; track a) {
-          <span class="universe-chip">{{ a }}<span class="x">×</span></span>
+          <span class="universe-chip">{{ a }}</span>
         }
-        <button type="button" class="universe-add">+ add ticker</button>
       </div>
     </div>
   </div>
@@ -53,11 +52,7 @@
     </div>
     <span class="divider"></span>
     <span class="eyebrow">STRATEGY</span>
-    <select class="strategy-select">
-      <option>vrp_short_vol</option>
-      <option>buy_and_hold (placeholder)</option>
-      <option>regime_filter_long</option>
-    </select>
+    <span class="strategy-fixed">vrp_short_vol</span>
     <div class="form-spacer"></div>
     <span class="form-meta">
       {{ data.assets.length }} assets × {{ data.periods.length }} periods · 1 split

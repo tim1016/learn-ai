@@ -87,7 +87,7 @@ describe("RealizedVsIvComponent — real response", () => {
     expect(screen.queryByTestId("sample-data-banner"), "nothing on this page is synthetic").toBeNull();
   });
 
-  it("says the IV pipeline is missing when the response carries no IV30, rather than drawing an IV line", async () => {
+  it("says there is no IV30 when the response carries none, rather than drawing an IV line", async () => {
     const { http, user, fixture } = await renderPage();
 
     await user.click(screen.getByRole("button", { name: "Compute" }));

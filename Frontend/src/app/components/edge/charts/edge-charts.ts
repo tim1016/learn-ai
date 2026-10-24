@@ -166,8 +166,8 @@ export class EdgePriceIVChartComponent implements AfterViewInit {
     const lo = Math.min(...candles.map(c => c.l)) * 0.998;
     const hi = Math.max(...candles.map(c => c.h)) * 1.002;
 
-    // Right-axis range: prefer IV when available, fall back to RV when the
-    // IV pipeline isn't wired (v1 live runs). With no IV at all, the IV
+    // Right-axis range: prefer IV when available, fall back to RV when no
+    // IV30 lands on these bars. With no IV at all, the IV
     // line is suppressed but RV bands and RV-YZ trace stay visible against
     // the same axis — relabel "IV30" → "RV YZ" in that case so the user
     // knows what the right axis represents.
@@ -222,7 +222,7 @@ export class EdgePriceIVChartComponent implements AfterViewInit {
       ctx.fillRect(cx - cw / 2, Math.min(yP(c.o), yP(c.c)), cw, Math.max(1, Math.abs(yP(c.c) - yP(c.o))));
     });
 
-    // IV30 — only when the live IV pipeline supplied data; otherwise the
+    // IV30 — only when the response carried IV30; otherwise the
     // right axis is repurposed for RV (see ivAvailable above).
     if (ivAvailable) {
       ctx.strokeStyle = TOK.vol; ctx.lineWidth = 1.5;
@@ -383,17 +383,17 @@ export class EdgeVrpHistogramComponent implements AfterViewInit {
     const ctx = setupCanvas(canvas, w, h);
     const bins = data.vrpHistogram;
     if (!bins.length) {
-      // Empty state — IV pipeline not yet wired (v1) so no VRP samples.
+      // Empty state — no bar has both IV30 and a forward RV.
       ctx.fillStyle = TOK.muted;
       ctx.font = "11px JetBrains Mono, monospace";
       ctx.textAlign = "center"; ctx.textBaseline = "middle";
       ctx.fillText(
-        "No VRP samples — IV pipeline not yet wired (v1).",
+        "No VRP samples for this window.",
         w / 2, h / 2 - 6,
       );
       ctx.fillStyle = TOK.subtle; ctx.font = "10px JetBrains Mono, monospace";
       ctx.fillText(
-        "Returns once /api/edge/realized-vs-iv reads OptionIvSnapshots.",
+        "VRP needs IV30 and a forward RV at the same bar.",
         w / 2, h / 2 + 10,
       );
       ctx.textBaseline = "alphabetic";

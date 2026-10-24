@@ -42,11 +42,6 @@
   font-size: 11px; color: $text-subtle;
   code { color: $text-secondary; font-family: $font-mono; }
 }
-.coverage-action {
-  background: transparent; border: 1px solid rgba(255,152,0,0.3);
-  border-radius: 4px; color: $warn;
-  font-size: 11px; padding: 4px 10px; cursor: pointer;
-}
 
 /* IV-pipeline-not-wired variant of the coverage banner */
 .banner-iv-missing {
@@ -56,7 +51,6 @@
   color: $text-secondary;
 
   .pi { color: $info; }
-  .coverage-action { border-color: rgba(41,182,246,0.30); color: $info; }
 }
 
 /* IV-source + confidence (recorder fallback / health gating) */

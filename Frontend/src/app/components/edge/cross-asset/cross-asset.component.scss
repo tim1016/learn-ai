@@ -87,15 +87,6 @@
   color: var(--ind-cat-trend);
   font-family: $font-mono; font-weight: 700; font-size: 11px;
   display: inline-flex; align-items: center; gap: 4px;
-
-  .x { color: $text-muted; font-weight: 400; }
-}
-.universe-add {
-  padding: 4px 10px; border-radius: 999px;
-  background: transparent; border: 1px dashed $border-light;
-  color: $text-muted; font-size: 11px; cursor: pointer;
-
-  &:hover { color: $text-primary; border-color: $border-strong; }
 }
 
 /* ─── Form ─── */
@@ -119,11 +110,8 @@
   }
 }
 .divider { width: 1px; height: 22px; background: $border; }
-.strategy-select {
-  height: 28px; padding: 0 8px;
-  background: $bg-elevated; border: 1px solid $border-light;
-  border-radius: 4px; color: $text-primary;
-  font-size: 12px; font-family: $font-mono;
+.strategy-fixed {
+  color: $text-primary; font-size: 12px; font-family: $font-mono;
 }
 .form-spacer { flex: 1; }
 .form-meta { font-size: 11px; color: $text-muted; font-family: $font-mono; }

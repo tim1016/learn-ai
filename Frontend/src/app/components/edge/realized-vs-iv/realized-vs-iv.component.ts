@@ -80,10 +80,9 @@ export class RealizedVsIvComponent {
     this.data()?.vrpHistogram.reduce((acc, b) => acc + b.count, 0) ?? 0,
   );
 
-  /** True iff the loaded series has no finite IV30 samples. Currently the
-   *  expected state for live SPY/QQQ runs because the IV pipeline that
-   *  back-solves IV from OptionIvSnapshots isn't wired yet (v1). */
-  readonly ivPipelineMissing = computed(() => {
+  /** True iff the loaded series has no finite IV30 samples: the endpoint
+   *  aligns recorded IV30 snapshots to the bar timestamps, and none landed. */
+  readonly ivMissing = computed(() => {
     const d = this.data();
     return d !== null && !d.iv30.some((v) => Number.isFinite(v));
   });

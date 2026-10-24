@@ -106,20 +106,18 @@
 
   @if (data(); as d) {
     <!-- Coverage banner -->
-    @if (ivPipelineMissing()) {
+    @if (ivMissing()) {
       <div class="coverage-banner banner-iv-missing">
         <i class="pi pi-info-circle"></i>
         <div class="coverage-body">
-          <div class="coverage-title">IV pipeline not wired yet — RV-only view</div>
+          <div class="coverage-title">No IV30 at these bars — RV-only view</div>
           <div class="coverage-meta">
-            Live RV ({{ rvLastValue() }}) renders against the right axis labelled
-            <code>RV YZ</code>. IV30 line, RV-vs-IV bands, VRP histogram, and
-            long/short-vol signal triangles will appear once
-            <code>/api/edge/realized-vs-iv/series</code> back-solves IV from
-            <code>OptionIvSnapshots</code> — F1 step 4 in the design doc.
+            No recorded IV30 falls on these bars' timestamps, so the IV30 line,
+            RV-vs-IV bands, VRP histogram and long/short-vol signal triangles
+            cannot be drawn. Realized vol ({{ rvLastValue() }} latest) renders
+            against the right axis labelled <code>RV YZ</code>.
           </div>
         </div>
-        <button class="coverage-action" type="button">View coverage probe →</button>
       </div>
     } @else {
       <div class="coverage-banner">
@@ -132,7 +130,6 @@
             <code>{{ d.coverage.ivFirstTsMs | timestampDisplay:'date-et' }}</code>.
           </div>
         </div>
-        <button class="coverage-action" type="button">View coverage probe →</button>
       </div>
     }
 
