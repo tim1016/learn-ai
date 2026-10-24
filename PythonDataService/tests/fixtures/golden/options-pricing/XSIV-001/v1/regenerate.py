@@ -8,16 +8,17 @@ Fixture paperwork: run by hand, never by a test or by CI. Two steps, both from `
 
 ``payload`` writes the chain payload: a pinned listed chain (``tests/_helpers/option_chain.OptionChain``: weekly Friday
 expiries, three of them listed late, a one-dollar strike grid), the stock rows the study hands the IV build, and the
-daily option price of every contract the provider path asked for on every day it priced. It runs on any commit that
-holds the generator.
+daily option price of every contract the provider path asked for on every day it priced. To discover those contracts,
+``make_payload`` calls ``provider_path``; it requires the same historical code as ``freeze``.
 
 ``freeze`` runs the **provider path** over that payload and writes what it returns. The provider path is the code the
 study used before the option inputs moved to the lake: ``PolygonClientService`` over the Polygon SDK client's
 ``list_options_contracts`` and ``list_aggs``, the contract finder that asked it for expiries and contracts, and the IV
 builder that fetched daily option bars. That code, and the generator's SDK surface, were deleted in the commit that
-moved the study's option inputs to the lake, so ``freeze`` only runs on commit 8c9bba4a (the tip of #3540 Part A,
-before Part B) or the commit that adds this fixture: ``git worktree add <dir> 8c9bba4a``, copy this folder in, run it
-there. The output on file was written on the fixture's own commit, with no other change to the provider path.
+moved the study's option inputs to the lake. Both commands require commit ``8c9bba4a`` (the tip of #3540 Part A,
+before Part B) with this fixture folder copied in, or fixture commit ``a200d770``. Create a separate worktree at that
+revision and run both commands there; neither can run against the later lake implementation. The output on file was
+written on the fixture's own commit, with no other change to the provider path.
 """
 
 from __future__ import annotations
