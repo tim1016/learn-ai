@@ -62,7 +62,13 @@ import type {
 } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
 import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
 import { tickerRangeToWire } from '../../../utils/ticker-wire';
-import { SignalStudyDataSourceRaw, toSignalStudyDataSource } from './signal-study-data-source';
+import { LakeStudySourceComponent } from '../../../shared/lake-study/lake-study-source.component';
+import {
+  mapLakeStudyDataSource,
+  readLakeStudyRefusal,
+  type LakeDataSourceRaw,
+  type LakeStudyRefused,
+} from '../../../shared/lake-study/lake-study';
 
 /** Snake-case shape returned by /api/jobs-internal/signal-engine worker. */
 interface SignalEngineJobResultRaw {
@@ -90,7 +96,7 @@ interface SignalEngineJobResultRaw {
   deflated_sharpe: unknown;
   methodology: unknown;
   research_log: string;
-  data_source?: SignalStudyDataSourceRaw | null;
+  data_source?: LakeDataSourceRaw | null;
   error: string | null;
 }
 
@@ -110,6 +116,7 @@ interface SignalEngineJobResultRaw {
     IndicatorConfigModalComponent,
     TickerRangePickerComponent,
     AssetIdentityComponent,
+    LakeStudySourceComponent,
   ],
   templateUrl: './signal-runner.component.html',
   styleUrls: ['./signal-runner.component.scss'],
@@ -145,8 +152,13 @@ export class SignalRunnerComponent {
     resolution: 'minute',
     multiplier: 15,
   });
-  readonly availableMultipliers: readonly number[] = [1, 5, 15, 60, 240];
-  readonly availableResolutions: readonly Resolution[] = ['minute', 'hour', 'daily'];
+  /**
+   * The bars the backend accepts for the session this page names (extended hours): minute bars that divide the
+   * hour and can reach the study's validity gate (`signal_study_service.py`). Hourly, daily and the other
+   * multiples are refused up front, so the page does not offer them.
+   */
+  readonly availableMultipliers: readonly number[] = [1, 5, 15];
+  readonly availableResolutions: readonly Resolution[] = ['minute'];
 
   /** Catalog-driven selection: indicator key + params (matches data-lab's
    *  ``IndicatorEntry`` shape). The ``feature_name`` sent to the backend is
@@ -192,6 +204,8 @@ export class SignalRunnerComponent {
   readonly jobId = signal<string | null>(null);
   readonly result = signal<SignalEngineResult | null>(null);
   readonly error = signal<string | null>(null);
+  /** Why the lake could not supply the window, when the run failed on that; read from the payload the failed job parked. */
+  readonly refusal = signal<LakeStudyRefused | null>(null);
   readonly formCollapsed = signal(false);
 
   /** Rolling FIFO log buffer (cap 500). */
@@ -290,6 +304,7 @@ export class SignalRunnerComponent {
       } else if (j.status === 'failed' && resultFetchedFor !== id) {
         resultFetchedFor = id;
         this.error.set(j.errorMessage ?? 'Signal engine run failed');
+        void this.loadRefusal(id);
       } else if (j.status === 'cancelled' && resultFetchedFor !== id) {
         resultFetchedFor = id;
         this.error.set(j.message ?? 'Run cancelled');
@@ -299,6 +314,7 @@ export class SignalRunnerComponent {
 
   async runSignalEngine(): Promise<void> {
     this.error.set(null);
+    this.refusal.set(null);
     this.result.set(null);
     this.logBuffer.clear();
 
@@ -312,9 +328,13 @@ export class SignalRunnerComponent {
       // SignalEngineJobRequest preserves multiplier=15 default (PR ii);
       // the picker is also initialized to multiplier=15 above so the UI
       // and the wire agree.
+      // The session is named, not defaulted: this study has always computed on extended hours (04:00-20:00 ET),
+      // and which session it should use is an open owner decision (D02 of PRD #3490). The page offers no
+      // session choice until that is decided.
       const wire = tickerRangeToWire({
         ...this.range(),
         symbol: this.range().symbol.toUpperCase(),
+        session: 'extended',
       });
       const id = await this.jobsService.startJob('signal_engine', {
         ...wire,
@@ -367,8 +387,22 @@ export class SignalRunnerComponent {
     this.jobId.set(null);
     this.result.set(null);
     this.error.set(null);
+    this.refusal.set(null);
     this.formCollapsed.set(false);
     this.logBuffer.clear();
+  }
+
+  /**
+   * A run the lake refused parks its reason and counts as the job's result (`status: "refused"`). A run that failed
+   * for any other reason parks nothing, and the fetch finds none: the failure message already shown is all there is.
+   */
+  private async loadRefusal(id: string): Promise<void> {
+    try {
+      const refused = readLakeStudyRefusal(await this.jobsService.fetchResult<unknown>(id));
+      if (refused !== null && this.jobId() === id) this.refusal.set(refused);
+    } catch {
+      // No parked result: the job failed on something other than a refused window.
+    }
   }
 
   private async handleCompleted(id: string): Promise<void> {
@@ -438,7 +472,7 @@ export class SignalRunnerComponent {
         ? this.mapMethodology(raw.methodology as Record<string, unknown>)
         : null,
       researchLog: raw.research_log ?? '',
-      dataSource: raw.data_source ? toSignalStudyDataSource(raw.data_source) : null,
+      dataSource: raw.data_source ? mapLakeStudyDataSource(raw.data_source) : null,
       error: raw.error ?? undefined,
     };
   }

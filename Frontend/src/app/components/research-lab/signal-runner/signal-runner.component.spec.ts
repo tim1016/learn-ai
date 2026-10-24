@@ -160,20 +160,20 @@ describe('SignalRunnerComponent job wiring', () => {
     );
   }
 
-  it('sends the body the backend model is pinned against: the legacy rth label and no session policy', async () => {
+  it('sends the body the backend model is pinned against: the one session field, named', async () => {
     await component.runSignalEngine();
 
     const [type, payload] = jobsServiceMock.startJob.mock.calls[0];
     expect(type).toBe('signal_engine');
-    // tests/jobs/test_signal_study_job.py parses exactly this body: `session` stays the inert legacy label, and the
-    // session policy is left to the backend default (extended hours) until the owner decides D02.
+    // tests/jobs/test_signal_study_job.py parses exactly this body. The session is named, not defaulted: the study
+    // computes on extended hours until the owner decides D02, and the request carries no second session field.
     expect(payload).toEqual({
       symbol: 'AAPL',
       from_date: '2024-01-02',
       to_date: '2024-06-28',
       timespan: 'minute',
       multiplier: 15,
-      session: 'rth',
+      session: 'extended',
       feature_name: 'rsi_14',
       flip_sign: true,
       regime_gate_enabled: true,
@@ -181,7 +181,48 @@ describe('SignalRunnerComponent job wiring', () => {
     });
   });
 
-  it('carries the lake data source and its coverage counts from a completed run into the result', async () => {
+  it('offers only the bars the backend accepts, and no session choice the study would ignore', () => {
+    const el = fixture.nativeElement as HTMLElement;
+
+    const multipliers = Array.from(el.querySelectorAll('select[aria-label="Bar multiplier"] option')).map((o) => o.textContent?.trim());
+    const resolutions = Array.from(el.querySelectorAll('[aria-label="Resolution"] button')).map((b) => b.textContent?.trim());
+
+    expect(multipliers).toEqual(['1×', '5×', '15×']);
+    expect(resolutions).toEqual(['1m']);
+    expect(el.querySelector('[aria-label="Session"]')).toBeNull();
+  });
+
+  const dataSource = (coverage: unknown, over: Record<string, unknown> = {}) => ({
+    kind: 'lake',
+    provider: 'polygon',
+    symbol: 'AAPL',
+    price_adjustment_mode: 'polygon_split_adjusted',
+    session_policy: 'extended',
+    window_start_ms: 1704171600000,
+    window_end_ms: 1719550800000,
+    effective_window: { start_ms: 1704171600000, end_ms: 1719550800000 },
+    warmup_sessions: 0,
+    bar_minutes: 15,
+    aggregation: 'minute_fold_et_wall_clock_no_fill',
+    identity_digest: 'def',
+    calculation_version: 'signal-study/1',
+    snapshot_digest: 'abc',
+    look_forward_bars: 15,
+    coverage,
+    bars_used: 8000,
+    cache: { hit: false, cached_at_ms: null },
+    ...over,
+  });
+
+  async function settleJob(status: 'completed' | 'failed', extra: Partial<JobState> = {}): Promise<HTMLElement> {
+    setJob(status, extra);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    return fixture.nativeElement as HTMLElement;
+  }
+
+  it('shows the lake data-source line, with its added and reused counts, on a completed run', async () => {
     jobsServiceMock.fetchResult.mockResolvedValueOnce({
       success: true,
       ticker: 'AAPL',
@@ -189,64 +230,90 @@ describe('SignalRunnerComponent job wiring', () => {
       start_date: '2024-01-02',
       end_date: '2024-06-28',
       bars_used: 8000,
-      data_source: {
-        kind: 'lake',
-        provider: 'polygon',
-        price_adjustment_mode: 'polygon_split_adjusted',
-        bar_minutes: 15,
-        session_policy: 'extended',
-        window_start_ms: 1704171600000,
-        window_end_ms: 1719550800000,
-        warmup_sessions: 0,
-        look_forward_bars: 15,
-        snapshot_digest: 'abc',
-        identity_digest: 'def',
-        calculation_version: 'signal-study/1',
-        coverage: {
-          window: group({ reused: 70, added: 12 }),
-          warmup: group({ expected_sessions: 0, added: 0 }),
-          artifacts: { fetched: 14, reused: 70, refreshed: 0 },
-        },
-        bars_used: 8000,
-        cache: { hit: false, cached_at_ms: null },
-      },
+      data_source: dataSource({
+        window: group({ reused: 70, added: 12 }),
+        warmup: group({ expected_sessions: 0, added: 0 }),
+        artifacts: { fetched: 14, reused: 70, refreshed: 0 },
+      }),
       error: null,
     });
-    setJob('completed');
 
-    fixture.detectChanges();
-    await fixture.whenStable();
+    const el = await settleJob('completed');
 
-    const source = component.result()?.dataSource;
-    expect(source?.sessionPolicy).toBe('extended');
-    expect(source?.lookForwardBars).toBe(15);
-    expect(source?.coverage?.window).toMatchObject({ expectedSessions: 82, reused: 70, added: 12, unavailableFromProvider: 0 });
-    expect(source?.coverage?.artifacts).toEqual({ fetched: 14, reused: 70, refreshed: 0 });
-    expect(source?.cache).toEqual({ hit: false, cachedAtMs: null });
+    const line = el.querySelector('app-lake-study-source');
+    expect(line?.textContent).toContain('Data lake, Polygon');
+    expect(line?.textContent).toContain('15-minute bars, folded from 1-minute bars');
+    expect(line?.textContent).toContain('12 added · 70 reused · 0 missing');
+    expect(line?.textContent).not.toContain('No result');
+    expect(component.result()?.dataSource?.cache).toEqual({ hit: false, cachedAtMs: null });
   });
 
-  it('maps a stored report that has no data source without one', async () => {
+  it('says the source was not recorded on a stored report that has none, and does not claim the lake', async () => {
     jobsServiceMock.fetchResult.mockResolvedValueOnce({
       success: true, ticker: 'AAPL', feature_name: 'rsi_14', start_date: '2024-01-02', end_date: '2024-06-28',
       bars_used: 8000, error: null,
     });
-    setJob('completed');
 
-    fixture.detectChanges();
-    await fixture.whenStable();
+    const el = await settleJob('completed');
 
     expect(component.result()?.dataSource).toBeNull();
+    expect(el.querySelector('app-lake-study-source')?.textContent).not.toContain('Data lake');
   });
 
-  it('shows the typed reason a refused run carries instead of an opaque failure', () => {
-    setJob('failed', {
-      errorMessage: '60-minute bars are too long for the 15-bar forward target: a day holds at most 24 of them.',
+  it('shows why the lake refused a run and the counts it reached, not one sentence', async () => {
+    const reason = 'The lake cannot admit this window: 1 of 82 sessions cannot be supplied by the provider: 2024-03-06 (provider_no_data).';
+    jobsServiceMock.fetchResult.mockResolvedValueOnce({
+      success: false, status: 'refused', ticker: 'AAPL', error: reason,
+      refusal: {
+        code: 'data_unavailable_from_provider', reason,
+        sessions: [{ group: 'window', trading_date_ms: 1709738400000, outcome: 'unavailable_from_provider', reason: 'provider_no_data', failure_reason: 'provider_no_data' }],
+        sessions_total: 1,
+        coverage: {
+          window: group({ added: 81, failed: 1, unavailable_from_provider: 1 }),
+          warmup: group({ expected_sessions: 0, added: 0 }),
+          artifacts: { fetched: 81, reused: 0, refreshed: 0 },
+        },
+      },
+      data_source: dataSource({
+        window: group({ added: 81, failed: 1, unavailable_from_provider: 1 }),
+        warmup: group({ expected_sessions: 0, added: 0 }),
+        artifacts: { fetched: 81, reused: 0, refreshed: 0 },
+      }, { snapshot_digest: null, effective_window: null }),
     });
 
-    fixture.detectChanges();
+    const el = await settleJob('failed', { errorCode: 'data_unavailable_from_provider', errorMessage: reason });
 
-    expect(component.error()).toBe(
-      '60-minute bars are too long for the 15-bar forward target: a day holds at most 24 of them.',
-    );
+    const text = el.textContent ?? '';
+    expect(text).toContain('No result');
+    expect(text).toContain('82 sessions · 0 reused · 81 added · 0 missing · 1 failed (1 unavailable from the provider)');
+    expect(text).toContain('provider_no_data');
+    expect(text.split(reason).length - 1, 'the reason is said once, not as an error banner as well').toBe(1);
+    expect(el.querySelector('p-message')).toBeNull();
+  });
+
+  it('shows the reason of a refusal that came before anything was read, with no source line', async () => {
+    const reason = '15-minute bars are too long for the 15-bar forward target under regular-hours sessions: the longest session in this window holds at most 26 of them.';
+    jobsServiceMock.fetchResult.mockResolvedValueOnce({
+      success: false, status: 'refused', ticker: 'AAPL', error: reason,
+      refusal: { code: 'resolution_unsupported', reason, sessions: [], sessions_total: 0, coverage: null },
+      data_source: null,
+    });
+
+    const el = await settleJob('failed', { errorCode: 'resolution_unsupported', errorMessage: reason });
+
+    const text = el.textContent ?? '';
+    expect(text).toContain('No result');
+    expect(text).toContain(reason);
+    expect(text).not.toContain('Data lake');
+    expect(el.querySelector('p-message')).toBeNull();
+  });
+
+  it('shows the failure message alone when the job failed on something other than a refused window', async () => {
+    jobsServiceMock.fetchResult.mockRejectedValueOnce(new Error('404'));
+
+    const el = await settleJob('failed', { errorCode: 'ValueError', errorMessage: 'Forward return series failed validation' });
+
+    expect(el.querySelector('p-message')?.textContent).toContain('Forward return series failed validation');
+    expect(el.querySelector('app-lake-study-source')).toBeNull();
   });
 });

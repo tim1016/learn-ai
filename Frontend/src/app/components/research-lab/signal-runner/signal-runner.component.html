@@ -24,6 +24,7 @@
         [showAutoFetch]="false"
         [availableResolutions]="availableResolutions"
         [availableMultipliers]="availableMultipliers"
+        sessionMode="hidden"
         title="Signal data"
       />
 
@@ -122,12 +123,15 @@
     }
   }
 
-  @if (error(); as err) {
+  @if (refusal(); as refused) {
+    <app-lake-study-source [source]="refused.dataSource" [refusal]="refused.refusal" />
+  } @else if (error(); as err) {
     <p-message severity="error">{{ err }}</p-message>
   }
 
   @if (result(); as res) {
     @if (res.success) {
+      <app-lake-study-source [source]="res.dataSource ?? null" />
       <app-signal-report [result]="res" />
     }
   }
