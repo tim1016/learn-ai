@@ -1,6 +1,6 @@
 import { routePathOf } from '../../fleet/account-workspace';
 import { defineWorkspaceTabs } from '../../shared/workspace/workspace-tabs';
-import { operationsTabRoute } from '../operations-tabs';
+import { operationsTabOf, operationsTabRoute } from '../operations-tabs';
 
 /**
  * The checks Operations → Data checks hosts (ADR 0084):
@@ -30,7 +30,7 @@ export function dataCheckRoute(check: DataCheck): readonly string[] {
 
 /** The check a URL opens, or `null` when it is not one of Data checks' checks. */
 export function dataCheckOf(url: string): DataCheck | null {
-  const [, root, tab, segment] = routePathOf(url).split('/');
-  if (`/${root}` !== operationsTabRoute('data-checks')[0] || tab !== 'data-checks') return null;
+  if (operationsTabOf(url) !== 'data-checks') return null;
+  const segment = routePathOf(url).split('/')[3];
   return DATA_CHECKS.find((check) => check.id === segment)?.id ?? null;
 }

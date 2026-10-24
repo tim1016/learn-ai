@@ -1,4 +1,5 @@
 import type { components } from '../../api/broker.types';
+import { operationsTabLabel, operationsTabRoute } from '../../operations/operations-tabs';
 
 /**
  * The scoped-health projection, as the data plane sends it (PRD #3490 R30).
@@ -49,3 +50,23 @@ export const HEALTH_NEEDS = {
    */
   stockHistory: ['stock_history'],
 } as const satisfies Readonly<Record<string, readonly AffectedOperation[]>>;
+
+/** Where a finding's evidence is shown: the router's commands for an Operations tab, with the filters and card that show it. */
+export interface OperationsLink {
+  readonly label: string;
+  readonly route: readonly string[];
+  readonly query: Readonly<Record<string, string>>;
+  readonly fragment: string | undefined;
+}
+
+/** The link a chip or a notice offers for `item`, or `null` where no Operations tab shows its evidence. */
+export function operationsLinkOf(item: ScopedHealthItem): OperationsLink | null {
+  const { link } = item;
+  if (link === null || link === undefined) return null;
+  return {
+    label: operationsTabLabel(link.tab),
+    route: operationsTabRoute(link.tab),
+    query: link.query ?? {},
+    fragment: link.fragment ?? undefined,
+  };
+}

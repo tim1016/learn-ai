@@ -15,7 +15,7 @@ const TAB_HELP: Partial<Readonly<Record<OperationsTab, HelpDocumentRoute>>> = {
 };
 
 const PURPOSE =
-  'The data lake, the option archive and the backups. Opening a tab reads status and starts no backfill, backup or restore.';
+  'The data lake, the option archive, the backups, the math checks and the data checks. Opening a tab reads status and starts no backfill, backup, restore or fixture run.';
 
 /**
  * The Operations place (ADR 0084): one header over its tabs. Each tab is a

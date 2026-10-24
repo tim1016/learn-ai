@@ -2,9 +2,8 @@ import { NgTemplateOutlet } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
-import { operationsTabRoute } from '../../operations/operations-tabs';
 import { formatTimestampDisplay } from '../timestamp/timestamp-display';
-import { HEALTH_SOURCES, SEVERITY_WORD, SOURCE_LABEL, type HealthSeverity } from './scoped-health';
+import { HEALTH_SOURCES, operationsLinkOf, SEVERITY_WORD, SOURCE_LABEL, type HealthSeverity, type OperationsLink } from './scoped-health';
 import { watchScopedHealth } from './scoped-health.service';
 
 interface Chip {
@@ -15,7 +14,7 @@ interface Chip {
   /** Findings that ask for attention, beyond the one the chip shows. */
   readonly attention: number;
   readonly detail: string;
-  readonly link: { readonly route: readonly string[]; readonly query: Readonly<Record<string, string>>; readonly fragment: string | undefined } | null;
+  readonly link: OperationsLink | null;
 }
 
 /**
@@ -53,11 +52,7 @@ export class HealthChipsComponent {
         word: SEVERITY_WORD[worst.severity],
         attention: Math.max(attention - 1, 0),
         detail: `${worst.summary} (read ${formatTimestampDisplay(worst.observed_ms, { mode: 'local' })}${worst.freshness === 'cached' ? ', reused' : ''})`,
-        link: worst.link === null || worst.link === undefined ? null : {
-          route: operationsTabRoute(worst.link.tab),
-          query: worst.link.query ?? {},
-          fragment: worst.link.fragment ?? undefined,
-        },
+        link: operationsLinkOf(worst),
       };
     });
   });

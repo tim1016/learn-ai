@@ -145,7 +145,7 @@ describe('the health notice', () => {
     const notice = await screen.findByRole('status');
     expect(notice.textContent).toContain('Unknown.');
     expect(notice.textContent).toContain('cannot be confirmed healthy');
-    expect(screen.getByRole('link', { name: 'Open Operations' }).getAttribute('href')).toBe('/operations/lake');
+    expect(screen.getByRole('link', { name: 'Open Operations' }).getAttribute('href')).toBe('/operations');
   });
 
   it('asks again when the symbol changes, and does not show the last symbol\'s finding meanwhile', async () => {

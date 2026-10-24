@@ -1,8 +1,8 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
-import { operationsTabLabel, operationsTabRoute } from '../../operations/operations-tabs';
-import { SEVERITY_WORD, type AffectedOperation } from './scoped-health';
+import { OPERATIONS_ROOT } from '../../operations/operations-tabs';
+import { operationsLinkOf, SEVERITY_WORD, type AffectedOperation } from './scoped-health';
 import { watchScopedHealth } from './scoped-health.service';
 
 /**
@@ -49,14 +49,10 @@ export class HealthNoticeComponent {
       severity: worst.severity,
       text: worst.explanation,
       others: rest.length,
-      link: worst.link === null || worst.link === undefined ? null : {
-        label: operationsTabLabel(worst.link.tab),
-        route: operationsTabRoute(worst.link.tab),
-        query: worst.link.query ?? {},
-        fragment: worst.link.fragment ?? undefined,
-      },
+      link: operationsLinkOf(worst),
     };
   });
 
-  protected readonly operationsRoute = operationsTabRoute('lake');
+  /** The place itself, which opens on its first tab: a notice that cannot name the evidence does not guess a tab. */
+  protected readonly operationsRoute = [OPERATIONS_ROOT];
 }
