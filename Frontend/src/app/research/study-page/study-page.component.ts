@@ -1,6 +1,10 @@
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
+import { TimestampDisplayComponent } from '../../shared/timestamp';
+import type { WorkspaceAction } from '../../shared/workspace/workspace-action';
+import type { StudyPrefill } from '../stored-study/rerun';
+
 import { HowThisWorksLinkComponent } from '../../shared/help/how-this-works-link.component';
 import { menuLabelFor } from '../../shell/app-menu';
 import type { DataSourceProvenance } from '../../shared/workspace/data-source-provenance';
@@ -44,6 +48,7 @@ const IDLE: WorkspaceStateContent = {
     HowThisWorksLinkComponent,
     PreviousResultComponent,
     RouterLink,
+    TimestampDisplayComponent,
     WorkspaceDataSourceComponent,
     WorkspaceHeaderComponent,
     WorkspaceStateBlockComponent,
@@ -74,6 +79,8 @@ export class StudyPageComponent {
    * hands over what its result records.
    */
   readonly dataSource = input<DataSourceProvenance | null | undefined>(undefined);
+  /** The saved run the inputs were filled in from (`?rerun=`), or why they were not. */
+  readonly prefill = input<StudyPrefill | null>(null);
 
   /** One press of Run study. */
   readonly run = output();
@@ -87,6 +94,15 @@ export class StudyPageComponent {
     const own = this.dataSource();
     return own === undefined ? this.definition().source : own;
   });
+  /** Every run is saved, so every study offers the list of its own. */
+  protected readonly savedRuns = computed<readonly WorkspaceAction[]>(() => [
+    {
+      id: 'saved-runs',
+      label: 'Saved runs',
+      route: ['/research/history'],
+      queryParams: { type: this.definition().history },
+    },
+  ]);
   protected readonly descriptive = computed(() => this.definition().resultKind === 'descriptive');
   protected readonly idle = IDLE;
 

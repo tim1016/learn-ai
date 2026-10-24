@@ -57,6 +57,8 @@ export interface ComputeRvIvRequest {
   estimators: readonly Estimator[];
   session?: Session;
   windows?: readonly number[];
+  /** The saved run these inputs were filled in from; the new run's record names it. */
+  rerunOf?: string;
 }
 
 @Injectable({ providedIn: "root" })
@@ -85,6 +87,7 @@ export class EdgeApiService {
         estimators: req.estimators,
         windows,
         bars,
+        ...(req.rerunOf === undefined ? {} : { rerun_of: req.rerunOf }),
       }
     ));
     const liveIvP = this.getLiveIv30(req.symbol, tenorDays);

@@ -8,6 +8,7 @@
   [hasResult]="result()?.success === true"
   [previous]="inputs.isPrevious()"
   [captured]="inputs.captured()"
+  [prefill]="prefillNotice()"
   (run)="runSignalEngine()"
 >
   <app-ticker-range-picker

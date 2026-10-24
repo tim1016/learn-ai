@@ -1,6 +1,7 @@
-import type { Routes } from '@angular/router';
+import type { Route, Routes } from '@angular/router';
 
 import { redirectKeepingState } from '../shell/route-redirects';
+import { STORED_STUDY_TYPE_IDS } from './stored-study/stored-study';
 
 /**
  * The `/research` route family (ADR 0084): the study list, one page per study,
@@ -60,8 +61,17 @@ export const RESEARCH_ROUTES: Routes = [
     loadComponent: () =>
       import('./history/research-history-page.component').then((m) => m.ResearchHistoryPageComponent),
   },
+  // The detail of a History entry of one of the five studies' own runs: what was saved, read and never rerun.
+  ...STORED_STUDY_TYPE_IDS.map(
+    (study): Route => ({
+      path: `history/${study}/:id`,
+      data: { fullBleed: true, study },
+      loadComponent: () =>
+        import('./stored-study/stored-study-page.component').then((m) => m.StoredStudyPageComponent),
+    }),
+  ),
   {
-    // The detail of a History entry of kind signal study: the stored report, read and never rerun.
+    // The detail of a History entry of the retired store's signal reports: the stored report, read and never rerun.
     path: 'history/signal-report/:id',
     loadComponent: () =>
       import('../components/research-lab/signal-report-page/signal-report-page.component').then(

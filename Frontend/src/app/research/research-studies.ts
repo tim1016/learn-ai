@@ -1,5 +1,6 @@
 import type { HelpDocumentRoute } from '../shared/help/help-documents';
 import type { DataSourceProvenance } from '../shared/workspace/data-source-provenance';
+import type { StoredStudyType } from './stored-study/stored-study';
 
 /**
  * The Research place's studies (ADR 0084, PRD #3490 R24): each one's address,
@@ -43,6 +44,8 @@ export type StudyResultKind = 'assessed' | 'descriptive';
 export interface StudyDefinition {
   readonly id: ResearchStudyId;
   readonly route: string;
+  /** The History kind that holds this study's saved runs, and so the one its page links to. */
+  readonly history: StoredStudyType;
   readonly question: string;
   /** What the study picks first: one instrument, or a universe of them. */
   readonly subject: 'instrument' | 'universe';
@@ -83,12 +86,11 @@ function providerSource(
   };
 }
 
-const HELD_FOR_A_DAY = 'The result is held for 24 hours and is not saved to a history.';
-
 export const RESEARCH_STUDIES: readonly StudyDefinition[] = [
   {
     id: 'feature',
     route: '/research/feature',
+    history: 'feature-study',
     question: 'Does this indicator predict the next move for this instrument?',
     subject: 'instrument',
     resultKind: 'assessed',
@@ -101,7 +103,6 @@ export const RESEARCH_STUDIES: readonly StudyDefinition[] = [
     limitations: [
       'Bars include pre-market and after-hours trades, and the indicator runs straight across the overnight gap.',
       'It tests one instrument and one indicator at a time, over the window you pick and nothing before it.',
-      HELD_FOR_A_DAY,
     ],
     nextStep: 'An indicator that holds up here can be tried as a trading signal, which adds a train and test split and costs.',
     nextLinks: [{ label: 'Open the Signal study', route: '/research/signal' }],
@@ -109,6 +110,7 @@ export const RESEARCH_STUDIES: readonly StudyDefinition[] = [
   {
     id: 'cross-sectional',
     route: '/research/cross-sectional',
+    history: 'cross-sectional-study',
     question: 'Does an option-implied feature predict what a stock does next, across a whole universe?',
     subject: 'universe',
     resultKind: 'assessed',
@@ -125,7 +127,6 @@ export const RESEARCH_STUDIES: readonly StudyDefinition[] = [
     limitations: [
       'Implied volatility is rebuilt from the provider’s option bars, so a member with no usable option history is left out of the statistics and listed with its reason.',
       'Only the members counted as valid enter the aggregate; the counts above the table say how many that is.',
-      HELD_FOR_A_DAY,
     ],
     nextStep: 'Widen or narrow the universe, or change the feature or the target, and run again.',
     nextLinks: [],
@@ -133,6 +134,7 @@ export const RESEARCH_STUDIES: readonly StudyDefinition[] = [
   {
     id: 'signal',
     route: '/research/signal',
+    history: 'signal-study',
     question: 'Does a trading signal built on this indicator hold up out of sample?',
     subject: 'instrument',
     resultKind: 'assessed',
@@ -145,7 +147,6 @@ export const RESEARCH_STUDIES: readonly StudyDefinition[] = [
     limitations: [
       'Bars include pre-market and after-hours trades, and the study needs at least 500 bars in the window.',
       'The train and test split is by bar position, so a short window gives a short test.',
-      HELD_FOR_A_DAY,
     ],
     nextStep: 'A signal that survives can be written as entry and exit rules and replayed in the Rule sandbox.',
     nextLinks: [{ label: 'Open the Rule sandbox', route: '/spec-strategy' }],
@@ -153,6 +154,7 @@ export const RESEARCH_STUDIES: readonly StudyDefinition[] = [
   {
     id: 'indicator-reliability',
     route: '/research/indicator-reliability',
+    history: 'indicator-reliability',
     question: 'Is this indicator’s link to what price does next real, or what chance alone produces?',
     subject: 'instrument',
     resultKind: 'assessed',
@@ -170,7 +172,6 @@ export const RESEARCH_STUDIES: readonly StudyDefinition[] = [
     limitations: [
       'A lead-in cut short by the provider’s history, the listing date or gaps is not reported, so an early window can start unwarmed.',
       'It tests one instrument at a time. The last bars of the window have no forward return and are left out.',
-      'The result is not saved.',
     ],
     nextStep: 'An indicator with a real link can be run through the Feature study on the same instrument.',
     nextLinks: [{ label: 'Open the Feature study', route: '/research/feature' }],
@@ -178,6 +179,7 @@ export const RESEARCH_STUDIES: readonly StudyDefinition[] = [
   {
     id: 'realized-vs-iv',
     route: '/research/realized-vs-iv',
+    history: 'realized-vs-iv',
     question: 'Is implied volatility richer or cheaper than the volatility the stock then realizes?',
     subject: 'instrument',
     resultKind: 'descriptive',
@@ -195,7 +197,7 @@ export const RESEARCH_STUDIES: readonly StudyDefinition[] = [
     limitations: [
       'Implied volatility comes only from what the recorder stored, matched to bars by exact timestamp; with none stored the study shows realized volatility alone.',
       'The last bars have no forward window, so their forward figures stay unavailable.',
-      'The current IV marker is a live snapshot; it is never written into past dates. Nothing is saved.',
+      'The current IV marker is a live snapshot; it is never written into past dates, and a saved run does not keep it.',
     ],
     nextStep: 'Change the instrument, bar size or tenor and run again.',
     nextLinks: [],

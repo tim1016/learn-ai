@@ -85,6 +85,11 @@ const ROWS: Readonly<Record<string, Row>> = {
   'research/demos/trade-simulator': { group: RESEARCH },
   // The History indexes every study's own store (R26); a stored signal report opens under it.
   'research/history': { group: RESEARCH },
+  'research/history/feature-study/:id': { group: RESEARCH },
+  'research/history/signal-study/:id': { group: RESEARCH },
+  'research/history/cross-sectional-study/:id': { group: RESEARCH },
+  'research/history/indicator-reliability/:id': { group: RESEARCH },
+  'research/history/realized-vs-iv/:id': { group: RESEARCH },
   'research/history/signal-report/:id': { group: RESEARCH },
   // The Research Lab shell still hosts the run detail pages until slice 28.
   'research-lab': { group: RESEARCH, lands: '/research' },

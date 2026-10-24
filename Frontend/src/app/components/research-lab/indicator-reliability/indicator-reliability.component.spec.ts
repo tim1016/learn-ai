@@ -9,6 +9,8 @@ import {
   provideFakeTickerCatalog,
 } from '../../../shared/ticker-catalog/testing/fake-ticker-catalog';
 import { fakeVendorCatalog, provideFakeVendorCatalog } from '../../../shared/symbol-catalog/testing/fake-symbol-catalog';
+import { environment } from '../../../../environments/environment';
+import { RECORD_ID, storedRecord } from '../../../research/stored-study/testing/stored-study-fixtures';
 import { IndicatorReliabilityComponent } from './indicator-reliability.component';
 
 describe('IndicatorReliabilityComponent (Indicator reliability study)', () => {
@@ -67,5 +69,31 @@ describe('IndicatorReliabilityComponent (Indicator reliability study)', () => {
     run.click();
 
     expect(runs()).toHaveLength(1);
+  });
+
+  it('fills the inputs from a saved run, keeps its parameters over the indicator’s defaults, starts nothing, then names the run when Run study is pressed', async () => {
+    fixture.componentRef.setInput('rerun', RECORD_ID);
+    fixture.detectChanges();
+    http
+      .expectOne(`${environment.pythonServiceUrl}/api/research/study-records/indicator-reliability/${RECORD_ID}`)
+      .flush(storedRecord('indicator-reliability'));
+    await new Promise((resolve) => setTimeout(resolve)); // the read resolves in a later task than the flush
+    await fixture.whenStable();
+    // The indicator's own parameters arrive after the fill; the saved ones stay.
+    for (const request of http.match((r) => r.url.includes('/api/research/indicator-params/'))) {
+      request.flush([{ name: 'length', type: 'int', default: 10, min: 1, max: 200, description: 'Lookback.' }]);
+    }
+    await fixture.whenStable();
+
+    expect(component.range()).toMatchObject({ symbol: 'SPY', from: '2024-01-02', to: '2024-03-28' });
+    expect(component.indicatorName()).toBe('rsi');
+    expect(component.paramValues()).toEqual({ length: 14 });
+    expect(component.selectedHorizons()).toEqual([5, 1]);
+    expect(runs()).toHaveLength(0);
+
+    component.runAnalysis();
+
+    const [run] = runs();
+    expect(run.request.body).toMatchObject({ indicator_name: 'rsi', horizons: [5, 1], rerun_of: RECORD_ID });
   });
 });

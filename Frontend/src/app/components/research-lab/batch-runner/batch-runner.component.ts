@@ -4,6 +4,7 @@ import {
   computed,
   effect,
   inject,
+  input,
   signal,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
@@ -24,6 +25,8 @@ import type { MultiTickerRange } from '../../../shared/multi-ticker-range-picker
 import { multiTickerRangeToWire } from '../../../utils/ticker-wire';
 import { StudyPageComponent } from '../../../research/study-page/study-page.component';
 import { createRunGate } from '../../../research/run-gate';
+import { createRerunPrefill } from '../../../research/stored-study/rerun';
+import { StoredInputsError, type StoredInputs } from '../../../research/stored-study/stored-inputs';
 import { createResultInputTracker } from '../../../shared/workspace/previous-result';
 import { CrossSectionalReportComponent } from './cross-sectional-report/cross-sectional-report.component';
 import { CrossSectionalJobResultRaw, toBatchResearchResult } from './cross-sectional-result.mapper';
@@ -68,6 +71,15 @@ interface BatchStudyInputs {
 })
 export class BatchRunnerComponent {
   private jobsService = inject(JobsService);
+
+  /** `?rerun=<saved run id>`: fill the inputs from that run. It runs nothing; Run study is still the reader's. */
+  readonly rerun = input<string>();
+  private readonly prefill = createRerunPrefill({
+    study: 'cross-sectional-study',
+    id: this.rerun,
+    apply: (stored) => this.fillFrom(stored),
+  });
+  readonly prefillNotice = this.prefill.notice;
 
   // Form state
   featureName = signal('iv_rank_60');
@@ -217,6 +229,23 @@ export class BatchRunnerComponent {
     return this.gate.press(() => this.startBatch());
   }
 
+  /** Sets the inputs from a saved run's. Everything is read first, so a field it cannot read leaves the page as it was. */
+  private fillFrom(stored: StoredInputs): void {
+    const symbols = stored.texts('symbols').map((symbol) => symbol.toUpperCase());
+    if (symbols.length === 0) throw new StoredInputsError('"symbols" names no universe');
+    const feature = stored.text('feature_name');
+    const target = stored.text('target_type');
+    if (!OPTIONS_FEATURES.some((option) => option.value === feature)) {
+      throw new StoredInputsError(`"${feature}" is not a feature this page offers`);
+    }
+    if (!TARGET_TYPES.some((option) => option.value === target)) {
+      throw new StoredInputsError(`"${target}" is not a target this page offers`);
+    }
+    this.range.update((range) => ({ ...range, symbols, from: stored.text('from_date'), to: stored.text('to_date') }));
+    this.featureName.set(feature);
+    this.targetType.set(target);
+  }
+
   private async startBatch(): Promise<void> {
     if (this.range().symbols.length === 0) {
       this.error.set('Select at least one ticker');
@@ -238,11 +267,14 @@ export class BatchRunnerComponent {
         ...submitted.range,
         symbols: submitted.range.symbols.map((s) => s.toUpperCase()),
       });
+      const parent = this.prefill.parent();
       const id = await this.jobsService.startJob('cross_sectional', {
         ...wire,
         feature_name: submitted.feature,
         target_type: submitted.target,
+        ...(parent === null ? {} : { rerun_of: parent }),
       });
+      this.prefill.started();
       this.submitted = submitted;
       this.jobId.set(id);
     } catch (err: unknown) {

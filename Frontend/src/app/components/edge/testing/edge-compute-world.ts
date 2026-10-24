@@ -1,4 +1,4 @@
-import type { HttpTestingController } from "@angular/common/http/testing";
+import type { HttpTestingController, TestRequest } from "@angular/common/http/testing";
 
 const FIRST_BAR_MS = Date.UTC(2026, 0, 5, 14, 30);
 const DAY_MS = 86_400_000;
@@ -73,6 +73,8 @@ export interface ComputeAnswer {
   /** The estimators the request named, in request order; the response holds a
    *  series for each. Defaults to Yang-Zhang alone. */
   estimators?: readonly string[];
+  /** Sees the series request before it is answered, for a test that reads what the page sent. */
+  onSeriesRequest?: (request: TestRequest) => void;
 }
 
 /** Answers the requests one Compute click makes, in order, with a small
@@ -81,7 +83,9 @@ export interface ComputeAnswer {
 export async function answerCompute(http: HttpTestingController, answer: ComputeAnswer = {}): Promise<void> {
   http.expectOne("/api/aggregates/fetch").flush(aggregatesResponse());
   await tick();
-  http.expectOne("/api/edge/realized-vs-iv/series").flush(seriesResponse(answer.ivPresent ?? true, answer.estimators ?? ["yz"]));
+  const series = http.expectOne("/api/edge/realized-vs-iv/series");
+  answer.onSeriesRequest?.(series);
+  series.flush(seriesResponse(answer.ivPresent ?? true, answer.estimators ?? ["yz"]));
   http.expectOne("/api/edge/iv30/vix-style").flush({ detail: "dark" }, { status: 503, statusText: "Unavailable" });
   await tick();
   http.expectOne("/api/edge/iv30/parametric").flush({ detail: "dark" }, { status: 503, statusText: "Unavailable" });

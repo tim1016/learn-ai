@@ -1,10 +1,15 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from "@angular/core";
+import { ChangeDetectionStrategy, Component, computed, inject, input, signal } from "@angular/core";
 import { EdgeApiService, type Session } from "../services/edge-api.service";
 import type { RealizedVsIvData } from "../services/edge-data.model";
 import { SymbolPickerComponent } from "../../../shared/symbol-picker/symbol-picker.component";
 import { createResultInputTracker } from "../../../shared/workspace/previous-result";
 import { StudyPageComponent } from "../../../research/study-page/study-page.component";
+import { createRerunPrefill } from "../../../research/stored-study/rerun";
+import { StoredInputsError, type StoredInputs } from "../../../research/stored-study/stored-inputs";
 import { RealizedVsIvReportComponent } from "./realized-vs-iv-report.component";
+
+/** The tenors the page offers. */
+const TENORS: readonly string[] = ["7D", "14D", "30D", "60D"];
 
 /** What a Compute is made from: the inputs a shown result answers. */
 interface RealizedVsIvInputs {
@@ -27,6 +32,15 @@ interface RealizedVsIvInputs {
 })
 export class RealizedVsIvComponent {
   private readonly api = inject(EdgeApiService);
+
+  /** `?rerun=<saved run id>`: fill the inputs from that run. It runs nothing; Run study is still the reader's. */
+  readonly rerun = input<string>();
+  private readonly prefill = createRerunPrefill({
+    study: "realized-vs-iv",
+    id: this.rerun,
+    apply: (stored) => this.fillFrom(stored),
+  });
+  readonly prefillNotice = this.prefill.notice;
 
   /** The last real Compute, or null. The page opens idle, and a failed Compute
    *  clears it: nothing is rendered that the endpoint did not return. */
@@ -76,13 +90,16 @@ export class RealizedVsIvComponent {
     this.errorMsg.set(null);
     const submitted = this.enteredInputs();
     try {
+      const parent = this.prefill.parent();
       const result = await this.api.computeRealizedVsIv({
         symbol: submitted.symbol,
         barSize: submitted.barSize,
         tenor: submitted.tenor,
         session: submitted.session,
         estimators: ["yz"],
+        ...(parent === null ? {} : { rerunOf: parent }),
       });
+      this.prefill.started();
       this.data.set(result);
       this.inputs.capture(submitted);
     } catch (e) {
@@ -93,6 +110,25 @@ export class RealizedVsIvComponent {
     } finally {
       this.loading.set(false);
     }
+  }
+
+  /**
+   * Sets the inputs from a saved run's. The run recorded the bar size the study was told ("15m" or "1d"), so a run
+   * that was asked for 5m or 1h bars, which the study treats as daily, fills in as 1D. Everything is read first, so a
+   * field it cannot read leaves the page as it was.
+   */
+  private fillFrom(stored: StoredInputs): void {
+    const sent = stored.text("bar_size");
+    const barSize = sent === "15m" ? "15m" : sent === "1d" ? "1D" : null;
+    if (barSize === null) throw new StoredInputsError(`"${sent}" is not a bar size this page offers`);
+    const tenor = `${stored.number("tenor_days")}D`;
+    if (!TENORS.includes(tenor)) throw new StoredInputsError(`a ${tenor} tenor is not offered here`);
+    const session = stored.text("session");
+    if (session !== "ETH" && session !== "RTH") throw new StoredInputsError(`"${session}" is not a session this page offers`);
+    this.symbol.set(stored.text("symbol").toUpperCase());
+    this.barSize.set(barSize);
+    this.tenor.set(tenor as RealizedVsIvInputs["tenor"]);
+    this.session.set(session);
   }
 
   protected setSession(s: Session): void { this.session.set(s); }

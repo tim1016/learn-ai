@@ -8,6 +8,7 @@
   [hasResult]="result()?.success === true"
   [previous]="inputs.isPrevious()"
   [captured]="inputs.captured()"
+  [prefill]="prefillNotice()"
   (run)="runAnalysis()"
 >
   <!-- Sampling card hidden: the study reads 1-minute regular-hours bars whatever is picked,

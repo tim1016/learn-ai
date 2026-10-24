@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { StudyPageComponent } from './study-page.component';
 import { RESEARCH_STUDIES, type ResearchStudyId } from '../research-studies';
+import type { StudyPrefill } from '../stored-study/rerun';
 
 interface Page {
   readonly study: ResearchStudyId;
@@ -14,6 +15,7 @@ interface Page {
   readonly hasOutput?: boolean;
   readonly hasResult?: boolean;
   readonly previous?: boolean;
+  readonly prefill?: StudyPrefill | null;
 }
 
 async function renderPage(page: Page) {
@@ -29,6 +31,7 @@ async function renderPage(page: Page) {
        [hasResult]="hasResult"
        [previous]="previous"
        [captured]="captured"
+       [prefill]="prefill"
        (run)="run()">
        <div studyInstrument>instrument picker</div>
        <div studyConfig>test configuration</div>
@@ -45,6 +48,7 @@ async function renderPage(page: Page) {
         hasOutput: false,
         hasResult: false,
         previous: false,
+        prefill: null,
         captured: { key: 'k', facts: [{ label: 'Instrument', value: 'SPY' }] },
         ...page,
         run,
@@ -179,5 +183,33 @@ describe('StudyPageComponent', () => {
     await renderPage({ study: 'signal', hasOutput: true, hasResult: true });
 
     expect(screen.queryByTestId('study-descriptive-note')).toBeNull();
+  });
+
+  it.each(RESEARCH_STUDIES)('offers every study the list of its own saved runs: %s', async (study) => {
+    await renderPage({ study: study.id });
+
+    expect(screen.getByRole('link', { name: 'Saved runs' }).getAttribute('href')).toBe(
+      `/research/history?type=${study.history}`,
+    );
+  });
+
+  it('says when the inputs were filled in from a saved run, that nothing has run, and where that run is', async () => {
+    await renderPage({
+      study: 'feature',
+      prefill: { state: 'filled', study: 'feature-study', id: 'a'.repeat(32), savedAtMs: 1_790_000_000_000 },
+    });
+
+    const notice = screen.getByTestId('study-prefill');
+    expect(notice.textContent).toContain('Nothing has run');
+    expect(within(notice).getByRole('link', { name: 'Open that run' }).getAttribute('href')).toBe(
+      `/research/history/feature-study/${'a'.repeat(32)}`,
+    );
+    expect((screen.getByRole('button', { name: 'Run study' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('says why nothing was filled in when the saved run could not be used', async () => {
+    await renderPage({ study: 'feature', prefill: { state: 'failed', message: 'The saved run to fill in from was not found.' } });
+
+    expect(screen.getByRole('alert').textContent).toContain('was not found');
   });
 });

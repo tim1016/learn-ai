@@ -7,6 +7,7 @@ import {
 } from '@angular/common/http/testing';
 import { signal, computed, type Signal } from '@angular/core';
 import { vi } from 'vitest';
+import { provideRouter } from '@angular/router';
 
 import { environment } from '../../../../environments/environment';
 import {
@@ -20,6 +21,7 @@ import {
 
 import { FeatureRunnerComponent } from './feature-runner.component';
 import { JobsService, type JobState } from '../../../services/jobs.service';
+import { FEATURE_INPUTS, RECORD_ID, storedRecord } from '../../../research/stored-study/testing/stored-study-fixtures';
 
 /**
  * The feature runner moved from a synchronous `ResearchService` call to a
@@ -82,6 +84,7 @@ describe('FeatureRunnerComponent', () => {
       ],
       providers: [
         { provide: JobsService, useValue: jobsServiceMock },
+        provideRouter([]),
         // The card reads the lake catalog on init; without this the real
         // service is constructed and fires a doomed XHR on every run.
         provideFakeTickerCatalog(
@@ -211,6 +214,83 @@ describe('FeatureRunnerComponent', () => {
       fixture.destroy();
 
       expect(jobsServiceMock.cancelJob).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('rerun from a saved run', () => {
+    const recordUrl = `${environment.pythonServiceUrl}/api/research/study-records/feature-study/${RECORD_ID}`;
+
+    async function openSaved(answer: ReturnType<typeof storedRecord> | { refuse: number }): Promise<void> {
+      fixture.componentRef.setInput('rerun', RECORD_ID);
+      fixture.detectChanges();
+      const request = TestBed.inject(HttpTestingController).expectOne(recordUrl);
+      if ('refuse' in answer) request.flush({}, { status: answer.refuse, statusText: 'refused' });
+      else request.flush(answer);
+      await new Promise((resolve) => setTimeout(resolve)); // the read resolves in a later task than the flush
+      await fixture.whenStable();
+      fixture.detectChanges();
+    }
+
+    const notice = () => (fixture.nativeElement as HTMLElement).querySelector('[data-testid="study-prefill"]');
+
+    it('fills the inputs from the saved run, says so, and starts nothing', async () => {
+      await openSaved(storedRecord('feature-study'));
+
+      expect(component.range()).toEqual({
+        symbol: 'SPY',
+        from: '2024-01-02',
+        to: '2024-03-28',
+        resolution: 'minute',
+        multiplier: 5,
+      });
+      expect(component.selectedIndicator()).toBe('rsi');
+      expect(component.selectedParams()).toEqual({ length: 14 });
+      expect(notice()?.textContent).toContain('Nothing has run');
+      expect(jobsServiceMock.startJob).not.toHaveBeenCalled();
+    });
+
+    it('names the saved run as the new run’s parent when Run study is pressed, once', async () => {
+      await openSaved(storedRecord('feature-study'));
+
+      await component.runResearch();
+      await component.runResearch();
+
+      const [first, second] = jobsServiceMock.startJob.mock.calls.map(([, payload]) => payload);
+      expect(first).toMatchObject({ symbol: 'SPY', feature_name: 'rsi_14', rerun_of: RECORD_ID });
+      expect(second).not.toHaveProperty('rerun_of');
+      fixture.detectChanges();
+      expect(notice(), 'the fill has done its job once a run started').toBeNull();
+    });
+
+    it('keeps the lineage for the next press when the run did not start', async () => {
+      await openSaved(storedRecord('feature-study'));
+      jobsServiceMock.startJob.mockRejectedValueOnce(new Error('Network error'));
+
+      await component.runResearch();
+      await component.runResearch();
+
+      expect(jobsServiceMock.startJob.mock.calls.map(([, payload]) => payload.rerun_of)).toEqual([RECORD_ID, RECORD_ID]);
+    });
+
+    it('leaves the inputs as they were and says so when the saved run is not found', async () => {
+      const before = component.range();
+
+      await openSaved({ refuse: 404 });
+
+      expect(component.range()).toBe(before);
+      expect(notice()?.textContent).toContain('was not found, so nothing was filled in');
+      await component.runResearch();
+      expect(jobsServiceMock.startJob.mock.calls[0][1]).not.toHaveProperty('rerun_of');
+    });
+
+    it('fills nothing when the saved run’s inputs are not ones this page offers', async () => {
+      const before = component.range();
+      const hourly = storedRecord('feature-study', { inputs: { ...FEATURE_INPUTS, timespan: 'hour' } as never });
+
+      await openSaved(hourly);
+
+      expect(component.range()).toBe(before);
+      expect(notice()?.textContent).toContain('could not be read');
     });
   });
 

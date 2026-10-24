@@ -127,6 +127,38 @@ describe('ResearchHistoryPageComponent', () => {
     );
   });
 
+  it('opens each of the five studies’ own runs at its detail, and tells them from the earlier stores’ rows of the same name', async () => {
+    await renderHistory(
+      page({
+        entries: [
+          entry({ type: 'feature-study', native_id: RUN, question: 'Feature run' }),
+          entry({ type: 'signal-study', native_id: RUN, question: 'Signal run' }),
+          entry({ type: 'cross-sectional-study', native_id: RUN, question: 'Universe run' }),
+          entry({ type: 'indicator-reliability', native_id: RUN, question: 'Reliability run' }),
+          entry({ type: 'realized-vs-iv', native_id: RUN, question: 'Volatility run' }),
+          entry({ type: 'signal-report', native_id: '7', question: 'Earlier signal report' }),
+          entry({ type: 'feature-experiment', native_id: '5', question: 'Earlier feature experiment' }),
+        ],
+        total: 7,
+      }),
+    );
+
+    for (const [question, type] of [
+      ['Feature run', 'feature-study'],
+      ['Signal run', 'signal-study'],
+      ['Universe run', 'cross-sectional-study'],
+      ['Reliability run', 'indicator-reliability'],
+      ['Volatility run', 'realized-vs-iv'],
+    ] as const) {
+      expect(screen.getByRole('link', { name: question }).getAttribute('href')).toBe(`/research/history/${type}/${RUN}`);
+    }
+    const kindOf = (name: string) => (screen.getByText(name).closest('tr') as HTMLElement).querySelector('td')?.textContent;
+    expect(kindOf('Feature run')).toBe('Feature study');
+    expect(kindOf('Earlier feature experiment')).toBe('Feature study (earlier)');
+    expect(kindOf('Signal run')).toBe('Signal study');
+    expect(kindOf('Earlier signal report')).toBe('Signal study (earlier)');
+  });
+
   it('shows a feature study as the headline its store kept, with no link to a detail that does not exist', async () => {
     await renderHistory(
       page({

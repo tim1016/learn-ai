@@ -1,9 +1,10 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { HttpClientTestingModule } from '@angular/common/http/testing';
+import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
 import { computed, signal } from '@angular/core';
 import { provideRouter } from '@angular/router';
 import { vi } from 'vitest';
 
+import { environment } from '../../../../environments/environment';
 import { JobsService, type JobState } from '../../../services/jobs.service';
 import { provideFakeDateWorld } from '../../../shared/date-picker/testing/fake-trading-calendar';
 import {
@@ -16,6 +17,7 @@ import {
   provideFakeEnsureCoverage,
   provideFakeVendorCatalog,
 } from '../../../shared/symbol-catalog/testing/fake-symbol-catalog';
+import { RECORD_ID, storedRecord } from '../../../research/stored-study/testing/stored-study-fixtures';
 import { BatchRunnerComponent } from './batch-runner.component';
 
 /**
@@ -161,6 +163,25 @@ describe('BatchRunnerComponent (Cross-sectional study)', () => {
 
     expect(jobsMock.startJob).toHaveBeenCalledTimes(1);
     expect(jobsMock.startJob.mock.calls[0][1]).toMatchObject({ symbols: ['SPY', 'QQQ', 'AAPL'], timespan: 'day' });
+  });
+
+  it('fills the universe, window, feature and target from a saved run, starts nothing, then names it when Run study is pressed', async () => {
+    fixture.componentRef.setInput('rerun', RECORD_ID);
+    fixture.detectChanges();
+    TestBed.inject(HttpTestingController)
+      .expectOne(`${environment.pythonServiceUrl}/api/research/study-records/cross-sectional-study/${RECORD_ID}`)
+      .flush(storedRecord('cross-sectional-study', { inputs: { ...storedRecord('cross-sectional-study').inputs, symbols: ['iwm', 'dia'], feature_name: 'log_skew', target_type: 'volatility' } as never }));
+    await new Promise((resolve) => setTimeout(resolve)); // the read resolves in a later task than the flush
+    await fixture.whenStable();
+
+    expect(component.range()).toMatchObject({ symbols: ['IWM', 'DIA'], from: '2025-09-02', to: '2025-12-01' });
+    expect(component.featureName()).toBe('log_skew');
+    expect(component.targetType()).toBe('volatility');
+    expect(jobsMock.startJob).not.toHaveBeenCalled();
+
+    await component.runBatch();
+
+    expect(jobsMock.startJob.mock.calls[0][1]).toMatchObject({ symbols: ['IWM', 'DIA'], target_type: 'volatility', rerun_of: RECORD_ID });
   });
 
   it('leaves a running job running when the study is left', () => {

@@ -1,8 +1,22 @@
-<app-workspace-header [title]="title()" [purpose]="definition().question">
+<app-workspace-header [title]="title()" [purpose]="definition().question" [secondaryActions]="savedRuns()">
   @if (definition().help; as help) {
     <app-how-this-works workspaceHelp [route]="help.route" [anchor]="help.anchor" />
   }
 </app-workspace-header>
+
+@if (prefill(); as filled) {
+  @if (filled.state === 'filled') {
+    <p class="study-prefill" role="status" data-testid="study-prefill">
+      Inputs filled in from a saved run. Nothing has run: change anything you like, then press Run study.
+      <span class="study-prefill__run">
+        Saved <app-timestamp-display [value]="filled.savedAtMs" mode="local" /> ·
+        <a [routerLink]="['/research/history', filled.study, filled.id]">Open that run</a>
+      </span>
+    </p>
+  } @else {
+    <p class="study-prefill study-prefill--failed" role="alert" data-testid="study-prefill">{{ filled.message }}</p>
+  }
+}
 
 <ol class="study-steps">
   <li class="study-step" data-step="instrument">

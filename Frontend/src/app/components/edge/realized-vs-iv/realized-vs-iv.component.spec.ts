@@ -12,10 +12,13 @@ import type {
   RealizedVsIvData,
 } from "../services/edge-data.model";
 import { answerCompute, failBarsFetch, tick, YZ_RV_BY_WINDOW } from "../testing/edge-compute-world";
+import { environment } from "../../../../environments/environment";
+import { RECORD_ID, RVIV_INPUTS, storedRecord } from "../../../research/stored-study/testing/stored-study-fixtures";
 import { RealizedVsIvComponent } from "./realized-vs-iv.component";
 
-async function renderPage() {
+async function renderPage(inputs: Record<string, unknown> = {}) {
   const view = await render(RealizedVsIvComponent, {
+    inputs,
     providers: [
       ...fakePickerWorld().providers,
       provideHttpClient(),
@@ -399,5 +402,33 @@ describe("RealizedVsIvComponent — live IV30 readout", () => {
     const method = screen.getByTestId("live-iv30-method");
     expect(method.textContent).toContain("parametric");
     expect(method.textContent).not.toContain("vix-style");
+  });
+});
+
+describe("RealizedVsIvComponent — rerun from a saved run", () => {
+  it("fills the inputs from the saved run and fetches nothing, then names the run when Run study is pressed", async () => {
+    const { http, user, fixture } = await renderPage({ rerun: RECORD_ID });
+    http
+      .expectOne(`${environment.pythonServiceUrl}/api/research/study-records/realized-vs-iv/${RECORD_ID}`)
+      .flush(
+        storedRecord("realized-vs-iv", {
+          inputs: { ...RVIV_INPUTS, symbol: "qqq", bar_size: "15m", tenor_days: 60, session: "RTH" } as never,
+        }),
+      );
+    await tick();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect((screen.getByLabelText("Bar size") as HTMLSelectElement).value).toBe("15m");
+    expect((screen.getByLabelText("Tenor") as HTMLSelectElement).value).toBe("60D");
+    expect(screen.getByRole("button", { name: "RTH" }).classList.contains("on")).toBe(true);
+    expect(screen.getByTestId("study-prefill").textContent).toContain("Nothing has run");
+    http.expectNone("/api/aggregates/fetch");
+
+    await user.click(screen.getByRole("button", { name: "Run study" }));
+    let sent: unknown;
+    await answerCompute(http, { onSeriesRequest: (request) => (sent = request.request.body) });
+
+    expect(sent).toMatchObject({ symbol: "QQQ", bar_size: "15m", tenor_days: 60, session: "RTH", rerun_of: RECORD_ID });
   });
 });

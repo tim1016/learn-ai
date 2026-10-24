@@ -7,6 +7,7 @@ import {
 } from '@angular/common/http/testing';
 import { signal } from '@angular/core';
 import { vi } from 'vitest';
+import { provideRouter } from '@angular/router';
 
 import { environment } from '../../../../environments/environment';
 import {
@@ -19,6 +20,7 @@ import {
 } from '../../../shared/symbol-catalog/testing/fake-symbol-catalog';
 
 import { JobsService, type JobState } from '../../../services/jobs.service';
+import { RECORD_ID, storedRecord } from '../../../research/stored-study/testing/stored-study-fixtures';
 import { SignalRunnerComponent } from './signal-runner.component';
 
 /** A one-indicator `/api/dataset/available` catalog. */
@@ -57,6 +59,7 @@ describe('SignalRunnerComponent indicator catalog load', () => {
             dismiss: vi.fn(),
           },
         },
+        provideRouter([]),
         // The ticker card reads the lake catalog on init; without this the
         // real service fires a doomed XHR on every run.
         provideFakeTickerCatalog(
@@ -104,6 +107,30 @@ describe('SignalRunnerComponent indicator catalog load', () => {
     expect(picker?.querySelector('[role="alert"]')).toBeNull();
     expect(picker?.textContent).not.toContain('Indicators could not be loaded.');
     expect(picker?.textContent).toContain('1 of 1');
+  });
+
+  describe('rerun from a saved run', () => {
+    it('fills the inputs, flip sign and regime gate from the saved run, starts nothing, then names it when Run study is pressed', async () => {
+      const component = fixture.componentInstance;
+      fixture.componentRef.setInput('rerun', RECORD_ID);
+      fixture.detectChanges();
+      TestBed.inject(HttpTestingController)
+        .expectOne(`${environment.pythonServiceUrl}/api/research/study-records/signal-study/${RECORD_ID}`)
+        .flush(storedRecord('signal-study'));
+      await new Promise((resolve) => setTimeout(resolve)); // the read resolves in a later task than the flush
+      await fixture.whenStable();
+
+      expect(component.range()).toEqual({ symbol: 'SPY', from: '2024-01-02', to: '2024-03-28', resolution: 'minute', multiplier: 15 });
+      expect(component.selectedIndicator()).toBe('macd');
+      expect(component.selectedParams()).toEqual({ fast: 12, slow: 26, signal: 9 });
+      expect(component.flipSign()).toBe(false);
+      expect(component.regimeGateEnabled()).toBe(true);
+      expect(startJob).not.toHaveBeenCalled();
+
+      await component.runSignalEngine();
+
+      expect(startJob.mock.calls[0][1]).toMatchObject({ feature_name: 'macd_signal', flip_sign: false, rerun_of: RECORD_ID });
+    });
   });
 
   describe('study layout', () => {

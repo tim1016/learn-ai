@@ -3,6 +3,7 @@ import {
   signal,
   computed,
   inject,
+  input,
   ChangeDetectionStrategy,
   effect,
 } from '@angular/core';
@@ -29,7 +30,7 @@ import {
 import {
   IndicatorCatalogService,
 } from '../../../shared/indicator-catalog/indicator-catalog.service';
-import { findFeatureId } from '../../../shared/indicator-catalog/feature-mapping';
+import { findFeatureId, findMappingForFeature } from '../../../shared/indicator-catalog/feature-mapping';
 import { ActiveIndicatorCardComponent } from '../../data-lab/active-indicator-card/active-indicator-card.component';
 import { IndicatorConfigModalComponent } from '../../data-lab/indicator-config-modal/indicator-config-modal.component';
 import { TickerRangePickerComponent } from '../../../shared/ticker-range-picker/ticker-range-picker.component';
@@ -40,6 +41,8 @@ import type {
 import { tickerRangeToWire } from '../../../utils/ticker-wire';
 import { StudyPageComponent } from '../../../research/study-page/study-page.component';
 import { createRunGate } from '../../../research/run-gate';
+import { createRerunPrefill } from '../../../research/stored-study/rerun';
+import { StoredInputsError, type StoredInputs } from '../../../research/stored-study/stored-inputs';
 import { createResultInputTracker } from '../../../shared/workspace/previous-result';
 
 /** What a Feature study's request is made from: the inputs a shown result answers. */
@@ -72,6 +75,15 @@ interface FeatureStudyInputs {
 export class FeatureRunnerComponent {
   private jobsService = inject(JobsService);
   private catalog = inject(IndicatorCatalogService);
+
+  /** `?rerun=<saved run id>`: fill the inputs from that run. It runs nothing; Run study is still the reader's. */
+  readonly rerun = input<string>();
+  private readonly prefill = createRerunPrefill({
+    study: 'feature-study',
+    id: this.rerun,
+    apply: (stored) => this.fillFrom(stored),
+  });
+  readonly prefillNotice = this.prefill.notice;
 
   /** Catalog passed to the picker. Exposed as a getter so the template can
    *  read the service signal directly without leaking the service. */
@@ -246,6 +258,26 @@ export class FeatureRunnerComponent {
     () => this.job() !== null || this.error() !== null || this.result() !== null,
   );
 
+  /** Sets the inputs from a saved run's. Everything is read first, so a field it cannot read leaves the page as it was. */
+  private fillFrom(stored: StoredInputs): void {
+    const name = stored.text('feature_name');
+    const mapping = findMappingForFeature(name);
+    if (mapping === null) throw new StoredInputsError(`"${name}" is not an indicator this page offers`);
+    const multiplier = stored.number('multiplier');
+    if (stored.text('timespan') !== 'minute' || !this.availableMultipliers.includes(multiplier)) {
+      throw new StoredInputsError(`${multiplier} ${stored.text('timespan')} bars are not offered here`);
+    }
+    this.range.set({
+      symbol: stored.text('symbol').toUpperCase(),
+      from: stored.text('from_date'),
+      to: stored.text('to_date'),
+      resolution: 'minute',
+      multiplier,
+    });
+    this.selectedIndicator.set(mapping.indicator);
+    this.selectedParams.set({ ...mapping.params });
+  }
+
   /** Picker (add) in this host = single-select replace. The picker fires
    *  (add) on every row click; we treat each fire as "set this as the
    *  active feature" rather than accumulating. */
@@ -349,11 +381,14 @@ export class FeatureRunnerComponent {
         ...submitted.range,
         symbol: submitted.range.symbol.toUpperCase(),
       });
+      const parent = this.prefill.parent();
       const id = await this.jobsService.startJob('feature_research', {
         ...wire,
         feature_name: featureId,
         force: this.forceRun(),
+        ...(parent === null ? {} : { rerun_of: parent }),
       });
+      this.prefill.started();
       this.submitted = submitted;
       this.jobId.set(id);
     } catch (err: unknown) {

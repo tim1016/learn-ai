@@ -3,6 +3,7 @@ import {
   signal,
   computed,
   inject,
+  input,
   DestroyRef,
   ChangeDetectionStrategy,
   effect,
@@ -24,6 +25,8 @@ import type { TickerRange } from '../../../shared/ticker-range-picker/ticker-ran
 import { tickerRangeToWire } from '../../../utils/ticker-wire';
 import { StudyPageComponent } from '../../../research/study-page/study-page.component';
 import { createResultInputTracker } from '../../../shared/workspace/previous-result';
+import { createRerunPrefill } from '../../../research/stored-study/rerun';
+import { StoredInputsError, type StoredInputs } from '../../../research/stored-study/stored-inputs';
 import type { IndicatorReliabilityResponse } from './indicator-reliability.models';
 import { IndicatorReliabilityReportComponent } from './indicator-reliability-report/indicator-reliability-report.component';
 
@@ -90,6 +93,20 @@ export class IndicatorReliabilityComponent {
   private http = inject(HttpClient);
   private destroyRef = inject(DestroyRef);
   private pythonUrl = environment.pythonServiceUrl;
+
+  /** `?rerun=<saved run id>`: fill the inputs from that run. It runs nothing; Run study is still the reader's. */
+  readonly rerun = input<string>();
+  private readonly prefill = createRerunPrefill({
+    study: 'indicator-reliability',
+    id: this.rerun,
+    apply: (stored) => this.fillFrom(stored),
+  });
+  readonly prefillNotice = this.prefill.notice;
+  /**
+   * The indicator and parameters a saved run was filled in from. Picking an indicator loads its default parameters
+   * when the answer arrives, which would overwrite the saved ones; the answer for the same indicator keeps them.
+   */
+  private filled: { readonly indicator: string; readonly params: Record<string, number> } | null = null;
 
   // Form inputs
   // Single TickerRange replaces the previous (ticker, fromDate, toDate)
@@ -203,6 +220,7 @@ export class IndicatorReliabilityComponent {
     // Load params when indicator changes
     effect(() => {
       const name = this.indicatorName();
+      if (this.filled !== null && this.filled.indicator !== name) this.filled = null;
       if (name) {
         this.loadIndicatorParams(name);
       }
@@ -252,14 +270,44 @@ export class IndicatorReliabilityComponent {
         catchError(() => of([])),
       )
       .subscribe(params => {
+        // An answer for an indicator that is no longer the picked one has nothing to set.
+        if (name !== this.indicatorName()) return;
         this.paramConfigs.set(params);
         // Set default values
         const defaults: Record<string, number> = {};
         for (const p of params) {
           defaults[p.name] = p.default;
         }
-        this.paramValues.set(defaults);
+        const saved = this.filled?.indicator === name ? this.filled.params : {};
+        this.paramValues.set({ ...defaults, ...saved });
       });
+  }
+
+  /** Sets the inputs from a saved run's. Everything is read first, so a field it cannot read leaves the page as it was. */
+  private fillFrom(stored: StoredInputs): void {
+    const horizons = stored.numbers('horizons');
+    const offered = this.allHorizons.map((option) => option.value);
+    const notOffered = horizons.filter((horizon) => !offered.includes(horizon));
+    if (horizons.length === 0 || notOffered.length > 0) {
+      throw new StoredInputsError(`horizons ${notOffered.join(', ') || '(none)'} are not offered here`);
+    }
+    if (stored.text('timespan') !== 'minute' || stored.number('multiplier') !== 1) {
+      throw new StoredInputsError('only 1 minute bars are offered here');
+    }
+    const indicator = stored.text('indicator_name');
+    const params = stored.numberMap('indicator_params');
+    const slope = stored.boolean('include_slope');
+    this.range.set({
+      symbol: stored.text('symbol').toUpperCase(),
+      from: stored.text('from_date'),
+      to: stored.text('to_date'),
+      resolution: 'minute',
+    });
+    this.filled = { indicator, params };
+    this.indicatorName.set(indicator);
+    this.paramValues.set(params);
+    this.selectedHorizons.set(horizons);
+    this.includeSlope.set(slope);
   }
 
   updateParam(name: string, value: number): void {
@@ -287,12 +335,14 @@ export class IndicatorReliabilityComponent {
       ...submitted.range,
       symbol: submitted.range.symbol.toUpperCase(),
     });
+    const parent = this.prefill.parent();
     const payload = {
       ...wire,
       indicator_name: submitted.indicator,
       indicator_params: submitted.params,
       horizons: submitted.horizons,
       include_slope: submitted.includeSlope,
+      ...(parent === null ? {} : { rerun_of: parent }),
     };
 
     this.http
@@ -311,6 +361,7 @@ export class IndicatorReliabilityComponent {
       )
       .subscribe(res => {
         if (res) {
+          this.prefill.started();
           this.result.set(res);
           if (!res.success && res.error) {
             this.error.set(res.error);

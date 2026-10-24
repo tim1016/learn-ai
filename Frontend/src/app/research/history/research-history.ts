@@ -36,8 +36,20 @@ export const HISTORY_TYPES: Readonly<Record<ResearchHistoryType, HistoryTypeInfo
   'walk-forward': { label: 'Walk-forward', detail: (id) => ['/research/history/walk-forward', id] },
   'monte-carlo': { label: 'Monte Carlo', detail: (id) => ['/research/history/monte-carlo', id] },
   baseline: { label: 'Baseline', detail: (id) => ['/research/history/baseline', id] },
-  'signal-report': { label: 'Signal study', detail: (id) => ['/research/history/signal-report', id] },
-  'feature-experiment': { label: 'Feature study', detail: null },
+  'feature-study': { label: 'Feature study', detail: (id) => ['/research/history/feature-study', id] },
+  'signal-study': { label: 'Signal study', detail: (id) => ['/research/history/signal-study', id] },
+  'cross-sectional-study': {
+    label: 'Cross-sectional study',
+    detail: (id) => ['/research/history/cross-sectional-study', id],
+  },
+  'indicator-reliability': {
+    label: 'Indicator reliability',
+    detail: (id) => ['/research/history/indicator-reliability', id],
+  },
+  'realized-vs-iv': { label: 'Realized vs IV', detail: (id) => ['/research/history/realized-vs-iv', id] },
+  // The rows the retired .NET backend wrote: kept as they were, apart from the runs the studies record now.
+  'signal-report': { label: 'Signal study (earlier)', detail: (id) => ['/research/history/signal-report', id] },
+  'feature-experiment': { label: 'Feature study (earlier)', detail: null },
 };
 
 export const HISTORY_TYPE_IDS = Object.keys(HISTORY_TYPES) as ResearchHistoryType[];

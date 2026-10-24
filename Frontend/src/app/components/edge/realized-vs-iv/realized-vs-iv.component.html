@@ -7,6 +7,7 @@
   [hasResult]="data() !== null"
   [previous]="inputs.isPrevious()"
   [captured]="inputs.captured()"
+  [prefill]="prefillNotice()"
   (run)="onCompute()"
 >
   <app-symbol-picker
