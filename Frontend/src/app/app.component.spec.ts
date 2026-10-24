@@ -55,11 +55,11 @@ describe('AppComponent', () => {
           { path: 'strategy-lab', component: ShellSmokeRouteComponent, data: { fullBleed: true } },
           { path: 'options-setups', component: ShellSmokeRouteComponent },
           { path: 'options-setups/:name/define', component: ShellSmokeRouteComponent, data: { stickyContent: true } },
-          { path: 'research-lab/strategy-runs/:id', component: ShellSmokeRouteComponent },
-          { path: 'research-lab/walk-forward/:id', component: ShellSmokeRouteComponent },
-          { path: 'research-lab/monte-carlo/:id', component: ShellSmokeRouteComponent },
-          { path: 'research-lab/baselines/:id', component: ShellSmokeRouteComponent },
-          { path: 'research-lab/signal-report/:id', component: ShellSmokeRouteComponent },
+          { path: 'research/history/spec-run/:id', component: ShellSmokeRouteComponent },
+          { path: 'research/history/walk-forward/:id', component: ShellSmokeRouteComponent },
+          { path: 'research/history/monte-carlo/:id', component: ShellSmokeRouteComponent },
+          { path: 'research/history/baseline/:id', component: ShellSmokeRouteComponent },
+          { path: 'research/history/signal-report/:id', component: ShellSmokeRouteComponent },
           { path: 'strategy-lab/docs', component: ShellSmokeRouteComponent },
           // The workspace's own URLs, stubbed: these specs grade the window
           // title the shell computes from them, not what the tabs render.
@@ -230,7 +230,7 @@ describe('AppComponent', () => {
       ['/markets/SPY/chart/news?from=2026-01-02', 'SPY · Headlines · Markets'],
       ['/options-setups', 'Options setups'],
       ['/options-setups/SPY%200DTE/define', 'SPY 0DTE · Define · Options setups'],
-      ['/research-lab/strategy-runs/run-42', 'Research Lab · Research'],
+      ['/research/history/spec-run/run-42', 'History · Research'],
       // A document is titled by itself: the help index is its home, not the page it explains.
       ['/strategy-lab/docs', 'Strategy Lab Manual'],
     ])('sets the browser title outside a workspace as Page · Group from the active menu node: %s', async (url, expected) => {
@@ -287,11 +287,11 @@ describe('AppComponent', () => {
 
     for (const url of [
       '/markets',
-      '/research-lab/strategy-runs/run-42',
-      '/research-lab/walk-forward/wf-42',
-      '/research-lab/monte-carlo/mc-42',
-      '/research-lab/baselines/baseline-42',
-      '/research-lab/signal-report/42',
+      '/research/history/spec-run/run-42',
+      '/research/history/walk-forward/wf-42',
+      '/research/history/monte-carlo/mc-42',
+      '/research/history/baseline/baseline-42',
+      '/research/history/signal-report/42',
     ]) {
       await router.navigateByUrl(url);
       fixture.detectChanges();

@@ -75,12 +75,20 @@ export const APP_MENU: readonly AppMenuGroup[] = [
     title: 'Research',
     icon: 'pi pi-compass',
     items: [
-      { title: 'Research Lab', route: '/research-lab' },
-      { title: 'Edge Analysis', route: '/edge' },
-      { title: 'Realized vs IV', route: '/edge/realized-vs-iv' },
-      { title: 'Cross-Asset', route: '/edge/cross-asset' },
-      { title: 'Regimes', route: '/edge/regimes' },
-      { title: 'Strategy Spec', route: '/spec-strategy' },
+      { title: 'Studies', route: '/research' },
+      { title: 'Feature study', route: '/research/feature' },
+      { title: 'Cross-sectional study', route: '/research/cross-sectional' },
+      { title: 'Signal study', route: '/research/signal' },
+      { title: 'Indicator reliability', route: '/research/indicator-reliability' },
+      { title: 'Realized vs implied vol', route: '/research/realized-vs-iv' },
+      { title: 'Rule sandbox', route: '/research/rule-sandbox' },
+      // Every study's saved results, whichever store keeps them.
+      { title: 'History', route: '/research/history' },
+      // Sample data, never measurements: the title says so.
+      { title: 'Cross-asset demo', route: '/research/demos/cross-asset' },
+      { title: 'Regimes demo', route: '/research/demos/regimes' },
+      { title: 'Edge score demo', route: '/research/demos/edge-score' },
+      { title: 'Trade simulator demo', route: '/research/demos/trade-simulator' },
     ],
   },
   {

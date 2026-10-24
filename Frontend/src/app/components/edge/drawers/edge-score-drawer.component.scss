@@ -20,6 +20,12 @@
   animation: esdSlide .2s ease;
 }
 
+.esd--inline {
+  position: static; width: auto;
+  border: 1px solid $border; border-radius: $radius-md;
+  box-shadow: none; animation: none; z-index: auto;
+}
+
 .esd-header {
   padding: 14px 18px; border-bottom: 1px solid $border;
   display: flex; align-items: center; justify-content: space-between;

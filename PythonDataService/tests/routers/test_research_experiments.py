@@ -1,15 +1,14 @@
-"""The Research Lab's legacy experiment history over HTTP, without a database.
+"""A stored signal experiment's report over HTTP, without a database.
 
-These run on every PR: what each route is asked and refused, what an absent or unreadable report is told, the 503 of a
-service with no database configured, the row mapping, and - the heart of it - that a signal report the engine stored
-is served field for field. The SQL is proved against a real database in ``test_research_experiments_postgres.py``.
+These run on every PR: what the route is asked and refuses, what an absent or unreadable report is told, the 503 of a
+service with no database configured, and - the heart of it - that a signal report the engine stored is served field for
+field. The SQL is proved against a real database in ``test_research_experiments_postgres.py``.
 """
 
 from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Iterator
-from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -19,86 +18,19 @@ from httpx import ASGITransport
 from app.config import settings
 from app.main import app
 from app.routers.research_experiments import get_experiment_store
-from app.schemas.research_experiments import (
-    ResearchExperimentResponse,
-    SignalExperimentReport,
-    SignalExperimentResponse,
-)
-from app.services.research_experiment_service import (
-    StoredReportUnreadable,
-    parse_signal_report,
-    research_experiment_from_row,
-    signal_experiment_from_row,
-)
+from app.schemas.research_experiments import SignalExperimentReport
+from app.services.research_experiment_service import StoredReportUnreadable, parse_signal_report
 from tests._helpers.stored_signal_report import a_busy_signal_report, served, stored_text
 
 BASE = "/api/research"
-CREATED_MS = 1_790_000_000_123
-
-
-def _research(**changes: Any) -> ResearchExperimentResponse:
-    return ResearchExperimentResponse(
-        **{
-            "id": 7,
-            "ticker": "SPY",
-            "feature_name": "rsi_14",
-            "start_date": "2025-01-02",
-            "end_date": "2025-06-30",
-            "bars_used": 48_750,
-            "mean_ic": 0.0123,
-            "ic_t_stat": 2.5,
-            "ic_p_value": 0.012,
-            "adf_p_value": 0.001,
-            "kpss_p_value": 0.4,
-            "is_stationary": True,
-            "passed_validation": False,
-            "monotonicity_ratio": 0.8,
-            "is_monotonic": True,
-            "created_at_ms": CREATED_MS,
-            **changes,
-        }
-    )
-
-
-def _signal(**changes: Any) -> SignalExperimentResponse:
-    return SignalExperimentResponse(
-        **{
-            "id": 3,
-            "ticker": "SPY",
-            "feature_name": "momentum_5m",
-            "start_date": "2025-01-02",
-            "end_date": "2025-06-30",
-            "bars_used": 48_750,
-            "overall_grade": "B",
-            "status_label": "Research",
-            "overall_passed": True,
-            "mean_oos_sharpe": 0.65,
-            "best_threshold": 1.0,
-            "best_cost_bps": 2.5,
-            "flip_sign": False,
-            "regime_gate_enabled": True,
-            "created_at_ms": CREATED_MS,
-            **changes,
-        }
-    )
 
 
 class _Experiments:
     """A store holding fixed history; a report is parsed from its stored text by the real parser."""
 
     def __init__(self) -> None:
-        self.research: list[ResearchExperimentResponse] = [_research()]
-        self.signal: list[SignalExperimentResponse] = [_signal()]
         self.reports: dict[int, str] = {}
         self.asked: list[tuple[Any, ...]] = []
-
-    async def research_experiments(self, ticker: str) -> list[ResearchExperimentResponse]:
-        self.asked.append(("research", ticker))
-        return self.research
-
-    async def signal_experiments(self, ticker: str) -> list[SignalExperimentResponse]:
-        self.asked.append(("signal", ticker))
-        return self.signal
 
     async def signal_report(self, experiment_id: int) -> SignalExperimentReport | None:
         self.asked.append(("report", experiment_id))
@@ -118,76 +50,6 @@ def history() -> Iterator[_Experiments]:
 async def client() -> AsyncIterator[httpx.AsyncClient]:
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as http:
         yield http
-
-
-# ── The lists ──────────────────────────────────────────────────────
-
-
-async def test_the_research_list_answers_each_experiment_in_snake_case_with_its_instant_in_ms(
-    client: httpx.AsyncClient, history: _Experiments
-) -> None:
-    response = await client.get(f"{BASE}/experiments", params={"ticker": "spy"})
-
-    assert response.status_code == 200, response.text
-    assert response.json() == [
-        {
-            "id": 7,
-            "ticker": "SPY",
-            "feature_name": "rsi_14",
-            "start_date": "2025-01-02",
-            "end_date": "2025-06-30",
-            "bars_used": 48_750,
-            "mean_ic": 0.0123,
-            "ic_t_stat": 2.5,
-            "ic_p_value": 0.012,
-            "adf_p_value": 0.001,
-            "kpss_p_value": 0.4,
-            "is_stationary": True,
-            "passed_validation": False,
-            "monotonicity_ratio": 0.8,
-            "is_monotonic": True,
-            "created_at_ms": CREATED_MS,
-        }
-    ]
-    assert history.asked == [("research", "spy")]
-
-
-async def test_the_signal_list_answers_each_headline_in_snake_case(
-    client: httpx.AsyncClient, history: _Experiments
-) -> None:
-    response = await client.get(f"{BASE}/signal-experiments", params={"ticker": "SPY"})
-
-    assert response.status_code == 200, response.text
-    assert response.json() == [
-        {
-            "id": 3,
-            "ticker": "SPY",
-            "feature_name": "momentum_5m",
-            "start_date": "2025-01-02",
-            "end_date": "2025-06-30",
-            "bars_used": 48_750,
-            "overall_grade": "B",
-            "status_label": "Research",
-            "overall_passed": True,
-            "mean_oos_sharpe": 0.65,
-            "best_threshold": 1.0,
-            "best_cost_bps": 2.5,
-            "flip_sign": False,
-            "regime_gate_enabled": True,
-            "created_at_ms": CREATED_MS,
-        }
-    ]
-
-
-@pytest.mark.parametrize("path", ["experiments", "signal-experiments"])
-@pytest.mark.parametrize("params", [{}, {"ticker": ""}, {"ticker": "T" * 51}], ids=["missing", "empty", "too-long"])
-async def test_a_list_without_a_usable_ticker_is_refused_with_a_422(
-    client: httpx.AsyncClient, history: _Experiments, path: str, params: dict[str, str]
-) -> None:
-    response = await client.get(f"{BASE}/{path}", params=params)
-
-    assert response.status_code == 422, response.text
-    assert history.asked == []
 
 
 # ── The report ─────────────────────────────────────────────────────
@@ -339,65 +201,13 @@ async def test_a_report_id_that_cannot_be_a_row_id_is_refused_without_asking_the
 # ── A service with no database ─────────────────────────────────────
 
 
-@pytest.mark.parametrize(
-    "path",
-    ["experiments?ticker=SPY", "signal-experiments?ticker=SPY", "signal-experiments/1/report"],
-)
-async def test_with_no_database_configured_every_route_answers_a_503_without_naming_the_setting(
-    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, path: str
+async def test_with_no_database_configured_the_report_route_answers_a_503_without_naming_the_setting(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(settings, "POSTGRES_URL", "")
 
-    response = await client.get(f"{BASE}/{path}")
+    response = await client.get(f"{BASE}/signal-experiments/1/report")
 
     assert response.status_code == 503, response.text
     assert response.json()["detail"]["code"] == "RESEARCH_EXPERIMENTS_STORE_UNAVAILABLE"
     assert "POSTGRES" not in response.text.upper()
-
-
-# ── Rows as the tables hold them ───────────────────────────────────
-
-
-def test_a_research_row_becomes_an_experiment_with_its_decimals_as_floats() -> None:
-    row = {
-        "Id": 7,
-        "Symbol": "SPY",
-        "FeatureName": "rsi_14",
-        "StartDate": "2025-01-02",
-        "EndDate": "2025-06-30",
-        "BarsUsed": 48_750,
-        "MeanIC": Decimal("0.01230000"),
-        "ICTStat": Decimal("2.50000000"),
-        "ICPValue": Decimal("0.01200000"),
-        "AdfPValue": Decimal("0.00100000"),
-        "KpssPValue": Decimal("0.40000000"),
-        "IsStationary": True,
-        "PassedValidation": False,
-        "MonotonicityRatio": Decimal("0.80000000"),
-        "IsMonotonic": True,
-        "created_at_ms": CREATED_MS,
-    }
-
-    assert research_experiment_from_row(row) == _research()
-
-
-def test_a_signal_row_becomes_a_headline_with_its_decimals_as_floats() -> None:
-    row = {
-        "Id": 3,
-        "Symbol": "SPY",
-        "FeatureName": "momentum_5m",
-        "StartDate": "2025-01-02",
-        "EndDate": "2025-06-30",
-        "BarsUsed": 48_750,
-        "OverallGrade": "B",
-        "StatusLabel": "Research",
-        "OverallPassed": True,
-        "MeanOosSharpe": Decimal("0.65000000"),
-        "BestThreshold": Decimal("1.00000000"),
-        "BestCostBps": Decimal("2.50000000"),
-        "FlipSign": False,
-        "RegimeGateEnabled": True,
-        "created_at_ms": CREATED_MS,
-    }
-
-    assert signal_experiment_from_row(row) == _signal()

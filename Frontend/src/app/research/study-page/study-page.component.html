@@ -1,0 +1,100 @@
+<app-workspace-header [title]="title()" [purpose]="definition().question" [secondaryActions]="savedRuns()">
+  @if (definition().help; as help) {
+    <app-how-this-works workspaceHelp [route]="help.route" [anchor]="help.anchor" />
+  }
+</app-workspace-header>
+
+@if (prefill(); as filled) {
+  @if (filled.state === 'filled') {
+    <p class="study-prefill" role="status" data-testid="study-prefill">
+      Inputs filled in from a saved run. Nothing has run: change anything you like, then press Run study.
+      <span class="study-prefill__run">
+        Saved <app-timestamp-display [value]="filled.savedAtMs" mode="local" /> ·
+        <a [routerLink]="['/research/history', filled.study, filled.id]">Open that run</a>
+      </span>
+    </p>
+  } @else {
+    <p class="study-prefill study-prefill--failed" role="alert" data-testid="study-prefill">{{ filled.message }}</p>
+  }
+}
+
+<ol class="study-steps">
+  <li class="study-step" data-step="instrument">
+    <h2 class="study-step__title"><span class="study-step__number">1</span>{{ instrumentHeading() }}</h2>
+    <ng-content select="[studyInstrument]" />
+    @if (definition().constraints.length > 0) {
+      <dl class="study-constraints" data-testid="study-constraints">
+        @for (constraint of definition().constraints; track constraint.label) {
+          <div>
+            <dt>{{ constraint.label }}</dt>
+            <dd>{{ constraint.value }}</dd>
+          </div>
+        }
+      </dl>
+    }
+  </li>
+
+  <li class="study-step" data-step="configuration">
+    <h2 class="study-step__title"><span class="study-step__number">2</span>Test configuration</h2>
+    <ng-content select="[studyConfig]" />
+  </li>
+
+  <li class="study-step study-step--run" data-step="run">
+    <h2 class="study-step__title"><span class="study-step__number">3</span>Run</h2>
+    <p class="study-run__summary">
+      @if (running()) {
+        Running: {{ readySummary() }}
+      } @else if (blockedReason(); as reason) {
+        {{ reason }}
+      } @else {
+        Ready: {{ readySummary() }}
+      }
+    </p>
+    <button type="button" class="study-run" [disabled]="!canRun() || running()" (click)="press()">
+      @if (running()) {
+        <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+      }
+      Run study
+    </button>
+  </li>
+</ol>
+
+<section class="study-result" aria-label="Result">
+  @if (descriptive()) {
+    <p class="study-result__kind" data-testid="study-descriptive-note">
+      Descriptive result: values as measured. This study does not grade them.
+    </p>
+  }
+
+  <ng-content select="[studyProgress]" />
+
+  @if (!hasOutput()) {
+    <app-workspace-state-block [state]="idle" />
+  }
+
+  @if (hasResult()) {
+    <app-previous-result [previous]="previous()" [captured]="captured()">
+      <ng-content select="[studyResult]" />
+    </app-previous-result>
+
+    <section class="study-notes" data-testid="study-notes">
+      <h3>Limitations</h3>
+      <ul>
+        @for (limitation of definition().limitations; track limitation) {
+          <li>{{ limitation }}</li>
+        }
+      </ul>
+      <h3>Next step</h3>
+      <p>{{ definition().nextStep }}</p>
+      @if (definition().nextLinks.length > 0) {
+        <p class="study-notes__links">
+          @for (link of definition().nextLinks; track link.route) {
+            <a [routerLink]="link.route">{{ link.label }}</a>
+          }
+        </p>
+      }
+    </section>
+  }
+
+  <app-workspace-data-source [provenance]="provenance()" />
+</section>

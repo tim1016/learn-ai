@@ -76,6 +76,18 @@ describe('TickerRangePickerComponent (flags)', () => {
     expect(fixture.nativeElement.querySelector('app-sampling-card')).not.toBeNull();
   });
 
+  it('suggests hour bars on a long minute window only where the host offers hour bars', () => {
+    const long: TickerRange = { ...baseValue, from: '2025-01-01', to: '2025-06-30' };
+    fixture.componentRef.setInput('value', long);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.textContent, 'hour bars are offered by default').toContain('Switch to hour');
+
+    fixture.componentRef.setInput('availableResolutions', ['minute']);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.textContent, 'a host that reads minute bars alone is not led to hour bars').not.toContain('Switch to hour');
+  });
+
   it('hideSampling=true collapses the Sampling card', () => {
     fixture.componentRef.setInput('hideSampling', true);
     fixture.detectChanges();

@@ -92,7 +92,6 @@ function makeRunResponse(): StrategyRunResponse {
 
 interface ServiceMock {
   getRun: ReturnType<typeof vi.fn>;
-  listRuns: ReturnType<typeof vi.fn>;
   createRun: ReturnType<typeof vi.fn>;
   runSpyEmaFixture: ReturnType<typeof vi.fn>;
 }
@@ -105,7 +104,6 @@ describe('RunDetailPageComponent', () => {
   beforeEach(async () => {
     service = {
       getRun: vi.fn().mockResolvedValue(makeRunResponse()),
-      listRuns: vi.fn(),
       createRun: vi.fn(),
       runSpyEmaFixture: vi.fn(),
     };

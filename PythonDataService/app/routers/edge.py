@@ -42,6 +42,9 @@ from app.engine.edge.threshold_events import (
     log_imputed_prior_emitted,
 )
 from app.engine.edge.vrp import compute_vrp, vrp_signal
+from app.research.study_records.captures import capture_realized_vs_iv
+from app.research.study_records.models import RecordId
+from app.research.study_records.recorder import keeps_route_record
 from app.services.iv_recorder import get_iv_store
 from app.volatility.basis import convert_iv_act365_to_trading252
 
@@ -95,6 +98,10 @@ class RealizedVsIvSeriesRequest(BaseModel):
         le=1.0,
         description="Hard-gate floor: signals are forced to 0 where confidence < floor.",
     )
+    rerun_of: RecordId | None = Field(
+        None,
+        description="The saved run this one was prefilled from (the History's Rerun); lineage only, never an input.",
+    )
 
 
 class RealizedVsIvSeriesResponse(BaseModel):
@@ -119,6 +126,7 @@ class RealizedVsIvSeriesResponse(BaseModel):
 
 
 @router.post("/realized-vs-iv/series", response_model=RealizedVsIvSeriesResponse)
+@keeps_route_record("realized-vs-iv", capture_realized_vs_iv, body="req")
 async def realized_vs_iv_series(req: RealizedVsIvSeriesRequest) -> RealizedVsIvSeriesResponse:
     """Compute trailing + forward RV for the requested estimators and windows;
     align IV30 series; emit VRP forward + z-score."""

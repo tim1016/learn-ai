@@ -19,7 +19,7 @@
           [class.outcome--failed]="fold.status === 'failed'"
         >
           <a
-            [routerLink]="fold.test_run_id === null ? null : ['/research-lab/strategy-runs', fold.test_run_id]"
+            [routerLink]="fold.test_run_id === null ? null : ['/research/history/spec-run', fold.test_run_id]"
             [attr.aria-label]="outcomeAriaLabel(outcome)"
           >
             <span class="outcome__fold">F{{ fold.fold_index + 1 }}</span>
