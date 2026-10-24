@@ -14,8 +14,8 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from app.research.signal.session_dates import ny_session_dates
 from app.research.signal.standardize import apply_threshold_filter, compute_train_zscore
+from app.research.validation.ic import new_york_dates
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +118,7 @@ def run_backtest(
 
     if include_series and timestamps is not None:
         ts = timestamps[mask]
-        result.dates = [str(day) for day in ny_session_dates(ts)]
+        result.dates = [str(day) for day in new_york_dates(ts)]
         cum = np.cumsum(net_returns)
         result.cumulative_returns = cum.tolist()
         result.positions = positions.tolist()

@@ -3,7 +3,7 @@
 Formula: per New York session date, daily vol = std(intraday log returns); vol regime compares daily vol with cross-day quantiles; trend regime compares MA(daily close, ma_window).diff(ma_slope_diff)/ma_slope_diff with half the median absolute slope; the gate selects Low Vol and Sideways.
 Reference: Internal — no external reference.
 Canonical implementation: app/research/signal/regime.py
-Validated against: NONE — pending (pending-fixture per registry)
+Validated against: tests/research/test_signal_new_york_dates.py (New York date bucketing); independent regime fixture pending.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from app.research.signal.session_dates import ny_session_dates
+from app.research.validation.ic import new_york_dates
 
 
 def compute_daily_regime_labels(
@@ -28,7 +28,7 @@ def compute_daily_regime_labels(
     Returns DataFrame with columns: date, vol_regime, trend_regime.
     """
     bar_df = pd.DataFrame(bars).sort_values("timestamp").reset_index(drop=True)
-    bar_df["date"] = ny_session_dates(bar_df["timestamp"])
+    bar_df["date"] = new_york_dates(bar_df["timestamp"])
     bar_df["log_return"] = np.log(bar_df["close"] / bar_df["close"].shift(1))
 
     daily = bar_df.groupby("date").agg(close=("close", "last"), realized_vol=("log_return", "std")).reset_index()
@@ -66,7 +66,7 @@ def compute_bar_regime_gate(
     """Return per-bar boolean mask: 1 if Low Vol AND Sideways, else 0."""
     daily_regimes = compute_daily_regime_labels(bars)
 
-    bar_dates = ny_session_dates(timestamps)
+    bar_dates = pd.Series(new_york_dates(timestamps), index=timestamps.index)
     date_to_active = {}
     for _, row in daily_regimes.iterrows():
         is_active = row["vol_regime"] == "Low Vol" and row["trend_regime"] == "Sideways"

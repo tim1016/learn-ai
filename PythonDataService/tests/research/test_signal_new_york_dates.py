@@ -31,8 +31,8 @@ from app.research.signal.backtest import run_backtest
 from app.research.signal.config import SignalConfig
 from app.research.signal.engine import run_signal_engine
 from app.research.signal.regime import compute_bar_regime_gate, compute_daily_regime_labels
-from app.research.signal.session_dates import ny_session_dates
 from app.research.signal.walk_forward import run_walk_forward
+from app.research.validation.ic import new_york_dates
 
 ET = ZoneInfo("America/New_York")
 MINUTE_MS = 60_000
@@ -110,7 +110,7 @@ def test_regular_hours_bars_have_the_same_new_york_and_utc_date_so_their_numbers
     assert len(windows) > 700 and any(w.close_ms_utc - w.open_ms_utc < 6 * 3_600_000 for w in windows), "early closes are in"
     instants = [ms for w in windows for ms in (w.open_ms_utc, w.close_ms_utc - MINUTE_MS)]
 
-    new_york = ny_session_dates(pd.Series(instants, dtype="int64")).tolist()
+    new_york = new_york_dates(pd.Series(instants, dtype="int64")).tolist()
 
     assert new_york == [_utc_date(ms) for ms in instants]
     assert new_york == [w.session_date for w in windows for _ in (0, 1)]
@@ -131,13 +131,7 @@ def test_an_evening_bar_keeps_its_sessions_new_york_date_in_either_clock_regime(
     instant = _instant(day, *clock)
 
     assert _utc_date(instant) == utc_date_of_it, "the case is what it says it is"
-    assert ny_session_dates(pd.Series([instant], dtype="int64")).iloc[0] == day
-
-
-def test_the_date_series_keeps_the_index_it_was_given():
-    stamps = pd.Series([_instant(date(2025, 1, 31), 19, 30), _instant(date(2025, 2, 3), 4, 0)], index=[7, 3], dtype="int64")
-
-    assert ny_session_dates(stamps).to_dict() == {7: date(2025, 1, 31), 3: date(2025, 2, 3)}
+    assert new_york_dates(pd.Series([instant], dtype="int64"))[0] == day
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +153,10 @@ def test_a_sessions_evening_bars_count_in_that_sessions_regime_not_in_a_day_of_t
     bars += _extended_session(sessions[-1], close, _calm_day_wild_evening(sessions[-1], rng))
 
     daily = compute_daily_regime_labels(bars)
-    gate = compute_bar_regime_gate(bars, pd.Series([b["timestamp"] for b in bars]))
+    stamps = pd.Series([b["timestamp"] for b in bars], index=range(7, 7 + len(bars)))
+    gate = compute_bar_regime_gate(bars, stamps)
+
+    assert gate.index.equals(stamps.index), "the gate stays aligned with the caller's bars"
 
     assert daily["date"].tolist() == sessions, "one regime day per session: no day made of one evening's bars"
     last = daily.set_index("date").loc[sessions[-1]]

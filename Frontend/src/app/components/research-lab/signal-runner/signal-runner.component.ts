@@ -50,6 +50,7 @@ import type { DataSourceProvenance } from '../../../shared/workspace/data-source
 import { LakeStudySourceComponent } from '../../../shared/lake-study/lake-study-source.component';
 import { LakeHoldingNoticeComponent } from '../../../shared/lake-study/lake-holding-notice.component';
 import { createLakeHolding } from '../../../shared/lake-study/create-lake-holding';
+import { storedSession } from '../../../shared/lake-study/stored-session';
 import type { InstrumentDataRequest } from '../../../shared/data-lake';
 import {
   LAKE_STUDY_TREE,
@@ -58,7 +59,7 @@ import {
   sessionPolicyWords,
   toDataSourceProvenance,
   type LakeSessionPolicy,
-  type LakeStudyRefused,
+  type LakeStudyRefusalShown,
 } from '../../../shared/lake-study/lake-study';
 import signalBarMinutes from '@repo-contracts/signal-study-bar-minutes.json';
 
@@ -76,16 +77,6 @@ function nearestBar(offered: readonly number[], wanted: number): number {
     const nearer = Math.abs(length - wanted) - Math.abs(best - wanted);
     return nearer < 0 || (nearer === 0 && length < best) ? length : best;
   });
-}
-
-/** The session a saved run computed on: the one it names, or extended, which is what the study computed on before it named one. */
-function storedSession(stored: StoredInputs): Session {
-  if (!stored.has('session')) return 'extended';
-  const session = stored.text('session');
-  if (session !== 'rth' && session !== 'extended') {
-    throw new StoredInputsError(`"${session}" is not a session this page offers`);
-  }
-  return session;
 }
 
 /** What a Signal study's request is made from: the inputs a shown result answers. */
@@ -214,7 +205,7 @@ export class SignalRunnerComponent {
    * Why the lake could not supply the window, when the run failed on that; read from the payload the failed job parked,
    * with the session it judged: the one its source records, or the one the run asked for when nothing was read.
    */
-  readonly refusal = signal<{ readonly refused: LakeStudyRefused; readonly session: LakeSessionPolicy | null } | null>(null);
+  readonly refusal = signal<LakeStudyRefusalShown | null>(null);
 
   /**
    * The data-source line for what is on screen: the shown result's lake source, or the source a refused run was
@@ -367,7 +358,7 @@ export class SignalRunnerComponent {
     const mapping = findMappingForFeature(name);
     if (mapping === null) throw new StoredInputsError(`"${name}" is not an indicator this page offers`);
     const multiplier = stored.number('multiplier');
-    const session = storedSession(stored);
+    const session = storedSession(stored, 'extended');
     if (stored.text('timespan') !== 'minute') {
       throw new StoredInputsError(`${multiplier} ${stored.text('timespan')} bars are not offered here`);
     }

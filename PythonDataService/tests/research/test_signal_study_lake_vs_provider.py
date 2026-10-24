@@ -301,11 +301,10 @@ def test_a_bar_length_off_the_hour_regroups_the_same_minutes_into_other_buckets_
 #: more as the price falls. ``continuous`` outputs are pinned two-sided at the measured value, within the statistic's
 #: float accumulation error (``accumulation_atol``); ``discrete`` outputs (the chosen threshold and cost, counts) are
 #: pinned exactly, because a tolerance on a choice means nothing: the choice is stable because the sweep's winner leads
-#: its runner-up by far more than that error (asserted below; measured 0.41 at the least). Re-measure (print
+#: its runner-up by far more than that error (asserted below). Re-measure (print
 #: ``output_diffs`` per case) only when the pinned tape, the lake's encoding or the engine's numbers intentionally
-#: change; never to make a failing test pass. Re-measured once, for #3522's New York date bucketing, which moved the
-#: engine's regime days on this extended-hours tape: the tape, the cause (``data-quality``) and the unchanged outputs
-#: (``effective_n``, which reads no date) held, and the sweep's winner now leads by 0.41 where it led by 0.047.
+#: change; never to make a failing test pass. The measurements use New York date
+#: bucketing for the engine's regime days on this extended-hours tape.
 QUANTIZATION_MEASURED = {
     "price_150": (
         150.0, 5,

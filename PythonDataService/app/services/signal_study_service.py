@@ -74,7 +74,7 @@ and what it reads now, field by field:
   has not finished is refused, where the provider used to hand back the forming
   session's partial bars. The 70/30 train/test split is by bar index. Regime
   labels, walk-forward months and the per-bar date labels bucket by the bar's
-  **New York** date (``app.research.signal.session_dates``, through the zone, so
+  **New York** date (``app.research.validation.ic.new_york_dates``, through the zone, so
   daylight saving is right). In standard time 19:00-19:59 ET is already the next UTC
   date, so a UTC date moved those extended-hours evening bars into the next session's
   day (before a weekend, a holiday or the window's end, into a day made of them alone),

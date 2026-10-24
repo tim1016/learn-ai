@@ -35,7 +35,6 @@ import { TradeBackfillRunner, type TradeBackfillEnd } from '../../../shared/data
 import type { TradeBackfillWindow } from '../../../shared/data-lake/trade-backfill-spec';
 import { heldReport } from '../../../shared/data-lake/testing/instrument-data-report';
 import { SignalRunnerComponent } from './signal-runner.component';
-import signalBarMinutes from '@repo-contracts/signal-study-bar-minutes.json';
 
 /** The sessions in the page's default window, as the lake's count of them reports. */
 const SESSIONS = 124;
@@ -277,20 +276,14 @@ describe('SignalRunnerComponent indicator catalog load', () => {
       expect.soft(barNote()).toBeUndefined();
     });
 
-    it('says which length the run uses under extended hours too, when the server stops offering the one entered', () => {
+    it('says which length the run uses under extended hours too, when the one entered is not offered', () => {
       const component = fixture.componentInstance;
-      const offered = signalBarMinutes.extended;
-      signalBarMinutes.extended = [1, 2, 3, 4, 5, 6, 10, 12];
-      try {
-        component.range.update((r) => ({ ...r, multiplier: 15 }));
-        fixture.detectChanges();
+      component.range.update((r) => ({ ...r, multiplier: 20 }));
+      fixture.detectChanges();
 
-        expect.soft(component.shownRange().multiplier).toBe(12);
-        expect.soft(barNote()).toBe('15-minute bars are not offered for this session, so this run uses 12-minute bars.');
-        expect.soft(barNote(), 'the regular-hours reason is for regular hours only').not.toContain('Regular hours offer');
-      } finally {
-        signalBarMinutes.extended = offered;
-      }
+      expect.soft(component.shownRange().multiplier).toBe(15);
+      expect.soft(barNote()).toBe('20-minute bars are not offered for this session, so this run uses 15-minute bars.');
+      expect.soft(barNote(), 'the regular-hours reason is for regular hours only').not.toContain('Regular hours offer');
     });
 
     it('keeps a length the chosen session offers, and says only why the list is short', async () => {
