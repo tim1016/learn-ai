@@ -11,6 +11,8 @@ No test hands the study the bars it expects.
 from __future__ import annotations
 
 import io
+import threading
+import time
 import zipfile
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
@@ -457,6 +459,8 @@ def test_an_extended_study_refuses_a_day_captured_before_its_after_hours_tape_fi
     assert refusal.coverage.window.as_dict()["captured_before_final"] == 1
     reason = refusal.coverage.issues[0].reason
     assert "before its extended session had closed" in reason and "must be captured again" in reason
+    assert "completed at 2024-03-11 16:20 ET" in reason and "as early as 2024-03-11 16:15 ET" in reason
+    assert "(2024-03-11 20:15 ET)" in reason, "the instant the tape is final, in New York time across the DST change"
     assert day.isoformat() in refusal.reason
     assert calls.count == 0, "the study asks the vendor for nothing"
     assert _row_of(catalog, day) == row_before, "the shared day is as committed as it was"
@@ -608,9 +612,13 @@ def test_a_day_with_no_recorded_capture_time_is_not_called_early(catalog, lake):
     ("policy", "after_close_ms", "refused"),
     [
         pytest.param("regular", 5 * 60_000, True, id="regular_before_the_vendor_delay_has_passed"),
-        pytest.param("regular", VENDOR_DELAY_MS, False, id="regular_once_the_delay_has_passed"),
+        pytest.param("regular", VENDOR_DELAY_MS, True, id="regular_at_the_final_instant_a_capture_may_still_predate_it"),
+        pytest.param("regular", VENDOR_DELAY_MS + CLAIM_LEASE_MS - 1, True, id="regular_a_millisecond_inside_the_claim_lease"),
+        pytest.param("regular", VENDOR_DELAY_MS + CLAIM_LEASE_MS, False, id="regular_once_the_claim_lease_has_passed_too"),
         pytest.param("extended", AFTER_HOURS_TAIL_MS, True, id="extended_while_the_after_hours_tape_runs"),
-        pytest.param("extended", AFTER_HOURS_TAIL_MS + VENDOR_DELAY_MS, False, id="extended_once_the_tape_and_delay_have_passed"),
+        pytest.param("extended", AFTER_HOURS_TAIL_MS + VENDOR_DELAY_MS, True, id="extended_at_the_final_instant_a_capture_may_still_predate_it"),
+        pytest.param("extended", AFTER_HOURS_TAIL_MS + VENDOR_DELAY_MS + CLAIM_LEASE_MS - 1, True, id="extended_a_millisecond_inside_the_claim_lease"),
+        pytest.param("extended", AFTER_HOURS_TAIL_MS + VENDOR_DELAY_MS + CLAIM_LEASE_MS, False, id="extended_once_the_tape_delay_and_claim_lease_have_passed"),
     ],
 )
 def test_a_session_is_complete_only_when_the_vendor_has_delivered_its_whole_tape(
@@ -627,6 +635,92 @@ def test_a_session_is_complete_only_when_the_vendor_has_delivered_its_whole_tape
         assert refusal.code == "window_not_complete" and last.isoformat() in refusal.reason
     else:
         assert counts(admit(identity(MARCH, session=policy), now_ms=now).coverage.window) == (len(MARCH), 0, 0, 0)
+
+
+def _catalog_clock(monkeypatch: pytest.MonkeyPatch, now_ms: int) -> list[int]:
+    """Make the in-memory catalog stamp ``now_ms`` on every claim and completion; assigning to the list moves it."""
+    clock = [now_ms]
+    monkeypatch.setattr(FakeCatalog, "_now_ms", staticmethod(lambda: clock[0]))
+    return clock
+
+
+@respx.mock
+@pytest.mark.parametrize("policy", ["regular", "extended"])
+def test_a_study_started_within_a_claim_lease_of_the_final_instant_captures_nothing_a_later_run_would_refuse(
+    catalog, lake, monkeypatch, policy
+):
+    """A capture is judged by its completion less the claim lease, so a study that asks the vendor just after the
+    final instant publishes a day that rule calls early. The study waits out the lease instead: every day it
+    captures is one its next run admits again."""
+    mock_launcher()
+    calls = VendorCalls()
+    mock_vendor("SPY", vendor_history(MARCH), calls=calls)
+    ident = identity(MARCH, session=policy)
+    last = MARCH[-1]
+    final = capture_final_ms(last, policy)
+    clock = _catalog_clock(monkeypatch, final + 60_000)
+
+    refusal = refusal_of(ident, now_ms=clock[0])
+
+    assert refusal.code == "window_not_complete" and last.isoformat() in refusal.reason
+    assert calls.count == 0, "the vendor is not asked for a day whose capture the finality rule would call early"
+    assert not lake_file(lake, "raw", last).exists()
+
+    clock[0] = final + CLAIM_LEASE_MS - 1
+    assert refusal_of(ident, now_ms=clock[0]).code == "window_not_complete", "a lease has not passed until it has"
+    clock[0] = final + CLAIM_LEASE_MS
+    first = admit(ident, now_ms=clock[0])
+    clock[0] = final + 3_600_000
+    later = admit(ident, now_ms=clock[0])
+
+    assert counts(first.coverage.window) == (0, len(MARCH), 0, 0)
+    assert counts(later.coverage.window) == (len(MARCH), 0, 0, 0), "what the study captured it admits again"
+    assert later.snapshot_digest == first.snapshot_digest
+    assert calls.days() == MARCH, "each session was bought once"
+
+
+@respx.mock
+@pytest.mark.parametrize("policy", ["regular", "extended"])
+def test_a_writer_that_claimed_before_the_final_instant_and_is_still_publishing_has_its_short_tape_refused(
+    catalog, lake, policy
+):
+    """Another writer asked the vendor half a minute before the final instant and publishes while the study starts
+    just after it. Its day holds only what the vendor had delivered by then. The study neither waits on that writer
+    nor reads the day as ready; once the writer has published, the day is refused as early."""
+    mock_launcher()
+    calls = VendorCalls()
+    tape = vendor_history(MARCH)
+    mock_vendor("SPY", tape, calls=calls)
+    ident = identity(MARCH, session=policy)
+    day = MARCH[-1]
+    final = capture_final_ms(day, policy)
+    admit(ident)  # holds the window
+    asked_at = final - 30_000
+    short = [b for b in tape[day] if b["t"] + 60_000 + VENDOR_DELAY_MS <= asked_at]
+    assert 0 < len(short) < len(tape[day]), "the vendor had delivered part of the day"
+    leave_publication_in_flight(catalog, lake, day, lease_ms_from_now=60_000)
+    row = _row_of(catalog, day)
+    calls.requests.clear()
+
+    def publish_short_tape() -> None:
+        time.sleep(0.5)
+        commit_bars(catalog, lake, day, corrected_day(day, short, bump="0"))
+        row.update(status="complete", lease_expires_at_ms=None, completed_at_ms=final + 30_000)
+
+    writer = threading.Thread(target=publish_short_tape)
+    writer.start()
+    try:
+        refusal = refusal_of(ident, now_ms=final + 60_000)
+    finally:
+        writer.join()
+
+    assert refusal.code == "window_not_complete" and day.isoformat() in refusal.reason
+
+    after_the_lease = refusal_of(ident, now_ms=final + CLAIM_LEASE_MS)
+
+    assert after_the_lease.code == "captured_before_final"
+    assert [(i.trading_date, i.outcome) for i in after_the_lease.coverage.issues] == [(day, "captured_before_final")]
+    assert calls.count == 0
 
 
 # ---------------------------------------------------------------------------
