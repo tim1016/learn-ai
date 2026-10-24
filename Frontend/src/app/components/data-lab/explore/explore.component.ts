@@ -204,7 +204,7 @@ export class ExploreComponent {
 
   // ── Shell refresh requests ─────────────────────────────────
   // Initialized from the store, not zero: a remount (operator returning
-  // from Export/Validate) must not replay a tick a previous Explore
+  // from Export) must not replay a tick a previous Explore
   // instance already consumed. A tick queued while Explore was unmounted
   // needs no replay either — the mount auto-load below fetches the newest
   // committed scope, which is what that tick was asking for.

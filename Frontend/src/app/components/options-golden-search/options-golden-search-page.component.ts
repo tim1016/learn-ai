@@ -9,6 +9,8 @@ import { OptionsSearchTimingComponent } from './options-search-timing.component'
 import { AssetIdentityComponent } from '../../shared/asset-identity';
 import type { DateRange } from '../../shared/date-picker';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
+import { HealthNoticeComponent } from '../../shared/scoped-health/health-notice.component';
+import { HEALTH_NEEDS } from '../../shared/scoped-health/scoped-health';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { rangeInstants } from '../options-backtest/duration';
 import { OptionsBacktestService } from '../options-backtest/options-backtest.service';
@@ -23,7 +25,7 @@ interface CaptureState { readonly stamp: string; readonly kind: 'starting' | 'ru
 
 @Component({
   selector: 'app-options-golden-search-page',
-  imports: [OptionsSearchPositionComponent, TimestampDisplayComponent, OptionsSearchTimingComponent, AssetIdentityComponent, FormField, PageHeaderComponent, ReceiptLabelPipe, RouterLink, OptionsSearchStudyComponent, OptionsSearchKnobsComponent, OptionsSearchRulesComponent],
+  imports: [HealthNoticeComponent, OptionsSearchPositionComponent, TimestampDisplayComponent, OptionsSearchTimingComponent, AssetIdentityComponent, FormField, PageHeaderComponent, ReceiptLabelPipe, RouterLink, OptionsSearchStudyComponent, OptionsSearchKnobsComponent, OptionsSearchRulesComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './options-golden-search-page.component.html',
   styleUrl: './options-golden-search.component.scss',
@@ -32,6 +34,8 @@ export class OptionsGoldenSearchPageComponent {
   private readonly service = inject(OptionsGoldenSearchService);
   private readonly setupsService = inject(OptionsBacktestService);
   private readonly router = inject(Router);
+  /** A study replays archived option history; its backups decide whether that can be recovered. */
+  protected readonly healthNeeds = HEALTH_NEEDS.archivedOptions;
   readonly studyId = input<string | undefined>(undefined);
   readonly setup_name = input<string | undefined>(undefined);
   readonly parent_study_id = input<string | undefined>(undefined);

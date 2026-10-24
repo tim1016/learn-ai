@@ -7498,6 +7498,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/scoped-health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Scoped Health
+         * @description Health findings with their scope, observed time, severity, affected operations and Operations link.
+         *
+         *     A source that cannot be read answers ``unknown``, never healthy.
+         */
+        get: operations["scoped_health_api_scoped_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/snapshot/options-chain": {
         parameters: {
             query?: never;
@@ -20141,6 +20163,39 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** HealthItem */
+        HealthItem: {
+            /** Affects */
+            readonly affects: ("stock_history" | "options_history" | "recovery" | "live_chain" | "bot_feed")[];
+            /** Explanation */
+            explanation: string;
+            /**
+             * Freshness
+             * @enum {string}
+             */
+            freshness: "fresh" | "cached" | "unknown";
+            link?: components["schemas"]["HealthLink"] | null;
+            /**
+             * Needs Attention
+             * @description The server's call on whether a page that depends on this should say so.
+             */
+            readonly needs_attention: boolean;
+            /** Observed Ms */
+            observed_ms: number;
+            scope: components["schemas"]["HealthScope"];
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "critical" | "unknown" | "warning" | "info" | "ok";
+            /**
+             * Source
+             * @enum {string}
+             */
+            readonly source: "lake_catalog" | "option_archive" | "backups" | "ibkr_feed";
+            /** Summary */
+            summary: string;
+        };
         /**
          * HealthLineView
          * @description One health fact: what it is, its state, a short value and the backend's note.
@@ -20161,6 +20216,46 @@ export interface components {
             state: "ok" | "attention" | "problem" | "idle";
             /** Value */
             value: string;
+        };
+        /**
+         * HealthLink
+         * @description Where the evidence is: an Operations tab, with the filters and card that show it.
+         */
+        HealthLink: {
+            /** Fragment */
+            fragment?: string | null;
+            /** Query */
+            query?: {
+                [key: string]: string;
+            };
+            /**
+             * Tab
+             * @enum {string}
+             */
+            tab: "lake" | "option-archive" | "backups";
+        };
+        /**
+         * HealthScope
+         * @description Which evidence an item is about.
+         */
+        HealthScope: {
+            /**
+             * Breadth
+             * @description ``scoped`` only when an instrument is named; otherwise the item concerns every instrument.
+             * @enum {string}
+             */
+            readonly breadth: "broad" | "scoped";
+            /**
+             * Data Kind
+             * @enum {string}
+             */
+            data_kind: "stock_bars" | "option_archive" | "lake_backup" | "restore_check" | "ibkr_market_data";
+            /** Instrument */
+            instrument?: string | null;
+            /** Mode */
+            mode?: ("raw" | "polygon_split_adjusted" | "lean_adjusted") | ("paper" | "live") | null;
+            /** Session Ms */
+            session_ms?: number | null;
         };
         /**
          * HeldPositionFact
@@ -23309,8 +23404,6 @@ export interface components {
         };
         /** OptionArchiveHealth */
         OptionArchiveHealth: {
-            /** Attention */
-            attention: boolean;
             backup: components["schemas"]["ArchiveJobHealth"];
             /** Enabled */
             enabled: boolean;
@@ -30393,6 +30486,13 @@ export interface components {
             /** Saved At Ms */
             saved_at_ms?: number | null;
             setup?: components["schemas"]["OptionsBacktestSetup-Output"] | null;
+        };
+        /** ScopedHealthResponse */
+        ScopedHealthResponse: {
+            /** Generated Ms */
+            generated_ms: number;
+            /** Items */
+            items: components["schemas"]["HealthItem"][];
         };
         /**
          * SealedBotProgram
@@ -50081,6 +50181,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WalkForwardFoldCurvesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    scoped_health_api_scoped_health_get: {
+        parameters: {
+            query?: {
+                /** @description Only findings that get in the way of these operations. Omitted: every finding. */
+                operation?: ("stock_history" | "options_history" | "recovery" | "live_chain" | "bot_feed")[] | null;
+                /** @description Only findings about this instrument, plus those that cannot name one (broad). */
+                instrument?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScopedHealthResponse"];
                 };
             };
             /** @description Validation Error */

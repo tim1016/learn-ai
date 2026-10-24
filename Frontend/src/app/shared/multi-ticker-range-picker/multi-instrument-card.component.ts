@@ -49,7 +49,7 @@ export class MultiInstrumentCardComponent {
 
   /**
    * The card's landmark name. Pages that mount more than one card (the
-   * Observatory's query bar and backfill panel) must name each — AXE's
+   * Lake tab's query bar and backfill panel) must name each — AXE's
    * landmark-unique rule is about the operator being able to tell the
    * regions apart, not the rule itself.
    */

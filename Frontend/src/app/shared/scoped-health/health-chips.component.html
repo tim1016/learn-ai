@@ -1,0 +1,21 @@
+<ul class="health-chips" aria-label="Data health">
+  @for (chip of chips(); track chip.source) {
+    <li>
+      <ng-template #body>
+        <span class="health-chips__label">{{ chip.label }}</span>
+        <span class="health-chips__word">{{ chip.word }}</span>
+        @if (chip.attention > 0) { <span class="health-chips__more">+{{ chip.attention }}</span> }
+      </ng-template>
+      @if (chip.link; as link) {
+        <a class="health-chips__chip" [attr.data-severity]="chip.severity" [title]="chip.detail"
+           [routerLink]="link.route" [queryParams]="link.query" [fragment]="link.fragment">
+          <ng-container [ngTemplateOutlet]="body" />
+        </a>
+      } @else {
+        <span class="health-chips__chip" [attr.data-severity]="chip.severity" [title]="chip.detail">
+          <ng-container [ngTemplateOutlet]="body" />
+        </span>
+      }
+    </li>
+  }
+</ul>

@@ -20,10 +20,14 @@ because no row exists for it. A symbol backfilled in two stretches holds a
 first and a last session with a hole between them, and a run laid over the
 hole is refused. ``gapped_symbols`` finds those symbols from the counts
 alone; ``span_gaps`` measures one symbol's holes from its held sessions.
+
+``read_run_readiness`` runs the whole read, so the route and any other reader
+of the same answer (the scoped-health projection) share one composition.
 """
 
 from __future__ import annotations
 
+import asyncio
 from bisect import bisect_left, bisect_right
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -31,9 +35,10 @@ from datetime import date
 from itertools import groupby
 from pathlib import Path
 
+from app.data_lake import catalog_client, path_policy, root_identity
 from app.data_lake.adjustment_versions import AdjustmentVersionError, adjusted_file_gap, current_version
 from app.data_lake.catalog_client import ArtifactCoverageRow, SymbolRevisionCount
-from app.data_lake.types import AdjustedFileGap, PriceAdjustmentMode, SymbolRunReadiness
+from app.data_lake.types import AdjustedFileGap, DataType, PriceAdjustmentMode, RunReadinessResponse, SymbolRunReadiness
 from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms_utc
 
 
@@ -175,3 +180,40 @@ def fold_run_readiness(
             )
         )
     return rows
+
+
+async def read_run_readiness(
+    *, market: str, data_type: DataType, price_adjustment_mode: PriceAdjustmentMode, floor: date
+) -> RunReadinessResponse:
+    """Per symbol: the complete minute sessions the lake holds, and how many a run can read.
+
+    ``floor`` is the oldest session the provider still serves. The cost is one
+    catalog query and one snapshot read per symbol however many sessions the lake
+    holds; only a symbol whose count falls short of its span is read session by session.
+    """
+    data_root_id = root_identity.active_root_id()
+    counts = await catalog_client.select_symbol_revision_counts(
+        market, price_adjustment_mode, data_type, floor, data_root_id=data_root_id
+    )
+    gaps: dict[str, SpanGaps] = {}
+    for symbol in gapped_symbols(counts):
+        held = await catalog_client.select_coverage_minute_bars(
+            market, symbol, data_type, None, None, price_adjustment_mode=price_adjustment_mode, data_root_id=data_root_id
+        )
+        gaps[symbol] = span_gaps({row.trading_date for row in held if row.trading_date is not None}, floor)
+    versions = (
+        await asyncio.to_thread(
+            current_versions,
+            path_policy.resolve_lake_root(price_adjustment_mode),
+            sorted({count.symbol for count in counts}),
+        )
+        if needs_adjustment_record(price_adjustment_mode)
+        else None
+    )
+    return RunReadinessResponse(
+        market=market,
+        price_adjustment_mode=price_adjustment_mode,
+        data_type=data_type,
+        data_root_id=data_root_id,
+        symbols=fold_run_readiness(counts, versions, gaps),
+    )
