@@ -27,7 +27,7 @@ EARLY_CLOSES = [date(2024, 11, 29), date(2024, 12, 24)]
 
 def study(window: list[date], *, multiplier: int = 15, session: str = "extended", **over: Any) -> SignalStudyParams:
     return SignalStudyParams(
-        "SPY", over.pop("feature_name", "momentum_5m"), window[0], window[-1], "minute", multiplier,
+        over.pop("symbol", "SPY"), over.pop("feature_name", "momentum_5m"), window[0], window[-1], "minute", multiplier,
         session_policy=session, **over,  # type: ignore[arg-type]
     )
 
@@ -53,5 +53,5 @@ def ungated_rows(params: SignalStudyParams, bar_minutes: int) -> list[dict]:
 
 def engine_report(rows: list[dict], params: SignalStudyParams) -> SignalEngineReport:
     return run_signal_engine(
-        "SPY", params.feature_name, rows, params.from_date.isoformat(), params.to_date.isoformat(), params.config()
+        params.symbol, params.feature_name, rows, params.from_date.isoformat(), params.to_date.isoformat(), params.config()
     )

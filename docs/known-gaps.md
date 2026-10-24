@@ -647,7 +647,13 @@ measured in `tests/research/test_feature_study_lake_vs_provider.py`.
 - **P2: a window that starts before the symbol listed refuses.** Admission has no "not applicable" outcome for a
   session before the first trade; the provider path computed on the shorter series. The refusal is
   `data_unavailable_from_provider` for the sessions the vendor answers empty.
-- **Unverified assumptions:** that Polygon's own N-minute aggregate equals a fold of its minute aggregates, and that a
-  date-string window is ET-anchored on the live API. Both are asserted by the comparison tests against an
-  independent stand-in, not against live data.
+- **Unverified assumptions:** that a date-string window is ET-anchored on the live API, and that Polygon's own N-minute
+  aggregate equals a fold of its minute aggregates beyond the one case measured. That case: SPY 15-minute aggregates for
+  2025-01-13..17 (`adjusted=false`) equal `fold_minute_bars` of the repo's SPY minute capture bar for bar, 320 of 320 in
+  open, high, low, close and volume, for the whole day and for regular hours (owner-approved call, 2026-10-24; pinned by
+  `tests/research/test_signal_study_lake_vs_provider.py` against the recording under
+  `tests/fixtures/golden/lake-studies`). It does not cover other symbols, half-days, a week with a clock change,
+  split-adjusted aggregates or other bar sizes, which the comparison tests still assert against an independent stand-in.
+  The same recording shows the end date arriving as the whole New York day (the last bar starts at 19:45 ET on the end
+  date); one winter week does not settle how the vendor reads a date string.
 

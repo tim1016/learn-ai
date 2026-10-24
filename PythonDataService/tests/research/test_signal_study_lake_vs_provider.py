@@ -1,4 +1,4 @@
-"""Signal study inputs: the old provider path against the admitted lake path, on one pinned vendor payload (#3522; R14, T08, D02).
+"""Signal study inputs: the old provider path against the admitted lake path, on one pinned vendor payload (#3522; R14, T08).
 
 Slice 32 of the UX redesign moves the study's bars from ``PolygonClientService.fetch_aggregates`` to the lake. This
 module is the receipt for what that move changes, case by case. Both paths read the *same* pinned vendor payload:
@@ -11,8 +11,8 @@ module is the receipt for what that move changes, case by case. Both paths read 
 Each case records changed timestamps, prices, counts and derived outputs (best threshold and cost, the best net Sharpe,
 how often the signal is active, the effective sample, the walk-forward OOS Sharpe, the graduation grade), and names the
 cause in the reconcile taxonomy (``timestamp``, ``warmup``, ``precision``, ``off-by-one``, ``data-quality``). A case
-that moves nothing says so by asserting zero. Unexplained drift fails here; an *intentional* divergence is the owner's
-decision (D02) and is listed in the PR.
+that moves nothing says so by asserting zero. Unexplained drift fails here; an *intentional* divergence is named in its
+case's docstring, and the owner accepted each of them on #3522.
 
 The lake's 1/10,000 price grid is ``data-quality``, never ``precision``: it changes the input data, and ``precision``
 is floating-point accumulation. A tolerance may loosen only for the latter, so each output this divergence moves is
@@ -20,19 +20,26 @@ pinned at its *measured* magnitude (``test_prices_finer_than_the_lake_grid...``)
 Sharpe, the active share or the chosen threshold move depends on the price the signal is computed at. The pin is
 two-sided, at the measured value to full precision, and its tolerance is the floating-point accumulation error of the
 statistic (``accumulation_atol``), the only thing that can differ between two platforms running the same arithmetic.
+That tape is synthetic and finer than the grid on purpose: it measures the size of the effect. The vendor's own prices are
+not finer, which the last section shows on a real split-adjusted tape.
 
-Not provable offline: that Polygon's own N-minute aggregates equal a fold of its minute aggregates. Cases that fold use
-an independent reference for the vendor side (``vendor_fold``); the equivalence with the live API is an assumption of
-the lake path (the same trades build both) and is unverified against live data. A minute that trades without moving a
-price may produce no minute bar while still adding to Polygon's 15-minute volume; the fold would then miss it and
-``volume_zscore`` would move. Settling it takes a captured day of Polygon's minute and 15-minute aggregates side by
-side (a fixture beside ``tests/fixtures/polygon_capture``); until then it stays listed as an unverified assumption.
+Cases that fold use an independent reference for the vendor side (``vendor_fold``). The last section holds the vendor's
+real answers (``tests/fixtures/golden/lake-studies``, recorded 2026-10-24 with the owner's approval) and is the one place
+the fold meets the vendor itself:
+
+* Polygon's own 15-minute SPY aggregates for 2025-01-13..17 equal ``fold_minute_bars`` of the repo's SPY minute capture,
+  bar for bar and field for field, for the whole day and for regular hours. That includes 135 buckets with missing minutes,
+  where a minute that traded without a minute bar of its own would have shown as a volume difference. It does not cover
+  other symbols, half-days, a week with a clock change, split-adjusted aggregates or any other bar length.
+* A split-adjusted WMT tape (the week before its 3:1 split) has no price finer than the lake's grid, and every Signal
+  output is identical on the two paths. It does not cover other split ratios, other tickers or prices below $1.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -40,6 +47,8 @@ import numpy as np
 import pytest
 import respx
 
+from app.data_lake.lean_writer import to_deci_cent
+from app.lean_sidecar.trading_calendar import expected_sessions, session_close_ms_utc, session_open_ms_utc
 from app.research.signal.engine import SignalEngineReport
 from app.research.study_inputs import StudyInputRefusal, admit_minute_inputs
 from app.services.signal_study_service import SignalStudyParams, serialize_signal_report, signal_study_identity
@@ -47,6 +56,13 @@ from tests._helpers.fake_lake_catalog import install_fake_catalog, mock_launcher
 from tests._helpers.lake_study import ATOL, DENSE, RTOL, assert_same, provider_rows
 from tests._helpers.pinned_vendor import VendorBar, mock_vendor, scaled, vendor_history
 from tests._helpers.signal_study import LONG, NOW_MS, SHORT, engine_report, lake_rows, study, ungated_rows
+from tests._helpers.vendor_recordings import (
+    SPY_15_MINUTE,
+    WMT_ADJUSTED,
+    by_session,
+    recorded_bars,
+    spy_minute_capture,
+)
 
 ET = ZoneInfo("America/New_York")
 
@@ -278,8 +294,8 @@ def test_a_bar_length_off_the_hour_regroups_the_same_minutes_into_other_buckets_
     assert comparison.max_output_diff > ATOL, "so the signal the study reports moves with the grid"
 
 
-#: What the lake's price grid moves, measured on this pinned payload (seed 11, the four-month window, 5,352
-#: fifteen-minute bars, the page's default RSI(14) run) at three price levels: the largest absolute difference between
+#: What a price finer than the lake's grid moves, measured on this pinned synthetic payload (seed 11, the four-month
+#: window, 5,352 fifteen-minute bars, the page's default RSI(14) run) at three price levels: the largest absolute difference between
 #: the two paths' value of each output, to full precision. Prices carry five or six decimals, finer than the grid. A
 #: rounding of at most 5e-5 is a larger share of a bar-to-bar change on a $2 name than on a $150 one, so the outputs move
 #: more as the price falls. ``continuous`` outputs are pinned two-sided at the measured value, within the statistic's
@@ -317,9 +333,11 @@ def test_prices_finer_than_the_lake_grid_move_each_output_by_its_measured_amount
     the provider path does not. That changes the input data, so it is not ``precision``: the movement is a fact about the
     data and is pinned at its measured value. What ``precision`` (float accumulation) adds on top of it is the tolerance.
 
-    The owner's D02 reads this table. On a $150 name nothing the reader acts on moves. On a $12 name the best net
-    Sharpe moves by 0.17 and the sweep picks another threshold (2.0 on the provider path, 0.5 on the lake); on a $2 name
-    the Sharpe moves by 0.49. The graduation grade does not change at any level.
+    This measures what a tape finer than the grid would do. The tape carries five and six decimals on purpose; real prices
+    are already on the grid (``test_a_real_split_adjusted_tape...``), so these movements are the size of the effect and not
+    one a real run sees. On a $150 name nothing the reader acts on would move. On a $12 name the best net Sharpe would move
+    by 0.17 and the sweep pick another threshold (2.0 on the provider path, 0.5 on the lake); on a $2 name the Sharpe by
+    0.49. The graduation grade would not change at any level.
     """
     tape = tape_for(LONG, start_price=start_price, decimals=decimals)
     mock_vendor("SPY", tape, adjusted=tape)
@@ -374,7 +392,8 @@ def test_folding_fractional_volume_sums_it_exactly_where_the_vendor_side_stand_i
 
 
 def test_regular_hours_is_a_different_sample_from_what_the_study_has_always_read(world):
-    """Cause: ``data-quality`` (session scope). The study ran on 04:00-20:00 ET; ``regular`` removes the rest. D02.
+    """Cause: ``data-quality`` (session scope). The study ran on 04:00-20:00 ET; ``regular`` removes the rest. The page
+    lets the person choose between the two (#3522).
 
     The numbers below are on the pinned synthetic tape, a measure of how much the policy moves the inputs and the
     outputs, not of how much it would move a live name's.
@@ -475,3 +494,139 @@ def test_the_study_reads_no_vwap_or_transaction_count_so_dropping_them_moves_not
     ours, theirs = engine_report(lake, params), engine_report(stripped, params)
 
     assert outputs(ours) == pytest.approx(outputs(theirs), abs=ATOL, rel=RTOL, nan_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# The vendor's real answers, recorded 2026-10-24 (tests/fixtures/golden/lake-studies)
+# ---------------------------------------------------------------------------
+
+SPY_WEEK = expected_sessions(date(2025, 1, 13), date(2025, 1, 17))
+#: SPY's 15-minute bars for the whole day (64 a session, 04:00-19:45 ET) and for regular hours (26 a session).
+SPY_15_MINUTE_BARS = {"extended": 320, "regular": 130}
+#: Buckets of the minute capture that hold fewer than their 15 minutes, and the minutes missing from them (measured).
+SPY_PARTIAL_BUCKETS, SPY_MISSING_MINUTES = 135, 738
+
+WMT_WINDOW = expected_sessions(date(2024, 2, 20), date(2024, 2, 23))
+#: The 3:1 split the corporate-action feed is served with, the owner's fact; no request was made for it.
+WMT_SPLIT = {"ticker": "WMT", "execution_date": "2024-02-26", "split_from": 1, "split_to": 3}
+WMT_BARS, WMT_PRICES = 2226, 8904
+#: Every price multiplied by this and rounded to six decimals is off the lake's grid: the positive control.
+OFF_THE_GRID = 1.0000337
+
+
+def vendor_15_minute_rows(session: str) -> list[dict]:
+    """Polygon's own 15-minute SPY bars as study rows, for the whole day or for regular hours alone."""
+    bars = recorded_bars(SPY_15_MINUTE)
+    if session == "regular":
+        bars = [
+            bar
+            for day, day_bars in by_session(bars).items()
+            for bar in day_bars
+            if session_open_ms_utc(day) <= bar["t"] < session_close_ms_utc(day)
+        ]
+    return [
+        {"timestamp": b["t"], "open": b["o"], "high": b["h"], "low": b["l"], "close": b["c"], "volume": float(b["v"])}
+        for b in bars
+    ]
+
+
+@pytest.mark.parametrize("session", ["extended", "regular"])
+def test_polygons_own_15_minute_spy_bars_equal_the_lake_fold_of_its_minute_bars_in_every_field(world, session):
+    """Cause: none. The fold and the vendor's aggregate agree, on every bar and every field, on exactly equal numbers.
+
+    The repo's SPY minute capture is served at the vendor's HTTP seam and taken through the real lake writer, committed-byte
+    admission and reader; the fold is the study's own. One symbol, one winter week, 15-minute bars: the assumption that the
+    vendor's N-minute bar is a fold of its minute bars is measured here and nowhere wider (the module docstring says where).
+    """
+    capture = spy_minute_capture()
+    minutes_in_bucket: dict[int, int] = {}
+    for bars in capture.values():
+        for bar in bars:
+            minutes_in_bucket[bar["t"] // 900_000] = minutes_in_bucket.get(bar["t"] // 900_000, 0) + 1
+    short = [count for count in minutes_in_bucket.values() if count < 15]
+    assert (len(short), sum(15 - count for count in short)) == (SPY_PARTIAL_BUCKETS, SPY_MISSING_MINUTES), (
+        "the buckets with missing minutes are in the comparison, which is what makes it more than a count of full ones"
+    )
+    mock_vendor("SPY", capture)
+    params = study(SPY_WEEK, multiplier=15, session=session, price_adjustment_mode="raw")
+
+    ours = ungated_rows(params, 15)  # the study refuses 15-minute regular-hours runs; the fold itself is what is held to the vendor
+    vendor = vendor_15_minute_rows(session)
+
+    assert len(vendor) == SPY_15_MINUTE_BARS[session]
+    assert ours == vendor, "bar for bar, open, high, low, close and volume, with no bar on one side only"
+
+
+def wmt_tape() -> dict[date, list[VendorBar]]:
+    tape = by_session(recorded_bars(WMT_ADJUSTED))
+    assert list(tape) == WMT_WINDOW
+    return tape
+
+
+def test_no_price_of_a_real_split_adjusted_tape_is_finer_than_the_lake_grid():
+    """The vendor's adjusted prices are rounded to at most four decimals before they reach us; the lake's encoder moves none."""
+    prices = [Decimal(repr(bar[column])) for bars in wmt_tape().values() for bar in bars for column in ("o", "h", "l", "c")]
+
+    assert len(prices) == WMT_PRICES
+    assert [price for price in prices if to_deci_cent(price) != price * 10_000] == []
+    assert min(prices) == Decimal("56.0186") and max(prices) == Decimal("60.45"), "a name priced in tens of dollars"
+
+
+@pytest.mark.parametrize("feature", ["rsi_14", "momentum_5m"])
+def test_a_real_split_adjusted_tape_gives_every_signal_output_unchanged_through_the_lake(world, feature):
+    """Cause: none. The same bars, prices and volumes reach the engine on both paths, so no output moves.
+
+    One-minute bars are the only length the four sessions give the engine an answer on (at five and fifteen minutes it
+    refuses on both paths), so those are compared as bars in the next test.
+    """
+    tape = wmt_tape()
+    mock_vendor("WMT", tape, adjusted=tape, splits=[WMT_SPLIT])
+    params = study(WMT_WINDOW, multiplier=1, feature_name=feature, symbol="WMT")
+
+    provider, lake = paths(tape, WMT_WINDOW, params)
+    comparison = compare(provider, lake, params)
+
+    assert comparison.errors == (None, None)
+    assert (comparison.provider_bars, comparison.lake_bars) == (WMT_BARS, WMT_BARS)
+    assert (comparison.timestamps_changed, comparison.prices_changed, comparison.volume_changed) == (0, 0, 0)
+    assert comparison.causes == []
+    assert comparison.max_output_diff <= ATOL, "every headline number is the same at the strict-float default"
+    assert comparison.grades[0] == comparison.grades[1]
+    assert_same(
+        serialize_signal_report(engine_report(provider, params)), serialize_signal_report(engine_report(lake, params))
+    )
+
+
+@pytest.mark.parametrize("multiplier", [5, 15])
+def test_a_real_split_adjusted_tape_folds_to_the_same_bars_on_both_paths(world, multiplier):
+    tape = wmt_tape()
+    mock_vendor("WMT", tape, adjusted=tape, splits=[WMT_SPLIT])
+    params = study(WMT_WINDOW, multiplier=multiplier, symbol="WMT")
+    columns = ("timestamp", "open", "high", "low", "close", "volume")
+
+    provider = provider_rows(tape, WMT_WINDOW, bar_minutes=multiplier)
+    lake = lake_rows(params)[0]
+
+    assert [{column: row[column] for column in columns} for row in provider] == lake
+
+
+def test_the_same_real_tape_pushed_off_the_grid_does_move_the_outputs_so_the_comparison_can_see_a_grid_effect(world):
+    """Cause: ``data-quality`` (input quantization). The positive control for the two cases above.
+
+    Measured: all 2,226 bars change by up to half a ten-thousandth, and the best net Sharpe, the effective sample and the
+    active share move by up to 2e-3. Without this a comparison that cannot see a grid effect would pass for the same reason.
+    """
+    tape = {
+        day: [{**bar, **{key: round(bar[key] * OFF_THE_GRID, 6) for key in ("o", "h", "l", "c", "vw")}} for bar in bars]
+        for day, bars in wmt_tape().items()
+    }
+    mock_vendor("WMT", tape, adjusted=tape, splits=[WMT_SPLIT])
+    params = study(WMT_WINDOW, multiplier=1, feature_name="rsi_14", symbol="WMT")
+
+    provider, lake = paths(tape, WMT_WINDOW, params)
+    comparison = compare(provider, lake, params)
+
+    assert comparison.errors == (None, None)
+    assert comparison.quantization_only and comparison.causes == ["data-quality"]
+    assert comparison.prices_changed == WMT_BARS
+    assert comparison.max_output_diff > 1e-4
