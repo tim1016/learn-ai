@@ -4,6 +4,8 @@ import { RouterOutlet } from '@angular/router';
 import { DataLabWorkspaceStore, createDataLabWorkspaceStore, seedDefaultIndicators } from '../../components/data-lab/data-lab-workspace-store';
 import { HowThisWorksLinkComponent } from '../../shared/help/how-this-works-link.component';
 import { formatReceiptLabel } from '../../shared/pipes/receipt-label.pipe';
+import { HealthNoticeComponent } from '../../shared/scoped-health/health-notice.component';
+import { HEALTH_NEEDS } from '../../shared/scoped-health/scoped-health';
 import { RunDockComponent } from '../../shared/run-dock/run-dock.component';
 import { RUN_DOCK_SOURCE, RUN_DOCK_STORAGE_KEY } from '../../shared/run-dock/run-dock-source';
 import { RunSessionService } from '../../services/run-session.service';
@@ -56,6 +58,7 @@ const TABS_THAT_NAME_IGNORED_KEYS: ReadonlySet<string> = new Set(['chart', 'retu
     RouterOutlet,
     InstrumentFactsHeaderComponent,
     HowThisWorksLinkComponent,
+    HealthNoticeComponent,
     WorkspaceHeaderComponent,
     WorkspaceStateBlockComponent,
     WorkspaceTabListComponent,
@@ -86,6 +89,7 @@ export class InstrumentWorkspaceComponent {
   private readonly context = inject(InstrumentContextService);
   private readonly admission = inject(InstrumentAdmissionService);
   private readonly url = inject(CurrentUrlService).url;
+  private readonly store = inject(DataLabWorkspaceStore);
   protected readonly setups = inject(SavedSetupsService);
 
   protected readonly symbol = this.context.symbol;
@@ -108,6 +112,17 @@ export class InstrumentWorkspaceComponent {
   protected readonly activeTab = computed(() => instrumentTabOf(this.url()));
 
   protected readonly setupsOpen = signal(false);
+
+  protected readonly healthNeeds = HEALTH_NEEDS.stockHistory;
+  /**
+   * The symbol the lake notice speaks for: the committed one, and only while the committed scope reads the
+   * split-adjusted view, the one view the health projection covers. A raw view gets no notice rather than
+   * another tree's finding.
+   */
+  protected readonly healthInstrument = computed(() => {
+    const scope = this.store.committedScope();
+    return scope?.adjusted ? scope.ticker : null;
+  });
 
   /** Build dataset is an action on the instrument, so it is in the header on every tab; it opens only for an instrument that opens. */
   protected readonly headerActions = computed<readonly WorkspaceAction[]>(() =>
@@ -180,7 +195,7 @@ export class InstrumentWorkspaceComponent {
 
   constructor() {
     // A fresh place starts with the product's default indicator recipe; seeding fetches nothing.
-    seedDefaultIndicators(inject(DataLabWorkspaceStore));
+    seedDefaultIndicators(this.store);
   }
 
   protected onHeaderAction(id: string): void {

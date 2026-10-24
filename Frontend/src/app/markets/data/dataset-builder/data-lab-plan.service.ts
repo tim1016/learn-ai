@@ -22,7 +22,7 @@ export interface DataLabPlanReceipt {
   window_start_ms_utc?: number;
   window_end_ms_utc?: number;
   /** Session entries are YYYY-MM-DD strings today; the server is moving to
-   *  ms-UTC session anchors, so render defensively (see ExportComponent). */
+   *  ms-UTC session anchors, so render defensively (see the Build dataset page). */
   exchange_sessions?: readonly unknown[];
   session_count?: number;
   output_columns?: readonly string[];

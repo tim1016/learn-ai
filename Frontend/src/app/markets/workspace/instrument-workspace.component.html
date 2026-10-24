@@ -21,6 +21,9 @@
 @if (stateContent(); as state) {
   <app-workspace-state-block [state]="state" (actionTriggered)="onAction($event)" />
 } @else {
+  @if (healthInstrument(); as symbol) {
+    <app-health-notice [needs]="healthNeeds" [instrument]="symbol" />
+  }
   @if (ignoredNotes().length > 0) {
     <app-migration-notice heading="Migrated link." [notes]="ignoredNotes()" (dismissed)="dismissIgnored()" />
   }

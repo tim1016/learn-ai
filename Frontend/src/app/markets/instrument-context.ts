@@ -135,16 +135,6 @@ export function windowMsUtc(window: InstrumentWindow): { readonly startMsUtc: nu
   return start === null || end === null ? null : { startMsUtc: start, endMsUtc: utcDayEndMs(end) };
 }
 
-/** The query a context writes: only the keys the context owns. */
-export function contextQuery(context: InstrumentContext): Record<string, string> {
-  return {
-    from: context.window.from,
-    to: context.window.to,
-    timeframe: context.timeframe,
-    session: context.session,
-  };
-}
-
 /** Whether two contexts commit the same request. */
 export function sameContext(a: InstrumentContext, b: InstrumentContext): boolean {
   return a.window.from === b.window.from

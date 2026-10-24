@@ -14,7 +14,10 @@ import { DataLabRangePresetsService, type ChartRangePreset } from '../../service
 import { RunSessionService } from '../../services/run-session.service';
 import type { InstrumentDataReport } from '../../shared/data-lake';
 import type { VendorSymbolEntry } from '../../shared/symbol-catalog/vendor-catalog.service';
+import { ScopedHealthService } from '../../shared/scoped-health/scoped-health.service';
 import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
+import { facts } from '../facts/testing/facts-fixtures';
+import { InstrumentFactsService, type FactsRead } from '../facts/instrument-facts.service';
 import { InstrumentContextService } from '../instrument-context.service';
 import { MARKETS_ROUTES } from '../markets.routes';
 import { InstrumentWorkspaceComponent } from '../workspace/instrument-workspace.component';
@@ -30,7 +33,6 @@ export const TO = '2026-05-15';
 export const WINDOW_QUERY = `from=${FROM}&to=${TO}`;
 
 export const INSTRUMENT_DATA_URL = `${environment.pythonServiceUrl}/api/data-lake/instrument-data`;
-export const RETURNS_URL = `${environment.pythonServiceUrl}/api/research/return-distribution`;
 export const CHART_URL = `${environment.pythonServiceUrl}/api/chart/data`;
 
 /** Python's 1Y range, as the place reads it for an address with no window. */
@@ -85,6 +87,14 @@ export function idleRunSession() {
   };
 }
 
+/** The lake notice's reader, answering that nothing needs a note: a spec about another tab asks the data plane nothing. */
+const QUIET_HEALTH = { read: async () => ({ generated_ms: 0, items: [] }) };
+
+/** The header's facts reader, answering each symbol with a quote: a spec about a tab asks the data plane nothing about the header. */
+const QUIET_FACTS = {
+  read: async (symbols: readonly string[]): Promise<FactsRead> => ({ kind: 'ok', facts: new Map(symbols.map((symbol) => [symbol, facts(symbol)])) }),
+};
+
 /** Routes beside the place's, for a spec that reaches the place from an old address. */
 export async function openPlace(url: string, extraProviders: readonly Provider[] = [], extraRoutes: Routes = []) {
   const world = placeWorld();
@@ -100,6 +110,8 @@ export async function openPlace(url: string, extraProviders: readonly Provider[]
       ...world.providers,
       { provide: DataLabRangePresetsService, useValue: { presets: async () => [PRESET_1Y] } },
       { provide: RunSessionService, useValue: idleRunSession() },
+      { provide: ScopedHealthService, useValue: QUIET_HEALTH },
+      { provide: InstrumentFactsService, useValue: QUIET_FACTS },
       ...extraProviders,
     ],
   });

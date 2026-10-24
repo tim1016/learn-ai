@@ -12,6 +12,8 @@ import { environment } from '../../../environments/environment';
 import { DataLabRangePresetsService, type ChartRangePreset } from '../../services/data-lab-range-presets.service';
 import { DataLabWorkspaceStore } from '../../components/data-lab/data-lab-workspace-store';
 import { RunSessionService } from '../../services/run-session.service';
+import { ScopedHealthService } from '../../shared/scoped-health/scoped-health.service';
+import { fakeScopedHealth, healthItem, projection } from '../../shared/scoped-health/testing/scoped-health-fixtures';
 import { fakePickerWorld, pickSymbol } from '../../shared/symbol-picker/testing/fake-picker-world';
 import { formatTimestampDisplay } from '../../shared/timestamp';
 import type { VendorSymbolEntry } from '../../shared/symbol-catalog/vendor-catalog.service';
@@ -139,6 +141,8 @@ async function open(
       ...pickers.providers,
       { provide: DataLabRangePresetsService, useValue: { presets: vi.fn(presets) } },
       { provide: RunSessionService, useValue: idleRunSession() },
+      // A spec about the lake notice overrides this; every other asks the data plane nothing about health.
+      { provide: ScopedHealthService, useValue: { read: async () => projection() } },
     ],
   });
   const harness = await RouterTestingHarness.create();
@@ -236,7 +240,7 @@ describe('an instrument\'s place', () => {
         expect(screen.getByRole('link', { name }).getAttribute('href'), `${name} keeps the window`).toBe(`/markets/SPY/${tab}?${WINDOW_QUERY}`);
       }
       expect(screen.queryByRole('link', { name: 'Options' }), 'Options is not a link').toBeNull();
-      expect(screen.getByText(/^Options/).getAttribute('title'), 'Options says why').toContain('Not in this place yet');
+      expect(within(strip).getByText(/^Options/).getAttribute('title'), 'Options says why').toContain('Not in this place yet');
     });
   });
 
@@ -491,6 +495,43 @@ describe('an instrument\'s place', () => {
 
       expect(await screen.findByText(/not in the lake and is not a listed US-equity symbol/)).toBeTruthy();
       expect(opened.readFacts).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('the lake notice (PRD #3490 R30)', () => {
+    const lakeGap = projection(
+      healthItem({
+        kind: 'stock_bars',
+        instrument: 'SPY',
+        severity: 'warning',
+        explanation: 'SPY has 3 scheduled sessions that are not in the lake.',
+        link: { tab: 'lake', query: { symbol: 'SPY', price_adjustment_mode: 'polygon_split_adjusted', data_type: 'trade' } },
+      }),
+    );
+
+    it('asks about the committed instrument\'s stock history only, and links to the evidence in the Lake', async () => {
+      const health = fakeScopedHealth(lakeGap);
+      TestBed.overrideProvider(ScopedHealthService, { useValue: { read: health.read } });
+      await openLoaded(`/markets/SPY/chart?${WINDOW_QUERY}`);
+
+      expect(await screen.findByText(/SPY has 3 scheduled sessions/)).toBeTruthy();
+      expect(health.read).toHaveBeenCalledWith({ operations: ['stock_history'], instrument: 'SPY' });
+      expect(screen.getByRole('link', { name: 'Open Lake' }).getAttribute('href')).toBe(
+        '/operations/lake?symbol=SPY&price_adjustment_mode=polygon_split_adjusted&data_type=trade',
+      );
+    });
+
+    it('says nothing about the lake for a raw view, which the split-adjusted health does not speak for', async () => {
+      const health = fakeScopedHealth(lakeGap);
+      TestBed.overrideProvider(ScopedHealthService, { useValue: { read: health.read } });
+      const opened = await openLoaded(`/markets/SPY/chart?${WINDOW_QUERY}`);
+      await screen.findByText(/SPY has 3 scheduled sessions/);
+
+      opened.store().patchDraft({ adjusted: false });
+      opened.store().commitScope();
+      opened.harness.fixture.detectChanges();
+
+      await waitFor(() => expect(screen.queryByText(/not in the lake/)).toBeNull());
     });
   });
 
