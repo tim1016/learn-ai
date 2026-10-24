@@ -1,0 +1,11 @@
+@if (view(); as status) {
+  <span class="archive-fact" [attr.data-kind]="status.kind" [attr.title]="status.explanation">
+    {{ status.label }}@if (status.span; as span) {,
+      <app-timestamp-display [value]="span.from" mode="date-et" granularity="short-date" />
+      to
+      <app-timestamp-display [value]="span.through" mode="date-et" granularity="short-date" />
+    }@if (status.latest !== null) {, latest
+      <app-timestamp-display [value]="status.latest" mode="date-et" granularity="short-date" />
+    }
+  </span>
+}

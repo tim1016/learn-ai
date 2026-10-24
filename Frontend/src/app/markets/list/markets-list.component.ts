@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject, input, signal, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
 
 import { AssetIdentityComponent } from '../../shared/asset-identity';
@@ -10,10 +10,14 @@ import type { WorkspaceStateContent } from '../../shared/workspace/workspace-sta
 import { WorkspaceHeaderComponent } from '../../shared/workspace/workspace-header.component';
 import { WorkspaceStateBlockComponent } from '../../shared/workspace/workspace-state-block.component';
 import { menuLabelFor } from '../../shell/app-menu';
+import { ArchiveFactComponent } from '../facts/archive-fact.component';
+import { FactsBoard } from '../facts/facts-board';
+import { InstrumentFactsService } from '../facts/instrument-facts.service';
+import { QuoteFactComponent } from '../facts/quote-fact.component';
 import { MARKETS_ROUTE, instrumentCommands, openableTab } from '../instrument-address';
 
-/** Rows drawn at once; the search reaches every other instrument. */
-const MAX_ROWS = 200;
+/** Rows drawn at first, and added by each "Show more"; a row's facts are asked for only once it is drawn. */
+export const PAGE_SIZE = 20;
 
 /**
  * Markets (`/markets`): the instruments the lake holds, and search over every
@@ -22,8 +26,14 @@ const MAX_ROWS = 200;
  * The rows come from the shared joined catalog (`SymbolCatalogService`): lake
  * holdings, with the listing's own status on each. A held instrument is listed
  * whether or not a quote is available; a delisted one stays listed. The page
- * reads that catalog once and starts nothing per row: no fill, no quote, no
- * live subscription.
+ * reads that catalog once and starts nothing per row: no fill, no live
+ * subscription.
+ *
+ * Each row also states its latest price, day move and options-archive status,
+ * with the basis and as-of time of the price. Python computes them, and a page
+ * of rows is read in one request for the rows drawn, never one per row; more
+ * rows are drawn a page at a time, each page one more request. A price that
+ * cannot be read says "unavailable" in its own row and leaves the row listed.
  *
  * Search is the shared symbol picker, so it carries the catalog's degraded
  * notice and the one coverage gate (ADR 0066): picking a symbol the lake does
@@ -35,6 +45,8 @@ const MAX_ROWS = 200;
   imports: [
     RouterLink,
     AssetIdentityComponent,
+    QuoteFactComponent,
+    ArchiveFactComponent,
     SymbolPickerComponent,
     WorkspaceHeaderComponent,
     WorkspaceStateBlockComponent,
@@ -57,8 +69,13 @@ export class MarketsListComponent {
   protected readonly picked = signal('');
 
   protected readonly held = computed<readonly PickerSymbol[]>(() => this.view.pool().filter(isHeldRow));
-  protected readonly rows = computed(() => this.held().slice(0, MAX_ROWS));
-  protected readonly cut = computed(() => Math.max(0, this.held().length - MAX_ROWS));
+  private readonly drawn = signal(PAGE_SIZE);
+  protected readonly rows = computed(() => this.held().slice(0, this.drawn()));
+  protected readonly remaining = computed(() => Math.max(0, this.held().length - this.rows().length));
+  protected readonly nextPage = computed(() => Math.min(PAGE_SIZE, this.remaining()));
+
+  /** The facts of the rows drawn: one request per page of rows, each symbol asked for once. */
+  protected readonly board = new FactsBoard(inject(InstrumentFactsService));
 
   /** Why the held list is not on screen, in the catalog's own words; `null` once it is. */
   protected readonly listState = computed<WorkspaceStateContent | null>(() => {
@@ -98,6 +115,17 @@ export class MarketsListComponent {
         }
       : null;
   });
+
+  constructor() {
+    effect(() => {
+      const symbols = this.rows().map((row) => row.symbol);
+      untracked(() => this.board.ask(symbols));
+    });
+  }
+
+  protected showMore(): void {
+    this.drawn.update((count) => count + PAGE_SIZE);
+  }
 
   protected commandsFor(symbol: string): string[] {
     return instrumentCommands(symbol, this.tab());

@@ -4,16 +4,20 @@ import type { Provider } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { By } from '@angular/platform-browser';
 import { Router, provideRouter } from '@angular/router';
-import { render, screen } from '@testing-library/angular';
+import { render, screen, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
+import { environment } from '../../../environments/environment';
 import { InstrumentCardComponent } from '../../shared/ticker-range-picker/parts/instrument-card.component';
 import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
 import { fakeTickerCatalog, provideFakeTickerCatalog } from '../../shared/ticker-catalog/testing/fake-ticker-catalog';
 import type { VendorSymbolEntry } from '../../shared/symbol-catalog/vendor-catalog.service';
 import type { TickerOption } from '../../shared/ticker-range-picker';
-import { MarketsListComponent } from './markets-list.component';
+import { formatTimestampDisplay } from '../../shared/timestamp';
+import { type InstrumentFacts } from '../facts/instrument-facts.service';
+import { OBSERVED_MS, archive, facts, quote } from '../facts/testing/facts-fixtures';
+import { MarketsListComponent, PAGE_SIZE } from './markets-list.component';
 
 const held = (symbol: string): TickerOption => ({
   symbol,
@@ -29,6 +33,21 @@ const vendor = (symbol: string, status: 'active' | 'inactive' = 'active'): Vendo
   asset_class: 'us_equity',
   status,
 });
+
+const FACTS_URL = `${environment.pythonServiceUrl}/api/markets/instrument-facts`;
+
+/** What the data plane answers for the symbols a request names. */
+function answer(symbols: readonly string[], make: (symbol: string) => InstrumentFacts = (symbol) => facts(symbol)) {
+  return { generated_ms: OBSERVED_MS, closes_adjustment: 'polygon_split_adjusted', facts: symbols.map(make) };
+}
+
+/** Every request a spec's rows asked the data plane for; the catalogs here are fakes and ask nothing. */
+function asked(http: HttpTestingController) {
+  return http.match((request) => request.url.startsWith(`${environment.pythonServiceUrl}/api/`));
+}
+
+const symbolsOf = (request: { request: { params: { get: (name: string) => string | null } } }) =>
+  (request.request.params.get('symbols') ?? '').split(',');
 
 async function renderMarkets(
   world = fakePickerWorld([held('SPY'), held('QQQ')], [vendor('SPY'), vendor('QQQ'), vendor('NVDA'), vendor('AMD')]),
@@ -75,23 +94,100 @@ describe('MarketsListComponent', () => {
   });
 
   describe('a page of instruments (T22)', () => {
-    it('starts no fill, no request and no subscription for any row', async () => {
-      const rows = Array.from({ length: 40 }, (_, index) => held(`S${String.fromCharCode(65 + (index % 26))}${String.fromCharCode(65 + Math.floor(index / 26))}`));
-      const { world, http } = await renderMarkets(fakePickerWorld(rows, rows.map((row) => vendor(row.symbol))));
+    const forty = Array.from({ length: 40 }, (_, index) => held(`S${String.fromCharCode(65 + (index % 26))}${String.fromCharCode(65 + Math.floor(index / 26))}`));
+    const fortyWorld = () => fakePickerWorld(forty, forty.map((row) => vendor(row.symbol)));
 
-      expect(screen.getAllByRole('row')).toHaveLength(41);
-      expect(world.coverage.ensureCalls).toEqual([]);
-      expect(world.coverage.refusals).toEqual([]);
-      // Nothing was asked of the network by the page or by any row.
+    it('draws a page of rows and asks the data plane once, for those rows, and starts no fill and no subscription', async () => {
+      const subscriptions = { EventSource: vi.fn(), WebSocket: vi.fn() };
+      vi.stubGlobal('EventSource', subscriptions.EventSource);
+      vi.stubGlobal('WebSocket', subscriptions.WebSocket);
+      try {
+        const { world, http } = await renderMarkets(fortyWorld());
+
+        expect(screen.getAllByRole('row')).toHaveLength(PAGE_SIZE + 1);
+        const requests = asked(http);
+        expect(requests.map((request) => request.request.url)).toEqual([FACTS_URL]);
+        expect(symbolsOf(requests[0])).toEqual(forty.slice(0, PAGE_SIZE).map((row) => row.symbol));
+        expect(requests[0].request.method).toBe('GET');
+        expect(world.coverage.ensureCalls).toEqual([]);
+        expect(world.coverage.refusals).toEqual([]);
+        expect(subscriptions.EventSource).not.toHaveBeenCalled();
+        expect(subscriptions.WebSocket).not.toHaveBeenCalled();
+        http.verify();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('asks for the next rows only when they are drawn, and never again for the rows already shown', async () => {
+      const { http } = await renderMarkets(fortyWorld());
+      const [first] = asked(http);
+      first.flush(answer(symbolsOf(first)));
+
+      await userEvent.click(screen.getByRole('button', { name: `Show ${PAGE_SIZE} more` }));
+
+      expect(screen.getAllByRole('row')).toHaveLength(2 * PAGE_SIZE + 1);
+      const more = asked(http);
+      expect(more).toHaveLength(1);
+      expect(symbolsOf(more[0])).toEqual(forty.slice(PAGE_SIZE).map((row) => row.symbol));
+      expect(screen.queryByRole('button', { name: /Show .* more/ })).toBeNull();
+      more[0].flush(answer(symbolsOf(more[0])));
       http.verify();
     });
 
-    it('draws a bounded number of rows and says so, leaving search to reach the rest', async () => {
+    it('draws a bounded page, says how many are held, and leaves search to reach any of them', async () => {
       const many = Array.from({ length: 230 }, (_, index) => held(`T${index.toString(36).toUpperCase().padStart(3, 'A')}`));
       await renderMarkets(fakePickerWorld(many, many.map((row) => vendor(row.symbol))));
 
-      expect(screen.getAllByRole('row')).toHaveLength(201);
-      expect(screen.getByText('Showing the first 200 of 230 held instruments. Search reaches the rest.')).toBeTruthy();
+      expect(screen.getAllByRole('row')).toHaveLength(PAGE_SIZE + 1);
+      expect(screen.getByText(/Showing 20 of 230 held instruments\. Search reaches any of them\./)).toBeTruthy();
+    });
+  });
+
+  describe('each row\'s facts (PRD #3490 R08)', () => {
+    it('states each row\'s price with its basis and as-of time, its day move and its options archive, with the held span said to be a span', async () => {
+      const { http } = await renderMarkets();
+      const [request] = asked(http);
+      request.flush(answer(symbolsOf(request), (symbol) =>
+        symbol === 'SPY'
+          ? facts('SPY', quote({ basis: 'live_quote', not_used: [] }), archive({ kind: 'complete', complete_through_session_ms: OBSERVED_MS, missing_sessions: 0 }))
+          : facts('QQQ', quote({ price: 612.4, basis: 'last_close' })),
+      ));
+
+      const [spy, qqq] = screen.getAllByRole('row').slice(1);
+      expect(await within(spy).findByText('$759.97')).toBeTruthy();
+      expect(within(spy).getByText(/Live quote, as of/).textContent).toContain(formatTimestampDisplay(OBSERVED_MS, { mode: 'local' }));
+      expect(within(spy).getByText(/Options archive: every required day stored/)).toBeTruthy();
+      expect(within(qqq).getByText('$612.40')).toBeTruthy();
+      expect(within(qqq).getByText(/Last completed close, as of/)).toBeTruthy();
+      expect(within(qqq).queryByText(/Options archive/), 'an underlying the archive does not track states nothing').toBeNull();
+      expect(within(spy).getByText('2024-01-02 to 2026-09-18')).toBeTruthy();
+    });
+
+    it('says unavailable in a row whose price could not be read, keeps every row listed and openable, and reads only those again', async () => {
+      const { http } = await renderMarkets();
+      const [request] = asked(http);
+      request.flush({ detail: 'The trading calendar could not name the last completed session.' }, { status: 503, statusText: 'Service Unavailable' });
+
+      expect(await screen.findAllByText('Price unavailable')).toHaveLength(2);
+      const rows = screen.getAllByRole('row').slice(1);
+      expect(rows.map((row) => row.querySelector('a')?.getAttribute('href'))).toEqual(['/markets/SPY/chart', '/markets/QQQ/chart']);
+      expect(screen.getByText(/Some prices could not be read/)).toBeTruthy();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Read them again' }));
+      const again = asked(http);
+      expect(again).toHaveLength(1);
+      expect(symbolsOf(again[0])).toEqual(['SPY', 'QQQ']);
+      again[0].flush(answer(symbolsOf(again[0])));
+      await vi.waitFor(() => expect(screen.getAllByText('$759.97')).toHaveLength(2));
+      expect(screen.queryByText(/Some prices could not be read/)).toBeNull();
+    });
+
+    it('draws a price still being read as being read, never as a figure', async () => {
+      await renderMarkets();
+
+      expect(screen.getAllByText('Reading the price…')).toHaveLength(2);
+      expect(screen.queryByText(/^\$/)).toBeNull();
     });
   });
 

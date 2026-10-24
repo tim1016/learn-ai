@@ -5520,6 +5520,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/markets/instrument-facts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Instrument Facts
+         * @description Each symbol's latest price with its basis and as-of time, its day move and its options-archive status.
+         *
+         *     A price is the freshest source that answers (live, delayed snapshot, last completed close) and names which. A
+         *     source that failed leaves only its own fields ``unavailable``; the response is still 200 and every other
+         *     instrument and fact in it stands.
+         */
+        get: operations["get_instrument_facts_api_markets_instrument_facts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/news": {
         parameters: {
             query?: never;
@@ -9034,6 +9058,37 @@ export interface components {
             /** Would Settle */
             would_settle: boolean;
         };
+        /** AvailableQuote */
+        AvailableQuote: {
+            /**
+             * As Of Ms
+             * @description When the price was observed, not when it was read.
+             */
+            as_of_ms: number;
+            /**
+             * Basis
+             * @enum {string}
+             */
+            basis: "live_quote" | "delayed_snapshot" | "last_close";
+            move: components["schemas"]["DayMove"] | null;
+            /**
+             * Move Unavailable Reason
+             * @description Why there is no move; set exactly when ``move`` is null.
+             */
+            move_unavailable_reason: string | null;
+            /**
+             * Not Used
+             * @description Fresher sources that did not answer, freshest first.
+             */
+            not_used: components["schemas"]["BasisNotUsed"][];
+            /** Price */
+            price: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "available";
+        };
         /**
          * BackfillDefaults
          * @description The parts of a ``DataRunSpec`` only the data plane knows (#1838).
@@ -9600,6 +9655,19 @@ export interface components {
             test_metrics: components["schemas"]["RunMetrics"];
             /** Test Trade Count */
             test_trade_count: number;
+        };
+        /**
+         * BasisNotUsed
+         * @description A source that was asked first and did not supply the price, with why.
+         */
+        BasisNotUsed: {
+            /**
+             * Basis
+             * @enum {string}
+             */
+            basis: "live_quote" | "delayed_snapshot" | "last_close";
+            /** Reason */
+            reason: string;
         };
         /** BenchmarkPreflightRequest */
         BenchmarkPreflightRequest: {
@@ -12259,6 +12327,19 @@ export interface components {
             updated_at_ms: number;
         };
         /**
+         * ComparisonClose
+         * @description The close a day move is measured from: one completed session's regular-hours close.
+         */
+        ComparisonClose: {
+            /** Price */
+            price: number;
+            /**
+             * Session Close Ms
+             * @description That session's scheduled close, from the canonical calendar.
+             */
+            session_close_ms: number;
+        };
+        /**
          * ConcentrationView
          * @description Where the collateral is: each underlying and expiry alone, and the account's own figure beside them.
          */
@@ -13350,6 +13431,17 @@ export interface components {
             session_open_ms_utc: number;
             /** Symbol */
             symbol: string;
+        };
+        /**
+         * DayMove
+         * @description ``change = price - comparison close``; ``change_percent = 100 * change / comparison close``.
+         */
+        DayMove: {
+            /** Change */
+            change: number;
+            /** Change Percent */
+            change_percent: number;
+            comparison_close: components["schemas"]["ComparisonClose"];
         };
         /** DayNotCapturedDetail */
         DayNotCapturedDetail: {
@@ -21049,6 +21141,28 @@ export interface components {
             /** Warnings */
             warnings?: string[];
         };
+        /** InstrumentFacts */
+        InstrumentFacts: {
+            /** @description Null for an underlying the archive does not track. */
+            options_archive: components["schemas"]["OptionsArchiveFact"] | null;
+            /** Quote */
+            quote: components["schemas"]["AvailableQuote"] | components["schemas"]["UnavailableQuote"];
+            /** Symbol */
+            symbol: string;
+        };
+        /** InstrumentFactsResponse */
+        InstrumentFactsResponse: {
+            /**
+             * Closes Adjustment
+             * @description The lake tree every close (last close, comparison close) is read from.
+             * @enum {string}
+             */
+            closes_adjustment: "raw" | "polygon_split_adjusted" | "lean_adjusted";
+            /** Facts */
+            facts: components["schemas"]["InstrumentFacts"][];
+            /** Generated Ms */
+            generated_ms: number;
+        };
         /**
          * InsufficientCoverageDetail
          * @description The typed 400 body's ``detail`` for a too-thin usable sample.
@@ -24568,6 +24682,29 @@ export interface components {
             range_reason: string | null;
             /** Unit Label */
             unit_label: string;
+        };
+        /** OptionsArchiveFact */
+        OptionsArchiveFact: {
+            /**
+             * Capturing
+             * @description Whether nightly capture is switched on.
+             */
+            capturing: boolean | null;
+            /** Complete Through Session Ms */
+            complete_through_session_ms: number | null;
+            /** Earliest Required Session Ms */
+            earliest_required_session_ms: number | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "none_stored" | "some_days" | "complete" | "unavailable";
+            /** Last Archived Session Ms */
+            last_archived_session_ms: number | null;
+            /** Missing Sessions */
+            missing_sessions: number | null;
+            /** Reason */
+            reason: string | null;
         };
         /**
          * OptionsBacktestCapitalEvidenceResponse
@@ -33975,6 +34112,21 @@ export interface components {
          * @enum {string}
          */
         TrustedTemplate: "trusted_default" | "reconciliation" | "ema_crossover" | "ema_crossover_signal" | "ema_crossover_2_bps" | "ema_previous_crossover" | "rsi_mean_reversion" | "deployment_validation";
+        /** UnavailableQuote */
+        UnavailableQuote: {
+            /**
+             * Not Used
+             * @description Every source that was asked, freshest first, with why it did not answer.
+             */
+            not_used: components["schemas"]["BasisNotUsed"][];
+            /** Reason */
+            reason: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "unavailable";
+        };
         /** UnderlyingArchiveHealth */
         UnderlyingArchiveHealth: {
             /** Complete Through Session Ms */
@@ -45166,6 +45318,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TrustedRunResponseModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_instrument_facts_api_markets_instrument_facts_get: {
+        parameters: {
+            query: {
+                /** @description Comma-separated distinct US-equity symbols, at most 25. */
+                symbols: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstrumentFactsResponse"];
                 };
             };
             /** @description Validation Error */

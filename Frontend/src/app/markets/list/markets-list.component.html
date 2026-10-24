@@ -20,7 +20,9 @@
       <tr>
         <th scope="col">Symbol</th>
         <th scope="col">Name</th>
+        <th scope="col">Latest price</th>
         <th scope="col">Held span</th>
+        <th scope="col">Options archive</th>
       </tr>
     </thead>
     <tbody>
@@ -37,13 +39,29 @@
               <span class="markets__badge">delisted</span>
             }
           </td>
-          <td>{{ row.firstHeld }} to {{ row.lastHeld }}</td>
+          <td><app-quote-fact [state]="board.stateOf(row.symbol)" layout="row" /></td>
+          <td class="markets__span">{{ row.firstHeld }} to {{ row.lastHeld }}</td>
+          <td>
+            @let facts = board.stateOf(row.symbol);
+            @if (facts.kind === 'ready') {
+              <app-archive-fact [fact]="facts.facts.options_archive" />
+            }
+          </td>
         </tr>
       }
     </tbody>
   </table>
-  @if (cut() > 0) {
-    <p class="markets__note">Showing the first {{ rows().length }} of {{ held().length }} held instruments. Search reaches the rest.</p>
+  @if (board.hasFailed()) {
+    <p class="markets__note">
+      Some prices could not be read, so those rows say so; the rows themselves are unaffected.
+      <button type="button" class="markets__link" (click)="board.retry()">Read them again</button>
+    </p>
+  }
+  @if (remaining() > 0) {
+    <p class="markets__note">
+      Showing {{ rows().length }} of {{ held().length }} held instruments. Search reaches any of them.
+      <button type="button" class="markets__link" (click)="showMore()">Show {{ nextPage() }} more</button>
+    </p>
   }
   <p class="markets__note">The held span is the first and last day the lake holds, not a promise that every session between them is held.</p>
 }
