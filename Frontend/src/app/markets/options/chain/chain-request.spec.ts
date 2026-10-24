@@ -52,6 +52,21 @@ describe('what an address asks the chain for', () => {
     expect(request.kind === 'invalid' && request.problems.join(' ')).toMatch(problem);
   });
 
+  it.each([
+    ['a mistyped expiry', 'expiry=abc', ['expiry']],
+    ['a session date that is not a date', 'source=archive&date=2026-02-30', ['date']],
+    ['an instant that is not milliseconds', 'source=archive&date=2026-10-09&at=3pm', ['at']],
+    ['an instant with no session date', `source=archive&at=${CLOSE}`, ['at']],
+    ['an instant off its session date', `source=archive&date=2026-10-12&at=${CLOSE}`, ['at']],
+    ['a source it does not offer and an expiry', 'source=bogus&expiry=x', ['source', 'expiry']],
+    // The source cannot have a past, and choosing another source repairs it: no key here is unreadable by itself.
+    ['a past asked of the snapshot', 'source=snapshot&date=2026-10-09', []],
+  ])('names the keys that cannot be read as they stand when it names %s, so a way out can drop them', (_name, query, keys) => {
+    const request = read(query);
+
+    expect(request.kind === 'invalid' && request.unusable).toEqual(keys);
+  });
+
   it('keeps the source it did name, even when the rest cannot be read, so the strip says which one it was', () => {
     expect(chainModeOf(read('source=archive&date=nope'))).toBe('past-archive');
     expect(chainModeOf(read('source=live&expiry=x'))).toBe('now-live');

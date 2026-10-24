@@ -332,6 +332,40 @@ describe('the modes of the chain', () => {
   });
 });
 
+describe('an address the chain cannot read is not a dead end', () => {
+  it('drops a mistyped expiry when a source is chosen, and keeps what it could read', async () => {
+    const { router } = await open(`/markets/SPY/options/chain?source=archive&date=${TRADING_DATE}&expiry=abc`);
+    expect(await screen.findByText('The chain asked for in this address cannot be read, so nothing is loaded.')).toBeTruthy();
+    expect(screen.getByText(/The expiry "abc" is not a time in whole milliseconds/)).toBeTruthy();
+
+    await userEvent.setup().click(modeButton('Past · Archive'));
+
+    await waitFor(() => expect(query(router)['expiry']).toBeUndefined());
+    expect(query(router)).toMatchObject({ source: 'archive', date: TRADING_DATE });
+    expect(await screen.findByText('No expiry is open.')).toBeTruthy();
+  });
+
+  it('offers to clear what cannot be read, names it, and clears nothing else', async () => {
+    const { router, market } = await open(`/markets/SPY/options/chain?${WINDOW}&source=archive&date=${TRADING_DATE}&at=nope&expiry=abc`);
+    await screen.findByText('The chain asked for in this address cannot be read, so nothing is loaded.');
+
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Clear the expiry and the instant' }));
+
+    await waitFor(() => expect(query(router)['at']).toBeUndefined());
+    expect(query(router)['expiry']).toBeUndefined();
+    expect(query(router)).toMatchObject({ from: '2026-04-15', to: '2026-05-15', source: 'archive', date: TRADING_DATE });
+    expect(await screen.findByText('No expiry is open.')).toBeTruthy();
+    expect(market.chain).not.toHaveBeenCalled();
+  });
+
+  it('offers no clearing for a past asked of the snapshot, which choosing a source repairs', async () => {
+    await open(`/markets/SPY/options/chain?source=snapshot&date=${TRADING_DATE}`);
+    await screen.findByText('The chain asked for in this address cannot be read, so nothing is loaded.');
+
+    expect(screen.queryByRole('button', { name: /^Clear / })).toBeNull();
+  });
+});
+
 describe('the Options tab\'s own context and the chart\'s window', () => {
   it('moving the session date leaves the chart window as it was, and Chart still has it on return', async () => {
     const { router, context } = await open(`/markets/SPY/options/chain?${WINDOW}&source=archive&date=${TRADING_DATE}&expiry=${EXPIRY_MS['2026-10-16']}`);

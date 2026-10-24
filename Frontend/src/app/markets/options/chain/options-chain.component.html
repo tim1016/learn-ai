@@ -31,6 +31,6 @@
   }
   @case ('past-live') { <app-workspace-state-block [state]="pastLiveState" /> }
   @default {
-    @if (invalidState(); as state) { <app-workspace-state-block [state]="state" /> }
+    @if (invalidState(); as state) { <app-workspace-state-block [state]="state" (actionTriggered)="onAction($event)" /> }
   }
 }

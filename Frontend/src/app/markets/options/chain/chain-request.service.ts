@@ -3,7 +3,7 @@ import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router, type Params } from '@angular/router';
 
 import type { ChainMode } from './chain-modes';
-import { readChainRequest } from './chain-request';
+import { readChainRequest, type ChainKey } from './chain-request';
 
 /**
  * The chain page's one reader of its address and one writer of it.
@@ -24,13 +24,26 @@ export class ChainRequestService {
   /** What the address asks the chain for. */
   readonly request = computed(() => readChainRequest(this.query()));
 
+  /** The keys the address holds that cannot be read as they stand, each to be dropped (`null`); none when the address is usable. */
+  private readonly unusable = computed<Params>(() => {
+    const request = this.request();
+    return request.kind === 'invalid' ? Object.fromEntries(request.unusable.map((key: ChainKey) => [key, null])) : {};
+  });
+
   /**
    * Chooses a mode. The expiry stays, so the contract is the same one under another source;
    * leaving the archive puts its date and instant away, since no other source has either.
+   * A key that cannot be read as it stands (a mistyped expiry, an instant off its session) goes,
+   * so choosing a mode is always a way out of an address the chain cannot read.
    */
   chooseMode(mode: ChainMode): void {
     if (mode.unavailable !== null) return;
-    this.write(mode.source === 'archive' ? { source: 'archive' } : { source: mode.source, date: null, at: null });
+    this.write({ ...this.unusable(), ...(mode.source === 'archive' ? { source: 'archive' } : { source: mode.source, date: null, at: null }) });
+  }
+
+  /** Drops the keys that cannot be read, and nothing else; the source, if it was readable, stays. */
+  clearUnusable(): void {
+    this.write(this.unusable());
   }
 
   pickExpiry(expiryMs: number): void {

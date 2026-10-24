@@ -5,10 +5,20 @@ import type { WorkspaceStateContent } from '../../../shared/workspace/workspace-
 import { InstrumentContextService } from '../../instrument-context.service';
 import { ArchiveChainComponent } from './archive/archive-chain.component';
 import { ChainModeSwitchComponent } from './chain-mode-switch.component';
-import { chainModeOf } from './chain-request';
+import { chainModeOf, type ChainKey } from './chain-request';
 import { ChainRequestService } from './chain-request.service';
 import { LiveChainComponent } from './live/live-chain.component';
 import { SnapshotChainComponent } from './snapshot/snapshot-chain.component';
+
+const CLEAR_UNUSABLE = 'clear-unusable';
+
+const KEY_NAMES: Readonly<Record<ChainKey, string>> = { source: 'the source', expiry: 'the expiry', date: 'the session date', at: 'the instant' };
+
+/** The keys a way out would drop, in words: `the expiry and the instant`. */
+function unusableNames(keys: readonly ChainKey[]): string {
+  const names = keys.map((key) => KEY_NAMES[key]);
+  return names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+}
 
 /** A past instant is never read from the live feed, and the present's chain is never shown under a past date. */
 const PAST_LIVE_STATE: WorkspaceStateContent = {
@@ -52,8 +62,13 @@ export class OptionsChainComponent {
           kind: 'invalid',
           happened: 'The chain asked for in this address cannot be read, so nothing is loaded.',
           why: request.problems.join(' '),
-          next: 'Choose a source above. Nothing is substituted for what the address asked for.',
+          next: `Choose a source above${request.unusable.length > 0 ? `, or clear ${unusableNames(request.unusable)}` : ''}. Nothing is substituted for what the address asked for.`,
+          actions: request.unusable.length > 0 ? [{ id: CLEAR_UNUSABLE, label: `Clear ${unusableNames(request.unusable)}` }] : [],
         }
       : null;
   });
+
+  protected onAction(id: string): void {
+    if (id === CLEAR_UNUSABLE) this.requests.clearUnusable();
+  }
 }

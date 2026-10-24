@@ -22,6 +22,9 @@ const DEFAULT_CHAIN_SOURCE: ChainSource = 'snapshot';
 
 const SOURCES: readonly ChainSource[] = ['snapshot', 'live', 'archive'];
 
+/** The address keys the chain reads. */
+export type ChainKey = 'source' | 'expiry' | 'date' | 'at';
+
 /** What an address asks for. Each kind is one way the chain can be asked, and `invalid` is none of them. */
 export type ChainRequest =
   /** Now · Snapshot: the current provider snapshot. `expiryMs` null: the nearest expiry, which the chain says it chose. */
@@ -32,8 +35,12 @@ export type ChainRequest =
   | { readonly kind: 'live'; readonly expiryMs: number | null }
   /** Live IBKR asked for a past date or instant: no such chain exists, and the present's is not shown for it. */
   | { readonly kind: 'past-live'; readonly expiryMs: number | null; readonly date: string | null; readonly atMs: number | null }
-  /** The address names something unusable: `problems` say what; `source` is the source it named when it named one. */
-  | { readonly kind: 'invalid'; readonly source: ChainSource | null; readonly problems: readonly string[] };
+  /**
+   * The address names something unusable: `problems` say what; `source` is the source it named when it named one;
+   * `unusable` are the keys that cannot be read as they stand, which a way out may drop. A source asked for a past
+   * it does not have names no such key: choosing another source repairs it.
+   */
+  | { readonly kind: 'invalid'; readonly source: ChainSource | null; readonly problems: readonly string[]; readonly unusable: readonly ChainKey[] };
 
 type Part<T> = { readonly ok: true; readonly value: T | null } | { readonly ok: false; readonly problem: string };
 
@@ -59,21 +66,34 @@ export function readChainRequest(query: QueryReader): ChainRequest {
   const at = readInstant(query.get('at'), 'instant');
 
   const problems: string[] = [];
-  if (source === null) problems.push(`The source "${sourceText}" is not one this chain offers: snapshot, live or archive.`);
-  for (const part of [expiry, date, at]) if (!part.ok) problems.push(part.problem);
-  if (!expiry.ok || !date.ok || !at.ok) return { kind: 'invalid', source, problems };
+  const unusable: ChainKey[] = [];
+  if (source === null) {
+    problems.push(`The source "${sourceText}" is not one this chain offers: snapshot, live or archive.`);
+    unusable.push('source');
+  }
+  for (const [key, part] of [['expiry', expiry], ['date', date], ['at', at]] as const) {
+    if (!part.ok) {
+      problems.push(part.problem);
+      unusable.push(key);
+    }
+  }
+  if (!expiry.ok || !date.ok || !at.ok) return { kind: 'invalid', source, problems, unusable };
 
   const expiryMs = expiry.value;
   const atMs = at.value;
-  if (atMs !== null && date.value === null) problems.push('A time of day needs the session date it falls on.');
+  if (atMs !== null && date.value === null) {
+    problems.push('A time of day needs the session date it falls on.');
+    unusable.push('at');
+  }
   if (atMs !== null && date.value !== null && etIsoDate(atMs) !== date.value) {
     problems.push(`The instant is not on the session date ${date.value} in New York.`);
+    unusable.push('at');
   }
   const asksForThePast = date.value !== null || atMs !== null;
   if (source === 'snapshot' && asksForThePast) {
     problems.push('A session date or an instant names the past, and Now · Snapshot is the current chain only. Choose Past · Archive to read a past date.');
   }
-  if (source === null || problems.length > 0) return { kind: 'invalid', source, problems };
+  if (source === null || problems.length > 0) return { kind: 'invalid', source, problems, unusable };
 
   if (source === 'archive') return { kind: 'archive', expiryMs, date: date.value, atMs };
   if (source === 'live') {
