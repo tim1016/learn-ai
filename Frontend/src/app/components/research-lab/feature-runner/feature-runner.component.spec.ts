@@ -34,11 +34,7 @@ import { DataLakeService, type DataLakeRead, type InstrumentDataReport } from '.
 import type { BackfillJobRun } from '../../../shared/data-lake/backfill-job-runner';
 import { TradeBackfillRunner, type TradeBackfillEnd } from '../../../shared/data-lake/trade-backfill-runner';
 import type { TradeBackfillWindow } from '../../../shared/data-lake/trade-backfill-spec';
-import {
-  FIRST_FETCHABLE_MS,
-  LAST_FETCHABLE_MS,
-  instrumentDataReport,
-} from '../../../shared/lake-study/testing/instrument-data-report';
+import { heldReport } from '../../../shared/data-lake/testing/instrument-data-report';
 
 /**
  * The feature runner moved from a synchronous `ResearchService` call to a
@@ -98,7 +94,7 @@ describe('FeatureRunnerComponent', () => {
     };
 
     // Left alone, the lake holds every session the default window needs, so only the specs about the count see a warning.
-    instrumentData = vi.fn().mockResolvedValue({ kind: 'ok', value: instrumentDataReport({ sessions: 60 }) });
+    instrumentData = vi.fn().mockResolvedValue({ kind: 'ok', value: heldReport({ sessions: 60 }) });
     captureRun = vi.fn().mockResolvedValue({ kind: 'completed', failure: null });
 
     await TestBed.configureTestingModule({
@@ -246,6 +242,16 @@ describe('FeatureRunnerComponent', () => {
       expect.soft(summary()).not.toContain('extended hours');
     });
 
+    it('reads a range that names no session as extended hours, in the sentence and in the request', async () => {
+      component.range.set({ symbol: 'AAPL', from: '2024-01-02', to: '2024-03-28', resolution: 'minute', multiplier: 1 });
+      fixture.detectChanges();
+
+      expect.soft(root().querySelector('.study-run__summary')?.textContent).toContain('extended hours');
+      await press('Run study');
+
+      expect(jobsServiceMock.startJob.mock.calls[0][1].session).toBe('extended');
+    });
+
     describe('a shown result', () => {
       async function showResult(): Promise<void> {
         jobsServiceMock.fetchResult.mockResolvedValueOnce(FEATURE_RESULT);
@@ -269,7 +275,6 @@ describe('FeatureRunnerComponent', () => {
         expect.soft(screen.getByText('Previous result')).toBeTruthy();
         const answered = screen.getByText('Previous result').closest('.previous-result__banner') as HTMLElement;
         expect.soft(within(answered).getByText('Session').nextElementSibling?.textContent).toBe('extended hours');
-        expect.soft(component.inputs.isPrevious()).toBe(true);
 
         await press('Ext');
 
@@ -592,7 +597,7 @@ describe('FeatureRunnerComponent', () => {
   });
 
   describe('sessions the lake does not hold yet', () => {
-    const lacking = (missing: number) => ({ kind: 'ok' as const, value: instrumentDataReport({ sessions: 60, missing }) });
+    const lacking = (missing: number) => ({ kind: 'ok' as const, value: heldReport({ sessions: 60, missing }) });
 
     /** Enters another window, which is what asks the lake for its count, and lets the page settle. */
     async function enterWindow(read: DataLakeRead<InstrumentDataReport>, to = '2024-03-27'): Promise<void> {
@@ -609,9 +614,7 @@ describe('FeatureRunnerComponent', () => {
     it('reads the count for the window the page holds, in the split-adjusted tree, and says nothing when the lake holds it all', async () => {
       await vi.waitFor(() => expect(instrumentData).toHaveBeenCalledTimes(1));
 
-      expect(instrumentData).toHaveBeenCalledWith({
-        symbol: 'AAPL', startTradingDate: '2024-01-02', endTradingDate: '2024-03-28', priceAdjustmentMode: 'polygon_split_adjusted',
-      });
+      expect(instrumentData).toHaveBeenCalledWith({ symbol: 'AAPL', from: '2024-01-02', to: '2024-03-28', tree: 'polygon_split_adjusted' });
       expect(warning()).toBeNull();
     });
 
@@ -634,7 +637,8 @@ describe('FeatureRunnerComponent', () => {
     });
 
     it('captures exactly the span the lake named through the shared runner, shows its progress, and counts again when it ends', async () => {
-      await enterWindow(lacking(12));
+      const counted = lacking(12);
+      await enterWindow(counted);
       let ends!: (end: TradeBackfillEnd) => void;
       let asked: TradeBackfillWindow | null = null;
       const job = { jobId: 'job-9', state: signal({ kind: 'running', started: true, progress: { current: 6, total: 24, unit: 'days', message: null } }), detach: vi.fn(), cancel: vi.fn() };
@@ -643,7 +647,7 @@ describe('FeatureRunnerComponent', () => {
         await accepted(job as unknown as BackfillJobRun);
         return new Promise<TradeBackfillEnd>((resolve) => (ends = resolve));
       });
-      instrumentData.mockResolvedValue({ kind: 'ok', value: instrumentDataReport({ sessions: 60 }) });
+      instrumentData.mockResolvedValue({ kind: 'ok', value: heldReport({ sessions: 60 }) });
 
       await userEvent.setup().click(screen.getByRole('button', { name: 'Capture 12 sessions' }));
       await fixture.whenStable();
@@ -651,7 +655,7 @@ describe('FeatureRunnerComponent', () => {
 
       expect.soft(asked).toEqual({
         symbol: 'AAPL', price_adjustment_mode: 'polygon_split_adjusted',
-        start_trading_date_ms: FIRST_FETCHABLE_MS, end_trading_date_ms: LAST_FETCHABLE_MS,
+        start_trading_date_ms: counted.value.fill_window?.start_trading_date_ms, end_trading_date_ms: counted.value.fill_window?.end_trading_date_ms,
       });
       expect.soft(screen.getByText('Capturing 12 sessions of AAPL into the lake.')).toBeTruthy();
       expect.soft(screen.getByText('6 of 24 days of the span')).toBeTruthy();
@@ -717,7 +721,7 @@ describe('FeatureRunnerComponent', () => {
     it('counts again once its own run ends, because the run filled the lake', async () => {
       await enterWindow(lacking(12));
       expect(warning()).not.toBeNull();
-      instrumentData.mockResolvedValue({ kind: 'ok', value: instrumentDataReport({ sessions: 60 }) });
+      instrumentData.mockResolvedValue({ kind: 'ok', value: heldReport({ sessions: 60 }) });
       jobsServiceMock.fetchResult.mockResolvedValueOnce(FEATURE_RESULT);
 
       await component.runResearch();

@@ -4,6 +4,7 @@ import { firstValueFrom } from 'rxjs';
 
 import { environment } from '../../../environments/environment';
 import type { components } from '../../api/broker.types';
+import type { InstrumentDataRequest } from './instrument-data-request';
 import { tradingDateToMs } from './trading-range';
 import type {
   ArtifactDetail,
@@ -42,15 +43,6 @@ export interface CoverageQuery {
 
 /** One instrument's data for a window, as Python reads it (`GET /api/data-lake/instrument-data`). */
 export type InstrumentDataReport = components['schemas']['InstrumentDataResponse'];
-
-export interface InstrumentDataQuery {
-  readonly symbol: string;
-  /** `YYYY-MM-DD`, both included; converted to `int64 ms UTC` at the HTTP seam, as `coverage` does. */
-  readonly startTradingDate: string;
-  readonly endTradingDate: string;
-  /** The trees the fetch pipeline writes; there is no default, for the reason `CoverageQuery` gives. */
-  readonly priceAdjustmentMode: 'raw' | 'polygon_split_adjusted';
-}
 
 /** The `{reason, message}` object every typed data-lake rejection puts in `detail`. */
 export interface DataLakeProblem {
@@ -106,9 +98,9 @@ export class DataLakeService {
    * Which of the window's scheduled sessions a run can read, which it cannot and
    * why, and the span a Fill would ask for. Read-only: nothing is fetched or written.
    */
-  async instrumentData(query: InstrumentDataQuery): Promise<DataLakeRead<InstrumentDataReport>> {
-    const startMs = tradingDateToMs(query.startTradingDate);
-    const endMs = tradingDateToMs(query.endTradingDate);
+  async instrumentData(request: InstrumentDataRequest): Promise<DataLakeRead<InstrumentDataReport>> {
+    const startMs = tradingDateToMs(request.from);
+    const endMs = tradingDateToMs(request.to);
     if (startMs === null || endMs === null) {
       return {
         kind: 'rejected',
@@ -120,10 +112,10 @@ export class DataLakeService {
       firstValueFrom(
         this.http.get<InstrumentDataReport>(`${this.base}/instrument-data`, {
           params: {
-            symbol: query.symbol,
+            symbol: request.symbol,
             start_trading_date_ms: startMs,
             end_trading_date_ms: endMs,
-            price_adjustment_mode: query.priceAdjustmentMode,
+            price_adjustment_mode: request.tree,
           },
         }),
       ),

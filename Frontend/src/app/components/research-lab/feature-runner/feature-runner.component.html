@@ -82,8 +82,8 @@
       }
     }
 
-    @if (refusal(); as refused) {
-      <app-lake-study-source [refusal]="refused.refusal" [session]="refusedSession()" />
+    @if (refusal(); as shown) {
+      <app-lake-study-source [refusal]="shown.refused.refusal" [session]="shown.session" />
     } @else if (error(); as err) {
       <p-message severity="error">{{ err }}</p-message>
     }

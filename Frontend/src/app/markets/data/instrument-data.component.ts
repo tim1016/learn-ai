@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, effect, inject, untracked } from '@angular/core';
 
+import type { InstrumentDataRequest, LakeTree } from '../../shared/data-lake';
 import { formatReceiptLabel } from '../../shared/pipes/receipt-label.pipe';
 import type { WorkspaceStateContent } from '../../shared/workspace/workspace-state';
 import { WorkspaceStateBlockComponent } from '../../shared/workspace/workspace-state-block.component';
@@ -8,12 +9,11 @@ import { InstrumentContextService } from '../instrument-context.service';
 import { DataFillComponent } from './data-fill.component';
 import { DataGapsComponent } from './data-gaps.component';
 import { DataSummaryComponent } from './data-summary.component';
-import type { AdjustmentTree } from './instrument-data';
-import { InstrumentDataStore, type InspectionRequest } from './instrument-data.store';
+import { InstrumentDataStore } from './instrument-data.store';
 import { QualityEvidenceComponent } from './quality-evidence/quality-evidence.component';
 
 /** The lake trees the place can read. The choice is the context's, so the Chart and this tab read the same one. */
-const TREE_CHOICES: readonly { readonly value: AdjustmentTree; readonly label: string }[] = [
+const TREE_CHOICES: readonly { readonly value: LakeTree; readonly label: string }[] = [
   { value: 'polygon_split_adjusted', label: 'Split-adjusted' },
   { value: 'raw', label: 'Raw' },
 ];
@@ -54,10 +54,10 @@ export class InstrumentDataComponent {
   protected readonly treeChoices = TREE_CHOICES;
   protected readonly inspection = this.store.inspection;
 
-  protected readonly tree = computed<AdjustmentTree>(() => this.context.shown().adjustment);
+  protected readonly tree = computed<LakeTree>(() => this.context.shown().adjustment);
 
   /** What the lake is asked about: the committed window of the address and this tab's tree. */
-  protected readonly request = computed<InspectionRequest | null>(() => {
+  protected readonly request = computed<InstrumentDataRequest | null>(() => {
     const context = this.context.context();
     return context === null
       ? null

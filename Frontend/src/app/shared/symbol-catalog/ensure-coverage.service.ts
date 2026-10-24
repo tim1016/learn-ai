@@ -307,7 +307,8 @@ export class EnsureCoverageService {
     );
     if (!this.live(entry)) return false;
     switch (end.kind) {
-      case 'failed': return this.fail(entry, end.code, end.message);
+      case 'failed':
+      case 'cancelled': return this.fail(entry, end.code, end.message);
       case 'detached': return false;
       case 'completed': return this.settle(symbol, mode, entry, end.failure);
     }

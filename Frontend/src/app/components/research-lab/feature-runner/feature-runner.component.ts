@@ -50,8 +50,9 @@ import type { DataSourceProvenance } from '../../../shared/workspace/data-source
 import { LakeStudySourceComponent } from '../../../shared/lake-study/lake-study-source.component';
 import { LakeHoldingNoticeComponent } from '../../../shared/lake-study/lake-holding-notice.component';
 import { createLakeHolding } from '../../../shared/lake-study/create-lake-holding';
-import type { LakeHoldingRequest } from '../../../shared/lake-study/lake-holding';
+import type { InstrumentDataRequest } from '../../../shared/data-lake';
 import {
+  LAKE_STUDY_TREE,
   readLakeStudyRefusal,
   SESSION_POLICY_FOR_REQUEST,
   sessionPolicyWords,
@@ -59,12 +60,7 @@ import {
   type LakeSessionPolicy,
   type LakeStudyRefused,
 } from '../../../shared/lake-study/lake-study';
-import featureBarMinutes from '@repo-contracts/feature-study-bar-minutes.json';
-
-/** A range's session as the request reads it: the wire adapter's default for a range that names none. This page always names one. */
-function sessionOf(range: TickerRange): Session {
-  return range.session ?? 'rth';
-}
+import featureBarMinutes from '@repo-contracts/fixtures/feature-study-bar-minutes-v1.json';
 
 /** The session a saved run computed on: the one it names, or extended, which is what the study computed on before it named one. */
 function storedSession(stored: StoredInputs): Session {
@@ -78,7 +74,10 @@ function storedSession(stored: StoredInputs): Session {
 
 /** What a Feature study's request is made from: the inputs a shown result answers. */
 interface FeatureStudyInputs {
-  readonly range: TickerRange;
+  /** Always names its session, so the wire never falls back to the adapter's `rth` default. */
+  readonly range: TickerRange & { readonly session: Session };
+  /** What the range's session asks the lake for. */
+  readonly policy: LakeSessionPolicy;
   readonly indicator: string;
   readonly params: Record<string, number>;
 }
@@ -141,7 +140,7 @@ export class FeatureRunnerComponent {
   /**
    * The bar lengths the study accepts: the study looks 15 minutes ahead, so a bar must divide 15 minutes, and hour,
    * daily, ×60 and ×240 bars always fail (#3527). The list is the server's `SUPPORTED_BAR_MINUTES`, which a data-plane
-   * test pins to this file.
+   * test pins to this file (`contracts/fixtures`).
    */
   readonly availableMultipliers: readonly number[] = featureBarMinutes.bar_minutes;
   readonly availableResolutions: readonly Resolution[] = ['minute'];
@@ -189,17 +188,18 @@ export class FeatureRunnerComponent {
   readonly jobId = signal<string | null>(null);
   readonly result = signal<ResearchResult | null>(null);
   readonly error = signal<string | null>(null);
-  /** Why the lake could not supply the window, when the run failed on that; read from the payload the failed job parked. */
-  readonly refusal = signal<LakeStudyRefused | null>(null);
-  /** The session the refusal judged: the one its source records, or the one the run asked for when nothing was read. */
-  readonly refusedSession = signal<LakeSessionPolicy | null>(null);
+  /**
+   * Why the lake could not supply the window, when the run failed on that; read from the payload the failed job
+   * parked, with the session it judged: the one its source records, or the one the run asked for when nothing was read.
+   */
+  readonly refusal = signal<{ readonly refused: LakeStudyRefused; readonly session: LakeSessionPolicy | null } | null>(null);
 
   /**
    * The data-source line for what is on screen: the shown result's lake source, or the source a refused run was
    * refused against. `undefined` before either exists, which leaves the study's own pre-run line.
    */
   readonly dataSource = computed<DataSourceProvenance | undefined>(() => {
-    const source = this.result()?.dataSource ?? this.refusal()?.dataSource ?? null;
+    const source = this.result()?.dataSource ?? this.refusal()?.refused.dataSource ?? null;
     return source === null ? undefined : toDataSourceProvenance(source);
   });
 
@@ -225,18 +225,24 @@ export class FeatureRunnerComponent {
   readonly starting = this.gate.starting;
 
   /** The inputs the shown result answers; a result is "previous" once these change. */
-  private readonly enteredInputs = computed<FeatureStudyInputs>(() => ({
-    range: this.range(),
-    indicator: this.selectedIndicator(),
-    params: this.selectedParams(),
-  }));
-  readonly inputs = createResultInputTracker(this.enteredInputs, ({ range, indicator, params }) => ({
-    key: JSON.stringify([range.symbol.toUpperCase(), range.from, range.to, range.resolution, range.multiplier ?? 1, sessionOf(range), indicator, params]),
+  private readonly enteredInputs = computed<FeatureStudyInputs>(() => {
+    const range = this.range();
+    // A range that names no session is extended hours, which is what the study computed on before it named one.
+    const session = range.session ?? 'extended';
+    return {
+      range: { ...range, session },
+      policy: SESSION_POLICY_FOR_REQUEST[session],
+      indicator: this.selectedIndicator(),
+      params: this.selectedParams(),
+    };
+  });
+  readonly inputs = createResultInputTracker(this.enteredInputs, ({ range, policy, indicator, params }) => ({
+    key: JSON.stringify([range.symbol.toUpperCase(), range.from, range.to, range.resolution, range.multiplier ?? 1, policy, indicator, params]),
     facts: [
       { label: 'Instrument', value: range.symbol.toUpperCase() },
       { label: 'Window', value: `${range.from} to ${range.to}` },
       { label: 'Bars', value: `${range.multiplier ?? 1} minute` },
-      { label: 'Session', value: sessionPolicyWords(SESSION_POLICY_FOR_REQUEST[sessionOf(range)]) },
+      { label: 'Session', value: sessionPolicyWords(policy) },
       { label: 'Indicator', value: `${indicator} ${JSON.stringify(params)}` },
     ],
   }));
@@ -280,10 +286,10 @@ export class FeatureRunnerComponent {
    * Read once per instrument or window; it warns and never holds up Run study.
    */
   readonly holding = createLakeHolding(
-    computed<LakeHoldingRequest | null>(() => {
+    computed<InstrumentDataRequest | null>(() => {
       if (!this.windowEntered()) return null;
       const r = this.range();
-      return { symbol: r.symbol.trim().toUpperCase(), from: r.from, to: r.to, tree: 'polygon_split_adjusted' };
+      return { symbol: r.symbol.trim().toUpperCase(), from: r.from, to: r.to, tree: LAKE_STUDY_TREE };
     }),
   );
 
@@ -301,9 +307,8 @@ export class FeatureRunnerComponent {
 
   /** What step 3 says is about to run. */
   readonly readySummary = computed(() => {
-    const r = this.range();
-    const session = sessionPolicyWords(SESSION_POLICY_FOR_REQUEST[sessionOf(r)]);
-    return `${this.selectedFeatureLabel} on ${r.symbol.toUpperCase()}, ${r.from} to ${r.to}, ${session}`;
+    const { range, policy } = this.enteredInputs();
+    return `${this.selectedFeatureLabel} on ${range.symbol.toUpperCase()}, ${range.from} to ${range.to}, ${sessionPolicyWords(policy)}`;
   });
 
   /** Why Run study cannot start, in words that point at the step to fix. */
@@ -428,7 +433,6 @@ export class FeatureRunnerComponent {
   private async startResearch(): Promise<void> {
     this.error.set(null);
     this.refusal.set(null);
-    this.refusedSession.set(null);
     this.result.set(null);
     this.inputs.clear();
     this.logBuffer.clear();
@@ -445,11 +449,7 @@ export class FeatureRunnerComponent {
       // alias-removal commit.
       const submitted = this.enteredInputs();
       // The run admits exactly the session the person chose from the lake, and the saved run records it.
-      const wire = tickerRangeToWire({
-        ...submitted.range,
-        symbol: submitted.range.symbol.toUpperCase(),
-        session: sessionOf(submitted.range),
-      });
+      const wire = tickerRangeToWire({ ...submitted.range, symbol: submitted.range.symbol.toUpperCase() });
       const parent = this.prefill.parent();
       const id = await this.jobsService.startJob('feature_research', {
         ...wire,
@@ -501,9 +501,7 @@ export class FeatureRunnerComponent {
     try {
       const refused = readLakeStudyRefusal(await this.jobsService.fetchResult<unknown>(id));
       if (refused !== null && this.jobId() === id) {
-        this.refusal.set(refused);
-        const asked = this.submitted === null ? null : SESSION_POLICY_FOR_REQUEST[sessionOf(this.submitted.range)];
-        this.refusedSession.set(refused.dataSource?.sessionPolicy ?? asked);
+        this.refusal.set({ refused, session: refused.dataSource?.sessionPolicy ?? this.submitted?.policy ?? null });
       }
     } catch (err: unknown) {
       if (err instanceof HttpErrorResponse && err.status === 404) return;

@@ -2,17 +2,17 @@ import { signal, type WritableSignal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { describe, expect, it, vi } from 'vitest';
 
-import { DataLakeService, type DataLakeRead, type InstrumentDataReport } from '../data-lake';
+import { DataLakeService, type DataLakeRead, type InstrumentDataReport, type InstrumentDataRequest } from '../data-lake';
 import type { BackfillJobRun, BackfillRunState } from '../data-lake/backfill-job-runner';
+import { heldReport } from '../data-lake/testing/instrument-data-report';
 import { TradeBackfillRunner, type TradeBackfillEnd } from '../data-lake/trade-backfill-runner';
 import type { TradeBackfillWindow } from '../data-lake/trade-backfill-spec';
 import { fakeTickerCatalog, provideFakeTickerCatalog } from '../ticker-catalog/testing/fake-ticker-catalog';
 import { createLakeHolding, type LakeHoldingControl } from './create-lake-holding';
-import type { LakeHoldingRequest } from './lake-holding';
-import { FIRST_FETCHABLE_MS, LAST_FETCHABLE_MS, instrumentDataReport } from './testing/instrument-data-report';
 
-const REQUEST: LakeHoldingRequest = { symbol: 'SPY', from: '2024-03-04', to: '2024-03-15', tree: 'polygon_split_adjusted' };
-const LACKING: InstrumentDataReport = instrumentDataReport({ sessions: 60, missing: 12 });
+const REQUEST: InstrumentDataRequest = { symbol: 'SPY', from: '2024-03-04', to: '2024-03-15', tree: 'polygon_split_adjusted' };
+const LACKING: InstrumentDataReport = heldReport({ sessions: 60, missing: 12 });
+const SPAN = LACKING.fill_window;
 
 /** The shared backfill runner as a page meets it: it takes the window the page names, hands over a job, and ends when told to. */
 function fakeRunner() {
@@ -39,7 +39,7 @@ function setup(first: DataLakeRead<InstrumentDataReport> = { kind: 'ok', value: 
       provideFakeTickerCatalog(catalog),
     ],
   });
-  const request = signal<LakeHoldingRequest | null>(REQUEST);
+  const request = signal<InstrumentDataRequest | null>(REQUEST);
   const control: LakeHoldingControl = TestBed.runInInjectionContext(() => createLakeHolding(request));
   const settle = async (kind: string) => {
     TestBed.tick();
@@ -54,9 +54,7 @@ describe('createLakeHolding', () => {
 
     await settle('read');
     expect(instrumentData).toHaveBeenCalledTimes(1);
-    expect(instrumentData).toHaveBeenCalledWith({
-      symbol: 'SPY', startTradingDate: '2024-03-04', endTradingDate: '2024-03-15', priceAdjustmentMode: 'polygon_split_adjusted',
-    });
+    expect(instrumentData).toHaveBeenCalledWith(REQUEST);
 
     request.set({ ...REQUEST });
     TestBed.tick();
@@ -110,7 +108,8 @@ describe('createLakeHolding', () => {
       await vi.waitFor(() => expect(control.capture().kind).toBe('running'));
 
       expect.soft(runner.asked()).toEqual({
-        symbol: 'SPY', price_adjustment_mode: 'polygon_split_adjusted', start_trading_date_ms: FIRST_FETCHABLE_MS, end_trading_date_ms: LAST_FETCHABLE_MS,
+        symbol: 'SPY', price_adjustment_mode: 'polygon_split_adjusted',
+        start_trading_date_ms: SPAN?.start_trading_date_ms, end_trading_date_ms: SPAN?.end_trading_date_ms,
       });
       expect.soft(control.capture()).toEqual({ kind: 'running', symbol: 'SPY', sessions: 12 });
       expect.soft(control.progress()).toBeNull();
@@ -141,7 +140,7 @@ describe('createLakeHolding', () => {
     });
 
     it('starts nothing when the count names no session to capture, or has not been read', async () => {
-      const { runner, control, settle } = setup({ kind: 'ok', value: instrumentDataReport({ sessions: 60, beforeProviderHistory: 3 }) });
+      const { runner, control, settle } = setup({ kind: 'ok', value: heldReport({ sessions: 60, beforeProviderHistory: 3 }) });
 
       await control.startCapture();
       await settle('read');
@@ -152,7 +151,7 @@ describe('createLakeHolding', () => {
 
     it.each([
       ['fails', { kind: 'failed', code: 'backfill_failed', message: 'the provider refused the key' } as const, false, 'the provider refused the key'],
-      ['is cancelled', { kind: 'failed', code: 'backfill_cancelled', message: 'The backfill was cancelled.' } as const, true, 'The backfill was cancelled.'],
+      ['is cancelled', { kind: 'cancelled', code: 'backfill_cancelled', message: 'The backfill was cancelled.' } as const, true, 'The backfill was cancelled.'],
     ])('keeps a capture that %s in view until it is dismissed', async (_name, end, cancelled, message) => {
       const { runner, control, settle } = setup();
       await settle('read');
@@ -205,6 +204,26 @@ describe('createLakeHolding', () => {
 
       const stopped = control.capture();
       expect(stopped.kind === 'stopped' && stopped.message).toContain('may still be running');
+    });
+
+    it('starts no second capture after a cancel the server refused, because the first job may still be writing', async () => {
+      const { runner, control, settle } = setup();
+      await settle('read');
+      const first = control.startCapture();
+      await vi.waitFor(() => expect(control.capture().kind).toBe('running'));
+      runner.job.cancel.mockRejectedValueOnce(new Error('Network error'));
+      await control.cancelCapture();
+      control.dismissCapture();
+      expect(control.capture(), 'the note is put away').toEqual({ kind: 'idle' });
+
+      await control.startCapture();
+
+      expect.soft(runner.run, 'the first job has not ended').toHaveBeenCalledTimes(1);
+      runner.end({ kind: 'completed', failure: null });
+      await first;
+      void control.startCapture();
+      await vi.waitFor(() => expect(runner.run, 'once it has ended the person may capture again').toHaveBeenCalledTimes(2));
+      runner.end({ kind: 'completed', failure: null });
     });
   });
 

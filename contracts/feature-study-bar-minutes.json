@@ -1,4 +1,0 @@
-{
- "canonical": "PythonDataService/app/services/feature_study_service.py::SUPPORTED_BAR_MINUTES",
- "bar_minutes": [1, 3, 5, 15]
-}

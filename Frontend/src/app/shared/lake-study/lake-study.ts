@@ -12,6 +12,7 @@
  *
  * Nothing here derives a fact. A time the server did not record is `null`.
  */
+import type { LakeTree } from '../data-lake';
 import type { Session } from '../ticker-range-picker/ticker-range-picker.types';
 import type { DataSourceProvenance } from '../workspace/data-source-provenance';
 
@@ -43,6 +44,9 @@ export const SESSION_POLICY_FOR_REQUEST: Readonly<Record<Session, LakeSessionPol
   rth: 'regular',
   extended: 'extended',
 };
+
+/** The lake tree a lake study reads: split-adjusted, the server's default for a study's `price_adjustment_mode`. */
+export const LAKE_STUDY_TREE: LakeTree = 'polygon_split_adjusted';
 
 /** A session in the reader's words, for a summary line or a refusal. */
 export function sessionPolicyWords(policy: LakeSessionPolicy): string {
