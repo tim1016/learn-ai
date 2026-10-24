@@ -161,7 +161,7 @@ class JsonlIvSnapshotStore(IvSnapshotStore):
         # legitimate use.
 
     def _file_for(self, ticker: str) -> Path:
-        # The ticker reaches here from request bodies (edge.py), so a
+        # The ticker reaches here from request bodies (the Realized vs IV job), so a
         # ``../`` ticker must not read or append outside ``base_dir``.
         return confine_path_to_root(self.base_dir / f"{ticker}.jsonl", self.base_dir, label="IV recorder ticker")
 
@@ -209,8 +209,8 @@ _default_store: IvSnapshotStore = JsonlIvSnapshotStore(_DEFAULT_STORE_PATH)
 
 def get_iv_store() -> IvSnapshotStore:
     """Return the process-wide recorder store. Both the recorder router
-    (writes) and consumer routers like edge.py (reads) share this singleton
-    so a single test injection swaps both sides."""
+    (writes) and consumers like the Realized vs IV study (reads) share this
+    singleton so a single test injection swaps both sides."""
     return _default_store
 
 

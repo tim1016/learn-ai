@@ -1,13 +1,12 @@
-"""Tests for the recorder fallback in edge.py.
+"""The Realized vs IV series composition and where its IV comes from (ADR 0071 decisions 9 and 11; #3525).
 
-Covers the realized-vs-iv router auto-reading from the recorder when
-``iv_series`` is omitted, plus the imputed-prior policy on
-``health_score`` (ADR 0071 Decision 11). Exercises:
+These were the route-level tests of ``POST /api/edge/realized-vs-iv/series``, which #3525 retired when the study began
+reading admitted lake bars. They keep the same assertions at the seams that exist now:
 
-- The pure helper ``_iv_series_from_recorder`` (precedence + skip rules).
-- The realized-vs-iv route's ``iv_source`` field across the three states:
-  ``caller_supplied`` (caller wins), ``recorder`` (fallback fires),
-  ``absent`` (recorder empty).
+* ``recorded_iv_points`` and ``load_iv_input`` (``app.services.realized_vs_iv_study_service``) read the recorder;
+* ``compute_realized_vs_iv_series`` (``app.engine.edge.realized_vs_iv_series``) composes the series.
+
+The lake-sourced study around them is tested in ``tests/research/test_realized_vs_iv_study.py``.
 """
 
 from __future__ import annotations
@@ -15,16 +14,14 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pytest
-from httpx import ASGITransport, AsyncClient
 
-from app.main import app
-from app.routers.edge import _iv_series_from_recorder
-from app.services.iv_recorder import (
-    InMemoryIvSnapshotStore,
-    RecordedIvSnapshot,
-    get_iv_store,
-    set_iv_store,
-)
+from app.engine.edge.realized_vs_iv_series import _parse_iv_series, compute_realized_vs_iv_series
+from app.services.iv_recorder import InMemoryIvSnapshotStore, RecordedIvSnapshot, get_iv_store, set_iv_store
+from app.services.realized_vs_iv_study_service import load_iv_input, recorded_iv_points
+from app.utils.session_anchors import et_date_at_ms
+
+START_MS = 1_700_000_000_000
+DAY_MS = 86_400_000
 
 
 @pytest.fixture
@@ -39,30 +36,38 @@ def recorder_store():
         set_iv_store(original)
 
 
-@pytest.fixture
-async def client():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        yield ac
-
-
-def _bars(n: int, start_ms: int = 1_700_000_000_000, step_ms: int = 86_400_000) -> list[dict]:
+def _bars(n: int, start_ms: int = START_MS, step_ms: int = DAY_MS) -> pd.DataFrame:
     """Synthetic daily OHLCV with mild drift so RV estimators have signal."""
     rng = np.random.default_rng(seed=42)
     closes = 100.0 * np.exp(np.cumsum(rng.normal(0, 0.01, size=n)))
-    bars: list[dict] = []
-    for i, c in enumerate(closes):
-        ts = start_ms + i * step_ms
-        bars.append(
-            {
-                "ts": int(ts),
-                "open": float(c * 0.999),
-                "high": float(c * 1.005),
-                "low": float(c * 0.995),
-                "close": float(c),
-                "volume": 1_000_000.0,
-            }
-        )
-    return bars
+    index = pd.Index([start_ms + i * step_ms for i in range(n)], name="ts", dtype=np.int64)
+    return pd.DataFrame(
+        {
+            "open": closes * 0.999,
+            "high": closes * 1.005,
+            "low": closes * 0.995,
+            "close": closes,
+            "volume": 1_000_000.0,
+        },
+        index=index,
+    )
+
+
+def _series(bars: pd.DataFrame, iv_points: list[dict] | None, *, iv_source: str = "caller_supplied", **overrides) -> dict:
+    settings = {
+        "symbol": "SPY",
+        "bar_size": "1d",
+        "tenor_days": 30,
+        "hf_session": "ETH",
+        "estimators": ["yz"],
+        "windows": [5, 10, 30],
+        "confidence_floor": 0.1,
+    }
+    return compute_realized_vs_iv_series(bars, iv_points=iv_points, iv_source=iv_source, **{**settings, **overrides})  # type: ignore[arg-type]
+
+
+def _window_of(bars: pd.DataFrame):
+    return et_date_at_ms(int(bars.index.min())), et_date_at_ms(int(bars.index.max()))
 
 
 def _record(
@@ -99,7 +104,7 @@ def _record(
     )
 
 
-class TestIvSeriesFromRecorder:
+class TestRecordedIvPoints:
     @pytest.mark.parametrize(
         ("records", "window_ms"),
         [
@@ -116,9 +121,9 @@ class TestIvSeriesFromRecorder:
     def test_returns_empty_list_when_no_row_is_usable(self, recorder_store, records, window_ms):
         for kwargs in records:
             _record(recorder_store, ts_ms=1_700_000_000_000, **kwargs)
-        idx = pd.Index(list(window_ms), dtype=np.int64)
+        start, end = (window_ms[0], window_ms[-1]) if window_ms else (1_700_000_000_000, 1_700_000_000_000)
 
-        assert _iv_series_from_recorder("SPY", idx) == []
+        assert recorded_iv_points("SPY", start_ms=start, end_ms=end) == []
 
     @pytest.mark.parametrize(
         ("iv_vix", "iv_param", "expected_iv30"),
@@ -130,9 +135,8 @@ class TestIvSeriesFromRecorder:
     def test_iv30_comes_from_the_preferred_available_source(self, recorder_store, iv_vix, iv_param, expected_iv30):
         ts = 1_700_000_000_000
         _record(recorder_store, ts_ms=ts, iv_vix=iv_vix, iv_param=iv_param)
-        idx = pd.Index([ts], dtype=np.int64)
 
-        items = _iv_series_from_recorder("SPY", idx)
+        items = recorded_iv_points("SPY", start_ms=ts, end_ms=ts)
 
         assert len(items) == 1, "the one recorded row yields one item"
         assert items[0]["iv30"] == pytest.approx(expected_iv30), "iv30 comes from the preferred available source"
@@ -140,9 +144,8 @@ class TestIvSeriesFromRecorder:
     def test_propagates_variance_contribution_synthetic(self, recorder_store):
         ts = 1_700_000_000_000
         _record(recorder_store, ts_ms=ts, iv_vix=0.21, vcs=0.12)
-        idx = pd.Index([ts], dtype=np.int64)
 
-        items = _iv_series_from_recorder("SPY", idx)
+        items = recorded_iv_points("SPY", start_ms=ts, end_ms=ts)
 
         assert items[0]["variance_contribution_synthetic"] == pytest.approx(0.12)
         # When the recorder row has no health_score (legacy row, or a row
@@ -156,9 +159,8 @@ class TestIvSeriesFromRecorder:
     def test_propagates_health_score_when_present(self, recorder_store):
         ts = 1_700_000_000_000
         _record(recorder_store, ts_ms=ts, iv_vix=0.21, vcs=0.12, health_score=0.85)
-        idx = pd.Index([ts], dtype=np.int64)
 
-        items = _iv_series_from_recorder("SPY", idx)
+        items = recorded_iv_points("SPY", start_ms=ts, end_ms=ts)
 
         assert items[0]["health_score"] == pytest.approx(0.85)
         assert items[0]["variance_contribution_synthetic"] == pytest.approx(0.12)
@@ -166,10 +168,9 @@ class TestIvSeriesFromRecorder:
     def test_window_filters_by_ticker(self, recorder_store):
         ts = 1_700_000_000_000
         _record(recorder_store, ts_ms=ts, ticker="QQQ", iv_vix=0.25)
-        idx = pd.Index([ts], dtype=np.int64)
 
-        assert _iv_series_from_recorder("SPY", idx) == []
-        assert len(_iv_series_from_recorder("QQQ", idx)) == 1
+        assert recorded_iv_points("SPY", start_ms=ts, end_ms=ts) == []
+        assert len(recorded_iv_points("QQQ", start_ms=ts, end_ms=ts)) == 1
 
 
 class TestParseIvSeriesNullCoalescing:
@@ -183,16 +184,13 @@ class TestParseIvSeriesNullCoalescing:
     """
 
     def test_parse_iv_series_handles_explicit_null_health(self):
-        from app.routers.edge import _parse_iv_series
-
         idx = pd.Index([1_000, 2_000], dtype=np.int64)
         # First bar: missing key. Second bar: explicit None on the wire.
         # Both must take the drop-health-factor branch and flag the bar
         # as imputed, not raise.
         iv_series = [
             {"ts": 1_000, "iv30": 0.20, "variance_contribution_synthetic": 0.05},
-            {"ts": 2_000, "iv30": 0.21, "health_score": None,
-             "variance_contribution_synthetic": 0.07},
+            {"ts": 2_000, "iv30": 0.21, "health_score": None, "variance_contribution_synthetic": 0.07},
         ]
 
         iv, confidence, health_imputed = _parse_iv_series(iv_series, idx)
@@ -208,51 +206,57 @@ class TestParseIvSeriesNullCoalescing:
         assert confidence.loc[2_000] == pytest.approx(1.0 - 0.07)
 
 
-class TestRealizedVsIvIvSourceField:
-    async def test_caller_supplied_wins_over_recorder(self, client, recorder_store):
+class TestIvSourceField:
+    def test_caller_supplied_wins_over_recorder(self, recorder_store):
         bars = _bars(40)
         # Recorder has a row mid-window — should be ignored when caller supplies.
-        _record(recorder_store, ts_ms=bars[20]["ts"], iv_vix=0.30)
-        caller_iv = [{"ts": bars[10]["ts"], "iv30": 0.18}]
+        _record(recorder_store, ts_ms=int(bars.index[20]), iv_vix=0.30)
+        caller_iv = [{"ts": int(bars.index[10]), "iv30": 0.18}]
 
-        resp = await client.post(
-            "/api/edge/realized-vs-iv/series",
-            json={"symbol": "SPY", "bars": bars, "iv_series": caller_iv},
-        )
+        loaded = load_iv_input("SPY", _window_of(bars), caller_iv)
 
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["iv_source"] == "caller_supplied"
+        assert loaded.source == "caller_supplied"
+        assert [p["iv30"] for p in loaded.points] == [0.18]
 
-    async def test_recorder_fallback_fires(self, client, recorder_store):
+    def test_recorder_fallback_fires(self, recorder_store):
         bars = _bars(40)
-        _record(recorder_store, ts_ms=bars[15]["ts"], iv_vix=0.22)
-        _record(recorder_store, ts_ms=bars[25]["ts"], iv_vix=0.24)
+        _record(recorder_store, ts_ms=int(bars.index[15]), iv_vix=0.22)
+        _record(recorder_store, ts_ms=int(bars.index[25]), iv_vix=0.24)
 
-        resp = await client.post(
-            "/api/edge/realized-vs-iv/series",
-            json={"symbol": "SPY", "bars": bars},
-        )
+        loaded = load_iv_input("SPY", _window_of(bars), None)
+        body = _series(bars, list(loaded.points), iv_source=loaded.source)
 
-        assert resp.status_code == 200
-        body = resp.json()
+        assert loaded.source == "recorder"
         assert body["iv_source"] == "recorder"
         # iv30 is sparse — only the two snapshot bars carry a value.
         non_null = sum(1 for v in body["iv30"] if v is not None)
         assert non_null == 2
 
-    async def test_absent_when_recorder_empty(self, client, recorder_store):
+    def test_absent_when_recorder_empty(self, recorder_store):
         bars = _bars(40)
 
-        resp = await client.post(
-            "/api/edge/realized-vs-iv/series",
-            json={"symbol": "SPY", "bars": bars},
-        )
+        loaded = load_iv_input("SPY", _window_of(bars), None)
+        body = _series(bars, None, iv_source=loaded.source)
 
-        assert resp.status_code == 200
-        body = resp.json()
+        assert loaded.source == "absent" and loaded.points == ()
         assert body["iv_source"] == "absent"
         assert all(v is None for v in body["iv30"])
+
+    def test_an_empty_caller_list_reads_the_recorder_as_it_always_did(self, recorder_store):
+        bars = _bars(40)
+        _record(recorder_store, ts_ms=int(bars.index[5]), iv_vix=0.22)
+
+        assert load_iv_input("SPY", _window_of(bars), []).source == "recorder"
+
+    def test_the_points_are_part_of_the_identity_by_digest(self, recorder_store):
+        bars = _bars(40)
+        _record(recorder_store, ts_ms=int(bars.index[5]), iv_vix=0.22)
+        before = load_iv_input("SPY", _window_of(bars), None)
+        _record(recorder_store, ts_ms=int(bars.index[6]), iv_vix=0.23)
+        after = load_iv_input("SPY", _window_of(bars), None)
+
+        assert before.digest != after.digest, "a new snapshot is a new input"
+        assert after.digest == load_iv_input("SPY", _window_of(bars), None).digest, "and the same snapshots are the same one"
 
 
 class TestHealthScoreImputedPrior:
@@ -270,78 +274,51 @@ class TestHealthScoreImputedPrior:
     with no evidence to support the cut.
     """
 
-    async def test_explanation_flags_health_imputed_when_missing(self, client, recorder_store):
+    def test_explanation_flags_health_imputed_when_missing(self):
         bars = _bars(40)
         # Recorder snapshot carries vcs but no health_score — the typical
         # recorder-fallback shape.
-        _record(recorder_store, ts_ms=bars[30]["ts"], iv_vix=0.22, vcs=0.10)
+        points = [{"ts": int(bars.index[30]), "iv30": 0.22, "variance_contribution_synthetic": 0.10}]
 
-        resp = await client.post(
-            "/api/edge/realized-vs-iv/series",
-            json={"symbol": "SPY", "bars": bars},
-        )
+        body = _series(bars, points, iv_source="recorder")
 
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["iv_source"] == "recorder"
         explanation = body["explanation"]
         assert explanation is not None
         assert explanation["health_imputed_now"] is True
 
-    async def test_explanation_does_not_flag_when_health_supplied(self, client, recorder_store):
+    def test_explanation_does_not_flag_when_health_supplied(self):
         bars = _bars(40)
         # Caller supplies both vcs *and* health_score — no imputation.
-        caller_iv = [
+        points = [
             {
-                "ts": bars[30]["ts"],
+                "ts": int(bars.index[30]),
                 "iv30": 0.22,
                 "variance_contribution_synthetic": 0.10,
                 "health_score": 0.95,
             }
         ]
 
-        resp = await client.post(
-            "/api/edge/realized-vs-iv/series",
-            json={"symbol": "SPY", "bars": bars, "iv_series": caller_iv},
-        )
+        body = _series(bars, points)
 
-        assert resp.status_code == 200
-        body = resp.json()
         explanation = body["explanation"]
         assert explanation is not None
         assert explanation["health_imputed_now"] is False
 
-    async def test_imputed_drops_health_factor_matches_explicit_full_health(
-        self, client, recorder_store
-    ):
+    def test_imputed_drops_health_factor_matches_explicit_full_health(self):
         bars = _bars(40)
-        # Two requests, identical except one supplies health=1.0 explicitly,
+        # Two runs, identical except one supplies health=1.0 explicitly,
         # the other omits it. Under the drop-health-factor branch, the
         # imputed bar produces confidence = (1 - vcs); the explicit
         # full-health bar produces confidence = 1.0 * (1 - vcs). With
         # vcs = 0 in both cases the two values must be identical — both
         # collapse to 1.0. The imputed-ness is still surfaced via the
         # ``health_imputed_now`` flag so the UI can mark the bar.
-        _record(recorder_store, ts_ms=bars[30]["ts"], iv_vix=0.22, vcs=0.0)
-        resp_imputed = await client.post(
-            "/api/edge/realized-vs-iv/series",
-            json={"symbol": "SPY", "bars": bars},
-        )
-        explicit_iv = [
-            {
-                "ts": bars[30]["ts"],
-                "iv30": 0.22,
-                "variance_contribution_synthetic": 0.0,
-                "health_score": 1.0,
-            }
-        ]
-        resp_explicit = await client.post(
-            "/api/edge/realized-vs-iv/series",
-            json={"symbol": "SPY", "bars": bars, "iv_series": explicit_iv},
+        ts = int(bars.index[30])
+        body_imputed = _series(bars, [{"ts": ts, "iv30": 0.22, "variance_contribution_synthetic": 0.0}], iv_source="recorder")
+        body_explicit = _series(
+            bars, [{"ts": ts, "iv30": 0.22, "variance_contribution_synthetic": 0.0, "health_score": 1.0}]
         )
 
-        body_imputed = resp_imputed.json()
-        body_explicit = resp_explicit.json()
         c_imputed = body_imputed["explanation"]["latest_confidence"]
         c_explicit = body_explicit["explanation"]["latest_confidence"]
         # Both confidences collapse to 1.0 (vcs=0 on both), but reach it
@@ -355,19 +332,15 @@ class TestHealthScoreImputedPrior:
 class TestTheUnrealizedForwardTailIsNotASignal:
     """The last window's forward RV is unrealized; a z-score built over a filled tail read as SHORT/LONG VOL."""
 
-    async def test_vrp_z_is_null_wherever_the_forward_rv_is(self, client, recorder_store):
+    def test_vrp_z_is_null_wherever_the_forward_rv_is(self):
         bars = _bars(400)
-        iv_series = [{"ts": bar["ts"], "iv30": 0.20 + 0.01 * ((i * 7) % 5)} for i, bar in enumerate(bars)]
+        iv_series = [{"ts": int(ts), "iv30": 0.20 + 0.01 * ((i * 7) % 5)} for i, ts in enumerate(bars.index)]
 
-        resp = await client.post(
-            "/api/edge/realized-vs-iv/series",
-            json={"symbol": "SPY", "bars": bars, "iv_series": iv_series, "windows": [5], "estimators": ["ctc"]},
-        )
+        body = _series(bars, iv_series, estimators=["ctc"], windows=[5])
 
-        assert resp.status_code == 200
-        body = resp.json()
         blind = [i for i, rv in enumerate(body["rv_hf_forward"]) if rv is None]
         assert blind, "the forward RV has an unrealized tail"
         assert blind[-1] == len(bars) - 1
         assert all(body["vrp_z"][i] is None for i in blind)
         assert any(z is not None for z in body["vrp_z"]), "earlier bars keep their z-score"
+        assert body["coverage"]["forward_nan_bars"] == len(blind)

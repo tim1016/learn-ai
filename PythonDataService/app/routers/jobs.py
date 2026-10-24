@@ -26,13 +26,15 @@ import asyncio
 import logging
 from dataclasses import asdict
 from datetime import date
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, status
 from fastapi.encoders import jsonable_encoder
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
+from app.engine.edge.confidence import DEFAULT_CONFIDENCE_FLOOR
+from app.engine.edge.features_realtime.hf_realized_vol import Session as HfSession
 from app.jobs import cache as result_cache
 from app.jobs.phases import friendly as friendly_phase
 from app.jobs.progress import JobCancelled, ProgressEmitter
@@ -45,8 +47,10 @@ from app.research.batch_runner import (
 from app.research.lake_study import SESSION_POLICY_FOR_REQUEST
 from app.research.signal.config import SignalConfig
 from app.research.signal.engine import run_signal_engine
+from app.schemas.broker_bots import normalized_symbol
 from app.schemas.engine_backtest import EngineBacktestRequest
 from app.schemas.ticker_request import (
+    DATE_PATTERN,
     MultiTickerRequest,
     Session,
     TickerRequest,
@@ -55,6 +59,8 @@ from app.services.dataset_service import RunCancelledError
 from app.services.engine_backtest_service import execute_engine_backtest
 from app.services.feature_study_service import FeatureStudyParams, run_feature_study
 from app.services.polygon_client import PolygonClientService
+from app.services.realized_vs_iv_study_service import RealizedVsIvParams, run_realized_vs_iv_study
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -221,6 +227,74 @@ class FeatureResearchJobRequest(_CamelCaseTickerRequest):
     job_id: str = Field(..., min_length=1)
     feature_name: str = Field(..., min_length=1)
     force: bool = False
+
+
+class IvPointPayload(_CamelCaseModel):
+    """One caller-supplied IV point, stamped as the snapshot was taken (the study aligns it to a bar).
+
+    ``iv30`` is ACT/365, the solver's native basis; the study converts it to TRD/252 before VRP. A
+    ``health_score`` or ``variance_contribution_synthetic`` that is present, even as ``null``, turns the confidence
+    path on (``null`` means no evidence and drops that factor), so what the caller set is kept apart from what it left out.
+    """
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
+
+    ts: int = Field(..., ge=0, le=MAX_TIMESTAMP_MS, description="int64 ms UTC")
+    iv30: float = Field(..., ge=0.0)
+    health_score: float | None = None
+    variance_contribution_synthetic: float | None = None
+
+
+class RealizedVsIvJobRequest(_CamelCaseModel):
+    """Body of POST /api/jobs-internal/realized-vs-iv.
+
+    The worker reads the study's bars from the data lake itself, materializing what the lake lacks: the browser
+    sends the symbol and the study's settings, never bars. Unless ``from_date`` and ``to_date`` name a window, it is
+    the last year (``1d``) or month (``15m``) of sessions whose tape is final; see
+    ``app.services.realized_vs_iv_study_service``.
+
+    ``bar_size`` is ``15m`` or ``1d``. Anything else is accepted here and refused by the job with
+    ``resolution_unsupported`` and a reason, so the answer is a typed refusal a page can show rather than a 422.
+
+    ``session`` is which bars the study folds from: ``extended`` (04:00-20:00 ET) or ``rth``. Omitted, it is the session
+    each bar size has always read (``extended`` for ``15m``, ``rth`` for ``1d``; D02). ``hf_session`` is the HF
+    estimator's own ETH/RTH filter and is unchanged.
+    """
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
+
+    job_id: str = Field(..., min_length=1)
+    symbol: str = Field(..., min_length=1, max_length=20)
+    bar_size: str = Field("1d", max_length=16)
+    tenor_days: int = Field(30, ge=1, le=365)
+    hf_session: HfSession = "ETH"
+    session: Session | None = None
+    estimators: list[Literal["ctc", "parkinson", "gk", "yz"]] = Field(default_factory=lambda: ["yz"], min_length=1)
+    windows: list[Annotated[int, Field(ge=2, le=500)]] = Field(default_factory=lambda: [5, 10, 30], min_length=1)
+    iv_series: list[IvPointPayload] | None = None
+    confidence_floor: float = Field(DEFAULT_CONFIDENCE_FLOOR, ge=0.0, le=1.0)
+    from_date: str | None = Field(None, pattern=DATE_PATTERN)
+    to_date: str | None = Field(None, pattern=DATE_PATTERN)
+    force: bool = False
+    """Skip the result cache and always re-run."""
+
+    @model_validator(mode="after")
+    def _window_is_both_dates_or_neither(self) -> RealizedVsIvJobRequest:
+        if (self.from_date is None) != (self.to_date is None):
+            raise ValueError("from_date and to_date name a window together; send both or neither")
+        if self.from_date is not None and self.to_date is not None:
+            try:
+                first, last = date.fromisoformat(self.from_date), date.fromisoformat(self.to_date)
+            except ValueError as exc:
+                raise ValueError(f"invalid calendar date: {exc}") from exc
+            if last < first:
+                raise ValueError(f"to_date ({self.to_date}) must be >= from_date ({self.from_date})")
+        return self
+
+    @field_validator("symbol", mode="before")
+    @classmethod
+    def _normalize_symbol(cls, value: object) -> object:
+        return normalized_symbol(value) if isinstance(value, str) else value
 
 
 class SignalEngineJobRequest(_CamelCaseTickerRequest):
@@ -765,6 +839,45 @@ async def start_feature_research_job(req: FeatureResearchJobRequest) -> dict:
         req.job_id,
         work,
         thread_name=f"feature-{req.job_id[:8]}",
+        cancel_check_every_n=100,
+    )
+    return {"job_id": req.job_id, "status": "queued"}
+
+
+@router.post("/realized-vs-iv", status_code=status.HTTP_202_ACCEPTED)
+async def start_realized_vs_iv_job(req: RealizedVsIvJobRequest) -> dict:
+    """Kick off a Realized vs IV study in a worker thread.
+
+    The worker admits the study's bars from the data lake (materializing what is missing), aligns the recorded or
+    caller-supplied IV to them, and computes the realized-vol series and the variance premium. A window the lake
+    cannot admit, or a bar size the study is not defined for, fails the job with a typed refusal and its coverage
+    counts; no result is computed. A successful prior run over the same admitted data and the same IV is served from
+    cache (the lookup follows admission). Pass ``force=true`` to bypass.
+    """
+    params = RealizedVsIvParams(
+        symbol=req.symbol,
+        bar_size=req.bar_size,
+        tenor_days=req.tenor_days,
+        hf_session=req.hf_session,
+        session_policy=SESSION_POLICY_FOR_REQUEST[req.session] if req.session is not None else None,
+        estimators=tuple(req.estimators),
+        windows=tuple(req.windows),
+        iv_series=(
+            [point.model_dump(exclude_unset=True) for point in req.iv_series] if req.iv_series is not None else None
+        ),
+        confidence_floor=req.confidence_floor,
+        window=(date.fromisoformat(req.from_date), date.fromisoformat(req.to_date))
+        if req.from_date is not None and req.to_date is not None
+        else None,
+    )
+
+    def work(emit: ProgressEmitter, cancel) -> dict | None:
+        return run_realized_vs_iv_study(params, job_id=req.job_id, force=req.force, emit=emit, cancel=cancel)
+
+    run_in_thread(
+        req.job_id,
+        work,
+        thread_name=f"realized-vs-iv-{req.job_id[:8]}",
         cancel_check_every_n=100,
     )
     return {"job_id": req.job_id, "status": "queued"}

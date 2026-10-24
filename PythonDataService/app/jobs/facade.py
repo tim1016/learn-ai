@@ -49,6 +49,7 @@ JOB_TYPE_ROUTES: Mapping[str, str] = {
     "lean_engine_run": "/api/jobs-internal/lean-engine-run",
     "cross_sectional": "/api/jobs-internal/cross-sectional",
     "feature_research": "/api/jobs-internal/feature-research",
+    "realized_vs_iv": "/api/jobs-internal/realized-vs-iv",
     "signal_engine": "/api/jobs-internal/signal-engine",
     "recency_chart": "/api/jobs-internal/recency-chart",
     "grid_search": "/api/jobs-internal/grid-search",

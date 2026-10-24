@@ -4004,46 +4004,6 @@
         "title": "BacktestRunViewRefusalBody",
         "type": "object"
       },
-      "BarPayload": {
-        "description": "Inline OHLCV bar.",
-        "properties": {
-          "close": {
-            "title": "Close",
-            "type": "number"
-          },
-          "high": {
-            "title": "High",
-            "type": "number"
-          },
-          "low": {
-            "title": "Low",
-            "type": "number"
-          },
-          "open": {
-            "title": "Open",
-            "type": "number"
-          },
-          "ts": {
-            "description": "int64 ms UTC",
-            "title": "Ts",
-            "type": "integer"
-          },
-          "volume": {
-            "default": 0.0,
-            "title": "Volume",
-            "type": "number"
-          }
-        },
-        "required": [
-          "ts",
-          "open",
-          "high",
-          "low",
-          "close"
-        ],
-        "title": "BarPayload",
-        "type": "object"
-      },
       "BarProperty": {
         "additionalProperties": false,
         "description": "Compares a bar-derived property to a threshold. Stateless.\n\nProperties:\n  * ``range`` \u2014 high - low (price points)\n  * ``body`` \u2014 abs(close - open) (price points)\n  * ``range_pct`` \u2014 (high - low) / close (unitless fraction)\n  * ``body_pct`` \u2014 abs(close - open) / close (unitless fraction)",
@@ -33593,6 +33553,52 @@
         "title": "Iv30LiveResponse",
         "type": "object"
       },
+      "IvPointPayload": {
+        "additionalProperties": false,
+        "description": "One caller-supplied IV point, stamped as the snapshot was taken (the study aligns it to a bar).\n\n``iv30`` is ACT/365, the solver's native basis; the study converts it to TRD/252 before VRP. A\n``health_score`` or ``variance_contribution_synthetic`` that is present, even as ``null``, turns the confidence\npath on (``null`` means no evidence and drops that factor), so what the caller set is kept apart from what it left out.",
+        "properties": {
+          "healthScore": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Healthscore"
+          },
+          "iv30": {
+            "minimum": 0.0,
+            "title": "Iv30",
+            "type": "number"
+          },
+          "ts": {
+            "description": "int64 ms UTC",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Ts",
+            "type": "integer"
+          },
+          "varianceContributionSynthetic": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Variancecontributionsynthetic"
+          }
+        },
+        "required": [
+          "ts",
+          "iv30"
+        ],
+        "title": "IvPointPayload",
+        "type": "object"
+      },
       "IvProvenancePayload": {
         "description": "Snake-case JSON projection of ``IvProvenance``.",
         "properties": {
@@ -53358,44 +53364,68 @@
         "title": "ReadinessCheckView",
         "type": "object"
       },
-      "RealizedVsIvSeriesRequest": {
+      "RealizedVsIvJobRequest": {
+        "additionalProperties": false,
+        "description": "Body of POST /api/jobs-internal/realized-vs-iv.\n\nThe worker reads the study's bars from the data lake itself, materializing what the lake lacks: the browser\nsends the symbol and the study's settings, never bars. Unless ``from_date`` and ``to_date`` name a window, it is\nthe last year (``1d``) or month (``15m``) of sessions whose tape is final; see\n``app.services.realized_vs_iv_study_service``.\n\n``bar_size`` is ``15m`` or ``1d``. Anything else is accepted here and refused by the job with\n``resolution_unsupported`` and a reason, so the answer is a typed refusal a page can show rather than a 422.\n\n``session`` is which bars the study folds from: ``extended`` (04:00-20:00 ET) or ``rth``. Omitted, it is the session\neach bar size has always read (``extended`` for ``15m``, ``rth`` for ``1d``; D02). ``hf_session`` is the HF\nestimator's own ETH/RTH filter and is unchanged.",
         "properties": {
-          "bar_size": {
+          "barSize": {
             "default": "1d",
-            "enum": [
-              "15m",
-              "1d"
-            ],
-            "title": "Bar Size",
+            "maxLength": 16,
+            "title": "Barsize",
             "type": "string"
           },
-          "bars": {
-            "items": {
-              "$ref": "#/components/schemas/BarPayload"
-            },
-            "title": "Bars",
-            "type": "array"
-          },
-          "confidence_floor": {
+          "confidenceFloor": {
             "default": 0.1,
-            "description": "Hard-gate floor: signals are forced to 0 where confidence < floor.",
             "maximum": 1.0,
             "minimum": 0.0,
-            "title": "Confidence Floor",
+            "title": "Confidencefloor",
             "type": "number"
           },
           "estimators": {
             "items": {
+              "enum": [
+                "ctc",
+                "parkinson",
+                "gk",
+                "yz"
+              ],
               "type": "string"
             },
+            "minItems": 1,
             "title": "Estimators",
             "type": "array"
           },
-          "iv_series": {
+          "force": {
+            "default": false,
+            "title": "Force",
+            "type": "boolean"
+          },
+          "fromDate": {
+            "anyOf": [
+              {
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fromdate"
+          },
+          "hfSession": {
+            "default": "ETH",
+            "enum": [
+              "ETH",
+              "RTH"
+            ],
+            "title": "Hfsession",
+            "type": "string"
+          },
+          "ivSeries": {
             "anyOf": [
               {
                 "items": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/IvPointPayload"
                 },
                 "type": "array"
               },
@@ -53403,267 +53433,69 @@
                 "type": "null"
               }
             ],
-            "description": "Optional [{ts, iv30, health_score?, variance_contribution_synthetic?}] history. iv30 must be ACT/365 (the solver's native basis); the router converts to TRD/252 before VRP. When health_score and variance_contribution_synthetic are supplied, the response includes per-bar confidence and the VRP signal is gated by it (Step E of IV-ownership plan).",
-            "title": "Iv Series"
+            "title": "Ivseries"
           },
-          "session": {
-            "default": "ETH",
-            "description": "Session for the HF RV estimator. ETH = 04:00-20:00 ET (default), RTH = 09:30-16:00 ET.",
-            "enum": [
-              "ETH",
-              "RTH"
-            ],
-            "title": "Session",
+          "jobId": {
+            "minLength": 1,
+            "title": "Jobid",
             "type": "string"
           },
+          "session": {
+            "anyOf": [
+              {
+                "enum": [
+                  "rth",
+                  "extended"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session"
+          },
           "symbol": {
+            "maxLength": 20,
+            "minLength": 1,
             "title": "Symbol",
             "type": "string"
           },
-          "tenor_days": {
+          "tenorDays": {
             "default": 30,
             "maximum": 365.0,
             "minimum": 1.0,
-            "title": "Tenor Days",
+            "title": "Tenordays",
             "type": "integer"
+          },
+          "toDate": {
+            "anyOf": [
+              {
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Todate"
           },
           "windows": {
             "items": {
+              "maximum": 500.0,
+              "minimum": 2.0,
               "type": "integer"
             },
+            "minItems": 1,
             "title": "Windows",
             "type": "array"
           }
         },
         "required": [
-          "symbol",
-          "bars"
+          "jobId",
+          "symbol"
         ],
-        "title": "RealizedVsIvSeriesRequest",
-        "type": "object"
-      },
-      "RealizedVsIvSeriesResponse": {
-        "properties": {
-          "confidence": {
-            "anyOf": [
-              {
-                "items": {
-                  "anyOf": [
-                    {
-                      "type": "number"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Confidence"
-          },
-          "coverage": {
-            "title": "Coverage",
-            "type": "object"
-          },
-          "explanation": {
-            "anyOf": [
-              {
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Explanation"
-          },
-          "floor_gated": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "boolean"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Floor Gated"
-          },
-          "iv30": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "title": "Iv30",
-            "type": "array"
-          },
-          "iv30_trd252": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "title": "Iv30 Trd252",
-            "type": "array"
-          },
-          "iv_source": {
-            "default": "caller_supplied",
-            "title": "Iv Source",
-            "type": "string"
-          },
-          "rv_forward": {
-            "additionalProperties": {
-              "items": {
-                "anyOf": [
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "type": "array"
-            },
-            "title": "Rv Forward",
-            "type": "object"
-          },
-          "rv_hf_forward": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "title": "Rv Hf Forward",
-            "type": "array"
-          },
-          "rv_hf_trailing": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "title": "Rv Hf Trailing",
-            "type": "array"
-          },
-          "rv_trailing": {
-            "additionalProperties": {
-              "items": {
-                "anyOf": [
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "type": "array"
-            },
-            "title": "Rv Trailing",
-            "type": "object"
-          },
-          "symbol": {
-            "title": "Symbol",
-            "type": "string"
-          },
-          "ts": {
-            "items": {
-              "type": "integer"
-            },
-            "title": "Ts",
-            "type": "array"
-          },
-          "vrp_forward": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "title": "Vrp Forward",
-            "type": "array"
-          },
-          "vrp_z": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "title": "Vrp Z",
-            "type": "array"
-          },
-          "vrp_z_scaled": {
-            "anyOf": [
-              {
-                "items": {
-                  "anyOf": [
-                    {
-                      "type": "number"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Vrp Z Scaled"
-          }
-        },
-        "required": [
-          "symbol",
-          "ts",
-          "rv_trailing",
-          "rv_forward",
-          "iv30",
-          "iv30_trd252",
-          "rv_hf_trailing",
-          "rv_hf_forward",
-          "vrp_forward",
-          "vrp_z",
-          "coverage"
-        ],
-        "title": "RealizedVsIvSeriesResponse",
+        "title": "RealizedVsIvJobRequest",
         "type": "object"
       },
       "RecencyChartJobRequest": {
@@ -87585,48 +87417,6 @@
         ]
       }
     },
-    "/api/edge/realized-vs-iv/series": {
-      "post": {
-        "description": "Compute trailing + forward RV for the requested estimators and windows;\nalign IV30 series; emit VRP forward + z-score.",
-        "operationId": "realized_vs_iv_series_api_edge_realized_vs_iv_series_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RealizedVsIvSeriesRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RealizedVsIvSeriesResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Realized Vs Iv Series",
-        "tags": [
-          "edge"
-        ]
-      }
-    },
     "/api/engine/backtest": {
       "post": {
         "description": "Run a strategy through the LEAN-compatible backtest engine (synchronous).\n\nUsed by tests, curl, and any caller that doesn't need streamed\nprogress. The Engine Lab UI uses the Jobs system instead \u2014 see\n``POST /api/jobs/engine_backtest`` (the jobs facade, ``app.jobs.facade``)\nwhich forwards to ``/api/jobs-internal/engine-backtest`` here.\n\nThe engine reads LEAN-format minute zips from the configured data\nroot and produces trades that reproduce LEAN's reference log\nbit-exactly when the same strategy is run against the same data.",
@@ -88632,6 +88422,49 @@
           }
         },
         "summary": "Drain Research Worker Pool",
+        "tags": [
+          "jobs-internal"
+        ]
+      }
+    },
+    "/api/jobs-internal/realized-vs-iv": {
+      "post": {
+        "description": "Kick off a Realized vs IV study in a worker thread.\n\nThe worker admits the study's bars from the data lake (materializing what is missing), aligns the recorded or\ncaller-supplied IV to them, and computes the realized-vol series and the variance premium. A window the lake\ncannot admit, or a bar size the study is not defined for, fails the job with a typed refusal and its coverage\ncounts; no result is computed. A successful prior run over the same admitted data and the same IV is served from\ncache (the lookup follows admission). Pass ``force=true`` to bypass.",
+        "operationId": "start_realized_vs_iv_job_api_jobs_internal_realized_vs_iv_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RealizedVsIvJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Start Realized Vs Iv Job Api Jobs Internal Realized Vs Iv Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Realized Vs Iv Job",
         "tags": [
           "jobs-internal"
         ]

@@ -56,7 +56,6 @@ from app.routers import (
     data_lab_sessions,
     data_quality,
     dataset,
-    edge,
     engine,
     golden_fixtures,
     golden_qualifications,
@@ -1484,8 +1483,6 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     from app.routers import recency_jobs
 
     app.include_router(recency_jobs.router, prefix="/api/jobs-internal", tags=["jobs-internal"])
-    # Edge router carries its own /api/edge prefix.
-    app.include_router(edge.router)
     # Live IV30 endpoints (vix-style + parametric) — Step C of IV-ownership plan.
     # Router carries its own /api/edge/iv30 prefix.
     app.include_router(iv30.router)
