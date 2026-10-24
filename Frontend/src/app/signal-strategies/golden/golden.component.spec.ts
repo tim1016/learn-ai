@@ -181,6 +181,16 @@ describe('Golden → Configuration review', () => {
     expect((await screen.findByRole('heading', { name: 'Second' })).closest('article')?.textContent).toContain('QQQ');
   });
 
+  it('opens no review, and says so, when the version’s baseline run is not among the strategy’s listed reviews', async () => {
+    const list = vi.fn(() => of([configurationReview({ id: 5, label: 'First' }), configurationReview({ id: 6, label: 'Second', symbol: 'QQQ' })]));
+    await open(`/signal-strategies/${EMA}/golden/configuration?case=57`, { services: { goldenValidation: { list } } });
+
+    expect(await screen.findByText(`Selected baseline run #57 is not among ${EMA}'s listed baseline runs. Nothing is selected.`)).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'First' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Second' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Save review' })).toBeNull();
+  });
+
   it('selects one of this strategy’s own runs as the baseline run only with a note, and offers nothing for another strategy’s', async () => {
     const designate = vi.fn(() => of(configurationReview({ id: 9, source_run_id: 41 })));
     const mine = await open(`/signal-strategies/${EMA}/golden/configuration?run=41`, {

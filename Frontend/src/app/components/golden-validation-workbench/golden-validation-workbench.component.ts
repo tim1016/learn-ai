@@ -5,7 +5,6 @@ import {
   effect,
   inject,
   input,
-  output,
   resource,
   signal,
 } from "@angular/core";
@@ -46,14 +45,16 @@ import {
 export class GoldenValidationWorkbenchComponent {
   private readonly golden = inject(GoldenValidationService);
 
-  /** The strategy whose baseline runs this lists. Unset, it lists every strategy's. */
-  readonly strategyKey = input<string | null>(null);
+  /** The strategy whose baseline runs this lists. */
+  readonly strategyKey = input.required<string>();
   /** When supplied, lets a researcher select that Python run as the baseline run. */
   readonly sourceRunId = input<number | null>(null);
-  /** The baseline run's review to open first, by its id. */
-  readonly caseId = input<number | null>(null);
-  /** Lets a host refresh what it shows of a baseline run after a saved decision. */
-  readonly changed = output<GoldenValidation>();
+  /**
+   * The baseline run's review the link names (`?case=`), as written. The catalog lists only the newest
+   * runs of this strategy, so a name it does not hold selects nothing and is said: another run's
+   * review is never opened in its place.
+   */
+  readonly requestedCase = input<string | undefined>(undefined);
   private readonly selectedId = signal<number | null>(null);
   private readonly latestResponse = signal<GoldenValidation | null>(null);
   private readonly designationCommandId = signal(this.commandId("designate"));
@@ -72,7 +73,7 @@ export class GoldenValidationWorkbenchComponent {
 
   protected readonly catalog = resource({
     params: () => this.strategyKey(),
-    loader: ({ params }) => firstValueFrom(this.golden.list(params === null ? {} : { strategyName: params })),
+    loader: ({ params }) => firstValueFrom(this.golden.list({ strategyName: params })),
   });
 
   /** A catalog exactly as long as one read asked for may be cut short: older cases exist that it does not show. */
@@ -88,13 +89,35 @@ export class GoldenValidationWorkbenchComponent {
     return latest === null ? catalog : [latest, ...catalog.filter((entry) => entry.id !== latest.id)];
   });
 
+  /** What the link's `?case=` names: nothing, a review by id, or a value that names no review. */
+  private readonly named = computed<{ readonly id: number | null; readonly raw: string } | null>(() => {
+    const raw = this.requestedCase();
+    if (raw === undefined || raw === "") return null;
+    const id = Number(raw);
+    return { id: Number.isInteger(id) && id > 0 ? id : null, raw };
+  });
+
   protected readonly selected = computed(() => {
     const cases = this.catalogCases();
     const sourceRunId = this.sourceRunId();
     if (sourceRunId !== null) {
       return cases.find((entry) => entry.source_run_id === sourceRunId) ?? null;
     }
-    return cases.find((entry) => entry.id === (this.selectedId() ?? this.caseId())) ?? cases[0] ?? null;
+    const picked = this.selectedId();
+    if (picked !== null) return cases.find((entry) => entry.id === picked) ?? null;
+    // A review the link names is that one or none; only a link that names none opens the newest.
+    const named = this.named();
+    if (named !== null) return cases.find((entry) => entry.id === named.id) ?? null;
+    return cases[0] ?? null;
+  });
+
+  /** Said when the link names a review this strategy's catalog does not hold, so an empty selection is never a silent one. */
+  protected readonly unfoundCase = computed<string | null>(() => {
+    const named = this.named();
+    if (named === null || this.sourceRunId() !== null || this.selectedId() !== null || this.selected() !== null) return null;
+    const what = named.id === null ? `"${named.raw}" is not a selected baseline run's number` : `Selected baseline run #${named.id} is not among ${this.strategyKey()}'s listed baseline runs`;
+    const cut = this.catalogCapped() ? ` (only the newest ${this.catalogLimit} are listed)` : "";
+    return `${what}${cut}. Nothing is selected.`;
   });
 
   protected readonly canDesignate = computed(() => this.sourceRunId() !== null && this.selected() === null);
@@ -163,7 +186,6 @@ export class GoldenValidationWorkbenchComponent {
         rationale,
       }));
       this.latestResponse.set(result);
-      this.changed.emit(result);
       this.selectedId.set(result.id);
       this.designationLabel.set("");
       this.designationRationale.set("");
@@ -223,7 +245,6 @@ export class GoldenValidationWorkbenchComponent {
           ? { authorized_program_version: authorizedProgramVersion } : {}),
       }));
       this.latestResponse.set(result);
-      this.changed.emit(result);
       this.resetReviewDraft();
       this.message.set(
         result.latest_review?.decision === "accept"

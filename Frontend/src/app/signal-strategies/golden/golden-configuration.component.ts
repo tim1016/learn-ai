@@ -63,8 +63,6 @@ export class GoldenConfigurationComponent {
     };
   });
 
-  protected readonly caseId = computed(() => parseRunId(this.case()));
-
   private readonly runId = computed(() => parseRunId(this.run()));
   private readonly runRead = resource({
     params: () => this.runId() ?? undefined,

@@ -29,6 +29,10 @@
       </form>
     }
 
+    @if (unfoundCase(); as words) {
+      <p class="golden-workbench__notice" role="status">{{ words }}</p>
+    }
+
     @if (sourceRunId() === null) {
       @let cases = catalogCases();
       @if (cases.length > 0) {
