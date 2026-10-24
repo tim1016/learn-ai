@@ -1,0 +1,24 @@
+<section class="explore">
+  <div class="explore__intro">
+    <p class="explore__scope">
+      Try this strategy out. Backtest runs it once, Sweep tries a grid of its settings, and Walk-forward tests each training
+      winner on data it did not see. Every number here is exploratory and in-sample: nothing in Explore approves settings.
+    </p>
+    <div class="explore__help">
+      <app-how-this-works route="/strategy-lab/docs" />
+      <app-how-this-works route="/strategy-docs" label="Strategy reference" />
+    </div>
+  </div>
+
+  <app-workspace-tab-list [tabs]="tabs()" [activeId]="activeTab()" label="Explore tools" />
+
+  @if (unavailable().length > 0) {
+    <ul class="explore__unavailable">
+      @for (tab of unavailable(); track tab.id) {
+        <li><strong>{{ tab.label }}</strong> is not available for this strategy. {{ tab.reason }}</li>
+      }
+    </ul>
+  }
+
+  <router-outlet />
+</section>

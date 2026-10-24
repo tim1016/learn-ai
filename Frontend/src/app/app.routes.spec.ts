@@ -1,12 +1,5 @@
-import { Injector, runInInjectionContext } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import {
-  convertToParamMap,
-  provideRouter,
-  Router,
-  UrlTree,
-  type PartialMatchRouteSnapshot,
-} from '@angular/router';
+import { provideRouter, Router } from '@angular/router';
 import { describe, expect, it } from 'vitest';
 
 import { appConfig } from './app.config';
@@ -18,23 +11,33 @@ import { AlpacaHomeComponent } from './components/brokers/alpaca-home/alpaca-hom
 import { AlpacaActivityPageComponent } from './components/brokers/alpaca-desk/activity/alpaca-activity-page.component';
 import { BotPanelShellComponent } from './components/broker/v2-panel/panel-shell/bot-panel-shell.component';
 import { EntryComponent } from './components/entry/entry.component';
-import { OptionsBacktestPageComponent } from './components/options-backtest/options-backtest-page.component';
+import { StrategyBuilderComponent } from './components/strategy-builder/strategy-builder.component';
+import { StrategyFinderUnavailableComponent } from './options-setups/analysis/strategy-finder-unavailable.component';
+import { OptionsSetupsIndexComponent } from './options-setups/index/options-setups-index.component';
+import { OptionsEvidencePageComponent } from './components/options-evidence/options-evidence-page.component';
+import { OptionsStudyPageComponent } from './options-setups/study/options-study-page.component';
+import { OptionsSetupExploreComponent } from './options-setups/workspace/explore/options-setup-explore.component';
+import { OptionsSetupGoldenComponent } from './options-setups/workspace/golden/options-setup-golden.component';
+import { routeTreeHasData } from './shell/current-url.service';
 import { NotFoundComponent } from './shell/not-found.component';
 import { accountWorkspaceFixRoute, type AccountWorkspaceFixDestination } from './fleet/account-workspace';
 import { HELP_DOCUMENTS } from './shared/help/help-documents';
 import { routes } from './app.routes';
 
 describe('routes', () => {
-  it('uses Strategy Lab as the canonical workbench and redirects legacy Engine Lab paths', () => {
-    expect(routes.find((route) => route.path === 'strategy-lab')?.loadComponent).toBeDefined();
-    expect(routes.find((route) => route.path === 'strategy-lab/runs/:id')?.redirectTo).toBeTypeOf('function');
+  it('keeps the old Strategy Lab, Grid Search and Walk-Forward addresses as resolvers of their owner, never as pages', () => {
+    for (const path of ['strategy-lab', 'strategy-lab/runs/:id', 'engine/runs/:id', 'grid-search', 'walk-forward']) {
+      const route = routes.find((candidate) => candidate.path === path);
+      expect.soft(route?.resolve?.['entry'], `${path} resolves its owner`).toBeTypeOf('function');
+      expect.soft(route?.redirectTo, `${path} is not a redirect to another redirect`).toBeUndefined();
+    }
+    // The engine and LEAN aliases end on the Strategy Lab address, which is no redirect route, so the chain holds.
     for (const path of ['engine', 'lean-engine', 'lean-lab']) {
       expect(routes.find((route) => route.path === path)).toMatchObject({
         redirectTo: 'strategy-lab',
         pathMatch: 'full',
       });
     }
-    expect(routes.find((route) => route.path === 'engine/runs/:id')?.redirectTo).toBeTypeOf('function');
     expect(routes.find((route) => route.path === 'engine-docs')).toMatchObject({
       redirectTo: 'strategy-lab/docs',
       pathMatch: 'full',
@@ -49,35 +52,6 @@ describe('routes', () => {
     }
   });
 
-  it.each([
-    ['204', '/strategy-lab?run=204'],
-    ['a b', '/strategy-lab?run=a%20b'],
-  ])('redirects a persisted run URL (id %s) onto the one-page workbench', (id, expectedUrl) => {
-    const route = routes.find((candidate) => candidate.path === 'strategy-lab/runs/:id');
-    const redirect = route?.redirectTo;
-    if (typeof redirect !== 'function') throw new Error('Strategy Lab run route is not a redirect.');
-
-    TestBed.configureTestingModule({ providers: [provideRouter([])] });
-    const params = { id };
-    const queryParams = {};
-    const redirectData: PartialMatchRouteSnapshot = {
-      routeConfig: route ?? null,
-      url: [],
-      params,
-      queryParams,
-      fragment: null,
-      data: {},
-      outlet: 'primary',
-      title: undefined,
-      paramMap: convertToParamMap(params),
-      queryParamMap: convertToParamMap(queryParams),
-    };
-    const tree = runInInjectionContext(TestBed.inject(Injector), () => redirect(redirectData));
-
-    if (!(tree instanceof UrlTree)) throw new Error('Redirect did not produce a UrlTree.');
-    expect(TestBed.inject(Router).serializeUrl(tree)).toBe(expectedUrl);
-  });
-
   it('opens on the entry page at the root address instead of jumping into the app', async () => {
     TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
     const router = TestBed.inject(Router);
@@ -86,13 +60,6 @@ describe('routes', () => {
 
     expect(router.url).toBe('/');
     expect(router.routerState.snapshot.root.firstChild?.component).toBe(EntryComponent);
-  });
-
-  it.each([
-    'options-lab',
-    'strategy-lab',
-  ])('marks %s as an intentionally full-bleed workspace', (path) => {
-    expect(routes.find((route) => route.path === path)?.data).toMatchObject({ fullBleed: true });
   });
 
   it.each([
@@ -116,13 +83,6 @@ describe('routes', () => {
     ['account-list hop chain', '/brokers/alpaca?surface=gallery', '/brokers/alpaca'],
     ['account-list hop chain', '/brokers/alpaca/bots', '/brokers/alpaca'],
     ['account-list hop chain', '/brokers/alpaca/gallery', '/brokers/alpaca'],
-    // A redirect lands in one hop (PRD #3490 R32): engine/runs/:id goes
-    // straight to the final /strategy-lab?run=N rather than through
-    // strategy-lab/runs/:id. Angular follows an absolute redirect into another
-    // redirect by restarting from the root, but not a relative one (it is
-    // re-matched with redirects off), so this is a full-router assertion, not
-    // a route-config shape check.
-    ['legacy engine/runs/:id bookmark', '/engine/runs/204', '/strategy-lab?run=204'],
   ])('%s: %s lands on %s', async (_kind, path, expectedUrl) => {
     TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
     const router = TestBed.inject(Router);
@@ -133,14 +93,16 @@ describe('routes', () => {
   });
 
   it.each([
-    // Without pathMatch: 'full' the run routes prefix-match, so a trailing
-    // segment still fired the redirect with id 204 instead of falling through
-    // to the wildcard — a URL that is not a run bookmark opened a run.
+    // A trailing segment is no run bookmark: it falls through to the wildcard
+    // rather than resolving run 204's owner.
     '/strategy-lab/runs/204/extra',
     '/engine/runs/204/extra',
     // A lost address starting like a real page fails in place too.
     '/research-lab/nothing-here',
     '/no-such-page?x=1#frag',
+    // A setup's address always carries its tab: a bare name, and a tab no page serves, name nothing.
+    '/options-setups/Mine',
+    '/options-setups/Mine/nonsense',
   ])('leaves %s where it is on the not-found page, never on a default page', async (path) => {
     TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
     const router = TestBed.inject(Router);
@@ -154,12 +116,85 @@ describe('routes', () => {
     expect(await leaf.routeConfig?.loadComponent?.()).toBe(NotFoundComponent);
   });
 
-  it('lazily loads the Options Backtest page at its own address', async () => {
-    const route = routes.find((candidate) => candidate.path === 'options-backtest');
-    if (route?.loadComponent === undefined) throw new Error('Options Backtest route is missing.');
+  it('lazily loads the Options setups list at its own address and keeps Define\'s rail in view', async () => {
+    TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
+    const router = TestBed.inject(Router);
+    const leafOf = () => {
+      let leaf = router.routerState.snapshot.root;
+      while (leaf.firstChild !== null) leaf = leaf.firstChild;
+      return leaf;
+    };
 
-    expect(await route.loadComponent()).toBe(OptionsBacktestPageComponent);
-    expect(route.data).toMatchObject({ stickyContent: true });
+    await router.navigateByUrl('/options-setups');
+    expect(await leafOf().routeConfig?.loadComponent?.()).toBe(OptionsSetupsIndexComponent);
+    expect(routeTreeHasData(router.routerState.snapshot.root, 'stickyContent')).toBe(false);
+
+    await router.navigateByUrl('/options-setups/SPY%200DTE/define');
+    expect(routeTreeHasData(router.routerState.snapshot.root, 'stickyContent')).toBe(true);
+  });
+
+  it('keeps the analytical views apart from a saved setup that is named analysis', async () => {
+    TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
+    const router = TestBed.inject(Router);
+    const leafOf = () => {
+      let leaf = router.routerState.snapshot.root;
+      while (leaf.firstChild !== null) leaf = leaf.firstChild;
+      return leaf;
+    };
+
+    await router.navigateByUrl('/options-setups/analysis');
+    expect(await leafOf().routeConfig?.loadComponent?.()).toBe(StrategyBuilderComponent);
+
+    await router.navigateByUrl('/options-setups/analysis/finder');
+    expect(await leafOf().routeConfig?.loadComponent?.()).toBe(StrategyFinderUnavailableComponent);
+
+    // A setup's address carries a tab, so this is the setup named "analysis", not an analytical view.
+    await router.navigateByUrl('/options-setups/analysis/define');
+    expect(leafOf().routeConfig?.path).toBe('define');
+    expect(leafOf().parent?.paramMap.get('name')).toBe('analysis');
+  });
+
+  it('opens a setup\'s Explore at its own address, whatever view and run its query names', async () => {
+    TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
+    const router = TestBed.inject(Router);
+
+    await router.navigateByUrl('/options-setups/SPY%200DTE/explore?view=history&run=30');
+
+    expect(router.url).toBe('/options-setups/SPY%200DTE/explore?view=history&run=30');
+    let leaf = router.routerState.snapshot.root;
+    while (leaf.firstChild !== null) leaf = leaf.firstChild;
+    expect(await leaf.routeConfig?.loadComponent?.()).toBe(OptionsSetupExploreComponent);
+    expect(leaf.queryParams).toEqual({ view: 'history', run: '30' });
+  });
+
+  it('opens a setup\'s Golden at its own address, whatever run it reviews and study it forks', async () => {
+    TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
+    const router = TestBed.inject(Router);
+
+    await router.navigateByUrl('/options-setups/SPY%200DTE/golden?run=76&parent_study_id=os_a');
+
+    expect(router.url).toBe('/options-setups/SPY%200DTE/golden?run=76&parent_study_id=os_a');
+    let leaf = router.routerState.snapshot.root;
+    while (leaf.firstChild !== null) leaf = leaf.firstChild;
+    expect(await leaf.routeConfig?.loadComponent?.()).toBe(OptionsSetupGoldenComponent);
+    expect(leaf.queryParams).toEqual({ run: '76', parent_study_id: 'os_a' });
+  });
+
+  it('opens a study by its own id, before the other kinds of evidence, and the other kinds still open at theirs', async () => {
+    TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
+    const router = TestBed.inject(Router);
+    const leafOf = () => {
+      let leaf = router.routerState.snapshot.root;
+      while (leaf.firstChild !== null) leaf = leaf.firstChild;
+      return leaf;
+    };
+
+    await router.navigateByUrl('/options-setups/evidence/study/os_a?view=lineage');
+    expect(await leafOf().routeConfig?.loadComponent?.()).toBe(OptionsStudyPageComponent);
+    expect(leafOf().paramMap.get('studyId')).toBe('os_a');
+
+    await router.navigateByUrl('/options-setups/evidence/run/76');
+    expect(await leafOf().routeConfig?.loadComponent?.()).toBe(OptionsEvidencePageComponent);
   });
 
   it('serves the account list — and its ?deploy intent — from the one broker route', async () => {

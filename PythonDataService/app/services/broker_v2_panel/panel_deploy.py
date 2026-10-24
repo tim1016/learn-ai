@@ -1013,7 +1013,7 @@ def _require_alpaca_deploy_request(
             next_action=(
                 "Restore the research store, then refresh this page."
                 if evidence_unread
-                else "Review the strategy in Strategy Validation, then refresh this page."
+                else "Review the strategy's Proof under Signal strategies, then refresh this page."
             ),
             http_status=409,
         )

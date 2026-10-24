@@ -4,13 +4,12 @@ import { of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
 import { environment } from '../../environments/environment';
+import { dataReport, dataSession } from '../shared/data-lake/testing/instrument-data-report';
 import { TradeBackfillRunner } from '../shared/data-lake/trade-backfill-runner';
 import { ReturnsDistributionService } from './returns/returns-distribution.service';
 import {
   INSTRUMENT_DATA_URL,
   WINDOW_QUERY,
-  dataReport,
-  dataSession,
   flushCatalog,
   openPlace,
   type OpenedPlace,

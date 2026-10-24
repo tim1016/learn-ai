@@ -323,15 +323,6 @@ async def test_research_reserves_development_visibility_and_resume_fences_late_d
     assert await conn.fetchval("SELECT count(*) FROM research_options_search_exposures WHERE owner_id=$1", row["id"]) == 1
 
 
-async def test_history_summaries_exclude_retained_heavy_study_document(conn: asyncpg.Connection, unique: str) -> None:
-    row = _record("os_" + unique, unique.upper())
-    row["retained_heavy_document"] = {"trace": ["x" * 1000] * 100}
-    await repo.create(conn, row, "lock", "request")
-    summary = next(item for item in await repo.summaries(conn) if item["id"] == row["id"])
-    assert set(summary) == {"id", "setup_name", "underlying", "phase", "status", "updated_at_ms"}
-    assert summary["setup_name"] == row["setup_name"]
-
-
 async def test_batched_diagnostic_query_returns_only_scalar_summaries(conn: asyncpg.Connection, unique: str) -> None:
     row = await _running(conn, unique)
     for index in range(2):

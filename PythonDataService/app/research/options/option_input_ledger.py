@@ -46,8 +46,8 @@ PROVIDER_INPUTS: Mapping[Stage, Mapping[str, str]] = {
     "option_expiries": {
         "provider": "polygon",
         "endpoint": "/v3/reference/options/contracts",
-        "query": "as_of the first session of each month, calls, expiring 20-45 days out, strike within 5% of that day's close",
-        "selection": "the last expiry at or before 30 days out and the first after it; reused for the whole month",
+        "query": "as_of the first session of each month, and again as of a later session that finds no near or no far expiry in it: calls expiring from 7 days after that session to 45 days after the month's last, strike within 5% of that day's close",
+        "selection": "for each session, the latest expiry 7 to 30 days out and the earliest 31 to 45 days out",
     },
     "option_contracts": {
         "provider": "polygon",

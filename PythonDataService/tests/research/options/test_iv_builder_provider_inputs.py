@@ -5,22 +5,20 @@ The cross-sectional study's option inputs stay with the provider. These tests ru
 installed at the SDK client's seam. The chain is priced with a known volatility, so what the builder returns can be
 checked against the number that generated it.
 
-The windows are short on purpose. ``contract_finder`` looks expiries up once per month and reuses the bracket for the
-whole month, while ``iv_builder._interpolate_iv`` (since #3484) raises when 30 days is no longer inside a day's
-bracket; the chain's two expiries are far enough apart that the first fortnight of a month stays bracketed. A longer
-window raises ``ValueError``; that interaction is recorded in ``docs/known-gaps.md`` and is not changed here.
+The window is two months, as a real run's is. ``contract_finder`` lists a month's expiries in one lookup and picks each
+date's pair around 30 days from it (#3528), so the run crosses a month edge and changes pair under it.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 import pytest
 
 from app.config import settings
-from app.research.options import iv_builder
+from app.research.options import contract_finder, iv_builder
 from app.research.options.iv_builder import build_iv_history
 from app.research.options.option_input_ledger import OptionInputLedger, combine
 from app.services import fred_service
@@ -29,18 +27,22 @@ from app.services.polygon_client import PolygonClientService
 from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 from tests._helpers.option_chain import OptionChain, option_ticker, parse_option_ticker
 
-#: The first two weeks of March 2024: the month's one expiry lookup (on Mar 1) keeps 30 days inside [low, high].
-WINDOW = [date(2024, 3, 1), *(date(2024, 3, d) for d in (4, 5, 6, 7, 8, 11, 12, 13, 14, 15))]
-LOW_EXPIRY, HIGH_EXPIRY = date(2024, 3, 29), date(2024, 4, 15)
+#: October and November 2024 up to Thanksgiving: every weekday is a session, so the frame the builder pads to business
+#: days holds exactly these rows. One expiry lookup per month (Oct 1, Nov 1) serves the whole window on a chain that
+#: lists a Friday every week.
+WINDOW = [day for day in (date(2024, 10, 1) + timedelta(days=n) for n in range(58)) if day.weekday() < 5]
+#: A slow walk, so a strike chosen at an expiry's first use is still within a few percent of the money when it leaves the pair.
+STEP = 0.1
 
-#: Option prices are rounded to 1e-4, so a price is off by at most 5e-5; vega is at least 5 per unit of volatility for
-#: these 14-45 day options on a $150 underlying (ATM about 12, a 25-delta wing about 9). The implied volatility is
-#: therefore recovered to within 5e-5 / 5 = 1e-5, which is the tolerance: the derived worst case, not a round number.
-#: Measured on this payload the largest error is 3.1e-6 (put wing); the solver's own tolerance adds nothing visible.
+#: Option prices are rounded to 1e-4, so a price is off by at most 5e-5; vega is at least 8.5 per unit of volatility for
+#: the 23-36 day options this window prices (ATM 15 to 17, a 25-delta wing 8.5 to 12), so the implied volatility is
+#: recovered to within 5e-5 / 8.5 = 5.9e-6. The tolerance stays at 1e-5, the value the short window pinned; it was not
+#: loosened to take the longer window. Measured on this payload the largest error is 3.5e-6 (put wing); the solver's own
+#: tolerance adds nothing visible.
 IV_ATOL = 1e-5
 
 
-def stock_rows(days: list[date], *, start: float = 150.0, step: float = 0.37) -> list[dict]:
+def stock_rows(days: list[date], *, start: float = 150.0, step: float = STEP) -> list[dict]:
     """Daily stock rows as the study hands them over: a gentle walk, timestamps at the session open."""
     from app.lean_sidecar.trading_calendar import session_open_ms_utc
 
@@ -63,9 +65,17 @@ def build(chain: OptionChain, rows: list[dict], ledger: OptionInputLedger, *, da
     return build_iv_history("SPY", days[0].isoformat(), days[-1].isoformat(), service, rows, ledger)
 
 
+def expiry_pairs(frame) -> list[tuple[date, date]]:
+    """Each row's bracketing expiries, rebuilt from the date and the DTEs the frame carries, not from the ledger."""
+    return [
+        (date.fromisoformat(row.date) + timedelta(days=int(row.dte_low)), date.fromisoformat(row.date) + timedelta(days=int(row.dte_high)))
+        for row in frame.itertuples()
+    ]
+
+
 def chain_for(rows: list[dict], days: list[date] = WINDOW, **options) -> OptionChain:
     spots = {day: row["close"] for day, row in zip(days, rows, strict=True)}
-    return OptionChain("SPY", spots, rate=DEFAULT_RISK_FREE_RATE, expiries=(LOW_EXPIRY, HIGH_EXPIRY), **options)
+    return OptionChain("SPY", spots, rate=DEFAULT_RISK_FREE_RATE, **options)
 
 
 # ---------------------------------------------------------------------------
@@ -143,33 +153,33 @@ def test_an_option_bar_fetch_that_fails_is_recorded_with_its_reason_and_the_rest
     rows = stock_rows(WINDOW)
     boom = ConnectionError("Max retries exceeded with url: /v2/aggs/ticker/x?apiKey=SECRET123&limit=1")
 
-    def fail_high_puts(ticker: str) -> Exception | None:
-        _, expiry, kind, _ = parse_option_ticker(ticker)
-        return boom if (expiry, kind) == (HIGH_EXPIRY, "put") else None
+    def fail_puts(ticker: str) -> Exception | None:
+        return boom if parse_option_ticker(ticker)[2] == "put" else None
 
-    chain = chain_for(rows, bar_failure=fail_high_puts)
+    chain = chain_for(rows, bar_failure=fail_puts)
     ledger = OptionInputLedger()
 
     with caplog.at_level(logging.WARNING, logger=iv_builder.logger.name):
         frame = build(chain, rows, ledger)
 
-    asked_high_puts = {t for t in chain.bar_requests if parse_option_ticker(t)[1:3] == (HIGH_EXPIRY, "put")}
-    assert asked_high_puts, "the chain listed puts at the far expiry and the builder asked for them"
+    asked_puts = {t for t in chain.bar_requests if parse_option_ticker(t)[2] == "put"}
+    assert asked_puts, "the chain listed puts and the builder asked for them"
     failures = ledger.failures
-    assert {f.key for f in failures} == asked_high_puts and all(f.stage == "option_bars" for f in failures)
+    assert {f.key for f in failures} == asked_puts and all(f.stage == "option_bars" for f in failures)
     assert {f.error_type for f in failures} == {"ConnectionError"}
     assert all("SECRET123" not in f.reason and "apiKey=REDACTED" in f.reason for f in failures), "a key never reaches a result"
     block = ledger.as_dict()
-    assert block["failures_total"] == len(asked_high_puts)
-    assert block["inputs"]["option_bars"]["failed"] == len(asked_high_puts)
+    assert block["failures_total"] == len(asked_puts)
+    assert block["inputs"]["option_bars"]["failed"] == len(asked_puts)
     assert block["inputs"]["option_bars"]["attempted"] == len(chain.bar_requests)
     assert any(r.getMessage().startswith("option bars were not fetched") for r in caplog.records), "and it is logged above debug"
-    # The failed contracts are the far-expiry puts: the skew leg that needs them is absent, never filled; ATM survives.
+    # The failed contracts are every put: the skew leg that needs them is absent, never filled; ATM survives on its calls.
     assert frame["iv_30d_put"].isna().all()
     np.testing.assert_allclose(frame["iv_30d_atm"].to_numpy(dtype=float), [chain.sigma(d) for d in WINDOW], atol=IV_ATOL, rtol=0)
 
 
-def test_an_expiry_lookup_that_fails_leaves_no_iv_and_names_the_month():
+def test_an_expiry_lookup_that_fails_leaves_no_iv_and_names_each_lookup_by_its_as_of_date():
+    """After a failed first lookup every later session asks again as of its own date (#3528), and each ask is recorded."""
     rows = stock_rows(WINDOW)
     chain = chain_for(rows, contract_failure=lambda expiry: TimeoutError("read timed out") if expiry is None else None)
     ledger = OptionInputLedger()
@@ -177,20 +187,74 @@ def test_an_expiry_lookup_that_fails_leaves_no_iv_and_names_the_month():
     frame = build(chain, rows, ledger)
 
     assert frame["iv_30d_atm"].isna().all(), "no expiry, no contract, no IV; nothing is substituted"
-    assert [(f.stage, f.key, f.error_type) for f in ledger.failures] == [("option_expiries", "SPY:2024-03", "TimeoutError")]
+    assert set(frame["missing_reason"]) == {"expiry_lookup_failed"}
+    assert [(f.stage, f.key, f.error_type) for f in ledger.failures] == [
+        ("option_expiries", f"SPY:{day.isoformat()}", "TimeoutError") for day in WINDOW
+    ]
     assert ledger.attempted("option_contracts") == 0
 
 
-def test_a_contract_lookup_that_fails_is_recorded_per_attempt_and_names_the_expiry():
+def test_a_re_list_is_a_lookup_of_its_own_recorded_under_its_as_of_date():
+    """The first lookup times out once: that session is missing, the next lists again as of itself and the month recovers."""
     rows = stock_rows(WINDOW)
-    chain = chain_for(rows, contract_failure=lambda expiry: OSError("reset") if expiry == HIGH_EXPIRY.isoformat() else None)
+    asked = {"expiry_lookups": 0}
+
+    def first_lookup_times_out(expiry: str | None) -> Exception | None:
+        if expiry is not None:
+            return None
+        asked["expiry_lookups"] += 1
+        return TimeoutError("read timed out") if asked["expiry_lookups"] == 1 else None
+
+    chain = chain_for(rows, contract_failure=first_lookup_times_out)
     ledger = OptionInputLedger()
 
     frame = build(chain, rows, ledger)
 
-    assert {(f.stage, f.key) for f in ledger.failures} == {("option_contracts", f"SPY:{HIGH_EXPIRY.isoformat()}")}
-    assert ledger.failed_count("option_contracts") == len(WINDOW), "a failed expiry is asked again on every date, and each ask is counted"
-    assert frame["iv_30d_atm"].isna().all(), "the far bracket is missing, so no 30-day interpolation exists"
+    as_of = [request["as_of"] for request in chain.contract_requests if request.get("expiration_date") is None]
+    assert as_of == ["2024-10-01", "2024-10-02", "2024-11-01"], "the month's first lookup, the re-list after its failure, the next month's"
+    assert [(f.stage, f.key) for f in ledger.failures] == [("option_expiries", "SPY:2024-10-01")]
+    assert ledger.attempted("option_expiries") == 3
+    assert list(frame.loc[frame["missing_reason"].notna(), "date"]) == ["2024-10-01"]
+    np.testing.assert_allclose(
+        frame["iv_30d_atm"].to_numpy(dtype=float)[1:], [chain.sigma(day) for day in WINDOW[1:]], atol=IV_ATOL, rtol=0
+    )
+    clean = OptionInputLedger()
+    build(chain_for(rows), rows, clean)
+    assert ledger.observation_digest("option_expiries") != clean.observation_digest("option_expiries"), "the lookups differ, so does the identity"
+
+
+def test_an_expiry_lookup_that_hits_its_cap_is_a_typed_failure_not_a_short_list(monkeypatch):
+    monkeypatch.setattr(contract_finder, "EXPIRY_LOOKUP_CONTRACTS_PER_DAY", 1)
+    rows = stock_rows(WINDOW)
+    ledger = OptionInputLedger()
+
+    frame = build(chain_for(rows), rows, ledger)
+
+    assert frame["iv_30d_atm"].isna().all() and set(frame["missing_reason"]) == {"expiry_lookup_truncated"}
+    assert [(f.stage, f.key, f.error_type) for f in ledger.failures] == [
+        ("option_expiries", "SPY:2024-10-01", "ExpiryLookupTruncated"),
+        ("option_expiries", "SPY:2024-11-01", "ExpiryLookupTruncated"),
+    ], "one lookup per month; a cut-short list is not asked again"
+    assert "hit its" in ledger.failures[0].reason and "contract cap" in ledger.failures[0].reason
+    assert ledger.degraded is True
+
+
+def test_a_contract_lookup_that_fails_is_recorded_per_attempt_and_names_the_expiry():
+    rows = stock_rows(WINDOW)
+    failing = date(2024, 11, 1)
+    chain = chain_for(rows, contract_failure=lambda expiry: OSError("reset") if expiry == failing.isoformat() else None)
+    ledger = OptionInputLedger()
+
+    frame = build(chain, rows, ledger)
+
+    assert {(f.stage, f.key, f.error_type) for f in ledger.failures} == {("option_contracts", f"SPY:{failing.isoformat()}", "OSError")}
+    uses = [pair for pair in expiry_pairs(frame) if failing in pair]
+    assert uses, "the failing expiry was in the pair on some dates"
+    assert ledger.failed_count("option_contracts") == len(uses), "a failed expiry is asked again on every date it is in the pair, and each ask is counted"
+    broken = frame["iv_quality"].eq("missing").to_list()
+    assert broken == [failing in pair for pair in expiry_pairs(frame)], "exactly the dates that needed it have no IV of their own"
+    sound = [(day, iv) for day, iv, bad in zip(WINDOW, frame["iv_30d_atm"], broken, strict=True) if not bad]
+    np.testing.assert_allclose([iv for _, iv in sound], [chain.sigma(day) for day, _ in sound], atol=IV_ATOL, rtol=0)
 
 
 # ---------------------------------------------------------------------------
@@ -203,15 +267,17 @@ def test_the_ledger_names_each_provider_input_and_fingerprints_what_it_answered(
     chain = chain_for(rows)
     ledger = OptionInputLedger()
 
-    build(chain, rows, ledger)
+    frame = build(chain, rows, ledger)
 
     block = ledger.as_dict()
     assert set(block["inputs"]) == {"option_expiries", "option_contracts", "option_bars"}
     for stage, entry in block["inputs"].items():
         assert entry["kind"] == "provider" and entry["provider"] == "polygon" and entry["reproducible"] is False, stage
         assert entry["attempted"] > 0 and entry["failed"] == 0 and len(entry["observation_digest"]) == 64, stage
-    assert block["inputs"]["option_expiries"]["attempted"] == 1, "one lookup for the month"
-    assert block["inputs"]["option_contracts"]["attempted"] == 2, "one per bracketing expiry"
+    assert block["inputs"]["option_expiries"]["attempted"] == 2, "one lookup for each of the two months"
+    assert block["inputs"]["option_contracts"]["attempted"] == len({e for pair in expiry_pairs(frame) for e in pair}), (
+        "one per expiry that was ever in a pair"
+    )
     assert block["risk_free_rate"] == {
         "kind": "provider", "provider": "fred", "days_from_fred": 0, "days_from_default": len(WINDOW), "days_fetch_failed": 0,
         "reproducible": False,

@@ -4,15 +4,14 @@ The job runs through the real runner, emitter and result cache over the job-stor
 pipeline (vendor HTTP, ``ensure_data``, the lake writer, admission) as in ``tests/research/test_cross_sectional_inputs.py``.
 
 The one stand-in is ``build_iv_history``, the provider-side IV build. It is real and tested against a priced option chain
-in ``tests/research/options/test_iv_builder_provider_inputs.py``; here it is replaced because, on master since #3484, no
-chain can pass the IV diagnostics over a window long enough to compute an IC (``contract_finder`` caches each month's
-expiry bracket and ``_interpolate_iv`` raises once 30 days is no longer inside it; see ``docs/known-gaps.md``). The stand-in
-derives its IV from the stock rows it is handed, so these tests also prove which bars reach the IV build, and it records
-into the same ``OptionInputLedger`` the real builder does.
+over a two-month window in ``tests/research/options/test_iv_builder_provider_inputs.py``; here it is replaced because this
+module's subject is the stock bars the job admits, caches and records, not the option chain. The stand-in derives its IV from
+the stock rows it is handed, so these tests also prove which bars reach the IV build, and it records into the same
+``OptionInputLedger`` the real builder does.
 
-What the stand-in cannot show is the production outcome while #3528 stands: the real builder raises for any window past the
-first fortnight of a month, so every member lands as ``iv_build_failed``. ``test_a_study_in_which_no_member_is_evaluated...``
-pins what the job does then: it fails with ``no_member_evaluated`` and each member's reason, and completes nothing.
+``builder_raises`` stands for an IV build that raises for a member. ``test_a_study_in_which_no_member_is_evaluated...`` pins
+what the job does when it does so for every member: it fails with ``no_member_evaluated`` and each member's reason, and
+completes nothing.
 """
 
 from __future__ import annotations
@@ -413,11 +412,11 @@ def test_a_repeat_served_from_the_cache_is_not_recorded_a_second_time(harness, t
 
 
 def builder_raises(ledger: OptionInputLedger) -> pd.DataFrame:
-    raise ValueError("30 days is outside the expiry bracket")
+    raise ValueError("the IV build raised for this member")
 
 
 def test_a_study_in_which_no_member_is_evaluated_fails_with_a_typed_code_and_each_members_reason(harness):
-    """While #3528 stands, the real IV builder raises for any window past a month's first fortnight: every member errors."""
+    """Every member's IV build raises: nothing is evaluated, so the job fails instead of completing over zero members."""
     harness.iv_behaviour["SPY"] = harness.iv_behaviour["QQQ"] = builder_raises
 
     state = harness.run(params(), job_id="none")
@@ -426,7 +425,7 @@ def test_a_study_in_which_no_member_is_evaluated_fails_with_a_typed_code_and_eac
     assert state["status"] == "failed" and state["error_code"] == "no_member_evaluated"
     message = state["error_message"]
     assert "None of the 2 requested members" in message and "SPY: " in message and "QQQ: " in message
-    assert "outside the expiry bracket" in message
+    assert "the IV build raised for this member" in message
     assert payload["success"] is False and payload["status"] == "not_evaluated" and "refusal" not in payload
     universe = payload["universe"]
     assert (universe["requested_count"], universe["evaluated_count"], universe["excluded_count"], universe["complete"]) == (2, 0, 2, False)

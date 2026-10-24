@@ -15,11 +15,13 @@ import type {
   TickerRange,
 } from '../ticker-range-picker.types';
 
-/** Session-toggle behaviour for the picker. The Python engine reads regular
- *  hours only, so Extended is never selectable.
- *  ``disabled`` = Extended rendered but disabled, with the reason shown.
- *  ``hidden``   = Session group not rendered at all. */
-export type SessionMode = 'disabled' | 'hidden';
+/** Session-toggle behaviour for the picker.
+ *  ``disabled`` = Extended rendered but disabled, with the reason shown: the
+ *                 host's run reads regular hours only. The default.
+ *  ``hidden``   = Session group not rendered at all.
+ *  ``enabled``  = RTH and Extended are both selectable: the host's run reads
+ *                 the session it is given. */
+export type SessionMode = 'disabled' | 'hidden' | 'enabled';
 
 /** The fields the sampling card sets. */
 export type SamplingChange = Partial<Pick<TickerRange, 'resolution' | 'multiplier' | 'session' | 'autoFetch'>>;
@@ -65,7 +67,7 @@ export class SamplingCardComponent {
   }
 
   setSession(s: Session): void {
-    if (s === 'extended') return;
+    if (s === 'extended' && this.sessionMode() !== 'enabled') return;
     this.changed.emit({ session: s });
   }
 

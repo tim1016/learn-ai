@@ -41,6 +41,8 @@ export interface RunHistoryRow {
   verdictGrade: string | null;
   verdictSignal: string | null;
   parityGroupId: string | null;
+  /** The run executed LEAN source pasted by the owner, whichever strategy it is filed under. */
+  customSource: boolean;
   /** Current human-review projection for a designated Validation Golden Run. */
   goldenValidationState?: string | null;
   /** False when that review was recorded against evidence that has since changed. */

@@ -3,6 +3,7 @@ import { ChangeDetectionStrategy, Component, computed, inject, input, linkedSign
 import { RouterLink } from '@angular/router';
 
 import type { components } from '../../api/broker.types';
+import { optionsSetupRoute } from '../../options-setups/options-setups.address';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
 import { OptionsGoldenSearchService, optionsSearchErrorMessage } from './options-golden-search.service';
@@ -22,6 +23,8 @@ export class OptionsFailureEvidenceComponent {
   readonly studyId = input.required<string>();
   readonly digest = input.required<string>();
   readonly window = input<EvidenceWindow>('development');
+  /** The Golden tab of the saved setup a study was started from, where a plan that forks it is made. */
+  protected readonly planRoute = (setupName: string) => optionsSetupRoute(setupName, 'golden');
   private readonly identity = computed(() => `${this.studyId()}:${this.digest()}:${this.window()}`);
   protected readonly offset = linkedSignal({ source: this.identity, computation: () => 0 });
   protected readonly target = linkedSignal<string, FailureEvent | null>({ source: () => `${this.identity()}:${this.offset()}`, computation: () => null });

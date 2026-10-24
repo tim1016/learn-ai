@@ -6,16 +6,16 @@ A backtest asks, “What would these rules have done with past prices?” It doe
 
 ### Follow this first exercise
 
-1. Open **Options setups → Options Backtest**. Stay on the **Backtest** tab.
-2. In **Instrument**, choose an underlying, such as SPY. The underlying is the stock or fund the option refers to. In **Duration**, choose a short range of completed trading days. The available range depends on the data plan.
+1. Open **Options setups** and press **New options setup**. Stay on the **Define** tab.
+2. In **Instrument**, choose an underlying, such as SPY. The underlying is the stock or fund the option refers to. The dates come later, in **Explore**: a setup holds instructions, and the run chooses dates.
 3. Keep the initial **Entry time** and **Exit time** while you learn. They begin five minutes after the open and fifteen minutes before the close. Leave **No re-entry after** off for this first exercise.
 4. In **Leg builder**, choose **Buy → Call → 1 contract → Weekly → At the money**, then press **Add leg**. Leave Stop loss, Momentum and Re-entry off. This is a practice configuration, not a trading recommendation.
 5. In **Costs**, review Cash and Slippage. Choose **Estimated** fees if the selected dates have published rates. The page starts with **Not charged**; that choice leaves fees out of the result. If estimated rates are unavailable, choose later dates or deliberately state another fee assumption.
 6. Read the setup's sentences beside the form. Check the instrument, contract choice, times, quantity and costs. Give the setup a name such as **First practice** and save it.
-7. Press **Check data**. Read the session list. **Ready** means the necessary data is stored; **Needs download** means it must be fetched; **Cannot be tested** needs a change or investigation. Nothing downloads during this check.
-8. If every requested session can be tested, start the backtest. Watch downloading and replay progress. If the page offers **Run available dates**, read the replacement range before choosing it, then start the run for that range.
+7. Open the **Explore** tab, which opens on **Backtest**. In **Duration**, choose a short range of completed trading days. The available range depends on the data plan. Read **What this backtest tests**: it is the setup as you last saved it, and anything you changed in Define after saving is not in the backtest. Press **Check data**. Read the session list. **Ready** means the necessary data is stored; **Needs download** means it must be fetched; **Cannot be tested** needs a change or investigation. Nothing downloads during this check.
+8. If every requested session can be tested, press **Start backtest**. Watch downloading and replay progress in the run shown below the buttons. If the page offers **Run available dates**, read the replacement range before choosing it, then start the run for that range.
 9. When the run is **Complete**, read **Total fees**, **Slippage paid**, and **Sessions** before judging Net profit. A run can finish successfully without making a trade.
-10. Open a day in the daily table or trades. Find the selected contract, its entry, its closing fill or remaining mark, and the reason it ended. Explain those events in your own words.
+10. In the run's result, open a day in the daily table or trades. Find the selected contract, its entry, its closing fill or remaining mark, and the reason it ended. Explain those events in your own words.
 
 > **You have finished the exercise when:** you can identify the setup used, the dates actually requested, the cost assumptions, and what happened to one leg. If no trade occurred, finding the recorded reason is a useful result too.
 
@@ -52,7 +52,7 @@ Each day has its own trading window. The setup tries to close its holdings at th
 
 ### Choose the historical range
 
-Use **Duration** to select the requested dates. After **Check data**, the page shows the earliest option prices served by the current plan. A range can fail because it is too old, not final yet, missing required data or missing fee rates. Downloading cannot solve every one of those problems.
+In **Explore**, use **Duration** to select the requested dates. After **Check data**, the page shows the earliest option prices served by the current plan. A range can fail because it is too old, not final yet, missing required data or missing fee rates. Downloading cannot solve every one of those problems.
 
 Holidays are handled by the trading calendar. On a shortened session, the window must still leave room for entry and exit. A session whose window does not fit is skipped with a reason.
 
@@ -156,10 +156,10 @@ The estimate rounds each fee type upward to cents on each fill. The broker's dai
 1. Read the plain-language summary next to the setup. Follow each leg's contract choice and rules.
 2. Resolve any field problems. If the summary cannot load, use its retry action before relying on it.
 3. Enter a recognizable setup name and save. Read the confirmation or problem message.
-4. Use the saved-setups menu to reopen a setup. Confirm the read-back before running it over new dates.
+4. Open a saved setup from **Options setups**. Confirm the read-back before running it over new dates.
 5. Use **Export setup** to download the setup file. **Import setup** reads a compatible JSON setup and reports rejected or invalid content instead of quietly repairing it.
 
-The setup contains trading instructions; the run chooses historical dates. Exporting a setup does not export price data, completed trades or a result. Use the trade export for the ledger of a completed run.
+The setup contains trading instructions; the run, in **Explore**, chooses historical dates and tests the setup as last saved, so save a change before you test it. Exporting a setup does not export price data, completed trades or a result. Use the trade export for the ledger of a completed run.
 
 Deleting a saved setup removes that library item. It is separate from deleting a run in History. A completed run retains the setup it used; later setup edits do not rewrite that recorded result.
 
@@ -180,7 +180,7 @@ If only part of a range can be tested, **Run available dates** offers its longes
 ### Follow the run's state
 
 - **Running:** watch the current phase and progress. Downloading comes before replay.
-- **Complete:** the whole result is saved and can be reopened in History.
+- **Complete:** the whole result is saved and can be reopened in **History**, a view of **Explore**. An opened run has its own address, so it can be bookmarked or shared.
 - **Failed:** read the reason and affected sessions. A partial replay is not presented as a completed result.
 - **Cancelled:** the request ended without a completed result. Captures already in progress may finish before cancellation completes.
 - **Interrupted:** the running job is gone and there is no completed result to read.
@@ -259,8 +259,8 @@ Older runs can say **Not recorded** for newer evidence. That is not zero. The re
 
 **Your goal:** compare a deliberate change without confusing different samples.
 
-1. Open **History** and find the run by setup, date range, start time and status. Use **Show older runs** when offered.
-2. Open a completed run to read its saved result and setup. **Use this setup** brings those instructions back to the form for a new experiment.
+1. In **Explore**, open **History** and find the run by setup, date range, start time and status. Use **Show older runs** when offered.
+2. Open a completed run to read its saved result and setup. **Use this setup** opens those instructions in **Define** as a new draft with no saved name, for a new experiment; the setup you opened Explore for is not changed. **Performance and research lineage** reads the run's retained evidence, and **Take to Golden** carries that run to the setup's Golden tab (chapter 13). Taking a run to Golden approves nothing.
 3. Select two eligible completed runs and press **Compare**. Read any eligibility message if comparison is unavailable.
 4. Start with the settings that differ. Then read the results over **shared sessions**: only days present in both runs contribute to those comparison totals.
 5. If you intended to test one change but several settings differ, make a better-controlled pair before drawing a conclusion.
@@ -269,11 +269,27 @@ Deleting a run removes that saved research result. Export anything you need befo
 
 **Practice:** compare your baseline with the version containing one stop. Explain the change in trades, costs and drawdown; do not judge it only by which total is larger.
 
-## 13. Explore the Past chain {#past-chain}
+## 13. Approve a run or start a golden search {#golden}
+
+**Your goal:** turn a run you have read into an approved version, or look for a stronger version with a search, and know which of the two made each version.
+
+**Golden** is the fourth tab of a saved setup. It holds both ways to an approved version, and both publish through the same Golden Options approval. Golden means owner-approved; it does not mean optimal and it is not a forecast.
+
+1. **Approve a tested run.** In **Explore**, open a completed run and press **Take to Golden**, or open **Golden** and press **Review run** beside a run of the saved content. Taking a run to Golden approves nothing. Golden reads what *that run* froze, shows it, and asks for a note. **Approve golden setup** sends the run and the hash of the content you read, so a setup that is edited, or saved again, in **Define** while you read cannot change what is approved: an approval of any other content is refused. Pressing the button twice, or again after a lost answer, is one request. A run that already has an approved version shows that version instead of making a second.
+2. **Start a golden search.** Press **Set up a golden search**. The search starts from the setup as last saved, and every check and the start name that content by its hash, so a setup saved differently since you read it is refused rather than searched. Edit the setup in **Define** and save it first; unsaved changes there are not used. A search ends in a study you open at its own address, where you compare candidates, open the final test and decide.
+3. **Read each version.** Every approved version says which path made it. A **single-run approval** is your approval of one tested run: no search ran, so no statistical qualification is claimed. A **golden search** version carries the study it came from and the verdict that study recorded, an **owner exception** keeps its failed rules and what you acknowledged, and a version whose study link is incomplete claims no search at all. Each lists its limitations, its source run and study, whether its execution proof still holds, and every revoke and re-proof since.
+4. **Re-prove or revoke.** Press **Review run** on a version to reach the run it came from, where **Re-prove from retained evidence** and **Revoke golden setup** are. **Re-proof replays the run's execution under the current rules; it does not recertify the statistical evidence recorded when a search approved the version.** Revoking needs a reason and blocks new entries.
+5. **Take a version to Deploy.** Press **Deploy an options bot** in the setup's header. It lists the approved versions of this setup, each with the path that made it, and a ready one has **Deploy this version**. Choosing it carries that exact version, by its own id, to the account list, and you choose the account there: nothing is chosen for you, even when only one version is ready. A version that is stale, revoked or unreadable is listed with why and has no link, and no other version is offered in its place. If the version is revoked while you choose an account, the account list says so by name and keeps saying so until you ask again; Deploy then refuses it as well. Nothing is deployed from the setup or from the account list: **Deploy** reads the version and the account again and applies its own checks before anything is sent.
+
+A search can change settings, so the version it approves may not be what the setup is saved as. Such a version is listed under the study that made it, never as a match for the draft. Versions are found for a setup by the exact content they froze, never by a name.
+
+A registered signal program that trades options is not an options setup. It deploys from its own strategy workflow, with its own warnings.
+
+## 14. Explore the Past chain {#past-chain}
 
 **Your goal:** see what was listed and what had traded at a historical instant.
 
-1. Open the instrument from **Markets**, choose its **Options** tab, and in the chain choose **Past · Archive**. The instrument is the underlying. Choose the trading date and, if you want one, the time. Nothing is read until a date is chosen.
+1. In **Explore**, follow **Past chain in Markets** to the chain of the setup's underlying on **Past · Archive**. Or open the instrument from **Markets**, choose its **Options** tab, and in the chain choose **Past · Archive**. The instrument is the underlying. Choose the trading date and, if you want one, the time. Nothing is read until a date is chosen.
 2. Read the underlying price and its timestamp, then choose an expiry from those listed. None is opened for you.
 3. Adjust the number of strikes shown around the money.
 4. Read calls and puts alongside each strike. Each price is the last stored trade-bar close at or before the chosen instant, with its own timestamp. It is not a bid or ask. The archive holds no quotes, Greeks, open interest or volume, so none is shown for a past date, and no current value stands in for one.
@@ -292,7 +308,7 @@ Expiry tags describe calendar position: **Daily, Weekly, Monthly, Quarterly, Unk
 
 Calls and puts can have different at-the-money strikes if their listed strikes differ. No price is borrowed from another day or a nearby strike.
 
-## 14. Find out why it did not trade {#troubleshooting}
+## 15. Find out why it did not trade {#troubleshooting}
 
 **Your goal:** find the first missing requirement rather than changing settings at random.
 
@@ -312,7 +328,7 @@ Calls and puts can have different at-the-money strikes if their listed strikes d
 
 When asking for help, retain the setup export, run identifier, affected day and leg, and exact problem message. Do not include broker credentials.
 
-## 15. Words and further reading {#glossary}
+## 16. Words and further reading {#glossary}
 
 | Term | Plain meaning |
 |---|---|

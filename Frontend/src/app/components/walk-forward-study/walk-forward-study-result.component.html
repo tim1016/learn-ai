@@ -51,6 +51,7 @@
     <p class="oos-note" role="note">
       <i class="pi pi-info-circle" aria-hidden="true"></i>
       Each fold's test-window result is <strong>out of sample</strong> for the settings chosen in that fold's training window. The other test cells were never chosen and are shown as exploratory only.
+      @if (goldenRoute(); as route) { <a [routerLink]="route" [queryParams]="{ walkForward: d.id }">Plan a golden search from this study →</a> }
     </p>
 
     <app-validation-scope-note />

@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 
 MAX_MISSING_PCT = 15.0
 MAX_DAY_OVER_DAY_IV_CHANGE = 0.50  # 50% day-over-day change flags discontinuity
+UNTYPED_MISSING = "no reason recorded"  # a missing day whose row carries no missing_reason
 
 
 @dataclass
@@ -28,6 +29,14 @@ class IvDiagnosticsReport:
     iv_skewness: float | None = None
     discontinuities: int = 0
     warnings: list[str] = field(default_factory=list)
+
+
+def _missing_by_reason(iv_data_df: pd.DataFrame, missing_mask: pd.Series) -> str:
+    """The missing days counted by their ``missing_reason``, as a suffix for the warning; empty without the column."""
+    if "missing_reason" not in iv_data_df.columns:
+        return ""
+    counts = iv_data_df.loc[missing_mask, "missing_reason"].astype(object).fillna(UNTYPED_MISSING).value_counts()
+    return ": " + ", ".join(f"{count} {reason}" for reason, count in counts.items())
 
 
 def run_iv_diagnostics(iv_data_df: pd.DataFrame) -> IvDiagnosticsReport:
@@ -77,7 +86,10 @@ def run_iv_diagnostics(iv_data_df: pd.DataFrame) -> IvDiagnosticsReport:
     )
 
     if report.missing_pct > MAX_MISSING_PCT:
-        report.warnings.append(f"Missing data too high: {report.missing_pct:.1f}% (max {MAX_MISSING_PCT}%)")
+        report.warnings.append(
+            f"Missing data too high: {report.missing_pct:.1f}% (max {MAX_MISSING_PCT}%)"
+            + _missing_by_reason(iv_data_df, ~valid_mask)
+        )
 
     # Gaps (consecutive missing days)
     missing_runs = (~valid_mask).astype(int)

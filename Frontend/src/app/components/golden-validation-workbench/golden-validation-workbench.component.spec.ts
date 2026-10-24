@@ -10,6 +10,8 @@ import { GoldenValidationService } from "../../services/golden-validation.servic
 import type { GoldenValidation, ReviewGoldenValidationRequest } from "../../services/golden-validation.types";
 import { GoldenValidationWorkbenchComponent } from "./golden-validation-workbench.component";
 
+const STRATEGY = "ema_crossover";
+
 const CASE: GoldenValidation = {
   id: 7,
   source_run_id: 44,
@@ -107,7 +109,7 @@ describe("GoldenValidationWorkbenchComponent", () => {
   it("designates a Python history run only after the baseline note is supplied", async () => {
     const service = fakeService();
     await render(GoldenValidationWorkbenchComponent, {
-      inputs: { sourceRunId: 44 },
+      inputs: { strategyKey: STRATEGY, sourceRunId: 44 },
       providers: [
         provideZonelessChangeDetection(),
         { provide: GoldenValidationService, useValue: service },
@@ -115,11 +117,11 @@ describe("GoldenValidationWorkbenchComponent", () => {
     });
     const user = userEvent.setup();
 
-    await user.click(await screen.findByRole("button", { name: "Designate golden run" }));
-    expect(screen.getByText(/Explain why this is the selected validation baseline/i)).toBeTruthy();
+    await user.click(await screen.findByRole("button", { name: "Select as baseline run" }));
+    expect(screen.getByText(/Explain why this is the selected baseline run/i)).toBeTruthy();
 
     await user.type(screen.getByRole("textbox", { name: /Why is this/i }), "Selected after parameter exploration.");
-    await user.click(screen.getByRole("button", { name: "Designate golden run" }));
+    await user.click(screen.getByRole("button", { name: "Select as baseline run" }));
 
     await waitFor(() => expect(service.designate).toHaveBeenCalled());
     expect(service.designate).toHaveBeenCalledWith(expect.objectContaining({ source_run_id: 44 }));
@@ -130,6 +132,7 @@ describe("GoldenValidationWorkbenchComponent", () => {
   it("keeps computed deviations visible when a reviewer accepts them", async () => {
     const service = fakeService({ list: vi.fn(() => of([CASE])) });
     await render(GoldenValidationWorkbenchComponent, {
+      inputs: { strategyKey: STRATEGY },
       providers: [
         provideZonelessChangeDetection(),
         { provide: GoldenValidationService, useValue: service },
@@ -168,6 +171,7 @@ describe("GoldenValidationWorkbenchComponent", () => {
     });
     const service = fakeService({ list: vi.fn(() => of([CASE])), review });
     await render(GoldenValidationWorkbenchComponent, {
+      inputs: { strategyKey: STRATEGY },
       providers: [
         provideZonelessChangeDetection(),
         { provide: GoldenValidationService, useValue: service },
@@ -206,6 +210,7 @@ describe("GoldenValidationWorkbenchComponent", () => {
     })));
     const service = fakeService({ list, review });
     await render(GoldenValidationWorkbenchComponent, {
+      inputs: { strategyKey: STRATEGY },
       providers: [
         provideZonelessChangeDetection(),
         { provide: GoldenValidationService, useValue: service },
@@ -232,6 +237,7 @@ describe("GoldenValidationWorkbenchComponent", () => {
     const service = fakeService({ list: vi.fn(() => of([stale])) });
 
     await render(GoldenValidationWorkbenchComponent, {
+      inputs: { strategyKey: STRATEGY },
       providers: [
         provideZonelessChangeDetection(),
         { provide: GoldenValidationService, useValue: service },
@@ -257,6 +263,7 @@ describe("GoldenValidationWorkbenchComponent", () => {
     }));
     const service = fakeService({ list: vi.fn(() => of([historicalCase])), review });
     await render(GoldenValidationWorkbenchComponent, {
+      inputs: { strategyKey: STRATEGY },
       providers: [
         provideZonelessChangeDetection(),
         { provide: GoldenValidationService, useValue: service },
@@ -287,11 +294,12 @@ describe("GoldenValidationWorkbenchComponent", () => {
     } };
     const service = fakeService({ list: vi.fn(() => of([affected])) });
     await render(GoldenValidationWorkbenchComponent, {
+      inputs: { strategyKey: STRATEGY },
       providers: [provideZonelessChangeDetection(), provideRouter([]), { provide: GoldenValidationService, useValue: service }],
     });
     const user = userEvent.setup();
     expect(await screen.findByText(affected.evidence_applicability?.explanation ?? "Missing evidence disposition")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Open saved configuration to rerun" }).getAttribute("href")).toBe("/strategy-lab?run=44");
+    expect(screen.getByRole("link", { name: "Open saved configuration to rerun" }).getAttribute("href")).toBe("/signal-strategies/ema_crossover/explore/backtest?run=44");
     await user.type(screen.getByRole("textbox", { name: "Review note" }), "I accept the recorded limitation.");
     await user.click(screen.getByRole("button", { name: "Save review" }));
     expect(service.review).not.toHaveBeenCalled();
@@ -302,6 +310,7 @@ describe("GoldenValidationWorkbenchComponent", () => {
   it("does not send a current case back to rerun its saved configuration", async () => {
     const service = fakeService({ list: vi.fn(() => of([CASE])) });
     await render(GoldenValidationWorkbenchComponent, {
+      inputs: { strategyKey: STRATEGY },
       providers: [provideZonelessChangeDetection(), provideRouter([]), { provide: GoldenValidationService, useValue: service }],
     });
 
@@ -316,13 +325,13 @@ describe("GoldenValidationWorkbenchComponent", () => {
       error: { detail: { code: "GOLDEN_VALIDATION_COMMAND_CONFLICT", message: "Run 44 already has a designation under another command." } },
     })));
     await render(GoldenValidationWorkbenchComponent, {
-      inputs: { sourceRunId: 44 },
+      inputs: { strategyKey: STRATEGY, sourceRunId: 44 },
       providers: [provideZonelessChangeDetection(), { provide: GoldenValidationService, useValue: fakeService({ designate }) }],
     });
     const user = userEvent.setup();
 
     await user.type(await screen.findByRole("textbox", { name: /Why is this/i }), "Selected after parameter exploration.");
-    await user.click(screen.getByRole("button", { name: "Designate golden run" }));
+    await user.click(screen.getByRole("button", { name: "Select as baseline run" }));
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toBe("Run 44 already has a designation under another command.");
@@ -331,16 +340,16 @@ describe("GoldenValidationWorkbenchComponent", () => {
   it("does not invent a cause when a designation fails with no server answer", async () => {
     const designate = vi.fn(() => throwError(() => new HttpErrorResponse({ status: 0 })));
     await render(GoldenValidationWorkbenchComponent, {
-      inputs: { sourceRunId: 44 },
+      inputs: { strategyKey: STRATEGY, sourceRunId: 44 },
       providers: [provideZonelessChangeDetection(), { provide: GoldenValidationService, useValue: fakeService({ designate }) }],
     });
     const user = userEvent.setup();
 
     await user.type(await screen.findByRole("textbox", { name: /Why is this/i }), "Selected after parameter exploration.");
-    await user.click(screen.getByRole("button", { name: "Designate golden run" }));
+    await user.click(screen.getByRole("button", { name: "Select as baseline run" }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("could not be designated");
+    expect(alert.textContent).toContain("could not be selected as the baseline run");
     expect(alert.textContent).not.toContain("Only completed Python baselines");
   });
 
@@ -351,6 +360,7 @@ describe("GoldenValidationWorkbenchComponent", () => {
     })));
     const service = fakeService({ list: vi.fn(() => of([CASE])), review });
     await render(GoldenValidationWorkbenchComponent, {
+      inputs: { strategyKey: STRATEGY },
       providers: [provideZonelessChangeDetection(), { provide: GoldenValidationService, useValue: service }],
     });
     const user = userEvent.setup();
@@ -366,15 +376,17 @@ describe("GoldenValidationWorkbenchComponent", () => {
     const cases = Array.from({ length: 100 }, (_, index) => ({ ...CASE, id: index + 1, source_run_id: 1000 + index }));
     const service = fakeService({ list: vi.fn(() => of(cases)) });
     await render(GoldenValidationWorkbenchComponent, {
+      inputs: { strategyKey: STRATEGY },
       providers: [provideZonelessChangeDetection(), { provide: GoldenValidationService, useValue: service }],
     });
 
-    expect(await screen.findByText(/newest 100 Validation Golden Runs/i)).toBeTruthy();
+    expect(await screen.findByText(/newest 100 selected baseline runs/i)).toBeTruthy();
   });
 
   it("stays quiet about a cap when the catalog is shorter than one page", async () => {
     const service = fakeService({ list: vi.fn(() => of([CASE])) });
     await render(GoldenValidationWorkbenchComponent, {
+      inputs: { strategyKey: STRATEGY },
       providers: [provideZonelessChangeDetection(), { provide: GoldenValidationService, useValue: service }],
     });
 
@@ -387,10 +399,11 @@ describe("GoldenValidationWorkbenchComponent", () => {
     const current = { ...stale, id: 8, source_run_id: 45, review_is_current: true };
     const service = fakeService({ list: vi.fn(() => of([stale, current])) });
     await render(GoldenValidationWorkbenchComponent, {
+      inputs: { strategyKey: STRATEGY },
       providers: [provideZonelessChangeDetection(), { provide: GoldenValidationService, useValue: service }],
     });
 
-    const catalog = await screen.findByRole("navigation", { name: "Validation Golden Run catalog" });
+    const catalog = await screen.findByRole("navigation", { name: "Selected baseline run catalog" });
     const buttons = within(catalog).getAllByRole("button");
     expect(buttons[0]?.textContent).toContain("Accepted Reviewed Deviations · review no longer applies");
     expect(buttons[1]?.textContent).toContain("Accepted Reviewed Deviations");
@@ -414,10 +427,11 @@ describe("GoldenValidationWorkbenchComponent", () => {
     const diverged = { ...CASE, id: 8, source_run_id: 45 };
     const service = fakeService({ list: vi.fn(() => of([pending, unavailable, diverged])) });
     await render(GoldenValidationWorkbenchComponent, {
+      inputs: { strategyKey: STRATEGY },
       providers: [provideZonelessChangeDetection(), { provide: GoldenValidationService, useValue: service }],
     });
     const user = userEvent.setup();
-    const catalog = await screen.findByRole("navigation", { name: "Validation Golden Run catalog" });
+    const catalog = await screen.findByRole("navigation", { name: "Selected baseline run catalog" });
 
     expect(screen.getByText("No paired verdict")).toBeTruthy();
     expect(screen.queryByText("Trade deviations")).toBeNull();
@@ -428,5 +442,70 @@ describe("GoldenValidationWorkbenchComponent", () => {
 
     await user.click(within(catalog).getAllByRole("button")[2] as HTMLElement);
     expect(screen.getByText("Trade deviations")).toBeTruthy();
+  });
+
+  describe("when the link names a baseline run's review (?case=)", () => {
+    const older = { ...CASE, id: 12, source_run_id: 40, label: "Older baseline" } satisfies GoldenValidation;
+    const newer = { ...CASE, id: 57, source_run_id: 50, label: "Newer baseline" } satisfies GoldenValidation;
+
+    async function open(requestedCase: string | undefined, listed: readonly GoldenValidation[] = [newer, older]) {
+      const service = fakeService({ list: vi.fn(() => of([...listed])) });
+      await render(GoldenValidationWorkbenchComponent, {
+        inputs: { strategyKey: STRATEGY, requestedCase },
+        providers: [provideZonelessChangeDetection(), { provide: GoldenValidationService, useValue: service }],
+      });
+      await screen.findByRole("navigation", { name: "Selected baseline run catalog" });
+      return service;
+    }
+
+    it("opens that review, not the newest", async () => {
+      await open("12");
+
+      expect(screen.getByRole("heading", { name: "Older baseline" })).toBeTruthy();
+      expect(screen.queryByText(/Nothing is selected/)).toBeNull();
+    });
+
+    it("opens the newest review only when the link names none", async () => {
+      await open(undefined);
+
+      expect(screen.getByRole("heading", { name: "Newer baseline" })).toBeTruthy();
+      expect(screen.queryByText(/Nothing is selected/)).toBeNull();
+    });
+
+    it("selects nothing, and says so, when the review it names is not in the listed catalog, offering no other review's form", async () => {
+      await open("99");
+
+      expect(await screen.findByText("Selected baseline run #99 is not among ema_crossover's listed baseline runs. Nothing is selected.")).toBeTruthy();
+      expect(screen.queryByRole("heading", { name: /Older baseline|Newer baseline/ })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Save review" })).toBeNull();
+      // Both reviews stay in the catalog for the owner to choose between.
+      const catalog = screen.getByRole("navigation", { name: "Selected baseline run catalog" });
+      expect(within(catalog).getAllByRole("button")).toHaveLength(2);
+    });
+
+    it("says the catalog may have been cut short when it is as long as one read can be", async () => {
+      const full = Array.from({ length: 100 }, (_, index) => ({ ...CASE, id: 1000 + index, source_run_id: 2000 + index }) satisfies GoldenValidation);
+      await open("57", full);
+
+      expect(await screen.findByText(/#57 is not among ema_crossover's listed baseline runs \(only the newest 100 are listed\)\. Nothing is selected\./)).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Save review" })).toBeNull();
+    });
+
+    it.each(["abc", "0", "-3", "1.5"])("selects nothing, and says so, for %s, which names no review", async (raw) => {
+      await open(raw);
+
+      expect(await screen.findByText(`"${raw}" is not a selected baseline run's number. Nothing is selected.`)).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Save review" })).toBeNull();
+    });
+
+    it("lets the owner choose a review from the catalog after the named one was not found", async () => {
+      await open("99");
+      const user = userEvent.setup();
+
+      await user.click(within(screen.getByRole("navigation", { name: "Selected baseline run catalog" })).getAllByRole("button")[1] as HTMLElement);
+
+      expect(screen.getByRole("heading", { name: "Older baseline" })).toBeTruthy();
+      expect(screen.queryByText(/Nothing is selected/)).toBeNull();
+    });
   });
 });

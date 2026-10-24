@@ -44,6 +44,16 @@ describe("BacktestRunsService", () => {
     await pending;
   });
 
+  it("passes the strategy filter through, so the server limits after it", async () => {
+    const pending = firstValueFrom(service.list(null, HISTORY_PAGE_SIZE, "rsi_mean_reversion"));
+
+    const request = http.expectOne((r) => r.url === BASE);
+    expect(request.request.params.get("strategy_name")).toBe("rsi_mean_reversion");
+    expect(request.request.params.get("limit")).toBe(String(HISTORY_PAGE_SIZE));
+    request.flush([]);
+    await pending;
+  });
+
   it("returns the run report as served", async () => {
     const run = makeRun({ id: 7 });
     const pending = firstValueFrom(service.get(7));

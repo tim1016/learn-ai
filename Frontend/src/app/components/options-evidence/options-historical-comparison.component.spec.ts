@@ -8,7 +8,7 @@ import { OptionsHistoricalComparisonComponent } from './options-historical-compa
 describe('Explicit historical comparator', () => {
   it('accepts only a different safe saved run ID and preserves the source and bot return in its link', async () => {
     await render(OptionsHistoricalComparisonComponent, {
-      inputs: { sourceRunId: 76, route: ['/options-evidence', 'run', '76'], context: { inspected_study_id: 'os_' + 'a'.repeat(40), bot_return: '/brokers/alpaca/clerks/paper/accounts/PA9/bots/options-1' } },
+      inputs: { sourceRunId: 76, route: ['/options-setups/evidence', 'run', '76'], context: { inspected_study_id: 'os_' + 'a'.repeat(40), bot_return: '/brokers/alpaca/clerks/paper/accounts/PA9/bots/options-1' } },
       providers: [provideRouter([])],
     });
     const field = screen.getByRole('textbox', { name: 'Saved comparator run ID' });
@@ -20,7 +20,7 @@ describe('Explicit historical comparator', () => {
     await userEvent.clear(field);
     await userEvent.type(field, '69');
     const href = screen.getByRole('link', { name: 'Compare selected run' }).getAttribute('href');
-    expect(href).toContain('/options-evidence/run/76');
+    expect(href).toContain('/options-setups/evidence/run/76');
     expect(href).toContain('comparator_run_id=69');
     expect(href).toContain('bot_return=');
     expect(href).toContain('inspected_study_id=');

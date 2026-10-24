@@ -32,7 +32,7 @@ from typing import Any, Literal
 
 import asyncpg
 
-from app.research.backtest_runs.records import BacktestRunRecord, TradeRecord
+from app.research.backtest_runs.records import USER_PROVIDED_ALGORITHM_NAME, BacktestRunRecord, TradeRecord
 from app.utils.timestamps import now_ms_utc
 
 REPORT_TRADE_LIMIT = 500
@@ -94,10 +94,16 @@ class RunRow:
     verdict_grade: str | None
     verdict_signal: str | None
     parity_group_id: str | None
+    custom_source: bool
 
     @property
     def engine(self) -> Engine:
         return _ENGINE_BY_SOURCE[self.source]
+
+    @property
+    def ran_custom_source(self) -> bool:
+        """Whether the run executed pasted LEAN source: marked so, or saved before the mark under the name that stood for it."""
+        return self.custom_source or self.strategy_name == USER_PROVIDED_ALGORITHM_NAME
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,7 +200,7 @@ async def insert_run(conn: asyncpg.Connection, record: BacktestRunRecord) -> Ins
                     max_drawdown, sharpe_ratio, sortino_ratio, profit_factor, commission_per_order, brokerage_policy,
                     data_policy_json, lean_statistics_json, lean_analysis_json, run_verdict_json,
                     verdict_version, verdict_grade, verdict_signal, equity_curve_json, validation_analytics_json,
-                    insight_summary_json, metric_documentation_json, evidence_provenance_json
+                    insight_summary_json, metric_documentation_json, evidence_provenance_json, custom_source
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb,
                     $10, $11, $12, $13, $14, $15,
@@ -202,7 +208,7 @@ async def insert_run(conn: asyncpg.Connection, record: BacktestRunRecord) -> Ins
                     $24, $25, $26, $27, $28, $29,
                     $30::jsonb, $31::jsonb, $32::jsonb, $33::jsonb,
                     $34, $35, $36, $37::jsonb, $38::jsonb,
-                    $39::jsonb, $40::jsonb, $41::jsonb
+                    $39::jsonb, $40::jsonb, $41::jsonb, $42
                 )
                 RETURNING id
                 """,
@@ -247,6 +253,7 @@ async def insert_run(conn: asyncpg.Connection, record: BacktestRunRecord) -> Ins
                 record.insight_summary_json,
                 record.metric_documentation_json,
                 record.evidence_provenance_json,
+                record.custom_source,
             )
             await _insert_trades(conn, int(run_id), record.trades)
     except asyncpg.UniqueViolationError:
@@ -314,7 +321,7 @@ _RUN_ROW_COLUMNS = """
     r.symbol, r.lean_run_id, r.parameters_json::text AS parameters_json,
     r.start_ms, r.end_ms, r.executed_at_ms, r.total_trades, r.total_pnl, r.commission_per_order,
     r.brokerage_policy, r.notes, r.data_policy_json::text AS data_policy_json, r.verdict_grade,
-    r.verdict_signal, r.parity_group_id
+    r.verdict_signal, r.parity_group_id, r.custom_source
 """
 _RUN_DETAIL_COLUMNS = f"""
     {_RUN_ROW_COLUMNS},
@@ -333,8 +340,10 @@ _TRADE_COLUMNS = (
 _VERDICT_COLUMNS = "id, parity_group_id, left_run_id, right_run_id, verdict_version, status, verdict_json::text AS verdict_json, created_at_ms"
 
 
-async def list_runs(conn: asyncpg.Connection, *, engine: Engine | None, limit: int) -> list[RunSummary]:
-    """History rows newest-first, optionally one engine's."""
+async def list_runs(
+    conn: asyncpg.Connection, *, engine: Engine | None, limit: int, strategy_name: str | None = None
+) -> list[RunSummary]:
+    """History rows newest-first, optionally one engine's and one strategy's."""
     rows = await conn.fetch(
         f"""
         SELECT {_RUN_ROW_COLUMNS},
@@ -342,12 +351,14 @@ async def list_runs(conn: asyncpg.Connection, *, engine: Engine | None, limit: i
                    SELECT 1 FROM research_backtest_run_trades t WHERE t.run_id = r.id AND t.is_synthetic_exit
                ) AS has_synthetic_exit
           FROM research_backtest_runs r
-         WHERE $1::text IS NULL OR r.source = $1::text
+         WHERE ($1::text IS NULL OR r.source = $1::text)
+           AND ($3::text IS NULL OR r.strategy_name = $3::text)
          ORDER BY r.executed_at_ms DESC, r.id DESC
          LIMIT $2
         """,
         None if engine is None else _SOURCE_BY_ENGINE[engine],
         limit,
+        strategy_name,
     )
     return [RunSummary(**row) for row in rows]
 

@@ -480,6 +480,6 @@ async def test_deploy_names_the_blocked_strategy_reason_even_when_every_strategy
     assert detail["message"] == "The selected strategy is not currently selectable for deployment."
     assert detail["why"]
     assert "no longer matches its recorded hash" in detail["why"]
-    assert "strategy validation" in detail["next_action"].lower()
+    assert "proof tab" in detail["next_action"].lower()
     assert "runtime" not in detail["next_action"].lower()
     assert registry.deploy_calls == []

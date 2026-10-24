@@ -7,7 +7,7 @@
         [attr.aria-current]="tab.id === activeId() ? 'page' : null"
         [routerLink]="route"
         [queryParams]="tab.queryParams"
-      >{{ tab.label }}</a>
+      >{{ tab.label }}@if (tab.badge; as badge) { <span class="workspace-tab__badge">{{ badge }}</span> }</a>
     } @else {
       <span class="workspace-tab workspace-tab--unavailable" aria-disabled="true" [attr.title]="tab.unavailableReason ?? null">
         {{ tab.label }}

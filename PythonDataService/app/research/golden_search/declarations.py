@@ -29,12 +29,7 @@ from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Any, Literal
 
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
-from app.research.sweep.eligibility import (
-    REASON_NO_SIGNAL_PROGRAM,
-    REASON_NON_NUMERIC_PUBLIC_PARAMETER,
-    REASON_NOT_PRODUCTION_CANDIDATE,
-    sweep_eligibility,
-)
+from app.research.sweep.eligibility import ineligibility_reason, sweep_eligibility
 from app.research.sweep.grid import params_hash
 
 KnobKind = Literal["integer", "decimal"]
@@ -289,10 +284,6 @@ _DECLARATIONS: dict[str, SearchDeclaration] = {
 }
 
 NO_DECLARATION_REASON = "No Golden Search declaration has shipped for this strategy yet."
-_INELIGIBILITY_COPY = {
-    REASON_NOT_PRODUCTION_CANDIDATE: "This strategy is an operational harness, not a production candidate.",
-    REASON_NO_SIGNAL_PROGRAM: "This strategy has no Signal Program, so its warmup cannot be measured.",
-}
 
 
 def declaration_for(strategy_key: str) -> SearchDeclaration | None:
@@ -305,12 +296,9 @@ def unavailable_reason(strategy_key: str) -> str | None:
     registration = _STRATEGY_REGISTRY.get(strategy_key)
     if registration is None:
         return f"No strategy named {strategy_key!r} is registered."
-    eligibility = sweep_eligibility(registration)
-    if not eligibility.eligible:
-        reasons = [_INELIGIBILITY_COPY[code] for code in eligibility.reason_codes if code in _INELIGIBILITY_COPY]
-        if REASON_NON_NUMERIC_PUBLIC_PARAMETER in eligibility.reason_codes:
-            reasons.append(f"Some parameters are not plain numbers: {', '.join(eligibility.offending_parameters)}.")
-        return " ".join(reasons)
+    ineligible = ineligibility_reason(sweep_eligibility(registration))
+    if ineligible is not None:
+        return ineligible
     if strategy_key not in _DECLARATIONS:
         return NO_DECLARATION_REASON
     return None

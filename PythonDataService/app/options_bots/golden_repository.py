@@ -90,17 +90,13 @@ async def list_records(
     return tuple(_record(row) for row in rows)
 
 
+async def count_records(conn: asyncpg.Connection) -> int:
+    return await conn.fetchval("SELECT count(*) FROM research_golden_option_setups")
+
+
 async def get_record(conn: asyncpg.Connection, qualification_id: str) -> GoldenRecord | None:
     row = await conn.fetchrow(f"SELECT {_COLUMNS} FROM research_golden_option_setups WHERE id = $1", qualification_id)
     return None if row is None else _record(row)
-
-
-async def records_for_setups(conn: asyncpg.Connection, hashes: list[str]) -> tuple[GoldenRecord, ...]:
-    rows = await conn.fetch(
-        f"SELECT {_COLUMNS} FROM research_golden_option_setups WHERE setup_sha256 = ANY($1::text[]) ORDER BY created_at_ms DESC, id DESC",
-        hashes,
-    )
-    return tuple(_record(row) for row in rows)
 
 
 async def by_command(conn: asyncpg.Connection, command_id: str) -> GoldenRecord | None:
@@ -183,6 +179,9 @@ async def insert_event(conn: asyncpg.Connection, event: GoldenEvent) -> GoldenEv
 class PostgresGoldenStore:
     async def list(self, *, limit: int = 200, source_run_id: int | None = None) -> tuple[GoldenRecord, ...]:
         return await with_connection(list_records, limit=limit, source_run_id=source_run_id)
+
+    async def count(self) -> int:
+        return await with_connection(count_records)
 
     async def get(self, qualification_id: str) -> GoldenRecord | None:
         return await with_connection(get_record, qualification_id)

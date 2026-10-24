@@ -1,0 +1,24 @@
+.muted {
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+}
+
+.refusal {
+  color: var(--danger);
+  font-size: var(--fs-xs);
+}
+
+a { color: var(--accent-text); }
+
+button {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+button:disabled { opacity: 0.6; cursor: not-allowed; }

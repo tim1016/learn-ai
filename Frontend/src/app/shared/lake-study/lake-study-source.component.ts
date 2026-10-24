@@ -5,9 +5,11 @@ import { WorkspaceDataSourceComponent } from '../workspace/workspace-data-source
 import { WorkspaceStateBlockComponent } from '../workspace/workspace-state-block.component';
 import type { WorkspaceStateContent } from '../workspace/workspace-state';
 import {
+  sessionPolicyWords,
   toDataSourceProvenance,
   type LakeCoverageGroup,
   type LakeSessionOutcome,
+  type LakeSessionPolicy,
   type LakeStudyDataSource,
   type LakeStudyRefusal,
 } from './lake-study';
@@ -47,6 +49,8 @@ export class LakeStudySourceComponent {
   readonly source = input<LakeStudyDataSource | null>(null);
   /** Present when the study did not run because the lake could not supply its inputs. */
   readonly refusal = input<LakeStudyRefusal | null>(null);
+  /** The session the refusal judged, named in its first line. Left unset, the line names none. */
+  readonly session = input<LakeSessionPolicy | null>(null);
 
   protected readonly provenance = computed(() => {
     const source = this.source();
@@ -55,9 +59,10 @@ export class LakeStudySourceComponent {
 
   protected readonly refusedState = computed<WorkspaceStateContent | null>(() => {
     const refusal = this.refusal();
-    return refusal === null
-      ? null
-      : { kind: 'failed', happened: 'No result: the lake could not supply this study its data.', why: refusal.reason };
+    if (refusal === null) return null;
+    const session = this.session();
+    const judged = session === null ? '' : ` for ${sessionPolicyWords(session)}`;
+    return { kind: 'failed', happened: `No result: the lake could not supply this study its data${judged}.`, why: refusal.reason };
   });
 
   /** The counts admission reached before it stopped, window first. */
