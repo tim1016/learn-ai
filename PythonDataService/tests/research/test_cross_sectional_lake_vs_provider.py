@@ -42,8 +42,10 @@ to compute one. Derived-output parity for the IC, N_eff and the binomial test is
 targets, the ATM pick, the spot and the IV are.
 
 The lake's 1/10,000 price grid is ``data-quality`` (input quantization), never ``precision``: it changes the input data,
-and ``precision`` is floating-point accumulation. Each output it moves is pinned at its measured magnitude with a stated
-margin and explicit ``atol``/``rtol`` (``test_prices_finer_than_the_lake_grid...``).
+and ``precision`` is floating-point accumulation. Each output it moves is pinned two-sided at its measured magnitude, to
+full precision, within the float error of that output's arithmetic (``test_prices_finer_than_the_lake_grid...``): a return
+carries an absolute error of a couple of ``eps`` whatever its size, a target is a Lipschitz function of returns, and a
+solved IV carries the rounding of the option price over its vega.
 """
 
 from __future__ import annotations
@@ -474,29 +476,64 @@ def test_the_regular_fold_of_a_real_spy_week_stops_at_the_15_59_minute_and_leave
     open_moves = [SPY_CLOSING_MINUTE[day][0] - SPY_REGULAR_FOLD[day][3] for day in SPY_WEEK]
     close_moves = [SPY_CLOSING_MINUTE[day][3] - SPY_REGULAR_FOLD[day][3] for day in SPY_WEEK]
     volume_share = [SPY_CLOSING_MINUTE[day][4] / SPY_REGULAR_FOLD[day][4] for day in SPY_WEEK]
-    np.testing.assert_allclose(close_moves, [-0.04, 0.41, 0.03, -0.06, -0.06], atol=1e-9, rtol=0)
-    assert min(volume_share) > 0.003 and max(volume_share) < 0.012
     np.testing.assert_allclose(open_moves, [-0.02, -0.03, -0.04, 0.01, -0.04], atol=1e-9, rtol=0)
-
+    np.testing.assert_allclose(close_moves, [-0.04, 0.41, 0.03, -0.06, -0.06], atol=1e-9, rtol=0)
     assert max(abs(move) / SPY_REGULAR_FOLD[day][3] for move, day in zip(open_moves, SPY_WEEK, strict=True)) < 1e-4, "the open is under one basis point away"
     assert max(abs(move) / SPY_REGULAR_FOLD[day][3] for move, day in zip(close_moves, SPY_WEEK, strict=True)) < 7.1e-4, "the close up to seven"
+    assert min(volume_share) > 0.003 and max(volume_share) < 0.012
+
 
 #: What the lake's price grid moves, measured on this pinned payload (seed 11, the DST window, 11 sessions) at three
-#: price levels: the largest absolute difference between the two paths' values at a shared session. Prices carry five or
-#: six decimals, finer than the grid. The movement grows as the price falls: a rounding of at most 5e-5 is a larger share
-#: of a day's change on a $2 name than on a $150 one. ``iv`` is the largest solved-IV difference over the days the option
-#: chain could solve (11, 10 and 3 of 11), pinned only where there are enough of them to mean something; a $2 underlying
-#: leaves 3. Re-measure (print the ``Comparison`` and ``OptionSide`` fields per case) only when the pinned tape or the
-#: lake's encoding intentionally changes; never to make a failing test pass.
+#: price levels, to full precision: the largest absolute difference between the two paths' values at a shared session.
+#: Prices carry five or six decimals, finer than the grid. The movement grows as the price falls: a rounding of at most
+#: 5e-5 is a larger share of a day's change on a $2 name than on a $150 one. ``iv`` is the largest solved-IV difference
+#: over the days the option chain could solve (11, 10 and 3 of 11), pinned only where there are enough of them to mean
+#: something; a $2 underlying leaves 3. Re-measure (print the ``Comparison`` and ``OptionSide`` fields per case) only
+#: when the pinned tape or the lake's encoding intentionally changes; never to make a failing test pass.
 GRID_MEASURED = {
-    "price_150": (150.0, 5, 1.0, {"returns": 4.76e-7, "directional": 4.80e-7, "abs_return": 4.80e-7, "volatility": 9.94e-7, "iv": 1.23e-6}),
-    "price_12": (12.0, 5, 0.5, {"returns": 5.41e-6, "directional": 5.35e-6, "abs_return": 5.35e-6, "volatility": 3.81e-5, "iv": 5.24e-6}),
-    "price_2": (2.0, 6, None, {"returns": 3.39e-5, "directional": 3.46e-5, "abs_return": 3.46e-5, "volatility": 4.08e-4}),
+    "price_150": (
+        150.0, 5, 1.0,
+        {"returns": 4.758706811935909e-07, "directional": 4.799286627728272e-07, "abs_return": 4.799286627728272e-07,
+         "volatility": 9.93863396220318e-07, "iv": 1.2319436593077882e-06},
+    ),
+    "price_12": (
+        12.0, 5, 0.5,
+        {"returns": 5.405870201924401e-06, "directional": 5.3492904448400325e-06, "abs_return": 5.3492904448400325e-06,
+         "volatility": 3.813195684010395e-05, "iv": 5.2392330460726555e-06},
+    ),
+    "price_2": (
+        2.0, 6, None,
+        {"returns": 3.386216610090642e-05, "directional": 3.456115803534415e-05, "abs_return": 3.456115803534415e-05,
+         "volatility": 4.083402936982117e-04},
+    ),
 }
-#: The headroom over a measured movement. The tape is seeded and the arithmetic deterministic, so this only absorbs
-#: platform differences in float summation order inside pandas and numpy; a real change in the lake's encoding, or in a
-#: target's math, moves these by orders of magnitude more.
-MEASURED_MARGIN = 1.5
+
+EPS = float(np.finfo(np.float64).eps)
+#: A daily return is a close over the day before: the ratio rounds once, to within ``eps / 2`` of a value near 1, and the
+#: subtraction or the log adds at most as much again. So a return carries an absolute error of about ``eps`` whatever its
+#: size (it does not shrink with the return), rounded up here to ``2 * eps``.
+RETURN_ABS_ERR = 2 * EPS
+#: How far each output can move when every return moves by ``RETURN_ABS_ERR``: the returns and the one-session targets
+#: are returns (or their absolute value); the volatility target is ``sqrt(252)`` times the sample standard deviation of
+#: five returns, which is 1-Lipschitz in the returns' L2 norm over ``sqrt(5 - 1)``, so ``sqrt(252) * sqrt(5) / 2``.
+LIPSCHITZ = {"returns": 1.0, "directional": 1.0, "abs_return": 1.0, "volatility": math.sqrt(252) * math.sqrt(5) / 2}
+#: The IV is the root of ``BS(sigma) = premium``. The premium is the difference of two terms of about ``S / 2`` each, so
+#: it carries a rounding of about ``4 * eps * S``; at the money the vega is ``S * phi(0) * sqrt(T)``, so the root moves
+#: by ``4 * eps / (phi(0) * sqrt(T))`` whatever ``S`` is. ``T`` is the nearest expiry on any pinned day (14 days). The
+#: Newton solve stops at a price residual of 1e-7, but its iterates are the same on every platform to within a few ulps, so
+#: it can stop on another step only if a residual sits within an ulp of 1e-7: not a case this tolerance covers, and not
+#: one that has occurred.
+IV_FLOAT_ERR = 4 * EPS / (math.sqrt(14 / 365) / math.sqrt(2 * math.pi))
+
+
+def float_atol(name: str) -> float:
+    """The float accumulation error of a pinned movement, class ``precision``: the difference of two paths' values.
+
+    Measured by re-rounding the same tape (every price times 16 factors that are not powers of two, both paths alike,
+    so no mathematical result changes; nine one-ulp nudges for the IV): the pinned movements stayed within 3.5e-15 of
+    their pinned values, about 4 times below the volatility bound and 8 times below the IV bound.
+    """
+    return 2 * (IV_FLOAT_ERR if name == "iv" else LIPSCHITZ[name] * RETURN_ABS_ERR)
 
 
 def worst_case_volatility_target_move(lowest_close: float) -> float:
@@ -514,7 +551,7 @@ def test_prices_finer_than_the_lake_grid_move_each_output_by_its_measured_amount
     (``lean_writer.to_deci_cent``); the provider path does not. That changes the input data, so it is not ``precision`` and no
     float tolerance covers it.
 
-    Each recorded output is pinned at its measured movement times ``MEASURED_MARGIN``, with ``rtol=0`` because the quantity
+    Each recorded output is pinned at its measured movement, within ``float_atol`` and with ``rtol=0`` because the quantity
     compared is itself a difference. The table above is what D02 is decided on: the daily returns move by about 5e-7 on a
     $150 name, 5e-6 on a $12 name and 3e-5 on a $2 name; the five-day volatility target by 1e-6, 4e-5 and 4e-4; the solved IV
     by 1e-6 and 5e-6 where it can be solved. ``worst_case_volatility_target_move`` is the bound the measured movement must sit
@@ -532,14 +569,13 @@ def test_prices_finer_than_the_lake_grid_move_each_output_by_its_measured_amount
     assert comparison.target_validity_moved == 0
     moved = {"returns": comparison.max_return_diff, **comparison.max_target_diff}
     for name in ("returns", *TARGETS):
-        # atol is the measured movement with its margin; rtol is 0 because the quantity compared is itself a difference.
-        np.testing.assert_allclose(moved[name], 0.0, atol=measured[name] * MEASURED_MARGIN, rtol=0, err_msg=name)
+        np.testing.assert_allclose(moved[name], measured[name], atol=float_atol(name), rtol=0, err_msg=name)
         assert moved[name] > 0, f"{name}: the divergence is real, so the output does move"
     assert moved["volatility"] <= worst_case_volatility_target_move(min(r["close"] for r in lake))
     if strike_step is not None:
         options = option_side(provider, lake, true_closes_of(tape), DST_WINDOW, strike_step=strike_step)
         assert options.iv_days >= 10 and options.atm_changed_days == 0
-        np.testing.assert_allclose(options.max_iv_diff, 0.0, atol=measured["iv"] * MEASURED_MARGIN, rtol=0, err_msg="iv")
+        np.testing.assert_allclose(options.max_iv_diff, measured["iv"], atol=float_atol("iv"), rtol=0, err_msg="iv")
         assert options.max_iv_diff > 0
 
 
