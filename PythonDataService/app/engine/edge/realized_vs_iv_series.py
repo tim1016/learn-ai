@@ -1,7 +1,7 @@
 """The Realized vs IV series: trailing and forward realized vol, aligned IV, and the VRP signal over one set of bars.
 
-Formula: per bar, trailing and forward RV for each estimator and window (annualized by ``BARS_PER_YEAR``), the HF
-  two-component RV over 21 trading days, IV30 converted ACT/365 to TRD/252 (NYSE session count of the tenor), and
+Formula: per bar, trailing and forward RV for each estimator and window (annualized by sqrt(252 * bars per session * the
+  per-bar variance)), the HF two-component RV over 21 trading days, IV30 converted ACT/365 to TRD/252 (NYSE session count of the tenor), and
   VRP_forward = IV30_TRD252² − RV_HF_forward² with its rolling z-score (``vrp_signal``) and, when per-bar confidence
   is supplied, the confidence-scaled z-score and hard floor.
 Reference: Bollerslev, Tauchen, Zhou (2009) "Expected Stock Returns and Variance Risk Premia" RFS 22(11) for VRP;
@@ -13,7 +13,13 @@ Canonical implementation: this file for the composition; the pieces live in the 
   change to a step: the VRP z-score no longer forward-fills IV (below). With IV on every bar the same bars and IV give
   the same series as before.
 Validated against: tests/research/test_realized_vs_iv_study.py (the composition against the estimators called
-  directly, on lake bars and on the vendor's own bars, at atol 1e-9, rtol 0). The pieces keep their own tests.
+  directly, on lake bars and on the vendor's own bars, at atol 1e-9, rtol 0) and tests/edge/test_realized_vs_iv_series.py
+  (the annualization follows the session the bars were folded from). The pieces keep their own tests.
+
+Annualization. A year is 252 sessions of ``bars_per_session`` bars. The caller says how many bars a full session of the
+session it folded holds (``app.engine.edge.session_bars``: 26 for regular hours and 64 for extended hours at 15 minutes,
+counted from the calendar; 1 for daily bars). It used to be 26 whatever the session, which understated every trailing
+Yang-Zhang line of an extended-hours run (the default) by sqrt(26 / 64), about 0.64 times (#3525).
 
 IV in. ``iv_points`` are ``{ts, iv30, health_score?, variance_contribution_synthetic?}`` stamped at bar starts
 (``app.engine.edge.iv_alignment`` puts them there). A bar with no point has no IV, and IV30, ``vrp_forward`` and the
@@ -30,6 +36,10 @@ warmup is fetched before the window.
 
 Forward tail. The forward realized vol of the last bars is not realized yet. It is NaN, never filled, and so is
 every VRP value built on it. ``forward_nan_bars`` counts them.
+
+The least that can show a z-score. The z-score needs ``VRP_LOOKBACK_BARS`` bars that each have a forward value, and the
+last ``FORWARD_TRADING_DAYS`` sessions have none, so a daily window needs 252 + 21 = 273 bars (the YZ-21 forward value is
+valid on bar ``n - 22`` and before). The study sizes its default window from this (``resolve_window``).
 """
 
 from __future__ import annotations
@@ -57,16 +67,22 @@ from app.volatility.basis import convert_iv_act365_to_trading252
 
 IvSource = Literal["caller_supplied", "recorder", "absent"]
 
+#: Bar sizes the series is defined for.
+BAR_SIZES = ("1d", "15m")
+
+#: Trading days the VRP's forward realized vol looks ahead (the HF forward RV on 15-minute bars, YZ-21 on daily bars). The
+#: forward value of the last this-many sessions is not realized yet and stays NaN.
+FORWARD_TRADING_DAYS = 21
+
+#: Bars the VRP z-score rolls over, at most: a trading year of daily bars.
+VRP_LOOKBACK_BARS = 252
+
 ESTIMATOR_FNS = {
     "ctc": close_to_close,
     "parkinson": parkinson,
     "gk": garman_klass,
     "yz": yang_zhang,
 }
-
-#: Bars a year, per supported bar size. The 15-minute figure counts the 26 regular-session bars a day, though the default
-#: 15-minute session is extended (64 a day): a mismatch that predates #3525 and is an open owner decision there.
-BARS_PER_YEAR: dict[str, int] = {"1d": DAILY_BARS_PER_YEAR, "15m": DAILY_BARS_PER_YEAR * 26}
 
 
 def compute_realized_vs_iv_series(
@@ -81,15 +97,22 @@ def compute_realized_vs_iv_series(
     iv_points: list[dict] | None,
     iv_source: IvSource,
     confidence_floor: float,
+    bars_per_session: int,
 ) -> dict[str, Any]:
-    """The series for ``bars`` (index: ``int64 ms UTC``, columns open/high/low/close/volume), as a JSON-able dict."""
-    if bar_size not in BARS_PER_YEAR:
-        raise ValueError(f"bar_size must be one of {sorted(BARS_PER_YEAR)}, got {bar_size!r}")
+    """The series for ``bars`` (index: ``int64 ms UTC``, columns open/high/low/close/volume), as a JSON-able dict.
+
+    ``bars_per_session`` is the bars a full session of the session the bars were folded from holds (1 for daily bars),
+    which a year of them is counted in.
+    """
+    if bar_size not in BAR_SIZES:
+        raise ValueError(f"bar_size must be one of {sorted(BAR_SIZES)}, got {bar_size!r}")
     if bar_size == "15m" and hf_session is None:
         raise ValueError("15m bars need the HF estimator's session, ETH or RTH")
+    if bars_per_session < 1 or (bar_size == "1d" and bars_per_session != 1):
+        raise ValueError(f"{bar_size} bars hold {1 if bar_size == '1d' else 'at least 1'} bar a session, got {bars_per_session}")
     if len(bars) < 2:
         raise ValueError(f"the series needs at least two bars, got {len(bars)}")
-    bpy = BARS_PER_YEAR[bar_size]
+    bpy = DAILY_BARS_PER_YEAR * bars_per_session
 
     rv_trailing: dict[str, list] = {}
     rv_forward: dict[str, list] = {}
@@ -117,7 +140,7 @@ def compute_realized_vs_iv_series(
     # realized yet, so a z-score of an unrealized tail would read as a signal;
     # and a bar with no IV has no VRP, so a window holding one has no z-score.
     # ``vrp_z`` is NaN wherever either is, and the page shows "—".
-    lookback = min(252, len(bars) - 1)
+    lookback = min(VRP_LOOKBACK_BARS, len(bars) - 1)
     sig = vrp_signal(
         iv=iv_trd252,
         rv=rv_hf_fwd,
@@ -283,15 +306,17 @@ def _compute_hf_rv_for_vrp(
         # we don't mutate the caller's DataFrame.
         bars_utc = bars.copy()
         bars_utc.index = pd.to_datetime(bars.index, unit="ms", utc=True)
-        trailing = hf_realized_vol_trd252(bars_utc, window_trading_days=21, session=session)
-        forward = hf_forward_rv_trd252(bars_utc, window_trading_days=21, session=session)
+        trailing = hf_realized_vol_trd252(bars_utc, window_trading_days=FORWARD_TRADING_DAYS, session=session)
+        forward = hf_forward_rv_trd252(bars_utc, window_trading_days=FORWARD_TRADING_DAYS, session=session)
         # Re-index back to int64 ms to match the rest of the pipeline.
         trailing.index = bars.index
         forward.index = bars.index
         return trailing, forward
     # Daily fallback: 21-day YZ trailing / forward. TRD/252 already.
-    trailing = yang_zhang(bars, window=21, annualize=True, bars_per_year=DAILY_BARS_PER_YEAR)
-    forward = forward_rv(bars, estimator="yz", window=21, annualize=True, bars_per_year=DAILY_BARS_PER_YEAR)
+    trailing = yang_zhang(bars, window=FORWARD_TRADING_DAYS, annualize=True, bars_per_year=DAILY_BARS_PER_YEAR)
+    forward = forward_rv(
+        bars, estimator="yz", window=FORWARD_TRADING_DAYS, annualize=True, bars_per_year=DAILY_BARS_PER_YEAR
+    )
     return trailing, forward
 
 

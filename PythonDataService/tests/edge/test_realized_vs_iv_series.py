@@ -11,13 +11,18 @@ The lake-sourced study around them is tested in ``tests/research/test_realized_v
 
 from __future__ import annotations
 
+from datetime import date
+
 import numpy as np
 import pandas as pd
 import pytest
 
+from app.engine.edge.features_realtime.realized_vol import yang_zhang
+from app.engine.edge.labels_oracle.forward_rv import forward_rv
 from app.engine.edge.realized_vs_iv_series import _parse_iv_series, compute_realized_vs_iv_series
+from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms_utc
 from app.services.iv_recorder import InMemoryIvSnapshotStore, RecordedIvSnapshot, get_iv_store, set_iv_store
-from app.services.realized_vs_iv_study_service import load_iv_input, recorded_iv_points
+from app.services.realized_vs_iv_study_service import BAR_MINUTES, load_iv_input, recorded_iv_points, resolve_window
 from app.utils.session_anchors import et_date_at_ms
 
 START_MS = 1_700_000_000_000
@@ -62,6 +67,7 @@ def _series(bars: pd.DataFrame, iv_points: list[dict] | None, *, iv_source: str 
         "estimators": ["yz"],
         "windows": [5, 10, 30],
         "confidence_floor": 0.1,
+        "bars_per_session": 1,
     }
     return compute_realized_vs_iv_series(bars, iv_points=iv_points, iv_source=iv_source, **{**settings, **overrides})  # type: ignore[arg-type]
 
@@ -389,3 +395,106 @@ class TestMissingIvStaysAbsentInTheZScore:
         touching = [i for i in range(min(gap), min(gap) + lookback + len(gap)) if i < len(bars)]
         assert all(body["vrp_z"][i] is None for i in touching), "every window that contains a bar without IV has no z-score"
 
+
+
+def _session_bars(days: list[date], *, per_session: int, head_ms: int, seed: int = 7) -> pd.DataFrame:
+    """OHLCV on the 15-minute grid of each session: ``per_session`` bars from ``head_ms`` before the open."""
+    rng = np.random.default_rng(seed)
+    starts = [session_open_ms_utc(day) - head_ms + k * 900_000 for day in days for k in range(per_session)]
+    closes = 100.0 * np.exp(np.cumsum(rng.normal(0, 0.002, size=len(starts))))
+    return pd.DataFrame(
+        {"open": closes * 0.9995, "high": closes * 1.002, "low": closes * 0.998, "close": closes, "volume": 1_000.0},
+        index=pd.Index(starts, name="ts", dtype=np.int64),
+    )
+
+
+EXTENDED_HEAD_MS = 330 * 60_000  # the extended session opens 04:00 ET, 330 minutes before the open
+SESSIONS_30 = expected_sessions(date(2024, 5, 1), date(2024, 6, 20))[:30]
+
+
+class TestAnnualizationFollowsTheSessionTheBarsWereFoldedFrom:
+    """A year is 252 sessions of the bars a session holds (26 for regular hours, 64 for extended), not 26 whatever the session (#3525)."""
+
+    def test_an_extended_run_is_annualized_at_64_bars_a_session_and_a_regular_run_at_26(self):
+        extended = _session_bars(SESSIONS_30, per_session=64, head_ms=EXTENDED_HEAD_MS)
+        regular = _session_bars(SESSIONS_30, per_session=26, head_ms=0)
+
+        for bars, per_session in ((extended, 64), (regular, 26)):
+            body = _series(bars, None, bar_size="15m", bars_per_session=per_session, estimators=["yz"], windows=[5, 10])
+            for window in (5, 10):
+                expected_trailing = yang_zhang(bars, window=window, annualize=True, bars_per_year=252 * per_session)
+                expected_forward = forward_rv(bars, estimator="yz", window=window, annualize=True, bars_per_year=252 * per_session)
+                for key, expected in ((body["rv_trailing"], expected_trailing), (body["rv_forward"], expected_forward)):
+                    ours = np.array([np.nan if v is None else v for v in key[f"yz_{window}"]])
+                    assert np.isnan(ours).tolist() == expected.isna().tolist()
+                    np.testing.assert_allclose(ours, expected.to_numpy(), atol=1e-9, rtol=0, equal_nan=True)
+
+    def test_counting_an_extended_run_at_26_bars_a_session_understates_it_by_the_square_root_of_26_over_64(self):
+        """The bug this replaces: the same extended bars annualized at 26 read 0.64 times the right figure."""
+        extended = _session_bars(SESSIONS_30, per_session=64, head_ms=EXTENDED_HEAD_MS)
+
+        right = _series(extended, None, bar_size="15m", bars_per_session=64, estimators=["yz"], windows=[5])["rv_trailing"]["yz_5"]
+        wrong = _series(extended, None, bar_size="15m", bars_per_session=26, estimators=["yz"], windows=[5])["rv_trailing"]["yz_5"]
+
+        pairs = [(a, b) for a, b in zip(right, wrong, strict=True) if a is not None and b is not None]
+        assert pairs
+        for a, b in pairs:
+            np.testing.assert_allclose(b / a, np.sqrt(26 / 64), atol=1e-12, rtol=0)
+        assert np.sqrt(26 / 64) == pytest.approx(0.637, abs=5e-4)
+
+    def test_the_hf_estimator_does_not_depend_on_the_count_it_counts_the_sessions_itself(self):
+        extended = _session_bars(SESSIONS_30, per_session=64, head_ms=EXTENDED_HEAD_MS)
+
+        a = _series(extended, None, bar_size="15m", bars_per_session=64)
+        b = _series(extended, None, bar_size="15m", bars_per_session=26)
+
+        assert a["rv_hf_trailing"] == b["rv_hf_trailing"] and a["rv_hf_forward"] == b["rv_hf_forward"]
+
+    @pytest.mark.parametrize(("bar_size", "bars_per_session"), [("1d", 26), ("1d", 0), ("15m", 0), ("15m", -3)])
+    def test_a_count_that_cannot_describe_the_bars_is_refused(self, bar_size, bars_per_session):
+        with pytest.raises(ValueError, match=r"a session, got"):
+            _series(_bars(40), None, bar_size=bar_size, bars_per_session=bars_per_session)
+
+
+class TestTheDefaultWindowCanShowAZScore:
+    """The default window holds the fewest bars a z-score needs; one session fewer holds too few (#3525).
+
+    The z-score exists only with IV on every bar of its 252-bar window, so these runs give every bar an IV.
+    """
+
+    NOW = 1_735_689_600_000  # 2025-01-01
+
+    @staticmethod
+    def _iv_on_every_bar(bars: pd.DataFrame) -> list[dict]:
+        return [{"ts": int(ts), "iv30": 0.20 + 0.01 * ((i * 7) % 5)} for i, ts in enumerate(bars.index)]
+
+    def test_the_daily_default_window_has_a_z_score_on_its_last_bar_that_has_a_forward_value(self):
+        start, end = resolve_window("1d", "regular", self.NOW)
+        sessions = expected_sessions(start, end)
+        bars = _bars(len(sessions))
+
+        body = _series(bars, self._iv_on_every_bar(bars), estimators=["ctc"], windows=[5])
+        shorter = _bars(len(sessions) - 1)
+        shorter_body = _series(shorter, self._iv_on_every_bar(shorter), estimators=["ctc"], windows=[5])
+
+        assert len(sessions) == 273
+        assert [i for i, z in enumerate(body["vrp_z"]) if z is not None] == [251], "exactly the bar 252 valid bars end on"
+        assert all(z is None for z in shorter_body["vrp_z"]), "one session fewer shows none"
+
+    @pytest.mark.parametrize(
+        ("policy", "per_session", "head_ms", "hf_session"),
+        [("regular", 26, 0, "RTH"), ("extended", 64, EXTENDED_HEAD_MS, "ETH")],
+    )
+    def test_the_fifteen_minute_default_window_has_a_z_score_when_every_bar_has_an_iv(self, policy, per_session, head_ms, hf_session):
+        start, end = resolve_window("15m", policy, self.NOW)  # type: ignore[arg-type]
+        sessions = expected_sessions(start, end)
+        # The calendar's own bar count for these sessions must equal the grid built here (no early close in the window).
+        assert BAR_MINUTES["15m"] == 15
+        bars = _session_bars(sessions, per_session=per_session, head_ms=head_ms)
+        shorter = _session_bars(sessions[1:], per_session=per_session, head_ms=head_ms)
+
+        body = _series(bars, self._iv_on_every_bar(bars), bar_size="15m", bars_per_session=per_session, hf_session=hf_session, estimators=["ctc"], windows=[5])
+        shorter_body = _series(shorter, self._iv_on_every_bar(shorter), bar_size="15m", bars_per_session=per_session, hf_session=hf_session, estimators=["ctc"], windows=[5])
+
+        assert any(z is not None for z in body["vrp_z"])
+        assert all(z is None for z in shorter_body["vrp_z"])

@@ -1,4 +1,4 @@
-"""Realized vs IV inputs: the old provider path against the admitted lake path, on one pinned vendor payload (#3525; R14, T08, D02).
+"""Realized vs IV inputs: the old provider path against the admitted lake path, on one pinned vendor payload (#3525; R14, T08).
 
 Slice 35 of the UX redesign moves the study's bars from the browser's ``/api/aggregates/fetch`` call (the provider, then
 ``DataSanitizer``) to the lake. This module is the receipt for what that move changes, case by case. Both paths read the
@@ -12,7 +12,7 @@ Slice 35 of the UX redesign moves the study's bars from the browser's ``/api/agg
 Each case records changed timestamps, prices, volumes and derived outputs (the trailing Yang-Zhang series, the HF
 realized vol and the premium), and names the cause in the reconcile taxonomy (``timestamp``, ``warmup``, ``precision``,
 ``off-by-one``, ``data-quality``). A case that moves nothing says so by asserting zero. Unexplained drift fails here; an
-*intentional* divergence is the owner's decision (D02) and is listed in the PR.
+*intentional* divergence is the owner's decision (#3525) and is recorded in the issue.
 
 The two that matter most are in the first half:
 
@@ -82,11 +82,13 @@ EPS = float(np.finfo(np.float64).eps)
 #: whatever its size, and a term built from two logs about ``4 * eps``. It does not shrink with the return, which is a
 #: fraction of a percent: that cancellation, not a sum's length, is the estimators' float error.
 RETURN_ABS_ERR = 4 * EPS
-#: Bars a year behind each output, as it is annualized: the trailing Yang-Zhang lines use the bar size's own count
-#: (``realized_vs_iv_series.BARS_PER_YEAR``, 26 bars a day for 15 minutes); the HF estimator counts the extended day's 64
-#: bars (the default session) and falls back to Yang-Zhang at 252 on daily bars.
-YZ_BARS_PER_YEAR = {"15m": 252 * 26, "1d": 252}
-HF_BARS_PER_YEAR = {"15m": 252 * 64, "1d": 252}
+#: Bars a session holds, as the series annualizes them: 15-minute bars default to the extended session, 64 bars a day
+#: (04:00 to 20:00 ET), and a daily bar is one a session. Stated here rather than read from ``session_bars``, so a
+#: mistake in the calendar count shows.
+BARS_PER_SESSION = {"15m": 64, "1d": 1}
+#: Bars a year behind each output, as it is annualized: the trailing Yang-Zhang lines and the HF estimator alike
+#: (the HF estimator falls back to Yang-Zhang at 252 on daily bars).
+BARS_PER_YEAR = {size: 252 * count for size, count in BARS_PER_SESSION.items()}
 
 
 def float_atol(comparison: Comparison, bar_size: str, name: str) -> float:
@@ -99,12 +101,10 @@ def float_atol(comparison: Comparison, bar_size: str, name: str) -> float:
     factors that are not powers of two, both paths alike): every pinned movement stayed within 2e-14 of its pinned value,
     at least 7 times inside this bound.
     """
-    hf = 2 * RETURN_ABS_ERR * math.sqrt(HF_BARS_PER_YEAR[bar_size])
+    bound = 2 * RETURN_ABS_ERR * math.sqrt(BARS_PER_YEAR[bar_size])
     if name == "vrp_forward":
-        return 2 * comparison.output_scale["hf_forward"] * hf
-    if name.startswith("hf_"):
-        return hf
-    return 2 * RETURN_ABS_ERR * math.sqrt(YZ_BARS_PER_YEAR[bar_size])
+        return 2 * comparison.output_scale["hf_forward"] * bound
+    return bound
 
 
 def assert_moved_by(comparison: Comparison, bar_size: str, measured: Mapping[str, float]) -> None:
@@ -190,6 +190,7 @@ def outputs(rows: list[dict], bar_size: str, iv: list[dict] | None) -> dict[str,
     series = compute_realized_vs_iv_series(
         frame_of(rows), symbol="SPY", bar_size=bar_size, tenor_days=30, hf_session="ETH", estimators=["yz"], windows=[5, 10, 30],
         iv_points=iv or None, iv_source="caller_supplied" if iv else "absent", confidence_floor=0.1,
+        bars_per_session=BARS_PER_SESSION[bar_size],
     )
 
     def column(values: list[float | None]) -> np.ndarray:
@@ -323,6 +324,10 @@ def test_the_lake_adds_nothing_to_the_bars_the_provider_sends_across_a_dst_chang
     assert comparison.lake_bars < len(window) * (64 if bar_size == "15m" else 1) + 1, "gaps are in both; nothing is filled"
 
 
+#: The 15-minute Yang-Zhang pins below (the ``yz_*`` entries) were re-measured when the series began annualizing an
+#: extended-hours run at 64 bars a session instead of 26 (#3525). Each is its earlier value times sqrt(64 / 26), to 1e-12;
+#: the HF and premium pins did not move, so the annualization is the only thing that changed them.
+#:
 #: What the sanitizer moves, measured on this pinned payload (seed 11, 27 sessions of 15-minute bars and 66 daily bars,
 #: both ``tape_for`` defaults) as the largest absolute difference between the two paths' value of an output at a shared
 #: bar, to full precision. Re-measure (print ``compare(...)``) only when the pinned tape or the sanitizer intentionally
@@ -331,7 +336,7 @@ SANITIZER_MEASURED = {
     "15m": {
         "bars_with_a_price_changed": 58, "bars_with_a_volume_changed": 38, "max_price_diff": 0.6055,
         "outputs": {
-            "yz_5": 0.03809597839626627, "yz_10": 0.019657046609122875, "yz_30": 0.01025750415640081,
+            "yz_5": 0.05976988837906799, "yz_10": 0.03084051207369859, "yz_30": 0.016093296570537485,
             "hf_trailing": 0.0020655496868912104, "hf_forward": 0.0020655496868912104, "vrp_forward": 0.0011693426890660996,
         },
     },
@@ -389,15 +394,15 @@ def test_the_sanitizer_clips_each_column_to_its_percentile_band_so_the_provider_
 #: rounding of at most 5e-5 is a larger share of a bar's range on a $2 name than on a $150 one.
 QUANTIZATION_MEASURED = {
     ("15m", 150.0, 5): {
-        "yz_5": 2.675568631019254e-05, "yz_10": 1.767336710128964e-05, "yz_30": 1.2308259477622485e-05,
+        "yz_5": 4.197777433700978e-05, "yz_10": 2.7728259606230043e-05, "yz_30": 1.9310786232240584e-05,
         "hf_trailing": 5.477703459710881e-07, "hf_forward": 5.477703459710881e-07, "vrp_forward": 3.112094703189294e-07,
     },
     ("15m", 12.0, 5): {
-        "yz_5": 0.0003113280498101001, "yz_10": 0.00026583772603372413, "yz_30": 0.0001273954275767264,
+        "yz_5": 0.0004884516311108866, "yz_10": 0.00041708053922923094, "yz_30": 0.00019987439112501004,
         "hf_trailing": 7.451893096033224e-06, "hf_forward": 7.451893096033224e-06, "vrp_forward": 4.234245391518399e-06,
     },
     ("15m", 2.0, 6): {
-        "yz_5": 0.0019130295892502425, "yz_10": 0.0014749512778684248, "yz_30": 0.0006041641547841481,
+        "yz_5": 0.0030014077555899354, "yz_10": 0.00231409395306148, "yz_30": 0.0009478907122023039,
         "hf_trailing": 0.00012998884399584298, "hf_forward": 0.00012998884399584298, "vrp_forward": 7.393305292863195e-05,
     },
     ("1d", 150.0, 5): {
@@ -471,7 +476,7 @@ EXTENDED_DAILY_MEASURED = {
 def test_the_daily_session_is_regular_by_default_and_folding_it_from_extended_hours_is_a_different_sample(world):
     """Cause: ``data-quality`` (session scope). The census could not confirm Polygon's day bar is regular-session only;
     the default assumes it is, because a day folded from extended minutes opens at the first pre-market print and its
-    high and low reach into the after-hours tape. Which one the page should use is an owner decision (D02)."""
+    high and low reach into the after-hours tape. The owner ruled the default regular (#3525)."""
     window = window_of("1d")
     tape = tape_for(window)
     mock_vendor("SPY", tape, adjusted=tape)

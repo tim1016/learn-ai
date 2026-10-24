@@ -29,10 +29,12 @@ import pandas as pd
 import pytest
 import respx
 
+from app.data_lake.capture_finality import CLAIM_LEASE_MS, capture_final_ms
 from app.engine.edge.features_realtime.hf_realized_vol import hf_realized_vol_trd252
 from app.engine.edge.features_realtime.realized_vol import yang_zhang
 from app.engine.edge.labels_oracle.forward_rv import forward_rv
 from app.engine.edge.labels_oracle.hf_forward_rv import hf_forward_rv_trd252
+from app.engine.edge.session_bars import bars_in_session
 from app.engine.edge.vrp import compute_vrp, vrp_signal
 from app.lean_sidecar.trading_calendar import expected_sessions, session_close_ms_utc, session_open_ms_utc
 from app.research.lake_study import StudyHooks, StudyRun
@@ -129,12 +131,25 @@ def result_of(p: RealizedVsIvParams) -> dict[str, Any]:
 
 
 def vendor_bars(tape: dict[date, list[VendorBar]], window: list[date], *, bar_size: str, regular_only: bool) -> list[dict]:
-    """The vendor's own aggregates of ``bar_size`` as study rows; see ``tests/_helpers/realized_vs_iv.py`` for the assumptions."""
-    return aggregates_as_rows(vendor_aggregates(tape, window, bar_size=bar_size, regular_only=regular_only))
+    """The vendor's own aggregates of ``bar_size`` as study rows; see ``tests/_helpers/realized_vs_iv.py`` for the assumptions.
+
+    The stand-in's 15-minute aggregates are always the whole extended tape; a regular-hours run reads the 15-minute bars
+    that start inside the scheduled session.
+    """
+    rows = aggregates_as_rows(vendor_aggregates(tape, window, bar_size=bar_size, regular_only=regular_only))
+    if bar_size == "15m" and regular_only:
+        sessions = {day: (session_open_ms_utc(day), session_close_ms_utc(day)) for day in window}
+        rows = [r for r in rows if any(open_ms <= r["timestamp"] < close_ms for open_ms, close_ms in sessions.values())]
+    return rows
+
+
+#: Bars a full session holds at each bar size and session, as the trading day is scheduled (regular 09:30 to 16:00 ET,
+#: extended 04:00 to 20:00 ET). Written here, not read from ``session_bars``, so a wrong count in the app shows.
+BARS_PER_SESSION = {("15m", "regular"): 26, ("15m", "extended"): 64, ("1d", "regular"): 1}
 
 
 def reference_series(
-    frame: pd.DataFrame, *, bar_size: str, tenor_days: int, hf_session: str, windows: list[int], iv: dict[int, float]
+    frame: pd.DataFrame, *, bar_size: str, bars_per_session: int, tenor_days: int, hf_session: str, windows: list[int], iv: dict[int, float]
 ) -> dict[str, np.ndarray]:
     """The series the retired route computed, chained from the estimators directly.
 
@@ -142,7 +157,7 @@ def reference_series(
     beyond the estimators themselves, so a mistake in the composition's plumbing (a window, a bars-per-year, a
     session, a basis conversion) shows here.
     """
-    bars_per_year = 252 if bar_size == "1d" else 252 * 26
+    bars_per_year = 252 * bars_per_session
     out: dict[str, np.ndarray] = {}
     for w in windows:
         out[f"trail_{w}"] = yang_zhang(frame, window=w, annualize=True, bars_per_year=bars_per_year).to_numpy()
@@ -210,17 +225,22 @@ def test_a_daily_bar_is_stamped_at_et_midnight_of_its_session_one_per_session_wi
 
 
 @pytest.mark.parametrize(
-    ("bar_size", "hf_session"), [("15m", "ETH"), ("15m", "RTH"), ("1d", "ETH")], ids=["15m-ETH", "15m-RTH", "1d"]
+    ("bar_size", "hf_session", "session_policy"),
+    [("15m", "ETH", "extended"), ("15m", "RTH", "extended"), ("15m", "RTH", "regular"), ("1d", "ETH", "regular")],
+    ids=["15m-ETH-extended", "15m-RTH-extended", "15m-RTH-regular", "1d"],
 )
-def test_the_whole_series_is_the_same_on_lake_bars_as_on_the_vendors_bars(lake_vendor, recorder_store, bar_size, hf_session):
-    p = params(bar_size, hf_session=hf_session)
+def test_the_whole_series_is_the_same_on_lake_bars_as_on_the_vendors_bars(lake_vendor, recorder_store, bar_size, hf_session, session_policy):
+    p = params(bar_size, hf_session=hf_session, session_policy=session_policy)
     identity = realized_vs_iv_identity(p, now_ms=NOW_MS)
     vendor = frame_of(vendor_bars(lake_vendor, expected_sessions(*window_of(bar_size)), bar_size=bar_size, regular_only=identity.inputs.session_policy == "regular"))
     iv = iv_every_third_bar(vendor)
-    p = params(bar_size, hf_session=hf_session, iv_series=[{"ts": ts, "iv30": value} for ts, value in iv.items()])
+    p = params(bar_size, hf_session=hf_session, session_policy=session_policy, iv_series=[{"ts": ts, "iv30": value} for ts, value in iv.items()])
 
     ours = result_of(p)
-    reference = reference_series(vendor, bar_size=bar_size, tenor_days=30, hf_session=hf_session, windows=[5, 10, 30], iv=iv)
+    reference = reference_series(
+        vendor, bar_size=bar_size, bars_per_session=BARS_PER_SESSION[(bar_size, session_policy)], tenor_days=30,
+        hf_session=hf_session, windows=[5, 10, 30], iv=iv,
+    )
 
     assert ours["ts"] == vendor.index.tolist()
     for w in (5, 10, 30):
@@ -234,6 +254,25 @@ def test_the_whole_series_is_the_same_on_lake_bars_as_on_the_vendors_bars(lake_v
     assert_same(ours["vrp_z"], reference["vrp_z"], "VRP z-score")
     assert ours["coverage"]["forward_nan_bars"] == int(np.isnan(reference["hf_forward"]).sum())
     assert sum(v is not None for v in ours["iv30"]) == len(iv), "every IV stamped at a bar start reached its bar"
+
+
+def test_an_extended_hours_fifteen_minute_run_is_annualized_at_64_bars_a_day_not_the_26_of_the_regular_session(lake_vendor):
+    """Regression (#3525): the default 15-minute run folds the extended session (64 bars a day) but its Yang-Zhang lines were
+    annualized at 26 a day, so each read sqrt(26 / 64), about 0.64 times, of the right figure."""
+    p = params("15m")
+    identity = realized_vs_iv_identity(p, now_ms=NOW_MS)
+    assert identity.inputs.session_policy == "extended"
+    frame = frame_of(vendor_bars(lake_vendor, expected_sessions(*window_of("15m")), bar_size="15m", regular_only=False))
+
+    ours = np.array([np.nan if v is None else v for v in result_of(p)["rv_trailing"]["yz_5"]])
+
+    right = yang_zhang(frame, window=5, annualize=True, bars_per_year=252 * 64).to_numpy()
+    understated = yang_zhang(frame, window=5, annualize=True, bars_per_year=252 * 26).to_numpy()
+    np.testing.assert_allclose(ours, right, atol=ATOL, rtol=RTOL, equal_nan=True)
+    valid = ~np.isnan(right)
+    assert valid.any()
+    np.testing.assert_allclose(understated[valid] / ours[valid], math.sqrt(26 / 64), atol=1e-12, rtol=0)
+    assert not np.allclose(ours[valid], understated[valid], atol=1e-6, rtol=0), "the two counts are different numbers"
 
 
 def test_the_first_valid_value_sits_where_the_estimator_windows_say_and_the_region_before_it_is_nan(lake_vendor):
@@ -408,40 +447,80 @@ def at_et(day: date, hour: int, minute: int = 0) -> int:
 
 
 @pytest.mark.parametrize(
-    ("now", "policy", "expected"),
+    ("now", "expected"),
     [
-        # A Monday: its regular tape is final at 16:15 ET, its extended tape at 20:15.
-        (at_et(date(2024, 3, 11), 16, 14), "regular", date(2024, 3, 8)),
-        (at_et(date(2024, 3, 11), 16, 15), "regular", date(2024, 3, 11)),
-        (at_et(date(2024, 3, 11), 20, 14), "extended", date(2024, 3, 8)),
-        (at_et(date(2024, 3, 11), 20, 15), "extended", date(2024, 3, 11)),
+        # A Monday: its regular tape is final at 16:15 ET and its extended tape at 20:15, plus the five-minute capture
+        # lease. The lake keeps one copy of a day, so a study that has to capture it waits for the extended tape whatever
+        # session it reads, and a default window never ends on a day it could only be refused for.
+        (at_et(date(2024, 3, 11), 16, 15), date(2024, 3, 8)),
+        (at_et(date(2024, 3, 11), 20, 19), date(2024, 3, 8)),
+        (at_et(date(2024, 3, 11), 20, 20), date(2024, 3, 11)),
         # A weekend and a holiday weekend look back to the last session.
-        (at_et(date(2024, 3, 10), 12), "regular", date(2024, 3, 8)),
-        (at_et(date(2024, 3, 31), 12), "regular", date(2024, 3, 28)),
-        # The early close: 13:00 ET plus the vendor delay.
-        (at_et(date(2024, 7, 3), 13, 14), "regular", date(2024, 7, 2)),
-        (at_et(date(2024, 7, 3), 13, 15), "regular", date(2024, 7, 3)),
-        (at_et(date(2024, 7, 3), 17, 15), "extended", date(2024, 7, 3)),
+        (at_et(date(2024, 3, 10), 12), date(2024, 3, 8)),
+        (at_et(date(2024, 3, 31), 12), date(2024, 3, 28)),
+        # The early close: 13:00 ET, the four-hour after-hours tape, the vendor delay and the lease.
+        (at_et(date(2024, 7, 3), 17, 19), date(2024, 7, 2)),
+        (at_et(date(2024, 7, 3), 17, 20), date(2024, 7, 3)),
     ],
 )
-def test_the_window_ends_on_the_last_session_whose_tape_the_vendor_has_finished_delivering(now, policy, expected):
-    assert last_final_session(now, policy) == expected
+def test_the_window_ends_on_the_last_session_the_study_can_read_or_capture(now, expected):
+    assert last_final_session(now) == expected
+
+
+@pytest.mark.parametrize("policy", ["regular", "extended"])
+def test_the_default_window_never_ends_on_a_session_admission_would_refuse_as_forming(lake_vendor, policy):
+    """Around the close the default end is a day admission accepts as complete, for either session."""
+    for hour, minute in ((16, 14), (16, 15), (16, 20), (19, 0), (20, 19), (20, 20), (23, 59)):
+        now = at_et(date(2024, 4, 5), hour, minute)
+        end = resolve_window("1d", policy, now)[1]  # type: ignore[arg-type]
+        identity = realized_vs_iv_identity(RealizedVsIvParams("SPY", "1d", session_policy=policy, window=(end, end)), now_ms=now)  # type: ignore[arg-type]
+
+        assert now >= capture_final_ms(end, "extended") + CLAIM_LEASE_MS, (hour, minute)
+        assert identity.inputs.window_end == end
+
+
+#: What a VRP z-score needs, stated independently of the app: it rolls over 252 bars that each have a forward value, and
+#: the forward value looks 21 sessions ahead, so the last 21 sessions have none.
+Z_LOOKBACK_BARS = 252
+Z_FORWARD_TAIL_SESSIONS = 21
 
 
 @pytest.mark.parametrize(
-    ("bar_size", "end", "start"),
+    ("bar_size", "policy", "sessions"),
     [
-        ("1d", date(2024, 12, 31), date(2023, 12, 31)),
-        ("1d", date(2024, 2, 29), date(2023, 2, 28)),  # the leap day lands on the 28th of a common year
-        ("15m", date(2024, 12, 31), date(2024, 11, 30)),
-        ("15m", date(2024, 3, 29), date(2024, 2, 29)),
-        ("15m", date(2024, 3, 31), date(2024, 2, 29)),  # a month back clamps to the month's last day
+        # 21 sessions with no forward value, then 252 daily bars (one a session): 273.
+        ("1d", "regular", 273),
+        # 252 bars at 26 a regular session is 10 sessions (9.7 rounded up), after the 21 of the tail.
+        ("15m", "regular", 31),
+        # 252 bars at 64 an extended session is 4 sessions (3.9 rounded up).
+        ("15m", "extended", 25),
     ],
 )
-def test_the_default_window_reaches_back_one_calendar_year_for_daily_bars_and_one_month_for_intraday(bar_size, end, start, monkeypatch):
-    monkeypatch.setattr("app.services.realized_vs_iv_study_service.last_final_session", lambda *_: end)
+def test_the_default_window_is_the_shortest_that_holds_the_bars_a_vrp_z_score_needs(bar_size, policy, sessions):
+    # A June end: no early close in the walk back, so the sessions are the plain bar arithmetic above.
+    start, end = resolve_window(bar_size, policy, at_et(date(2024, 6, 14), 21, 0))  # type: ignore[arg-type]
 
-    assert resolve_window(bar_size, "regular", NOW_MS) == (start, end)
+    window = expected_sessions(start, end)
+    valid = window[:-Z_FORWARD_TAIL_SESSIONS]
+    bars = sum(bars_in_session(day, BAR_MINUTES[bar_size], policy) for day in valid)  # type: ignore[arg-type]
+    assert end == date(2024, 6, 14)
+    assert len(window) == sessions
+    assert bars >= Z_LOOKBACK_BARS, "the bars with a forward value fill the lookback"
+    assert bars - bars_in_session(valid[0], BAR_MINUTES[bar_size], policy) < Z_LOOKBACK_BARS, "and one session fewer would not"  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(("policy", "early_close_bars", "sessions"), [("regular", 14, 32), ("extended", 52, 26)])
+def test_an_early_close_in_the_walk_back_holds_fewer_bars_so_the_window_reaches_one_session_further(policy, early_close_bars, sessions):
+    """2024-11-29 closes at 13:00 ET: 14 regular or 52 extended 15-minute bars, not 26 or 64."""
+    start, end = resolve_window("15m", policy, at_et(date(2024, 12, 31), 21, 0))  # type: ignore[arg-type]
+
+    window = expected_sessions(start, end)
+    valid = window[:-Z_FORWARD_TAIL_SESSIONS]
+    assert date(2024, 11, 29) in valid
+    assert bars_in_session(date(2024, 11, 29), 15, policy) == early_close_bars  # type: ignore[arg-type]
+    assert len(window) == sessions
+    assert sum(bars_in_session(day, 15, policy) for day in valid) >= Z_LOOKBACK_BARS  # type: ignore[arg-type]
+    assert sum(bars_in_session(day, 15, policy) for day in valid[1:]) < Z_LOOKBACK_BARS  # type: ignore[arg-type]
 
 
 def test_each_bar_size_defaults_to_the_session_it_has_always_read_and_the_identity_names_it():

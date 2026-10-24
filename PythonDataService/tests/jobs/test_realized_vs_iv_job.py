@@ -168,7 +168,7 @@ def test_a_completed_study_carries_a_lake_data_source_with_its_coverage_counts(h
     assert (result["bar_size"], result["tenor_days"], result["hf_session"]) == ("1d", 30, None)
 
 
-def test_the_default_window_is_the_last_year_of_final_sessions_read_through_the_lake(harness, monkeypatch):
+def test_the_default_window_holds_the_273_daily_bars_a_z_score_needs_and_is_read_through_the_lake(harness, monkeypatch):
     first, last = resolve_window("1d", "regular", NOW_MS)
     year = expected_sessions(first, last)
     harness.tape = vendor_history(year, seed=5, start_price=100.0, regular_keep=0.99, extended_keep=0.2)
@@ -180,10 +180,14 @@ def test_the_default_window_is_the_last_year_of_final_sessions_read_through_the_
 
     source = harness.result("year")["data_source"]
     assert state["status"] == "completed"
-    assert (first, last) == (date(2023, 12, 31), date(2024, 12, 31)), "the last session whose regular tape was final at 2025-01-01 00:00 UTC"
+    # 2025-01-01 00:00 UTC is 19:00 ET on 2024-12-31: that session's extended tape is final from 20:20 ET, so the last
+    # session the study can read or capture is the day before, and 273 sessions end there (252 with a forward value
+    # after the 21 that have none).
+    assert (first, last) == (date(2023, 11, 29), date(2024, 12, 30))
+    assert len(year) == 273
     assert source["window_start_ms"] == et_midnight_ms(first) and source["window_end_ms"] == et_midnight_ms(last)
     assert source["effective_window"] == {"start_ms": et_midnight_ms(year[0]), "end_ms": et_midnight_ms(year[-1])}
-    assert source["coverage"]["window"]["expected_sessions"] == len(year) and 250 <= len(year) <= 254
+    assert source["coverage"]["window"]["expected_sessions"] == len(year)
 
 
 # ---------------------------------------------------------------------------

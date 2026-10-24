@@ -10,9 +10,9 @@ Formula: a snapshot taken at ``t`` belongs to the bar whose half-open interval `
   that contains no snapshot has no IV. Nothing is carried forward, interpolated or averaged: sparse stays sparse
   (ADR 0071 decision 9), and the counts say how sparse.
 Reference: internal. Neither an external algorithm nor a vendor convention; it is a repo decision that keeps ADR 0071
-  decision 9 and replaces the exact-equality match it left implicit. Which rule the page should use is an owner
-  decision (D02 of PRD #3490): a snapshot at an exact bar start still lands on that bar, so a caller whose IV was
-  already stamped at bar starts is unchanged.
+  decision 9 and replaces the exact-equality match it left implicit. The owner chose containment, latest wins, nothing
+  filled (#3525): a snapshot at an exact bar start still lands on that bar, so a caller whose IV was already stamped at
+  bar starts is unchanged.
 Canonical implementation: this file.
 Validated against: tests/edge/test_iv_alignment.py
 """

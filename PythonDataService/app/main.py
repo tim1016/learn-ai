@@ -76,6 +76,7 @@ from app.routers import (
     options_backtest_chain,
     options_position_preview,
     quantlib_options,
+    realized_vs_iv,
     recency,
     research_divergence,
     research_experiments,
@@ -1516,6 +1517,8 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     # (ADR 0081); the data plane's own clock records the closing snapshot
     # (app.services.iv_recorder_schedule, #3525).
     app.include_router(iv_recorder.router)
+    # The window a Realized vs IV run reads when its request names none (#3525).
+    app.include_router(realized_vs_iv.router)
     # /research/data-divergence/* — dashboard + matrix endpoints. The router
     # carries its own prefix so we mount it bare.
     app.include_router(research_divergence.router)

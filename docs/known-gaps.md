@@ -85,41 +85,13 @@ previously tracked items (issues #1655, #1671, #1672, #1674, #1677, #1664,
   and stable moments within the inference sample. Numerical equation fixtures
   do not establish finite-sample interval coverage or DSR calibration for this
   intraday setting. Graduation gates remain independent of these diagnostics.
-- **Realized vs IV reads the lake: divergences from the provider path (#3525, 2026-10-24).** Measured on a pinned
-  payload in `tests/research/test_realized_vs_iv_lake_vs_provider.py`; the first four are owner decisions (D02 of PRD
-  #3490).
-  - *Winsorization is gone (P2).* `DataSanitizer` clipped every price column to its 1st to 99th percentile of level
-    across the window, so the provider path computed on bars whose highest- and lowest-priced days were rewritten.
-    Lake bars are not clipped. On the payload the trailing Yang-Zhang moves by up to 0.038 (15m) and 0.021 (daily).
-  - *A daily bar is the regular session by default (P2).* The census could not confirm Polygon's day bar is
-    regular-session only, and a real day bar opens and closes at the auction prints where the lake folds the first and
-    last minute (3 bps either way moves the payload's Yang-Zhang by 0.002). Folding the day from extended minutes moves
-    it by up to 0.12. A 15-minute bar keeps `extended`, as it was.
-  - *Recorded IV reaches a bar by containment (P2).* `snapshot_in_bar_latest` replaces timestamp equality, which almost
-    never held. Nothing is filled: the VRP z-score no longer forward-fills IV (it did, #3525 review M1), so it exists
-    only where recorded IV covers every bar of its 252-bar window. Whether the alignment rule is right is undecided.
-  - *Nothing schedules the IV recorder (P2).* Until something calls `POST /api/iv-recorder/snapshot` at the slots the
-    page reads "No IV30 at these bars", honestly. Recorded rows carry no tenor (the recorder defaults to 30 days), so
-    the Tenor control converts a recorded 30-day IV as if it were the tenor chosen.
-  - *The intraday window barely holds a forward value (P3, unchanged).* One month is about 21 sessions and the HF
-    forward RV looks 21 sessions ahead, so nearly every 15-minute bar is in the blind tail.
-  - *The 15-minute annualization does not match its bars (P2, owner decision).* The 15-minute Yang-Zhang lines are
-    annualized at 26 bars a day (`BARS_PER_YEAR`), the regular session, over bars that default to the extended session,
-    64 a day. If every one of the 64 bars carries the same variance, each line understates by about 0.64 times
-    (the square root of 26/64) against a day's variance. If only the 26 regular bars carry the day, the quiet pre-market
-    and after-hours bars dilute any window that touches them, and the line at the window's last bar (about 19:45 ET) is
-    half after-hours. The HF estimator in the same response already counts an extended day as 64 bars, and an early
-    close (14 regular bars) is mis-scaled either way. It predates #3525, which kept `extended` as it was. To decide:
-    fold the trailing lines from the regular session, which is what the annualization assumes, while the HF estimator
-    keeps extended bars; or derive the bars per session from the calendar for the chosen session. Either changes the
-    numbers, so it is the owner's call under D02 and not part of this change.
-  - *The default windows cannot produce a VRP z-score (P2, owner decision).* The z-score is a 252-bar rolling statistic
-    over bars that each have a forward realized volatility (and, since the IV fill went, recorded IV). The last 21 bars
-    of a daily window have no forward value, so a daily window needs at least 273 bars; the page's one-year default holds
-    about 251. A one-month 15-minute window holds about 2 sessions (128 bars) with a forward value, fewer than 252. So the
-    long/short-vol markers, the Realtime toggle and `vrp_z` are empty on both defaults. The page now says why, from the
-    window's counts. To decide: widen the defaults (a two-year daily window, a longer intraday one), or shorten the
-    z-score's lookback, which changes the numbers.
+- **Realized vs IV: open after it moved to the lake (#3525, 2026-10-24).**
+  - *Recorded rows carry no tenor (P2).* The recorder defaults to a 30-day target, and the scheduled snapshots are 30-day
+    ones, but a row does not say so, so the Tenor control (7, 14, 30 or 60 days) converts a recorded 30-day IV to
+    TRD/252 as if it were the tenor chosen. Tag each row with its target and read only the rows that match.
+  - *A once-a-day recorder gives a 15-minute run no z-score (P3).* The z-score needs IV on 252 consecutive bars, and a
+    daily snapshot lands on one 15-minute bar a day, so only daily bars can show it (after 252 recorded days). The page
+    says why from the window's counts.
   - *Unverified assumptions:* Polygon's own 15-minute and day aggregates equal a fold of its minute aggregates, and a
     day bar is the regular session. Both are asserted against an independent stand-in, not live data.
 - **Temporal wire/storage contracts outside Alpaca V2 remain non-numeric

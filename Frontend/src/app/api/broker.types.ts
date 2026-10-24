@@ -4750,6 +4750,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/edge/realized-vs-iv/window": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Default Window
+         * @description The window a run of ``bar_size`` reads when it names none, and the session it reads it in.
+         */
+        get: operations["get_default_window_api_edge_realized_vs_iv_window_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/engine/backtest": {
         parameters: {
             query?: never;
@@ -29076,14 +29096,15 @@ export interface components {
          *
          *     The worker reads the study's bars from the data lake itself, materializing what the lake lacks: the browser
          *     sends the symbol and the study's settings, never bars. Unless ``window_start_ms`` and ``window_end_ms`` (ET
-         *     midnight of the first and last session, ``int64 ms UTC``) name a window, it is the last year (``1d``) or month
-         *     (``15m``) of sessions whose tape is final; see ``app.services.realized_vs_iv_study_service``.
+         *     midnight of the first and last session, ``int64 ms UTC``) name a window, it is the fewest sessions whose bars let a
+         *     VRP z-score exist, ending at the last session the study can read (``GET /api/edge/realized-vs-iv/window`` says which);
+         *     see ``app.services.realized_vs_iv_study_service``.
          *
          *     ``bar_size`` is ``15m`` or ``1d``. Anything else is accepted here and refused by the job with
          *     ``resolution_unsupported`` and a reason, so the answer is a typed refusal a page can show rather than a 422.
          *
          *     ``session`` is which bars the study folds from: ``extended`` (04:00-20:00 ET) or ``rth``. Omitted, it is the session
-         *     each bar size has always read (``extended`` for ``15m``, ``rth`` for ``1d``; D02). ``hf_session`` is the HF
+         *     each bar size has always read (``extended`` for ``15m``, ``rth`` for ``1d``; #3525). ``hf_session`` is the HF
          *     estimator's own ETH/RTH filter and is unchanged.
          */
         RealizedVsIvJobRequest: {
@@ -29137,6 +29158,38 @@ export interface components {
             windowStartMs?: number | null;
             /** Windows */
             windows?: number[];
+        };
+        /**
+         * RealizedVsIvWindow
+         * @description The window a Realized vs IV run reads when its request names none.
+         *
+         *     ``window_start_ms`` and ``window_end_ms`` are ET midnight of the first and last session, ``int64 ms UTC``: the values the
+         *     job request takes, so a page can send back exactly the window it showed. The window holds the fewest sessions whose
+         *     bars let a VRP z-score exist (``resolve_window``), and ends on the last session the study can read or capture now.
+         */
+        RealizedVsIvWindow: {
+            /**
+             * Bar Size
+             * @enum {string}
+             */
+            bar_size: "15m" | "1d";
+            /**
+             * Session
+             * @enum {string}
+             */
+            session: "rth" | "extended";
+            /** Sessions */
+            sessions: number;
+            /**
+             * Window End Ms
+             * @description ET midnight of the last session, int64 ms UTC
+             */
+            window_end_ms: number;
+            /**
+             * Window Start Ms
+             * @description ET midnight of the first session, int64 ms UTC
+             */
+            window_start_ms: number;
         };
         /**
          * RecencyChartJobRequest
@@ -44669,6 +44722,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Iv30LiveResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_default_window_api_edge_realized_vs_iv_window_get: {
+        parameters: {
+            query: {
+                /** @description The study's bar size. */
+                bar_size: "15m" | "1d";
+                /** @description The session the run reads; omitted, it is the session the bar size reads by default. */
+                session?: ("rth" | "extended") | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RealizedVsIvWindow"];
                 };
             };
             /** @description Validation Error */

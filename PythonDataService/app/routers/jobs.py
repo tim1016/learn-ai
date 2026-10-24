@@ -257,14 +257,15 @@ class RealizedVsIvJobRequest(_CamelCaseModel):
 
     The worker reads the study's bars from the data lake itself, materializing what the lake lacks: the browser
     sends the symbol and the study's settings, never bars. Unless ``window_start_ms`` and ``window_end_ms`` (ET
-    midnight of the first and last session, ``int64 ms UTC``) name a window, it is the last year (``1d``) or month
-    (``15m``) of sessions whose tape is final; see ``app.services.realized_vs_iv_study_service``.
+    midnight of the first and last session, ``int64 ms UTC``) name a window, it is the fewest sessions whose bars let a
+    VRP z-score exist, ending at the last session the study can read (``GET /api/edge/realized-vs-iv/window`` says which);
+    see ``app.services.realized_vs_iv_study_service``.
 
     ``bar_size`` is ``15m`` or ``1d``. Anything else is accepted here and refused by the job with
     ``resolution_unsupported`` and a reason, so the answer is a typed refusal a page can show rather than a 422.
 
     ``session`` is which bars the study folds from: ``extended`` (04:00-20:00 ET) or ``rth``. Omitted, it is the session
-    each bar size has always read (``extended`` for ``15m``, ``rth`` for ``1d``; D02). ``hf_session`` is the HF
+    each bar size has always read (``extended`` for ``15m``, ``rth`` for ``1d``; #3525). ``hf_session`` is the HF
     estimator's own ETH/RTH filter and is unchanged.
     """
 

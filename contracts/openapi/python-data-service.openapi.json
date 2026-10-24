@@ -54553,7 +54553,7 @@
       },
       "RealizedVsIvJobRequest": {
         "additionalProperties": false,
-        "description": "Body of POST /api/jobs-internal/realized-vs-iv.\n\nThe worker reads the study's bars from the data lake itself, materializing what the lake lacks: the browser\nsends the symbol and the study's settings, never bars. Unless ``window_start_ms`` and ``window_end_ms`` (ET\nmidnight of the first and last session, ``int64 ms UTC``) name a window, it is the last year (``1d``) or month\n(``15m``) of sessions whose tape is final; see ``app.services.realized_vs_iv_study_service``.\n\n``bar_size`` is ``15m`` or ``1d``. Anything else is accepted here and refused by the job with\n``resolution_unsupported`` and a reason, so the answer is a typed refusal a page can show rather than a 422.\n\n``session`` is which bars the study folds from: ``extended`` (04:00-20:00 ET) or ``rth``. Omitted, it is the session\neach bar size has always read (``extended`` for ``15m``, ``rth`` for ``1d``; D02). ``hf_session`` is the HF\nestimator's own ETH/RTH filter and is unchanged.",
+        "description": "Body of POST /api/jobs-internal/realized-vs-iv.\n\nThe worker reads the study's bars from the data lake itself, materializing what the lake lacks: the browser\nsends the symbol and the study's settings, never bars. Unless ``window_start_ms`` and ``window_end_ms`` (ET\nmidnight of the first and last session, ``int64 ms UTC``) name a window, it is the fewest sessions whose bars let a\nVRP z-score exist, ending at the last session the study can read (``GET /api/edge/realized-vs-iv/window`` says which);\nsee ``app.services.realized_vs_iv_study_service``.\n\n``bar_size`` is ``15m`` or ``1d``. Anything else is accepted here and refused by the job with\n``resolution_unsupported`` and a reason, so the answer is a typed refusal a page can show rather than a 422.\n\n``session`` is which bars the study folds from: ``extended`` (04:00-20:00 ET) or ``rth``. Omitted, it is the session\neach bar size has always read (``extended`` for ``15m``, ``rth`` for ``1d``; #3525). ``hf_session`` is the HF\nestimator's own ETH/RTH filter and is unchanged.",
         "properties": {
           "barSize": {
             "default": "1d",
@@ -54699,6 +54699,55 @@
           "symbol"
         ],
         "title": "RealizedVsIvJobRequest",
+        "type": "object"
+      },
+      "RealizedVsIvWindow": {
+        "description": "The window a Realized vs IV run reads when its request names none.\n\n``window_start_ms`` and ``window_end_ms`` are ET midnight of the first and last session, ``int64 ms UTC``: the values the\njob request takes, so a page can send back exactly the window it showed. The window holds the fewest sessions whose\nbars let a VRP z-score exist (``resolve_window``), and ends on the last session the study can read or capture now.",
+        "properties": {
+          "bar_size": {
+            "enum": [
+              "15m",
+              "1d"
+            ],
+            "title": "Bar Size",
+            "type": "string"
+          },
+          "session": {
+            "enum": [
+              "rth",
+              "extended"
+            ],
+            "title": "Session",
+            "type": "string"
+          },
+          "sessions": {
+            "minimum": 1.0,
+            "title": "Sessions",
+            "type": "integer"
+          },
+          "window_end_ms": {
+            "description": "ET midnight of the last session, int64 ms UTC",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Window End Ms",
+            "type": "integer"
+          },
+          "window_start_ms": {
+            "description": "ET midnight of the first session, int64 ms UTC",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Window Start Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "bar_size",
+          "session",
+          "window_start_ms",
+          "window_end_ms",
+          "sessions"
+        ],
+        "title": "RealizedVsIvWindow",
         "type": "object"
       },
       "RecencyChartJobRequest": {
@@ -89268,6 +89317,77 @@
         "summary": "Iv30 Vix Style",
         "tags": [
           "edge-iv30"
+        ]
+      }
+    },
+    "/api/edge/realized-vs-iv/window": {
+      "get": {
+        "description": "The window a run of ``bar_size`` reads when it names none, and the session it reads it in.",
+        "operationId": "get_default_window_api_edge_realized_vs_iv_window_get",
+        "parameters": [
+          {
+            "description": "The study's bar size.",
+            "in": "query",
+            "name": "bar_size",
+            "required": true,
+            "schema": {
+              "description": "The study's bar size.",
+              "enum": [
+                "15m",
+                "1d"
+              ],
+              "title": "Bar Size",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The session the run reads; omitted, it is the session the bar size reads by default.",
+            "in": "query",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "rth",
+                    "extended"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The session the run reads; omitted, it is the session the bar size reads by default.",
+              "title": "Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RealizedVsIvWindow"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Default Window",
+        "tags": [
+          "edge-realized-vs-iv"
         ]
       }
     },
