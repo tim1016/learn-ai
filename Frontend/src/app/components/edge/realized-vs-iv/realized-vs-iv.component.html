@@ -54,20 +54,7 @@
     </label>
 
     <div class="estimator-block">
-      <span class="field-label">Estimator (multi-overlay)</span>
-      <div class="chip-row">
-        @for (e of ['ctc','parkinson','gk','yz']; track e) {
-          <button type="button" class="vol-chip"
-                  [class.on]="estimatorOn($any(e))"
-                  (click)="toggleEstimator($any(e))">
-            {{ e === 'ctc' ? 'CtC' : e === 'gk' ? 'GK' : e === 'yz' ? 'YZ' : 'Parkinson' }}
-          </button>
-        }
-      </div>
-    </div>
-
-    <div class="estimator-block">
-      <span class="field-label" title="HF estimator session for VRP-driving rv_hf_21d. Chip estimators above are session-agnostic daily-bar.">
+      <span class="field-label" title="HF estimator session for VRP-driving rv_hf_21d. The trailing Yang-Zhang lines are session-agnostic daily-bar.">
         HF session
       </span>
       <div class="chip-row">
@@ -199,7 +186,7 @@
         <span class="eyebrow">LAYERS</span>
         <button type="button" class="toggle" [class.on]="rvBands()" (click)="rvBands.set(!rvBands())">
           <span class="toggle-swatch generic" [class.on]="rvBands()"></span>
-          RV bands 5/10/30
+          YZ RV 5 / 10 / 30-bar
         </button>
 
         <span class="legend-spacer"></span>
@@ -255,7 +242,7 @@
             <span class="r-val">{{ fmtPct(r.iv30) }}</span>
             <span class="r-key" title="IV30 converted to TRD/252 basis (NYSE calendar). Used for VRP.">iv30_trd252</span>
             <span class="r-val">{{ fmtPct(r.iv30Trd252) }}</span>
-            <span class="r-key" title="Trailing 30-bar Yang-Zhang on daily bars. Chip-driven, NOT VRP-driving.">rv_yz_30_daily</span>
+            <span class="r-key" title="Trailing 30-bar Yang-Zhang (the yz_30 series) on daily bars. NOT VRP-driving.">rv_yz_30_daily</span>
             <span class="r-val">{{ fmtPct(r.rvYzDaily) }}</span>
             <span class="r-key" title="HF two-component estimator over 21 trading days. Drives VRP. Session-aware.">rv_hf_21d</span>
             @if (r.rvHf21d !== r.rvHf21d) {

@@ -11,7 +11,7 @@ import type {
   LiveIv30Marker,
   RealizedVsIvData,
 } from "../services/edge-data.model";
-import { answerCompute, failBarsFetch, tick } from "../testing/edge-compute-world";
+import { answerCompute, failBarsFetch, tick, YZ_RV_BY_WINDOW } from "../testing/edge-compute-world";
 import { RealizedVsIvComponent } from "./realized-vs-iv.component";
 
 async function renderPage() {
@@ -40,6 +40,7 @@ function realData(overrides: Partial<RealizedVsIvData> = {}): RealizedVsIvData {
     iv30: flat(0.21),
     iv30Trd252: flat(0.2),
     rvYZ: flat(0.14),
+    rvYzByWindow: [5, 10, 30].map((window) => ({ window, values: flat(0.14) })),
     rvHf21d: flat(0.15),
     vrpForward: flat(0.05),
     vrpZ: flat(0),
@@ -85,6 +86,28 @@ describe("RealizedVsIvComponent — real response", () => {
     expect(readout, "no zero or default masquerading as a measurement").not.toMatch(/edge_score\s*[+-]?0\.00/);
     expect(screen.getByTestId("rviv-unavailable-note")).toBeTruthy();
     expect(screen.queryByTestId("sample-data-banner"), "nothing on this page is synthetic").toBeNull();
+  });
+
+  it("reports the 30-bar Yang-Zhang series as rv_yz_30_daily, not the first series the server sent", async () => {
+    const { http, user, fixture } = await renderPage();
+
+    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await answerCompute(http);
+    fixture.detectChanges();
+
+    const key = screen.getByText("rv_yz_30_daily");
+    expect(key.nextElementSibling?.textContent?.trim()).toBe(`${(YZ_RV_BY_WINDOW[30] * 100).toFixed(1)}%`);
+    expect(screen.getByTestId("rviv-readout").textContent, "the 5-bar series is not the readout").not.toContain(
+      `${(YZ_RV_BY_WINDOW[5] * 100).toFixed(1)}%`,
+    );
+  });
+
+  it("offers no estimator chips, since the page computes Yang-Zhang alone", async () => {
+    await renderPage();
+
+    for (const name of ["CtC", "Parkinson", "GK"]) {
+      expect(screen.queryByRole("button", { name }), name).toBeNull();
+    }
   });
 
   it("says there is no IV30 when the response carries none, rather than drawing an IV line", async () => {

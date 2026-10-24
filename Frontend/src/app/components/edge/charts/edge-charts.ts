@@ -19,7 +19,7 @@ import {
   ViewChild,
 } from "@angular/core";
 
-import type { EdgeSampleData, RealizedVsIvData } from "../services/edge-data.model";
+import { RV_READOUT_WINDOW, type EdgeSampleData, type RealizedVsIvData } from "../services/edge-data.model";
 
 // Shared color tokens — match _tokens.scss.
 const TOK = {
@@ -166,15 +166,17 @@ export class EdgePriceIVChartComponent implements AfterViewInit {
     const lo = Math.min(...candles.map(c => c.l)) * 0.998;
     const hi = Math.max(...candles.map(c => c.h)) * 1.002;
 
-    // Right-axis range: prefer IV when available, fall back to RV when no
-    // IV30 lands on these bars. With no IV at all, the IV
-    // line is suppressed but RV bands and RV-YZ trace stay visible against
-    // the same axis — relabel "IV30" → "RV YZ" in that case so the user
-    // knows what the right axis represents.
+    // Right-axis range: the IV30 line plus every RV series the response
+    // carries, so the RV lines never leave the plot and the toggle never
+    // rescales it. With no IV at all, the IV line is suppressed and the RV
+    // lines stay visible against the same axis — relabel "IV30" → "RV YZ"
+    // in that case so the user knows what the right axis represents.
     const ivFinite = data.iv30.filter((v) => Number.isFinite(v)) as number[];
-    const rvFinite = data.rvYZ.filter((v) => Number.isFinite(v)) as number[];
+    const rvFinite = data.rvYzByWindow
+      .flatMap((s) => s.values)
+      .filter((v) => Number.isFinite(v)) as number[];
     const ivAvailable = ivFinite.length > 0;
-    const axisSrc = ivAvailable ? ivFinite : rvFinite;
+    const axisSrc = [...ivFinite, ...rvFinite];
     const ivLo = axisSrc.length ? Math.min(...axisSrc) * 0.85 : 0;
     const ivHi = axisSrc.length ? Math.max(...axisSrc) * 1.15 : 1;
 
@@ -267,15 +269,21 @@ export class EdgePriceIVChartComponent implements AfterViewInit {
       ctx.fillText(label, cx, cy - 8);
     }
 
-    // RV bands
+    // Trailing Yang-Zhang RV, one line per window the response returned
+    // (shortest, faintest first). A gap in a series breaks its line.
     if (this.rvBands()) {
-      [{ scale: 1.06, alpha: 0.45 }, { scale: 1.0, alpha: 0.6 }, { scale: 0.94, alpha: 0.85 }].forEach((s) => {
-        ctx.strokeStyle = `rgba(242, 173, 61, ${s.alpha})`;
-        ctx.lineWidth = 1; ctx.setLineDash([]);
+      const lines = data.rvYzByWindow;
+      lines.forEach((series, k) => {
+        const alpha = 0.4 + 0.45 * (k / Math.max(1, lines.length - 1));
+        ctx.strokeStyle = `rgba(242, 173, 61, ${alpha})`;
+        ctx.lineWidth = series.window === RV_READOUT_WINDOW ? 1.5 : 1;
+        ctx.setLineDash([]);
         ctx.beginPath();
-        data.rvYZ.forEach((v, i) => {
-          const py = yI(v * s.scale);
-          if (i === 0) ctx.moveTo(x(i), py); else ctx.lineTo(x(i), py);
+        let penDown = false;
+        series.values.forEach((v, i) => {
+          if (!Number.isFinite(v)) { penDown = false; return; }
+          if (penDown) ctx.lineTo(x(i), yI(v)); else ctx.moveTo(x(i), yI(v));
+          penDown = true;
         });
         ctx.stroke();
       });

@@ -4,7 +4,7 @@ import {
   EdgeVrpHistogramComponent,
   EDGE_TOK,
 } from "../charts/edge-charts";
-import { EdgeApiService, type Estimator, type Session } from "../services/edge-api.service";
+import { EdgeApiService, type Session } from "../services/edge-api.service";
 import type { RealizedVsIvData } from "../services/edge-data.model";
 import { SymbolPickerComponent } from "../../../shared/symbol-picker/symbol-picker.component";
 import { TimestampDisplayPipe } from "../../../shared/timestamp";
@@ -35,9 +35,6 @@ export class RealizedVsIvComponent {
   readonly barSize = signal<"5m" | "15m" | "1h" | "1D">("1D");
   readonly tenor = signal<"7D" | "14D" | "30D" | "60D">("30D");
 
-  readonly estimators = signal<Record<Estimator, boolean>>({
-    ctc: false, parkinson: false, gk: false, yz: true,
-  });
   /** ETH (04:00-20:00 ET) is the default. RTH (09:30-16:00) excludes
    *  pre-/post-market 15-min bars from the HF estimator. Daily-bar mode
    *  ignores this — the YZ-21 fallback is session-agnostic. */
@@ -117,15 +114,12 @@ export class RealizedVsIvComponent {
     this.loading.set(true);
     this.errorMsg.set(null);
     try {
-      const enabled = (Object.entries(this.estimators()) as [Estimator, boolean][])
-        .filter(([, on]) => on)
-        .map(([k]) => k);
       const result = await this.api.computeRealizedVsIv({
         symbol: this.symbol(),
         barSize: this.barSize(),
         tenor: this.tenor(),
         session: this.session(),
-        estimators: enabled.length ? enabled : ["yz"],
+        estimators: ["yz"],
       });
       this.data.set(result);
       this.hoverIdx.set(null);
@@ -137,11 +131,6 @@ export class RealizedVsIvComponent {
       this.loading.set(false);
     }
   }
-
-  protected toggleEstimator(k: Estimator): void {
-    this.estimators.update((m) => ({ ...m, [k]: !m[k] }));
-  }
-  protected estimatorOn(k: Estimator): boolean { return this.estimators()[k]; }
 
   protected setSession(s: Session): void { this.session.set(s); }
   protected sessionOn(s: Session): boolean { return this.session() === s; }

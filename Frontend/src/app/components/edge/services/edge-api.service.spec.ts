@@ -1,7 +1,7 @@
 import { TestBed } from "@angular/core/testing";
 import { provideHttpClient } from "@angular/common/http";
 import { HttpTestingController, provideHttpClientTesting } from "@angular/common/http/testing";
-import { answerCompute, tick } from "../testing/edge-compute-world";
+import { answerCompute, tick, YZ_RV_BY_WINDOW } from "../testing/edge-compute-world";
 import { EdgeApiService } from "./edge-api.service";
 
 /** Targeted tests for `getLiveIv30` — the live-IV30 fetch with
@@ -129,6 +129,26 @@ describe("EdgeApiService.computeRealizedVsIv", () => {
     expect.soft(result.coverage.forwardBlindTail).toBe(3);
     expect.soft(result.coverage.ivFirstTsMs).toBe(result.dates[5].getTime());
     expect.soft(result.liveIv30).toBeNull();
+  });
+
+  it("picks each Yang-Zhang window by key, whatever other estimators the response lists first", async () => {
+    const promise = service.computeRealizedVsIv({ ...request, estimators: ["ctc", "yz"] });
+    await answerCompute(httpMock, { estimators: ["ctc", "yz"] });
+
+    const result = await promise;
+    expect.soft(result.rvYZ[10], "the readout series is yz_30").toBeCloseTo(YZ_RV_BY_WINDOW[30], 12);
+    expect.soft(result.rvYzByWindow.map((s) => s.window)).toEqual([5, 10, 30]);
+    expect.soft(result.rvYzByWindow.map((s) => s.values[10])).toEqual(
+      [5, 10, 30].map((w) => YZ_RV_BY_WINDOW[w]),
+    );
+  });
+
+  it("rejects, rather than reading another estimator's series, when the response has no yz_30", async () => {
+    const rejection = expect(
+      service.computeRealizedVsIv({ ...request, estimators: ["ctc"] }),
+    ).rejects.toThrow("yz_30");
+    await answerCompute(httpMock, { estimators: ["ctc"] });
+    await rejection;
   });
 
   it("rejects with Python's reason when the bars fetch fails, leaving nothing to fall back to", async () => {
