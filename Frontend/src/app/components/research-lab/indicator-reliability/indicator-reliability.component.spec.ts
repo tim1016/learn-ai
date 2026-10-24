@@ -1,3 +1,4 @@
+import { vi } from 'vitest';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideHttpClient } from '@angular/common/http';
@@ -20,6 +21,14 @@ describe('IndicatorReliabilityComponent (Indicator reliability study)', () => {
 
   const root = () => fixture.nativeElement as HTMLElement;
   const runs = () => http.match((request) => request.method === 'POST' && request.url.endsWith('/api/research/indicator-reliability'));
+  const paramReads = () => http.match((request) => request.url.includes('/api/research/indicator-params/'));
+  const SCHEMA = [{ name: 'length', type: 'int', default: 14, min: 1, max: 200, description: 'Lookback.' }];
+  /** The indicator's parameters arrive; until they do, Run study is off. */
+  const answerParams = () => {
+    for (const request of paramReads()) request.flush(SCHEMA);
+    fixture.detectChanges();
+  };
+  const runButton = () => root().querySelector<HTMLButtonElement>('button.study-run');
 
   beforeEach(async () => {
     await TestBed.configureTestingModule({
@@ -62,13 +71,54 @@ describe('IndicatorReliabilityComponent (Indicator reliability study)', () => {
   });
 
   it('sends one request when Run study is pressed twice before the page re-renders', () => {
-    const run = root().querySelector<HTMLButtonElement>('button.study-run');
+    answerParams();
+    const run = runButton();
     if (run === null) throw new Error('no Run study button');
 
     run.click();
     run.click();
 
     expect(runs()).toHaveLength(1);
+  });
+
+  it('keeps Run study off until the indicator’s parameters have arrived', () => {
+    expect(runButton()?.disabled, 'the parameters are still being read').toBe(true);
+    expect(root().querySelector('.study-run__summary')?.textContent).toContain('Waiting for the indicator’s parameters');
+
+    answerParams();
+
+    expect(runButton()?.disabled).toBe(false);
+  });
+
+  it('shows a failed parameter read in step 2, keeps Run study off, and runs again once a retry succeeds', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    for (const request of paramReads()) request.flush({ detail: 'schema unavailable' }, { status: 500, statusText: 'Server Error' });
+    fixture.detectChanges();
+
+    const problem = root().querySelector('[data-testid="params-error"]');
+    expect.soft(problem?.textContent).toContain('The parameters of RSI could not be loaded: schema unavailable.');
+    expect.soft(runButton()?.disabled).toBe(true);
+    expect.soft(root().querySelector('.study-run__summary')?.textContent).toContain('use Try again in step 2');
+
+    problem?.querySelector<HTMLButtonElement>('button.config-retry')?.click();
+    answerParams();
+
+    expect.soft(root().querySelector('[data-testid="params-error"]')).toBeNull();
+    expect.soft(runButton()?.disabled).toBe(false);
+    expect(errors, 'a failure is shown to the reader, not written to the console').not.toHaveBeenCalled();
+  });
+
+  it('shows a failed indicator list in step 2 instead of leaving the picker silently empty', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    http
+      .expectOne(`${environment.pythonServiceUrl}/api/research/indicators`)
+      .flush({}, { status: 503, statusText: 'Unavailable' });
+    fixture.detectChanges();
+
+    expect(root().querySelector('[data-testid="indicators-error"]')?.textContent).toContain(
+      'The indicator list could not be loaded: the data plane answered 503.',
+    );
+    expect(errors).not.toHaveBeenCalled();
   });
 
   it('fills the inputs from a saved run, keeps its parameters over the indicator’s defaults, starts nothing, then names the run when Run study is pressed', async () => {

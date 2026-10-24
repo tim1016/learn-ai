@@ -9,7 +9,7 @@ import {
   effect,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { catchError, of, finalize } from 'rxjs';
 import { environment } from '../../../../environments/environment';
@@ -59,6 +59,16 @@ interface IndicatorOption {
 interface HorizonOption {
   label: string;
   value: number;
+}
+
+/** What a failed read says, in a sentence a reader can act on. */
+function describeFailure(err: unknown): string {
+  if (err instanceof HttpErrorResponse) {
+    const detail = (err.error as { detail?: unknown } | null)?.detail;
+    if (typeof detail === 'string') return detail;
+    return err.status === 0 ? 'the data plane did not answer' : `the data plane answered ${err.status}`;
+  }
+  return err instanceof Error ? err.message : 'the reason is unknown';
 }
 
 /** What a reliability request is made from: the inputs a shown result answers. */
@@ -146,12 +156,19 @@ export class IndicatorReliabilityComponent {
   // Indicator options (loaded from API)
   indicatorOptions = signal<IndicatorOption[]>([]);
   groupedIndicators = signal<Record<string, IndicatorOption[]>>({});
+  /** Why the indicator list is empty, when its read failed. Shown in step 2; the list is never made up. */
+  readonly indicatorsError = signal<string | null>(null);
+  /** The picked indicator's parameter schema has arrived. Run waits for it, so no run goes out with parameters unknown. */
+  readonly paramsReady = signal(false);
+  /** Why the picked indicator's parameters are not known, when their read failed. Shown in step 2. */
+  readonly paramsError = signal<string | null>(null);
 
   canRun = computed(() => {
     const r = this.range();
     return (
       r.symbol.trim().length > 0 &&
       this.indicatorName().trim().length > 0 &&
+      this.paramsReady() &&
       r.from.trim().length > 0 &&
       r.to.trim().length > 0 &&
       this.selectedHorizons().length > 0 &&
@@ -199,6 +216,8 @@ export class IndicatorReliabilityComponent {
   readonly blockedReason = computed<string | null>(() => {
     if (this.canRun() || this.loading()) return null;
     if (this.indicatorName().trim().length === 0) return 'Pick an indicator.';
+    if (this.paramsError() !== null) return 'The indicator’s parameters did not load: use Try again in step 2.';
+    if (!this.paramsReady()) return 'Waiting for the indicator’s parameters.';
     if (this.selectedHorizons().length === 0) return 'Pick at least one forward horizon.';
     return 'Choose an instrument and both dates.';
   });
@@ -227,14 +246,15 @@ export class IndicatorReliabilityComponent {
     });
   }
 
-  private loadIndicators(): void {
+  protected loadIndicators(): void {
     this.loadingIndicators.set(true);
+    this.indicatorsError.set(null);
     this.http
       .get<Record<string, IndicatorInfo[]>>(`${this.pythonUrl}/api/research/indicators`)
       .pipe(
         takeUntilDestroyed(this.destroyRef),
-        catchError(err => {
-          console.error('Failed to load indicators:', err);
+        catchError((err: unknown) => {
+          this.indicatorsError.set(`The indicator list could not be loaded: ${describeFailure(err)}.`);
           return of({});
         }),
         finalize(() => this.loadingIndicators.set(false)),
@@ -262,24 +282,36 @@ export class IndicatorReliabilityComponent {
       });
   }
 
+  protected retryIndicatorParams(): void {
+    this.loadIndicatorParams(this.indicatorName());
+  }
+
   private loadIndicatorParams(name: string): void {
+    this.paramsReady.set(false);
+    this.paramsError.set(null);
     this.http
       .get<ParamConfig[]>(`${this.pythonUrl}/api/research/indicator-params/${name}`)
-      .pipe(
-        takeUntilDestroyed(this.destroyRef),
-        catchError(() => of([])),
-      )
-      .subscribe(params => {
-        // An answer for an indicator that is no longer the picked one has nothing to set.
-        if (name !== this.indicatorName()) return;
-        this.paramConfigs.set(params);
-        // Set default values
-        const defaults: Record<string, number> = {};
-        for (const p of params) {
-          defaults[p.name] = p.default;
-        }
-        const saved = this.filled?.indicator === name ? this.filled.params : {};
-        this.paramValues.set({ ...defaults, ...saved });
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: params => {
+          // An answer for an indicator that is no longer the picked one has nothing to set.
+          if (name !== this.indicatorName()) return;
+          this.paramConfigs.set(params);
+          // Set default values
+          const defaults: Record<string, number> = {};
+          for (const p of params) {
+            defaults[p.name] = p.default;
+          }
+          const saved = this.filled?.indicator === name ? this.filled.params : {};
+          this.paramValues.set({ ...defaults, ...saved });
+          this.paramsReady.set(true);
+        },
+        error: (err: unknown) => {
+          if (name !== this.indicatorName()) return;
+          this.paramConfigs.set([]);
+          this.paramValues.set({});
+          this.paramsError.set(`The parameters of ${name.toUpperCase()} could not be loaded: ${describeFailure(err)}.`);
+        },
       });
   }
 

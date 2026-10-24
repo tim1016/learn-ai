@@ -49,6 +49,20 @@
       </div>
     </div>
 
+    @if (indicatorsError(); as problem) {
+      <div class="config-problem" data-testid="indicators-error">
+        <p-message severity="error">{{ problem }}</p-message>
+        <button type="button" class="config-retry" (click)="loadIndicators()">Try again</button>
+      </div>
+    }
+
+    @if (paramsError(); as problem) {
+      <div class="config-problem" data-testid="params-error">
+        <p-message severity="error">{{ problem }}</p-message>
+        <button type="button" class="config-retry" (click)="retryIndicatorParams()">Try again</button>
+      </div>
+    }
+
     <!-- Dynamic Params -->
     @if (paramConfigs().length > 0) {
       <div class="p-3 rounded border params-box">
