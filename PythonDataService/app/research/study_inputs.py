@@ -502,7 +502,9 @@ def admit_minute_inputs(
 
     Each required session's file is read, committed-byte admitted and parsed
     exactly once; only a session that was not ready is read again, after the
-    materializer (catalog claims, lease coordination) has had its say. What a
+    materializer (catalog claims, lease coordination) has had its say. (An
+    adjusted window is read again whole after a capture: the capture can
+    rebuild days that were ready, and one series must sit on one basis.) What a
     session turns out to be comes from that read and from the materializer's
     own failure for it — never from a guess: a file with no committed receipt
     is a capture in flight or one that died, and the materializer decides which.
@@ -593,8 +595,15 @@ def admit_minute_inputs(
     reads = dict(first_read)
     if materialization is not None:
         failures = {f.trading_date: f for f in materialization.withheld if f.trading_date is not None}
+        # A capture of an adjusted symbol can move the basis of every day the lake holds for it, including days that
+        # read ready before it. The reader pins the first basis it sees, so the days read again are read with a reader
+        # of their own, and every required day is read again: one read on the old basis and one on the new would
+        # otherwise be refused as mixed, or worse, admitted as one series.
+        again = required if identity.adjusted else fixable
+        if identity.adjusted:
+            reader = LeanMinuteDataReader(roots, session=identity.session_policy)
         try:
-            for day in fixable:
+            for day in again:
                 reads[day] = _read_session(root, reader, identity, day)
                 check_cancelled()
         except CatalogUnavailableError as exc:
