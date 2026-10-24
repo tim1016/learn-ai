@@ -65,7 +65,6 @@ const ROWS: Readonly<Record<string, Row>> = {
   'data-lab/returns': { group: MARKETS },
   'options-lab': { group: MARKETS, lands: '/options-lab/chain' },
   'options-lab/chain': { group: MARKETS },
-  'options-lab/strategy-finder': { group: MARKETS },
   'broker/options-chain': { group: MARKETS },
   'broker/options-surface': { group: MARKETS },
   'pricing-lab': { group: MARKETS },
@@ -132,8 +131,11 @@ const ROWS: Readonly<Record<string, Row>> = {
   // A search or study link names no setup the old page chose for it: a plan asks which setup first, and a study opens by its own id.
   'options-golden-search': { group: OPTIONS, lands: '/options-setups?then=golden' },
   'options-golden-search/:studyId': { group: OPTIONS, lands: '/options-setups/evidence/study/7' },
-  // The analytical builder is an Options Lab tab, filed under Options setups (R32).
-  'options-lab/strategy-builder': { group: OPTIONS },
+  // The analytical views, which are not setups (#3516), and the Options Lab addresses that now end at them.
+  'options-setups/analysis': { group: OPTIONS },
+  'options-setups/analysis/finder': { group: OPTIONS },
+  'options-lab/strategy-builder': { group: OPTIONS, lands: '/options-setups/analysis' },
+  'options-lab/strategy-finder': { group: OPTIONS, lands: '/options-setups/analysis/finder' },
 
   // ── Operations ───────────────────────────────────────────────────────────
   'data-lake': { group: OPERATIONS, lands: '/operations/lake' },
@@ -438,6 +440,8 @@ describe('the route inventory (T01)', () => {
       ['an Options Golden Search link with nothing', '/options-golden-search', '/options-setups?then=golden'],
       ['an Options Golden Search study link', '/options-golden-search/os_a?probe=1#probe', '/options-setups/evidence/study/os_a?probe=1#probe'],
       ['an Options Golden Search study link that also carried a plan', '/options-golden-search/os_a?setup_name=Mine&parent_study_id=os_b&x=1', '/options-setups/evidence/study/os_a?x=1'],
+      ['an Options Lab Strategy Builder link', '/options-lab/strategy-builder?ticker=SPY&probe=1#legs', '/options-setups/analysis?ticker=SPY&probe=1#legs'],
+      ['an Options Lab Strategy Finder link', '/options-lab/strategy-finder?probe=1#why', '/options-setups/analysis/finder?probe=1#why'],
     ])('lands %s on its new home in one navigation, with every other query key and the fragment', async (_name, url, landsOn) => {
       const { router, ended, cancelled } = await load(url);
 

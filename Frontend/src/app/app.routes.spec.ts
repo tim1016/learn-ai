@@ -18,6 +18,8 @@ import { AlpacaHomeComponent } from './components/brokers/alpaca-home/alpaca-hom
 import { AlpacaActivityPageComponent } from './components/brokers/alpaca-desk/activity/alpaca-activity-page.component';
 import { BotPanelShellComponent } from './components/broker/v2-panel/panel-shell/bot-panel-shell.component';
 import { EntryComponent } from './components/entry/entry.component';
+import { StrategyBuilderComponent } from './components/strategy-builder/strategy-builder.component';
+import { StrategyFinderUnavailableComponent } from './options-setups/analysis/strategy-finder-unavailable.component';
 import { OptionsSetupsIndexComponent } from './options-setups/index/options-setups-index.component';
 import { OptionsEvidencePageComponent } from './components/options-evidence/options-evidence-page.component';
 import { OptionsStudyPageComponent } from './options-setups/study/options-study-page.component';
@@ -177,6 +179,27 @@ describe('routes', () => {
 
     await router.navigateByUrl('/options-setups/SPY%200DTE/define');
     expect(routeTreeHasData(router.routerState.snapshot.root, 'stickyContent')).toBe(true);
+  });
+
+  it('keeps the analytical views apart from a saved setup that is named analysis', async () => {
+    TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
+    const router = TestBed.inject(Router);
+    const leafOf = () => {
+      let leaf = router.routerState.snapshot.root;
+      while (leaf.firstChild !== null) leaf = leaf.firstChild;
+      return leaf;
+    };
+
+    await router.navigateByUrl('/options-setups/analysis');
+    expect(await leafOf().routeConfig?.loadComponent?.()).toBe(StrategyBuilderComponent);
+
+    await router.navigateByUrl('/options-setups/analysis/finder');
+    expect(await leafOf().routeConfig?.loadComponent?.()).toBe(StrategyFinderUnavailableComponent);
+
+    // A setup's address carries a tab, so this is the setup named "analysis", not an analytical view.
+    await router.navigateByUrl('/options-setups/analysis/define');
+    expect(leafOf().routeConfig?.path).toBe('define');
+    expect(leafOf().parent?.paramMap.get('name')).toBe('analysis');
   });
 
   it('opens a setup\'s Explore at its own address, whatever view and run its query names', async () => {

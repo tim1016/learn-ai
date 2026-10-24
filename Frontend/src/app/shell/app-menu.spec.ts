@@ -77,7 +77,7 @@ describe('app menu projections', () => {
   });
 
   it('marks the group but no entry for a page the menu does not list', () => {
-    const groups = menuItemsFor('/options-lab/strategy-builder');
+    const groups = menuItemsFor('/options-setups/analysis');
     const options = groups.find((group) => group.label === 'Options setups');
 
     expect(options?.styleClass).toBe(ACTIVE_GROUP_CLASS);
@@ -133,7 +133,6 @@ describe('app menu projections', () => {
     // A shell's children light the shell's entry.
     ['/data-lab/export', 'Markets', 'Stocks'],
     ['/options-lab/chain', 'Markets', 'Options Lab'],
-    ['/options-lab/strategy-finder', 'Markets', 'Options Lab'],
     ['/research-lab/strategy-runs/run-42', 'Research', 'Research Lab'],
     ['/edge/regimes', 'Research', 'Regimes'],
     ['/golden-search/study-9', 'Signal strategies', 'Golden Search'],
@@ -143,8 +142,9 @@ describe('app menu projections', () => {
     // instrument headlines are Markets', the multi-strategy comparison Signal strategies'.
     ['/research-lab/market/news', 'Markets', 'Ticker News'],
     ['/research-lab/backtests/recency-chart', 'Signal strategies', 'Recency Chart'],
-    // The analytical builder is an Options Lab tab, filed under Options setups (R32).
-    ['/options-lab/strategy-builder', 'Options setups', 'Strategy Builder'],
+    // The analytical views are not setups: the list links to them and the menu does not (#3516).
+    ['/options-setups/analysis', 'Options setups', 'Strategy Builder'],
+    ['/options-setups/analysis/finder', 'Options setups', 'Strategy Finder (not available)'],
     ['/options-setups/evidence/run/run-7', 'Options setups', 'Options setups'],
     ['/options-setups/SPY%200DTE/overview', 'Options setups', 'Options setups'],
     // Data checks: each check is a page of the one Data checks tab.

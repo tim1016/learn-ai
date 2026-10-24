@@ -25,6 +25,23 @@ export const OPTIONS_SETUPS_ROUTES: Routes = [
     loadComponent: () => import('../components/options-evidence/options-evidence-page.component').then((m) => m.OptionsEvidencePageComponent),
   },
   {
+    // Fixed-leg analysis, not a setup. A setup named `analysis` still opens at
+    // `analysis/:tab`: neither child below matches a tab, so the match falls through to `:name`.
+    path: 'analysis',
+    loadComponent: () => import('./analysis/options-analysis.component').then((m) => m.OptionsAnalysisComponent),
+    children: [
+      {
+        path: '',
+        pathMatch: 'full',
+        loadComponent: () => import('../components/strategy-builder/strategy-builder.component').then((m) => m.StrategyBuilderComponent),
+      },
+      {
+        path: 'finder',
+        loadComponent: () => import('./analysis/strategy-finder-unavailable.component').then((m) => m.StrategyFinderUnavailableComponent),
+      },
+    ],
+  },
+  {
     path: ':name',
     canMatch: [carriesATab],
     loadComponent: () => import('./workspace/options-setup-workspace.component').then((m) => m.OptionsSetupWorkspaceComponent),

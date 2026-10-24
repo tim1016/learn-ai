@@ -30,6 +30,12 @@ describe('the Options setups list', () => {
     expect(screen.getByRole('link', { name: 'New options setup' }).getAttribute('href')).toBe('/options-setups/_new/define');
   });
 
+  it('links to the fixed-leg Strategy Builder, named as analysis only so it is not taken for a way to start a setup', async () => {
+    await renderIndex(async () => indexOf({}));
+
+    expect(screen.getByRole('link', { name: 'Strategy Builder (analysis only)' }).getAttribute('href')).toBe('/options-setups/analysis');
+  });
+
   it('puts a delete control on a saved setup and none on an example', async () => {
     await renderIndex(async () => indexOf({ setups: [savedName('Alpha', '1'), savedName('Shipped', '2', { example: true })] }));
 

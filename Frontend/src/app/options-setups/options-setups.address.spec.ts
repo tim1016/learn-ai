@@ -4,8 +4,11 @@ import {
   isOptionsEvidenceKind,
   isOptionsExploreView,
   isRunView,
+  OPTIONS_ANALYSIS_VIEWS,
   OPTIONS_EXPLORE_VIEWS,
   OPTIONS_SETUP_TABS,
+  optionsAnalysisRoute,
+  optionsAnalysisViewOf,
   optionsEvidenceRoute,
   optionsExploreQuery,
   optionsSetupLocation,
@@ -58,6 +61,18 @@ describe('the Options setups address', () => {
     expect(optionsSetupWindowTitle('/options-setups/SPY%200DTE/define')).toBe('SPY 0DTE · Define · Options setups');
     expect(optionsSetupWindowTitle('/options-setups/_new/overview')).toBe('New setup · Overview · Options setups');
     expect(optionsSetupWindowTitle('/options-setups')).toBeNull();
+  });
+
+  it('addresses the analytical views beside the setups, and reads a setup named analysis as a setup', () => {
+    expect(optionsAnalysisRoute('builder')).toEqual(['/options-setups', 'analysis']);
+    expect(optionsAnalysisRoute('finder')).toEqual(['/options-setups', 'analysis', 'finder']);
+    expect(OPTIONS_ANALYSIS_VIEWS.tabs.map((tab) => tab.label)).toEqual(['Strategy Builder', 'Strategy Finder (not available)']);
+    expect(optionsAnalysisViewOf('/options-setups/analysis?probe=1#legs')).toBe('builder');
+    expect(optionsAnalysisViewOf('/options-setups/analysis/finder')).toBe('finder');
+    expect(optionsAnalysisViewOf('/options-setups/analysis/define')).toBeNull();
+    expect(optionsAnalysisViewOf('/options-setups/SPY%200DTE/define')).toBeNull();
+    expect(optionsSetupLocation('/options-setups/analysis')).toBeNull();
+    expect(optionsSetupLocation('/options-setups/analysis/finder')).toBeNull();
   });
 
   it('addresses evidence by what it froze, and knows only the three kinds', () => {

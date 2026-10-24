@@ -6,7 +6,14 @@ import { EntryComponent } from "./components/entry/entry.component";
 import { brokerClerkRedirectGuard } from "./fleet/broker-clerk-redirect.guard";
 import { dataCheckRoute } from "./operations/data-checks/data-checks";
 import { operationsTabRoute } from "./operations/operations-tabs";
-import { redirectOptionsBacktest, redirectOptionsEvidence, redirectOptionsGoldenSearch, redirectOptionsGoldenStudy } from "./options-setups/options-setups.redirects";
+import {
+  redirectOptionsBacktest,
+  redirectOptionsEvidence,
+  redirectOptionsGoldenSearch,
+  redirectOptionsGoldenStudy,
+  redirectOptionsStrategyBuilder,
+  redirectOptionsStrategyFinder,
+} from "./options-setups/options-setups.redirects";
 import { redirectKeepingState } from "./shell/route-redirects";
 
 const loadBrokerLaneUnavailable = () =>
@@ -111,6 +118,16 @@ export const routes: Routes = [
       ),
   },
   {
+    path: "options-lab/strategy-builder",
+    redirectTo: redirectOptionsStrategyBuilder,
+    pathMatch: "full",
+  },
+  {
+    path: "options-lab/strategy-finder",
+    redirectTo: redirectOptionsStrategyFinder,
+    pathMatch: "full",
+  },
+  {
     path: "options-lab",
     data: { fullBleed: true },
     loadComponent: () =>
@@ -125,20 +142,6 @@ export const routes: Routes = [
           import(
             "./components/options-lab/chain/options-lab-chain.component"
           ).then((m) => m.OptionsLabChainComponent),
-      },
-      {
-        path: "strategy-builder",
-        loadComponent: () =>
-          import(
-            "./components/strategy-builder/strategy-builder.component"
-          ).then((m) => m.StrategyBuilderComponent),
-      },
-      {
-        path: "strategy-finder",
-        loadComponent: () =>
-          import(
-            "./components/options-lab/strategy-finder-unavailable/strategy-finder-unavailable.component"
-          ).then((m) => m.StrategyFinderUnavailableComponent),
       },
     ],
   },

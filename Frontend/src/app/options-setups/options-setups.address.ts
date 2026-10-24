@@ -83,6 +83,30 @@ const TABS: ReadonlyMap<string, OptionsSetupTab> = new Map(
   OPTIONS_SETUP_TABS.tabs.map((tab): [string, OptionsSetupTab] => [tab.id, tab.id]),
 );
 
+/**
+ * The analytical views (#3516): fixed-leg payoff analysis, and the Strategy
+ * finder's not-available page. Neither is a setup, so neither carries a setup
+ * tab; a setup named `analysis` still opens at `/options-setups/analysis/:tab`.
+ */
+export type OptionsAnalysisView = 'builder' | 'finder';
+
+export const OPTIONS_ANALYSIS_VIEWS = defineWorkspaceTabs<OptionsAnalysisView>(
+  { builder: 'Strategy Builder', finder: 'Strategy Finder (not available)' },
+  ['builder', 'finder'],
+);
+
+export function optionsAnalysisRoute(view: OptionsAnalysisView): string[] {
+  return view === 'builder' ? [OPTIONS_SETUPS_ROOT, 'analysis'] : [OPTIONS_SETUPS_ROOT, 'analysis', 'finder'];
+}
+
+/** The analytical view a URL names, or `null` for any other address (a setup named `analysis` with a tab included). */
+export function optionsAnalysisViewOf(url: string): OptionsAnalysisView | null {
+  const segments = url.split(/[?#]/)[0].split('/').filter((part) => part !== '');
+  if (segments.length < 2 || `/${segments[0]}` !== OPTIONS_SETUPS_ROOT || segments[1] !== 'analysis') return null;
+  if (segments.length === 2) return 'builder';
+  return segments.length === 3 && segments[2] === 'finder' ? 'finder' : null;
+}
+
 export type OptionsEvidenceKind = 'run' | 'study' | 'golden';
 
 const EVIDENCE_KINDS: ReadonlySet<string> = new Set<OptionsEvidenceKind>(['run', 'study', 'golden']);

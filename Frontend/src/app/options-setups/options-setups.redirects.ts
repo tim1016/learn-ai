@@ -7,6 +7,7 @@ import {
   OPTIONS_CHOOSE_GOLDEN,
   OPTIONS_CHOOSE_KEY,
   OPTIONS_SETUPS_ROOT,
+  optionsAnalysisRoute,
   optionsEvidenceRoute,
   optionsSetupRoute,
   optionsStudyRoute,
@@ -62,3 +63,11 @@ export const redirectOptionsGoldenSearch: RedirectFunction = (source) => {
 export const redirectOptionsGoldenStudy = redirectKeepingState((params) => optionsStudyRoute(String(params['studyId'] ?? '')), {
   drop: ['setup_name', GOLDEN_PARENT_STUDY_KEY],
 });
+
+/**
+ * `/options-lab/strategy-builder` and `/options-lab/strategy-finder` end at the
+ * same views in the Options setups place (#3516). Neither is a setup, so no
+ * saved name is looked up or guessed; query and fragment go with the link.
+ */
+export const redirectOptionsStrategyBuilder = redirectKeepingState(optionsAnalysisRoute('builder'));
+export const redirectOptionsStrategyFinder = redirectKeepingState(optionsAnalysisRoute('finder'));
