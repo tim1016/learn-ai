@@ -872,16 +872,16 @@ against a broker, so this vocabulary survives a broker change.
   hue stays the candle's direction, bright where the gate holds and dark where
   it fails. Each strategy's default gate is one of its own recorded rules, so
   its edges are the bot's. Gates only shade; they never trade.
-- **Strategy Validation page** — the standalone surface that owns a strategy
-  *becoming* validated and that displays the equivalence evidence. It is a
-  **master-detail list** (a row per validated strategy, click through to detail),
-  a sibling in spirit to the Golden Fixtures surface. The detail shows the
-  strategy's brief metadata, the **validation diagnostics** (QC backtest ID,
-  validation-case symbol, trades-matched / trades-validated counts, P&L-matched
-  magnitude, and the `DivergenceCategory` taxonomy from `qc_reconciler.py`), and
-  the **QuantConnect reference code** rendered inline. It never renders our
-  internal LEAN/engine port source — sovereignty means the reference is shown for
-  audit, the port is not.
+- **Strategy Validation page** — retired 2026-10-24 (ADR 0085). It was the
+  standalone surface that owned a strategy *becoming* validated, a
+  **master-detail list** that also embedded the Golden Validation workbench. Its
+  detail is now a strategy's **Proof** tab: the strategy's brief metadata, the
+  **validation diagnostics** (QC backtest ID, validation-case symbol,
+  trades-matched / trades-validated counts, P&L-matched magnitude, and the
+  `DivergenceCategory` taxonomy from `qc_reconciler.py`), and the **QuantConnect
+  reference code** rendered inline. It never renders our internal LEAN/engine port
+  source — sovereignty means the reference is shown for audit, the port is not.
+  The embedded workbench is Golden → **Configuration review**.
 - **Production candidate** — a strategy intended to advance through the
   external-reference validation cycle toward Paper deployment and, under a
   separate future release decision, possible Live deployment. Its current
@@ -967,6 +967,8 @@ parity verdicts of any version.
 - **Validation Golden Run** — a completed Strategy Lab history run selected by a
   user as the baseline for a proposed Golden Validation decision. “Golden” means
   user-selected baseline, not profitable, optimal, or universally validated.
+  Shown as **Selected baseline run** since ADR 0085; the stored type, the wire
+  fields and every historical decision keep this name.
 - **Golden Validation configuration** — the exact strategy or Signal Program
   version, signal ticker, resolved parameters, data identity/window, and execution
   assumptions named by a Validation Golden Run. A different value in any of these
@@ -1014,6 +1016,22 @@ parity verdicts of any version.
 - **QuantConnect Cloud backtest ID** — optional supplementary reference evidence
   for Golden Validation. It is neither required nor a substitute for selected
   Python/LEAN history evidence.
+- **Selected baseline run** — the display term for a **Validation Golden Run**
+  (ADR 0085): a completed Strategy Lab history run a person chose as the baseline
+  for one exact configuration, and the run its **Configuration review** judges. It
+  is not the best run, not a Golden Search version and not corpus coverage.
+  _Avoid_: golden run (alone), designated run, benchmark baseline.
+- **Benchmark baseline** — the null-hypothesis comparison a Research strategy run
+  carries: a buy-and-hold run, or runs of random EMA windows, whose results show
+  what the strategy has to beat. It is analysis of a run; it selects nothing and
+  approves nothing, and it is not a **Selected baseline run**.
+  _Avoid_: baseline run, golden baseline.
+- **Configuration review** — a signal strategy's Golden page for selected baseline
+  runs: it selects a completed run, freezes its exact configuration and records the
+  Golden Validation decision (Engine agreement, Reviewed deviations or Manual
+  override, each with its required note). It is the only place that decision is
+  made. It covers one symbol and one configuration, so it is neither program proof
+  (Proof) nor a qualified version (Versions).
 
 ## Golden Search (resolved 2026-10-01)
 
@@ -1232,10 +1250,9 @@ for the account pills it hosts.
   per-transaction station pipeline in a bot page's order records.
 - **Active menu node** — the single app-menu node one URL resolves to, by longest
   match. It is the sole resolver behind menubar highlighting and, outside an
-  account workspace, the window title (`Page · Group`, such as "Options Backtest ·
-  Options setups"), which is why those two can never disagree. A page the menu
-  does not list still has a node when its group owns it (an options evidence
-  page). A served document has none, and neither has an address no page answers.
+  account workspace, the window title (`Page · Group`, such as "Pricing Lab ·
+  Markets"), which is why those two can never disagree. A page the menu does not
+  list still has a node when its group owns it (Ticker News, in Markets). A served document has none, and neither has an address no page answers.
   Inside a workspace the menubar highlights Accounts and the title is the
   workspace tab — or the bot's name on a bot's page — followed by the account
   name ("Activity · Paper"), so two windows on different accounts are told apart.
@@ -1645,13 +1662,91 @@ these are the others.
   it. A registered program that trades options is still a signal strategy.
   _Avoid_: strategy (alone, when an options setup could be meant), algo, bot (a bot
   is a deployed run).
+- **Explore** — a signal strategy's tab for trying its settings out: **Backtest**
+  (one saved run, with Strategy Lab's workbench and history), **Sweep** (a Grid
+  Search over a grid of settings) and **Walk-forward** (a study that tests each
+  training winner on the window after it), each with its own history. Everything in
+  it is exploratory and in-sample, and nothing in it approves settings: approval is
+  Golden's. A run or search opens only under the strategy that produced it.
+  _Avoid_: Strategy Lab, Engine Lab, the Grid Search page (the old tool names; their
+  addresses redirect to the owning strategy's Explore).
+- **Handoff** — the move from one Explore tool to the next (Backtest to Sweep to
+  Walk-forward), or from any of them to a golden search plan. It carries what the
+  next tool can take, lists what it cannot and why, names what is left to choose,
+  and starts nothing: the next tool opens its form on the carried values, checks
+  them against its own schema, and runs only when the owner launches it. Into
+  Golden it opens an unlocked plan: no stage runs, an exploratory leader is not a
+  starting point or proof, the explored window is not the study range, and a
+  final interval that window reaches is shown as already viewed, never as
+  unexposed.
+  _Avoid_: promote (a handoff approves nothing), send to (it starts nothing).
+- **Golden** — a signal strategy's tab, and the only place its settings are
+  approved, one symbol and one exact configuration at a time. It holds three
+  pages: **Studies** (Golden Search, and one study's workbench), **Versions** (the
+  qualified versions with the active default, each ready, stale, revoked or
+  unverifiable, and Re-prove for a stale one) and **Configuration review**. Explore
+  and Proof never approve settings.
+  _Avoid_: Golden Search (the page; it is one of Golden's three), golden status (a
+  strategy has no single golden state).
+- **Proof** — a signal strategy's tab for its program: the ordered proof dossier,
+  whether it is accepted for Deploy, the reconciliation evidence and the one
+  strategy-level human flag. It is about the program at its validated corpus point
+  and approves no symbol; a selected baseline run and a configuration's approval
+  are Golden's.
+  _Avoid_: Strategy Validation (the retired page that held this and Configuration
+  review together), validated (alone, for a strategy).
 - **Options setup** — one saved setup (see Options Backtest) as a place, with its
   tabs: Overview, Define, Explore and Golden. The saved name addresses the current
   draft; an approved version is addressed by its Golden Options ID and exact
-  setup hash, and a run by its run ID. Setups and signal strategies are told apart
+  setup hash, and a run by its run ID. A run, a search and an approved version
+  are found from a saved setup by the exact content each froze, never by the name
+  it was recorded under, so two names holding identical content share them and
+  neither owns them, and deleting or reusing a name moves none of them. The
+  Options setups list holds every one of them, including those no saved name
+  holds any more. A draft with no saved name (a new one, an imported file) lives
+  at `/options-setups/_new/…`: a saved name starts with a letter or a digit, so no
+  name can be that segment. Setups and signal strategies are told apart
   by strategy model (timed option legs replayed from rules, against a signal
   decision stream), never by the asset traded.
   _Avoid_: options strategy, option signal.
+- **Explore (an options setup's)** — the tab where a saved setup is replayed over
+  past dates (Backtest) and its runs are read: History, Performance, Research
+  lineage and Historical comparison, with a link beside them to the setup's
+  underlying on the instrument's Past · Archive chain. A backtest
+  tests the setup **as last saved**, never the draft being edited in Define, and is
+  recorded under the saved name, so an edit that is not saved changes nothing a run
+  tested. A run keeps the setup it froze; an opened run has its own address
+  (`/options-setups/:name/explore?view=&run=`). **Take to Golden** carries the id of
+  a run that froze this setup's saved content to Golden and approves nothing there.
+  _Avoid_: Backtest tab (it is a view of Explore).
+- **Golden (an options setup's)** — the tab where a saved setup's tested runs and
+  searches become approved versions, by the two ways that exist: **approve a tested
+  run** (a note, and the run's own execution proof) and **start a golden search**
+  from the setup as last saved. Both publish through Golden Options. A review is of
+  the run named in the address (`?run=`) and of what that run froze, never of the
+  draft in Define, and an approval carries the hash of the content read. A search
+  starts from the saved content, named by its hash, and its study opens at its own
+  address (`/options-setups/evidence/study/:id`), whether or not a saved setup still
+  holds what it started from.
+  _Avoid_: Options Golden Search (the page it replaced; the search itself keeps the name).
+- **Single-run approval** — an approved version made from one backtest run after
+  review. No search ran for it, so it is never called a qualified search. A
+  **golden search version** carries its study and the verdict that study recorded;
+  a version whose study link is incomplete claims no search. A search that changes
+  settings makes a version whose content is not the saved content, so it is linked
+  through its study and never matched to the draft. **Re-proof** replays a run's
+  execution under the current rules and does not recertify statistical evidence.
+- **Deploy an options bot** — the setup header's action that takes one approved
+  version to Deploy. It lists the approved versions of the saved content (and those a
+  search that began from it made with changed settings), and a ready one links to the
+  account list under Deploy's own `options_setup` key by its own Golden Options id.
+  The owner chooses the version and then the account: nothing is pre-chosen, even when
+  one version is ready, and a stale, revoked or unreadable version is refused by name,
+  never replaced by another. Navigation sends no command; Deploy re-reads the version and
+  applies its own admission. A registered signal program that trades options is not
+  deployed this way: it stays in the signal workflow (`strategy`, `golden_qualification`),
+  because the split is the strategy model and not the asset traded.
+  _Avoid_: Use in Deploy (the signal Golden Search action).
 - **Operations** — the group for the machinery under the research: the data lake,
   the option archive, backups, math checks (the golden fixtures) and data checks
   (the TradingView comparison, data divergence and strategy pre-flight). It holds

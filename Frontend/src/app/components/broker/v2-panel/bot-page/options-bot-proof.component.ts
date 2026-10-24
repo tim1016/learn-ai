@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, inject, input, resource }
 import { toSignal } from '@angular/core/rxjs-interop';
 import { NavigationEnd, Router, RouterLink } from '@angular/router';
 import { filter, map } from 'rxjs';
+import { optionsStudyRoute } from '../../../../options-setups/options-setups.address';
 import { GoldenOptionSetupsService } from '../../../options-backtest/golden-option-setups.service';
 import { OptionsQualificationEvidenceComponent } from '../../../options-backtest/options-qualification-evidence.component';
 import { CopyButtonComponent } from '../../../../shared/copy-button/copy-button.component';
@@ -19,6 +20,7 @@ import type { OptionsBotConfiguration } from '../../broker-deploy-page/options-b
 })
 export class OptionsBotProofComponent {
   readonly configuration = input.required<OptionsBotConfiguration>();
+  protected readonly studyRoute = optionsStudyRoute;
   private readonly service = inject(GoldenOptionSetupsService);
   private readonly router = inject(Router);
   private readonly botPath = toSignal(this.router.events.pipe(

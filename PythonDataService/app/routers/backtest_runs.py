@@ -1,7 +1,7 @@
 """Python-owned backtest-run reads and verbs (#1929).
 
 ``GET /`` serves the run-history table (newest first, optionally one
-engine's), ``GET /{id}`` the run report with its newest five hundred trades
+engine's and one strategy's), ``GET /{id}`` the run report with its newest five hundred trades
 and parity verdicts, ``GET /{id}/strategy-view`` the run's own decision
 candles (#2639 D13), and ``PATCH /{id}/notes`` the researcher's notes.
 These replace the retired GraphQL ``backtestRuns`` /
@@ -50,10 +50,11 @@ def _not_found(run_id: int) -> HTTPException:
 @router.get("", response_model=list[BacktestRunSummaryResponse])
 async def list_backtest_runs(
     engine: Engine | None = Query(None),
+    strategy_name: str | None = Query(None, min_length=1, max_length=128, description="Only this strategy's runs."),
     limit: int = Query(DEFAULT_HISTORY_LIMIT, ge=1, le=MAX_HISTORY_LIMIT),
 ) -> list[BacktestRunSummaryResponse]:
-    """Run history, newest first."""
-    rows = await with_connection(repo.list_runs, engine=engine, limit=limit)
+    """Run history, newest first; the limit applies after the filters."""
+    rows = await with_connection(repo.list_runs, engine=engine, limit=limit, strategy_name=strategy_name)
     return [BacktestRunSummaryResponse.model_validate(row) for row in rows]
 
 

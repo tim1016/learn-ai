@@ -35,7 +35,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from enum import StrEnum
@@ -52,7 +52,7 @@ from app.options_backtest import run_json
 from app.options_backtest.describe import fee_policy_sentence
 from app.options_backtest.results import ExitReason, Fill, LegTrade, Mark, SessionOutcome, SessionStatus, SkipReason
 from app.options_backtest.run import RunResult, SlippagePoint, SlippageTolerance
-from app.options_backtest.saved_setups import read_stored_setup
+from app.options_backtest.saved_setups import SavedSetup, read_stored_setup
 from app.options_backtest.session_result import SessionResult
 from app.options_backtest.setup import OptionsBacktestSetup
 from app.options_backtest.statistics import RunSummary
@@ -486,6 +486,30 @@ async def read_run_rows(
         limit,
     )
     return tuple(rows)
+
+
+async def read_run_setup_json(conn: asyncpg.Connection, run_ids: Sequence[int]) -> dict[int, tuple[str, int]]:
+    """The setup each of these runs froze, as stored: its JSON and when the run was made, and nothing of its figures.
+
+    The history lists a run without its setup. Reading it again with today's rules (``run_setups_of``) is pure CPU
+    work, so it is left to the caller to do off the event loop and after the connection is released.
+    """
+    rows = await conn.fetch(
+        "SELECT id, setup_json::text AS setup_json, created_at_ms FROM research_options_backtest_runs "
+        "WHERE id = ANY($1::bigint[])",
+        list(run_ids),
+    )
+    return {row["id"]: (row["setup_json"], row["created_at_ms"]) for row in rows}
+
+
+def run_setups_of(stored: Mapping[int, tuple[str, int]]) -> dict[int, SavedSetup]:
+    """What each run froze, read again with today's rules: the setup, or why it cannot be read."""
+    return {run_id: read_stored_setup(f"run {run_id}", setup_json, made_at_ms) for run_id, (setup_json, made_at_ms) in stored.items()}
+
+
+async def count_runs(conn: asyncpg.Connection) -> int:
+    """How many runs are stored, so a list cut at a limit can say how many it left out."""
+    return await conn.fetchval("SELECT count(*) FROM research_options_backtest_runs")
 
 
 async def present_runs(rows: Sequence[asyncpg.Record], *, is_live: IsLive) -> tuple[RunRecord, ...]:

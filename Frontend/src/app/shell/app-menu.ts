@@ -2,6 +2,7 @@ import type { MenuItem } from 'primeng/api';
 
 import { accountWorkspaceLocation, routePathOf } from '../fleet/account-workspace';
 import type { BreadcrumbItem } from '../shared/breadcrumb/breadcrumb-item';
+import { optionsSetupWindowTitle } from '../options-setups/options-setups.address';
 import { HELP_DOCUMENTS } from '../shared/help/help-documents';
 import { OPERATIONS_TABS, operationsTabRoute } from '../operations/operations-tabs';
 
@@ -68,9 +69,6 @@ export const APP_MENU: readonly AppMenuGroup[] = [
     title: 'Markets',
     icon: 'pi pi-chart-line',
     items: [{ title: 'Markets', route: '/markets' }],
-    // The Options Lab shell still hosts the stub Strategy finder; its chain
-    // moved into the instrument's Options tab.
-    pages: [{ title: 'Options Lab', route: '/options-lab' }],
   },
   {
     id: 'research',
@@ -97,30 +95,36 @@ export const APP_MENU: readonly AppMenuGroup[] = [
     id: 'signal-strategies',
     title: 'Signal strategies',
     icon: 'pi pi-briefcase',
-    items: [
+    items: [{ title: 'Signal strategies', route: '/signal-strategies' }],
+    pages: [
+      // The multi-strategy comparison is one link from the list, not a menu entry.
+      { title: 'Recency Chart', route: '/signal-strategies/recency' },
+      // Backtest, Sweep and Walk-forward are a strategy's Explore tabs now. These
+      // addresses redirect there; when the record they name belongs to no
+      // registered strategy they stay open, as a refusal or a chooser, under this group.
       { title: 'Strategy Lab', route: '/strategy-lab' },
+      { title: 'Strategy Lab', route: '/engine' },
       { title: 'Grid Search', route: '/grid-search' },
       { title: 'Walk-Forward', route: '/walk-forward' },
+      // Golden Search studies are a strategy's Golden tab and Strategy Validation is its Proof
+      // and Golden → Configuration review. These addresses redirect there; one that names no
+      // strategy stays open as a chooser, or a refusal, under this group.
       { title: 'Golden Search', route: '/golden-search' },
       { title: 'Strategy Validation', route: '/strategy-validation' },
     ],
-    // The multi-strategy comparison stays a Research Lab tab until the
-    // signal strategy list hosts it.
-    pages: [{ title: 'Recency Chart', route: '/research-lab/backtests/recency-chart' }],
   },
   {
     id: 'options-setups',
     title: 'Options setups',
     icon: 'pi pi-sliders-h',
     items: [
-      { title: 'Options Backtest', route: '/options-backtest' },
-      { title: 'Options Golden Search', route: '/options-golden-search' },
+      { title: 'Options setups', route: '/options-setups' },
     ],
-    // The analytical builder is an Options Lab tab until the options setup
-    // workspace hosts it (R32 files it under Options setups, not Markets).
+    // The analytical views are not setups, so the menu does not list them: the
+    // Options setups list links to them (#3516).
     pages: [
-      { title: 'Options evidence', route: '/options-evidence' },
-      { title: 'Strategy Builder', route: '/options-lab/strategy-builder' },
+      { title: 'Strategy Builder', route: '/options-setups/analysis' },
+      { title: 'Strategy Finder (not available)', route: '/options-setups/analysis/finder' },
     ],
   },
   {
@@ -162,9 +166,12 @@ export const NOT_FOUND_TITLE = 'Page not found';
  */
 export const HOME_ROUTE = APP_MENU[0].items[0].route;
 
-/** The menu's name for a listed route, so a page can take its title from the entry that leads to it. */
+/**
+ * The menu's name for a route the menu lists or a group owns, so a page can take
+ * its title from the entry that leads to it.
+ */
 export function menuLabelFor(route: string): string {
-  const item = APP_MENU.flatMap((group) => group.items).find((candidate) => candidate.route === route);
+  const item = APP_MENU.flatMap((group) => [...group.items, ...(group.pages ?? [])]).find((candidate) => candidate.route === route);
   if (item === undefined) throw new Error(`No menu entry lists ${route}.`);
   return item.title;
 }
@@ -217,6 +224,9 @@ export function activeMenuNodeFor(url: string): ActiveMenuNode | null {
  * it once, and a served document is titled by itself.
  */
 export function windowTitleFor(url: string): string | null {
+  // One setup's tab is titled by the setup, its tab and the group (R01).
+  const setupTitle = optionsSetupWindowTitle(url);
+  if (setupTitle !== null) return setupTitle;
   const node = activeMenuNodeFor(url);
   if (node === null) return HELP_DOCUMENTS.find((document) => document.route === routePathOf(url))?.title ?? null;
   return node.item.title === node.group.title ? node.item.title : `${node.item.title} · ${node.group.title}`;

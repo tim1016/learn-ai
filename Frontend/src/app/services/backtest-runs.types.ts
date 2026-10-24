@@ -44,6 +44,12 @@ export interface BacktestRunSummary {
   verdictGrade: string | null;
   verdictSignal: string | null;
   parityGroupId: string | null;
+  /**
+   * The run executed LEAN source pasted by the owner. Its owner is the strategy
+   * whose Explore submitted the source, so the owner no longer says so; the
+   * record keeps no copy of the source.
+   */
+  customSource: boolean;
   hasSyntheticExit: boolean;
 }
 
@@ -154,6 +160,8 @@ export interface BacktestRunDetail {
   dataPolicy: DataPolicy | null;
   insightSummaryJson: string | null;
   parityGroupId: string | null;
+  /** The run executed pasted LEAN source, which the record does not keep: it cannot be rerun unchanged. */
+  customSource: boolean;
   notes: string | null;
   trades: BacktestRunDetailTrade[];
   /** True when the response carries only the newest bounded trade evidence. */
@@ -184,6 +192,7 @@ export function toRunHistoryRow(run: BacktestRunSummary): RunHistoryRow {
     verdictGrade: run.verdictGrade,
     verdictSignal: run.verdictSignal,
     parityGroupId: run.parityGroupId,
+    customSource: run.customSource,
   };
 }
 

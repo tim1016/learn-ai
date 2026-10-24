@@ -1,0 +1,48 @@
+<app-signal-strategy-section
+  title="Declared parameters"
+  scope="The ranges are Python's own. The registry default, the validated corpus value and the allowed range are three different things and stay in separate columns."
+  [read]="declarations()"
+  (retry)="retry.emit()"
+>
+  @if (declarations(); as state) {
+    @if (state.kind === 'ready') {
+      @if (noSchema()) {
+        <p class="note">Strategy Lab's catalog does not offer this strategy, so Python declares no parameter schema to show.</p>
+      } @else {
+        <table class="rows">
+          <thead>
+            <tr>
+              <th>Parameter</th>
+              <th>Allowed range</th>
+              <th>Registry default</th>
+              <th>Validated corpus value</th>
+              <th>Golden Search range</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (row of rows(); track row.name) {
+              <tr>
+                <td>
+                  <span class="mono">{{ row.name }}</span>
+                  @if (row.unit; as unit) { <span class="muted"> · {{ unit | receiptLabel | lowercase }}</span> }
+                  @if (row.description; as words) { <span class="muted block">{{ words }}</span> }
+                </td>
+                <td>{{ row.allowed }}</td>
+                <td>{{ row.registryDefault }}</td>
+                <td>{{ row.validated }}</td>
+                <td>{{ row.searchRange }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+
+      <h3 class="group__heading">Constraints between parameters</h3>
+      @for (constraint of constraints(); track constraint.message) {
+        <p class="note"><span class="mono">{{ constraint.left }} {{ constraint.op }} {{ constraint.right }}</span> · {{ constraint.message }}</p>
+      } @empty {
+        <p class="note">No Golden Search declaration lists a constraint between this strategy's parameters.</p>
+      }
+    }
+  }
+</app-signal-strategy-section>

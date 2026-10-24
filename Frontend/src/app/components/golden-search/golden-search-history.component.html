@@ -2,12 +2,6 @@
   <header class="history__header">
     <h2 id="gs-history-title">Studies</h2>
     <div class="filters" role="group" aria-label="Filter studies">
-      <label class="field"><span>Strategy</span>
-        <select (change)="onStrategy($event)" aria-label="Filter by strategy">
-          <option value="">All</option>
-          @for (option of capabilities(); track option.strategy_key) { <option [value]="option.strategy_key">{{ option.display_name }}</option> }
-        </select>
-      </label>
       <div class="field">
         <app-symbol-picker appearance="field" label="Instrument" [universe]="symbolUniverse()" [symbol]="filters().symbol ?? ''" (symbolChange)="onSymbol($event)" />
         @if (filters().symbol) { <button type="button" class="clear" (click)="onSymbol('')">Any instrument</button> }
@@ -29,7 +23,7 @@
       <table class="rows">
         <thead>
           <tr>
-            <th scope="col">Locked</th><th scope="col">Strategy</th><th scope="col">Instrument</th><th scope="col">Method</th>
+            <th scope="col">Locked</th><th scope="col">Instrument</th><th scope="col">Method</th>
             <th scope="col">State</th><th scope="col" class="num">Engine runs</th><th scope="col">Final test</th><th scope="col"><span class="sr-only">Open</span></th>
           </tr>
         </thead>
@@ -37,7 +31,6 @@
           @for (row of rows(); track row.id) {
             <tr [class.hidden-row]="row.hidden">
               <td><app-timestamp-display [value]="row.created_at_ms" mode="local" /></td>
-              <td>{{ displayName(row.strategy_key) ?? (row.strategy_key | receiptLabel) }}</td>
               <td><app-asset-identity [symbol]="row.symbol" size="sm" /></td>
               <td>{{ row.method === 'zoom' ? 'Zoom' : 'Grid' }}</td>
               <td>
@@ -56,7 +49,7 @@
                   <span class="muted">Held back</span>
                 }
               </td>
-              <td><a pButton size="small" [text]="true" [routerLink]="['/golden-search', row.id]" [attr.aria-label]="'Open study ' + row.id.slice(0, 8)">Open</a></td>
+              <td><a pButton size="small" [text]="true" [routerLink]="studyRoute(row)" [attr.aria-label]="'Open study ' + row.id.slice(0, 8)">Open</a></td>
             </tr>
           }
         </tbody>

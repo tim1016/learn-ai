@@ -52,14 +52,18 @@ describe('AppComponent', () => {
           { path: 'markets', component: ShellSmokeRouteComponent },
           { path: 'markets/:symbol/chart', component: ShellSmokeRouteComponent },
           { path: 'markets/:symbol/chart/news', component: ShellSmokeRouteComponent },
-          { path: 'options-lab', component: ShellSmokeRouteComponent, data: { fullBleed: true } },
-          { path: 'options-backtest', component: ShellSmokeRouteComponent, data: { stickyContent: true } },
+          { path: 'strategy-lab', component: ShellSmokeRouteComponent, data: { fullBleed: true } },
+          { path: 'options-setups', component: ShellSmokeRouteComponent },
+          { path: 'options-setups/:name/define', component: ShellSmokeRouteComponent, data: { stickyContent: true } },
           { path: 'research/history/spec-run/:id', component: ShellSmokeRouteComponent },
           { path: 'research/history/walk-forward/:id', component: ShellSmokeRouteComponent },
           { path: 'research/history/monte-carlo/:id', component: ShellSmokeRouteComponent },
           { path: 'research/history/baseline/:id', component: ShellSmokeRouteComponent },
           { path: 'research/history/signal-report/:id', component: ShellSmokeRouteComponent },
           { path: 'strategy-lab/docs', component: ShellSmokeRouteComponent },
+          { path: 'signal-strategies', pathMatch: 'full', component: ShellSmokeRouteComponent },
+          { path: 'signal-strategies/recency', component: ShellSmokeRouteComponent },
+          { path: 'signal-strategies/:key/define', component: ShellSmokeRouteComponent },
           // The workspace's own URLs, stubbed: these specs grade the window
           // title the shell computes from them, not what the tabs render.
           { path: 'brokers/alpaca/clerks/:clerkId/settings', component: ShellSmokeRouteComponent },
@@ -223,12 +227,16 @@ describe('AppComponent', () => {
     });
 
     it.each([
-      ['/options-lab', 'Options Lab · Markets'],
       ['/markets', 'Markets'],
       // An instrument's place is titled by the entity first (ADR 0084).
       ['/markets/spy/chart', 'SPY · Chart · Markets'],
       ['/markets/SPY/chart/news?from=2026-01-02', 'SPY · Headlines · Markets'],
-      ['/options-backtest', 'Options Backtest · Options setups'],
+      ['/options-setups', 'Options setups'],
+      ['/options-setups/SPY%200DTE/define', 'SPY 0DTE · Define · Options setups'],
+      ['/signal-strategies', 'Signal strategies'],
+      ['/signal-strategies/recency', 'Recency Chart · Signal strategies'],
+      // A strategy's page is titled by the entity and its tab, then the group.
+      ['/signal-strategies/ema_crossover_signal/define', 'ema_crossover_signal · Define · Signal strategies'],
       ['/research/history/spec-run/run-42', 'History · Research'],
       // A document is titled by itself: the help index is its home, not the page it explains.
       ['/strategy-lab/docs', 'Strategy Lab Manual'],
@@ -263,7 +271,7 @@ describe('AppComponent', () => {
     fixture.detectChanges();
     expect(pageBody().classList.contains('page-body--full-bleed')).toBe(false);
 
-    await router.navigateByUrl('/options-lab');
+    await router.navigateByUrl('/strategy-lab');
     fixture.detectChanges();
     expect(pageBody().classList.contains('page-body--full-bleed')).toBe(true);
   });
@@ -276,7 +284,7 @@ describe('AppComponent', () => {
     fixture.detectChanges();
     expect(main().classList.contains('main--sticky-content')).toBe(false);
 
-    await router.navigateByUrl('/options-backtest');
+    await router.navigateByUrl('/options-setups/SPY%200DTE/define');
     fixture.detectChanges();
     expect(main().classList.contains('main--sticky-content')).toBe(true);
   });

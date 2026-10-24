@@ -2,7 +2,7 @@
 <article class="report" aria-labelledby="report-title">
   <header class="report-head">
     <div><h2 id="report-title"><app-asset-identity [symbol]="s.symbol" size="sm" /> {{ capability()?.display_name ?? (s.strategy_key | receiptLabel) }}</h2><p>Golden Search research report</p></div>
-    <nav class="report-tools" aria-label="Report tools"><a [routerLink]="['/golden-search', s.id]">Study workbench</a><a routerLink="/docs/golden-search-manual" [queryParams]="{ study: s.id }">Operating manual</a><button type="button" (click)="print()">Print / save PDF</button></nav>
+    <nav class="report-tools" aria-label="Report tools"><a [routerLink]="studyRoute()">Study workbench</a><a routerLink="/docs/golden-search-manual" [queryParams]="{ study: s.id }">Operating manual</a><button type="button" (click)="print()">Print / save PDF</button></nav>
   </header>
   <section class="scope" aria-label="Report scope">
     <div><h3>Development</h3><p><app-timestamp-display [value]="s.scope.development_label_start_ms" mode="date-et" /> – <app-timestamp-display [value]="s.scope.development_end_ms - 1" mode="date-et" /></p><small>Used to choose settings</small></div>
@@ -38,7 +38,7 @@
         <app-golden-search-drawdown-panel data-span="12" [candidate]="candidate" [drawdown]="candidate.chance.drawdown" />
       </div>
     }
-    <a [routerLink]="['/golden-search', s.id]" [queryParams]="{ step: 'compare' }">Inspect neighbors, cost stresses, concentration, rehearsal and drawdown in Compare</a>
+    <a [routerLink]="studyRoute()" [queryParams]="{ step: 'compare' }">Inspect neighbors, cost stresses, concentration, rehearsal and drawdown in Compare</a>
   </section>
   <section class="chapter" aria-labelledby="report-final"><h2 id="report-final">What survived the final test?</h2>
     @if (s.results.exam; as exam) {

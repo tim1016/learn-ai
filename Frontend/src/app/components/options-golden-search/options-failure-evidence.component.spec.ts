@@ -27,7 +27,8 @@ it('shows partial scope and real close, and inspects retained input only on requ
   await userEvent.setup().click(screen.getAllByRole('button', { name: 'Inspect retained input' })[0]);
   expect(await screen.findByText('No Eligible Trade Bar')).toBeTruthy();
   expect(inspectFailure).toHaveBeenCalledExactlyOnceWith(FIXTURE.study_id, FIXTURE.candidate_hash, 'development', FIXTURE.items[0]);
-  expect(screen.getByRole('link', { name: 'Prepare a new linked plan' }).getAttribute('href')).toContain(`parent_study_id=${FIXTURE.study_id}`);
+  const plan = screen.getByRole('link', { name: 'Prepare a new linked plan' }).getAttribute('href') ?? '';
+  expect(plan).toBe(`/options-setups/${encodeURIComponent(FIXTURE.setup_name)}/golden?parent_study_id=${FIXTURE.study_id}`);
 });
 
 it('discloses a carried mark rule and lists no failure for a valued gap', async () => {

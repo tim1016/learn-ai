@@ -1,0 +1,43 @@
+@let selected = detail();
+@if (selected.diagnostics; as diagnostics) {
+  <dl class="evidence">
+    <div><dt>Matched</dt><dd>{{ diagnostics.trades_matched }} trades matched</dd></div>
+    <div><dt>Validated</dt><dd>{{ diagnostics.trades_validated }} trades validated</dd></div>
+    <div><dt>P&amp;L delta</dt><dd>{{ diagnostics.pnl_max_abs_diff }}</dd></div>
+    <div><dt>Diagnostics</dt><dd>{{ diagnostics.verdict | receiptLabel }}</dd></div>
+  </dl>
+
+  <section class="provenance" aria-label="Validation provenance">
+    @if (isHarness()) {
+      <p><span>Harness settings</span>{{ selected.settings_file_ref }}</p>
+      <p><span>Qualification</span>Deterministic replay and golden trace</p>
+      <p><span>Running build</span>Checked again at Start</p>
+    } @else {
+      <p><span>LEAN validator</span>{{ selected.validator_code_ref ?? 'Not recorded' }}</p>
+      <p><span>Deploy binding</span>{{ selected.settings_file_ref }}</p>
+      <p><span>Audit copy</span>{{ selected.audit_copy_ref }}</p>
+      <p><span>Reconciliation</span>{{ selected.reconciliation_ref }}</p>
+    }
+  </section>
+
+  @if (divergences().length > 0) {
+    <section>
+      <h3 class="heading">Divergence categories</h3>
+      <ul class="divergences">
+        @for (entry of divergences(); track entry[0]) {
+          <li><code>{{ entry[0] | receiptLabel }}</code><span>{{ entry[1] }}</span></li>
+        }
+      </ul>
+    </section>
+  }
+} @else {
+  <p class="empty">Validation evidence has not been registered yet.</p>
+}
+
+@if (!isHarness()) {
+  @if (selected.reference_code; as code) {
+    <app-quantconnect-reference-code [referenceCode]="code" />
+  }
+}
+
+<app-lean-twin-source [strategyKey]="selected.strategy_key" />

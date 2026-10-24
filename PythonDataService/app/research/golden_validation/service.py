@@ -588,7 +588,7 @@ async def review(
 
         golden_run = await repo.get_golden_run(conn, golden_run_id)
         if golden_run is None:
-            raise GoldenRunNotFoundError(f"Validation Golden Run {golden_run_id} was not found.")
+            raise GoldenRunNotFoundError(f"Selected baseline run {golden_run_id} was not found.")
         dossier = await _load_dossier(conn, golden_run, lock_evidence=True)
         if dossier.evidence.revision != expected_evidence_revision:
             raise StaleEvidenceError(dossier.evidence.revision)

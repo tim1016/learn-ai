@@ -89,6 +89,68 @@ async def test_completed_run_persists_after_source_changes_mid_run(
     assert study_id == 73
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("algorithm_source", "strategy_key", "recorded"),
+    [
+        pytest.param(
+            "class MyAlgorithm: pass",
+            "rsi_mean_reversion",
+            {"strategy_name": "rsi_mean_reversion", "custom_source": True},
+            id="a custom source is owned by the strategy that submitted it and still marked as custom",
+        ),
+        pytest.param(
+            "class MyAlgorithm: pass",
+            None,
+            {"strategy_name": "user_provided", "custom_source": True},
+            id="a custom source that names no owner keeps the name the run was built with and is marked",
+        ),
+        pytest.param(
+            None,
+            None,
+            {"strategy_name": "user_provided"},
+            id="a bundled template run is not marked",
+        ),
+    ],
+)
+async def test_completed_run_records_the_owner_the_request_names_and_whether_it_ran_pasted_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+    algorithm_source: str | None,
+    strategy_key: str | None,
+    recorded: dict[str, object],
+) -> None:
+    from app.services import lean_sidecar_service as service
+
+    request = service.TrustedRunRequest(
+        run_id="completed-owner",
+        start_ms_utc=1_736_175_600_000,
+        end_ms_utc=1_736_607_600_000,
+        starting_cash=100_000.0,
+        data_policy=_make_data_policy(),
+        algorithm_source=algorithm_source,
+        strategy_key=strategy_key,
+    )
+    persisted: list[dict] = []
+
+    async def capture_persist(payload) -> int:
+        persisted.append(payload)
+        return 73
+
+    monkeypatch.setattr(service, "assert_lean_persistence_source_current", lambda: None)
+    monkeypatch.setattr(service, "build_persist_payload", lambda **_kwargs: {"strategy_name": "user_provided"})
+    monkeypatch.setattr(service, "persist_run_payload", capture_persist)
+
+    await service._persist_completed_run(
+        request=request,
+        workspace=SimpleNamespace(root=tmp_path),
+        manifest=SimpleNamespace(),
+        response=SimpleNamespace(is_clean=True, lean_errors={}),
+    )
+
+    assert persisted == [recorded]
+
+
 @pytest.mark.parametrize(
     "adjusted",
     [

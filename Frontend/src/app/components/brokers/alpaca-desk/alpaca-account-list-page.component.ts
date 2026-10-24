@@ -5,7 +5,10 @@ import { ActivatedRoute } from '@angular/router';
 import { GOLDEN_QUALIFICATION_QUERY_PARAM } from '../../../fleet/account-workspace';
 import { BreadcrumbComponent } from '../../../shared/breadcrumb/breadcrumb.component';
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
+import { OPTIONS_SETUP_QUERY_PARAM } from '../../../fleet/options-setup-handoff';
+import { AlpacaDeployIntentComponent } from './alpaca-deploy-intent.component';
 import { AlpacaLaneCardComponent } from './alpaca-lane-card.component';
+import { AlpacaOptionsDeployIntentComponent } from './alpaca-options-deploy-intent.component';
 
 /** The runbooks each dead-end state points at: how to add an account, and
  * how to bring the account list back. They live in the repository, where
@@ -38,7 +41,12 @@ export const DIRECTORY_RUNBOOK_URL = `${RUNBOOKS}/fleet-directory-unavailable.md
 @Component({
   selector: 'app-alpaca-account-list-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AlpacaLaneCardComponent, BreadcrumbComponent],
+  imports: [
+    AlpacaDeployIntentComponent,
+    AlpacaLaneCardComponent,
+    AlpacaOptionsDeployIntentComponent,
+    BreadcrumbComponent,
+  ],
   templateUrl: './alpaca-account-list-page.component.html',
   styleUrl: './alpaca-account-list-page.component.scss',
 })
@@ -53,9 +61,23 @@ export class AlpacaAccountListPageComponent {
    * names no account, so choosing one here is the step it still needs. */
   protected readonly goldenHandoff = computed(() => this.queryParams().has(GOLDEN_QUALIFICATION_QUERY_PARAM));
 
+  /** The exact version the handoff names, as the address carries it. It stays
+   * in the address while an account is chosen and is read again, never
+   * replaced, by the panel that shows it (PRD #3490 R19). */
+  protected readonly pinnedVersion = computed(() => this.queryParams().get(GOLDEN_QUALIFICATION_QUERY_PARAM) ?? '');
+  protected readonly strategyKey = computed(() => this.queryParams().get('strategy'));
+
+  /** An approved options version on its way to Deploy (PRD #3490 R23): an
+   * options setup's "Deploy an options bot" names no account either. The id is
+   * the address's value, valid or not, and the panel that shows it judges it. */
+  protected readonly optionsHandoff = computed(() => this.queryParams().has(OPTIONS_SETUP_QUERY_PARAM));
+  protected readonly optionsSetupId = computed(() => this.queryParams().get(OPTIONS_SETUP_QUERY_PARAM) ?? '');
+
   /** A broker-wide `?deploy` intent has no lane yet: the list itself is the
-   * deploy entry point's lane-selection step. A golden handoff is one too. */
-  protected readonly deployIntent = computed(() => this.queryParams().has('deploy') || this.goldenHandoff());
+   * deploy entry point's lane-selection step. A golden or options handoff is one too. */
+  protected readonly deployIntent = computed(
+    () => this.queryParams().has('deploy') || this.goldenHandoff() || this.optionsHandoff(),
+  );
 
   protected readonly accounts = computed(() => this.fleet.lanesOf('alpaca'));
   protected readonly loading = this.fleet.isLoading;

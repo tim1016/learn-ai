@@ -427,7 +427,7 @@ describe('GoldenSearchDecisionStepComponent — after the final test', () => {
     expect(commands.map((c) => c.command)).toEqual(['approve']);
   });
 
-  it('approved: the golden settings, their qualification and program version, and Use in Deploy carrying the qualification', async () => {
+  it('approved: the golden settings, their qualification and program version, and Use in Deploy carrying the strategy and the qualification', async () => {
     const { view } = await renderStep(studyDetail('approved'));
 
     const tuple = screen.getByRole('region', { name: 'Your golden settings' });
@@ -436,7 +436,8 @@ describe('GoldenSearchDecisionStepComponent — after the final test', () => {
     expect(screen.getByRole('region', { name: 'Golden acceptance' }).textContent).toContain('Accepted · Manual override');
     expect(screen.getByRole('region', { name: 'Your recorded decision' }).textContent).toContain('Manual override acknowledged for program ema-crossover-signal/v3.');
     const deploy = screen.getByRole('link', { name: /use in deploy/i });
-    expect(deploy.getAttribute('href')).toBe('/brokers/alpaca?golden_qualification=gq-0001-aaaa-bbbb');
+    // The account list is where the owner chooses the account: the link names the strategy and the exact version, nothing else.
+    expect(deploy.getAttribute('href')).toBe('/brokers/alpaca?strategy=ema_crossover_signal&golden_qualification=gq-0001-aaaa-bbbb');
     expect(screen.queryByRole('checkbox')).toBeNull();
     await noAxeViolations(view.container);
   });

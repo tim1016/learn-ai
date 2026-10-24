@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject, input, output, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, output, signal, untracked } from '@angular/core';
 import { ButtonModule } from 'primeng/button';
 
 import { AssetIdentityComponent } from '../../shared/asset-identity/asset-identity.component';
@@ -27,7 +27,10 @@ const STATUSES: readonly GridSearchStatus[] = ['queued', 'running', 'completed',
 export class GridSearchHistoryComponent {
   private readonly service = inject(GridSearchService);
 
+  /** Names the strategy's rows by its display name rather than its key. */
   readonly strategies = input<readonly StrategyInfo[]>([]);
+  /** The one strategy this history is for. */
+  readonly strategyKey = input.required<string>();
   readonly opened = output<string>();
 
   readonly rows = signal<GridSearchSummary[]>([]);
@@ -39,7 +42,11 @@ export class GridSearchHistoryComponent {
   protected readonly displayNames = computed(() => new Map(this.strategies().map((s) => [s.name, s.display_name])));
 
   constructor() {
-    void this.refresh();
+    // Read once the strategy is in, and again if it ever changes.
+    effect(() => {
+      this.strategyKey();
+      untracked(() => void this.refresh());
+    });
   }
 
   /** Revision of the latest request; an older response must not overwrite a newer filter's rows. */
@@ -49,7 +56,7 @@ export class GridSearchHistoryComponent {
     const revision = ++this.revision;
     this.loading.set(true);
     try {
-      const rows = await this.service.list(this.filters());
+      const rows = await this.service.list({ ...this.filters(), strategy_key: this.strategyKey() });
       if (revision !== this.revision) return;
       this.rows.set(rows);
       this.error.set(null);

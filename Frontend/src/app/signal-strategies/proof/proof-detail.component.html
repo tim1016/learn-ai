@@ -1,0 +1,84 @@
+@let loaded = state();
+@if (loaded.kind === 'loading') {
+  <p class="message" role="status">Loading validation evidence...</p>
+} @else if (loaded.kind === 'failed') {
+  <app-workspace-state-block
+    [state]="{
+      kind: 'failed',
+      happened: 'Validation evidence could not be loaded.',
+      why: loaded.message,
+      next: 'Nothing is shown as missing because of this: the proof is unknown until the read succeeds.',
+      actions: [{ id: 'retry', label: 'Try again' }]
+    }"
+    (actionTriggered)="reload()"
+  />
+} @else {
+  @let selected = loaded.value;
+  @let harness = isHarness(selected);
+  @let accepted = isAccepted(selected);
+  <header class="head">
+    <div>
+      <h3 class="head__title">{{ selected.display_name }}</h3>
+      <p class="head__text">{{ selected.description }}</p>
+    </div>
+    @let proof = summaryOf(summary());
+    <app-signal-strategy-chip [tone]="tones[proof.state]">Proof {{ proof.state | receiptLabel }}</app-signal-strategy-chip>
+  </header>
+
+  @if (harness) {
+    <section class="harness" aria-label="Operational validation harness policy">
+      <i class="pi pi-wrench" aria-hidden="true"></i>
+      <div>
+        <h3>Operational validation harness</h3>
+        <p>
+          This program tests deployment mechanics in Dry Run and Paper. It does not enter
+          the external-reference promotion track and is permanently ineligible for Live.
+        </p>
+      </div>
+    </section>
+  }
+
+  @if (selected.proof; as dossier) {
+    <app-strategy-proof-pipeline [proof]="dossier" />
+  }
+
+  <section class="decision" [class.ready]="accepted" aria-label="Program proof decision">
+    <div>
+      <p class="decision__label">{{ harness ? 'Paper test readiness' : 'Program proof decision' }}</p>
+      @if (accepted) {
+        <h3>{{ harness ? 'Program proof accepted for a Paper test' : 'Program proof accepted for Deploy' }}</h3>
+        <p>{{ selected.behavioral_equivalence?.detail }}</p>
+      } @else {
+        <h3>{{ harness ? 'Not accepted for a Paper test yet' : 'Not accepted for Deploy yet' }}</h3>
+        <p>{{ selected.proof?.blocking_summary ?? 'Validation evidence is incomplete.' }}</p>
+      }
+      <p class="decision__scope">
+        This is the program's proof at its validated corpus point. It approves no symbol's settings:
+        a selected baseline run is reviewed, and settings are approved, in
+        <a [routerLink]="configurationRoute(selected)">Golden</a>.
+      </p>
+    </div>
+    <div class="decision__actions">
+      <a class="link-button" [routerLink]="backtestRoute(selected)" [queryParams]="backtestQueryParams(selected)">
+        <i class="pi pi-bolt" aria-hidden="true"></i>
+        Diagnose in Backtest
+      </a>
+      @if (accepted) {
+        <a class="link-button link-button--secondary" routerLink="/brokers/alpaca" [queryParams]="deployQueryParams(selected)">
+          <i class="pi pi-send" aria-hidden="true"></i>
+          Deploy strategy
+        </a>
+      }
+    </div>
+  </section>
+
+  <dl class="facts" aria-label="Program proof facts">
+    <div><dt>Behavior</dt><dd>{{ (selected.behavioral_equivalence?.verdict ?? 'evidence_missing') | receiptLabel }}</dd></div>
+    <div><dt>Reference</dt><dd>{{ harness ? 'Internal deterministic replay' : (selected.qc_cloud_backtest_id ?? 'Not attached') }}</dd></div>
+    <div><dt>Validation case</dt><dd>{{ selected.validation_case_symbol ?? 'n/a' }}</dd></div>
+    <div><dt>Reconciliation</dt><dd>{{ (selected.reconciliation_status ?? 'not_registered') | receiptLabel }}</dd></div>
+  </dl>
+
+  <app-proof-actions [detail]="selected" (changed)="onChanged()" />
+  <app-proof-evidence [detail]="selected" />
+}

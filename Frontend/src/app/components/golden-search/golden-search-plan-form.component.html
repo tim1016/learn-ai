@@ -8,20 +8,10 @@
 
   <section class="card" aria-label="Strategy, instrument and starting point">
     <div class="setup">
+      <div class="field"><span>Strategy</span><strong class="setup__fixed">{{ capability()?.display_name ?? (strategyKey() ?? pinnedStrategy() | receiptLabel) }}</strong></div>
       @if (revising()) {
-        <div class="field"><span>Strategy</span><strong class="setup__fixed">{{ capability()?.display_name ?? (strategyKey() ?? '' | receiptLabel) }}</strong></div>
         <div class="field"><span>Instrument</span><app-asset-identity [symbol]="symbol()" size="sm" /></div>
       } @else {
-        <label class="field"><span>Strategy</span>
-          <select (change)="onStrategyEvent($event)" aria-label="Strategy">
-            @for (option of available(); track option.strategy_key) {
-              <option [value]="option.strategy_key" [selected]="option.strategy_key === strategyKey()">{{ option.display_name }}</option>
-            }
-            @for (option of unavailable(); track option.strategy_key) {
-              <option [value]="option.strategy_key" disabled>{{ option.display_name }} — {{ option.reason }}</option>
-            }
-          </select>
-        </label>
         <div class="field"><app-symbol-picker appearance="field" label="Instrument" [symbol]="symbol()" (symbolChange)="setSymbol($event)" /></div>
       }
       @if (draft() !== null && incumbentLabel(); as label) {
@@ -38,7 +28,7 @@
         </div>
       }
     </div>
-    @if (!revising() && available().length === 0) { <p class="hint">No strategy has a Golden Search declaration yet.</p> }
+    @if (!revising() && unusableReason(); as reason) { <p class="hint">{{ reason }}</p> }
   </section>
 
   @if (defaultsError(); as message) { <p class="refusal" role="alert">{{ message }}</p> }
@@ -68,7 +58,7 @@
       />
     </section>
     <app-golden-search-protocol-controls [protocol]="d.protocol" [preflight]="preflight()" [defaultRate]="capability()?.default_expected_trades_per_year ?? null" [problems]="d.problems" (edit)="onEdit($event)" />
-    <app-golden-search-time-windows [protocol]="d.protocol" [range]="d.range" [rangeLaidOut]="d.range === d.laidOutRange" [layoutProblem]="datesError()" [rangeNote]="d.rangeNote" [finalMonths]="d.finalMonths" [finalSessionsCut]="d.finalSessionsCut" [preflight]="preflight()" [problems]="d.problems" [refusals]="refusalList()" (edit)="onEdit($event)" />
+    <app-golden-search-time-windows [protocol]="d.protocol" [range]="d.range" [rangeLaidOut]="d.range === d.laidOutRange" [layoutProblem]="datesError()" [rangeNote]="d.rangeNote" [finalMonths]="d.finalMonths" [finalSessionsCut]="d.finalSessionsCut" [preflight]="preflight()" [problems]="d.problems" [refusals]="refusalList()" [viewed]="handoff()?.viewed ?? null" (edit)="onEdit($event)" />
     <app-golden-search-refinement-controls [protocol]="d.protocol" [capability]="capability()" [problems]="d.problems" (edit)="onEdit($event)" />
     <app-golden-search-cost-controls [protocol]="d.protocol" [problems]="d.problems" (edit)="onEdit($event)" />
     <app-golden-search-plan-footer
@@ -91,7 +81,7 @@
     />
   } @else if (loadingDefaults()) {
     <p class="hint" role="status">Loading the study defaults…</p>
-  } @else if (!revising() && symbol() === '' && available().length > 0) {
+  } @else if (!revising() && symbol() === '' && unusableReason() === null) {
     <p class="hint">Pick an instrument to load the study defaults.</p>
   }
 </div>

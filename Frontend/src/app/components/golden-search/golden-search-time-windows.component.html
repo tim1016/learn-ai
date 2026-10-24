@@ -61,10 +61,20 @@
   @if (preflight()?.run_up; as runUp) {
     <p class="hint">Every run warms up on the same {{ runUp.run_up_sessions }} {{ runUp.run_up_sessions === 1 ? 'session' : 'sessions' }} before its window (the slowest setting needs {{ runUp.required_samples }} bars).</p>
   }
+  @if (viewedFinal(); as seen) {
+    <p class="exposure" data-state="viewed" role="note">
+      <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+      <span><strong>Final-test dates: already viewed in Explore.</strong> {{ seen.source }} covered {{ seen.from }} to {{ seen.to }}, which overlaps these dates, so a final test on them is not an untouched look. Choose a final interval Explore has not viewed, or accept that the final test can only be exploratory.</span>
+    </p>
+  }
   @if (preflight()?.exposure; as exposure) {
-    <p class="exposure" [attr.data-state]="exposure.state">
-      <i class="pi" [class.pi-check-circle]="exposure.state === 'not_opened'" [class.pi-exclamation-triangle]="exposure.state !== 'not_opened'" aria-hidden="true"></i>
-      <span><strong>Final-test dates: {{ exposureLabels[exposure.state] }}.</strong> {{ exposure.explanation }} {{ exposureClaims[exposure.state] }}</span>
+    <p class="exposure" [attr.data-state]="viewedFinal() === null ? exposure.state : 'viewed'">
+      <i class="pi" [class.pi-check-circle]="viewedFinal() === null && exposure.state === 'not_opened'" [class.pi-exclamation-triangle]="viewedFinal() !== null || exposure.state !== 'not_opened'" aria-hidden="true"></i>
+      @if (viewedFinal() === null) {
+        <span><strong>Final-test dates: {{ exposureLabels[exposure.state] }}.</strong> {{ exposure.explanation }} {{ exposureClaims[exposure.state] }}</span>
+      } @else {
+        <span><strong>Recorded research: {{ exposureLabels[exposure.state] }}.</strong> {{ exposure.explanation }} That ledger covers recorded final tests and runs, so it cannot show everything you looked at.</span>
+      }
     </p>
   }
 </section>

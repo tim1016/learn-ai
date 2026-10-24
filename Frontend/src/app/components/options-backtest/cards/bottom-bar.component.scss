@@ -5,10 +5,7 @@ p { margin: 0; }
 .bar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: var(--space-3); }
 .name { grid-column: 1 / -1; min-width: 0; display: grid; gap: var(--space-1); font-size: var(--fs-sm); color: var(--text-secondary); }
 .name input { width: 100%; }
-// The two run buttons are plain items of the bar's grid: name, then Save and Check data side by side, then Start across both.
-.actions { display: contents; }
-.start { grid-column: 1 / -1; font-weight: var(--fw-semi); }
-kbd { margin-inline-start: var(--space-2); border: 1px solid currentColor; border-radius: var(--radius-sm); padding: 0 var(--space-1); font-family: var(--font-mono); font-size: var(--fs-xxs); line-height: 1.5; opacity: 0.85; }
+.bar > button { grid-column: 1 / -1; }
 .status { grid-column: 1 / -1; min-width: 0; font-size: var(--fs-sm); color: var(--text-secondary); display: flex; flex-wrap: wrap; gap: 0 var(--space-3); }
 .ok { color: var(--bull); }
 .bad { color: var(--bear); }
@@ -18,7 +15,6 @@ kbd { margin-inline-start: var(--space-2); border: 1px solid currentColor; borde
   .footer { position: fixed; z-index: 20; inset-inline: var(--page-pad-x); bottom: var(--space-3); padding: var(--space-3) var(--space-5); background: var(--bg-elevated); border-color: var(--border-strong); box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.35); }
   .bar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-3) var(--space-4); }
   .name { grid-column: auto; flex: 0 1 18rem; min-width: 8rem; }
-  .start { grid-column: auto; }
   .status { flex: 1 1 8rem; align-self: center; display: flex; }
 }
 
@@ -27,13 +23,7 @@ kbd { margin-inline-start: var(--space-2); border: 1px solid currentColor; borde
   .bar { gap: var(--space-2) var(--space-3); }
   // The name takes what the row leaves beside Save: a basis of nothing, so the row does not break before Save.
   .name { flex: 1 1 0; max-width: none; }
-  // The run buttons share the row below, each as wide as the other, so Start stays the thing to press.
-  .actions { display: flex; flex: 1 1 100%; gap: var(--space-2); }
-  .actions button { flex: 1 1 0; justify-content: center; }
   // One line above the name and Save, which share the row below it. A refusal or a name rule is the owner's to read in full, so it wraps.
   .status { flex-basis: 100%; order: -1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
   .status:has(.bad) { white-space: normal; }
-  kbd { display: none; }
 }
-
-.footer.footer--inline { position: static; box-shadow: none; }

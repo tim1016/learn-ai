@@ -1,0 +1,53 @@
+@let selected = detail();
+<section class="actions" aria-label="Proof actions">
+  <button type="button" class="button" [disabled]="busy()" (click)="refresh()">
+    <i class="pi pi-refresh" aria-hidden="true"></i>
+    Recheck stored proof
+  </button>
+  <fieldset class="flag-choice">
+    <legend>Human flag</legend>
+    <label [class.selected]="flagChoice() === 'validated'">
+      <input type="radio" name="validation-flag" value="validated" [checked]="flagChoice() === 'validated'" (change)="setFlagChoice($event)" />
+      <span>Accept</span>
+    </label>
+    <label [class.selected]="flagChoice() === 'invalidated'">
+      <input type="radio" name="validation-flag" value="invalidated" [checked]="flagChoice() === 'invalidated'" (change)="setFlagChoice($event)" />
+      <span>Reject</span>
+    </label>
+  </fieldset>
+  <label class="field">
+    <span>Reason</span>
+    <textarea [value]="flagReason()" (input)="setFlagReason($event)" rows="3"></textarea>
+  </label>
+  @if (!isHarness()) {
+    <label class="field">
+      <span>QC Cloud backtest ID</span>
+      <input
+        type="text"
+        [value]="backtestId() || selected.qc_cloud_backtest_id || ''"
+        (input)="setBacktestId($event)"
+        aria-label="QC Cloud backtest ID"
+        placeholder="Attach the accepted reference backtest"
+        autocomplete="off" />
+      <small>Required for acceptance. Trade reconciliation must also pass.</small>
+    </label>
+  }
+  <button type="button" class="button button--primary" [disabled]="busy()" (click)="submit()">Save flag</button>
+  @if (message(); as text) { <p class="actions__message" role="status">{{ text }}</p> }
+  @if (error(); as text) { <p class="actions__error" role="alert">{{ text }}</p> }
+</section>
+
+@if (selected.current_flag_event; as event) {
+  <section class="flag" aria-label="Current validation flag">
+    <dl>
+      <div><dt>Flag</dt><dd>{{ flagLabel(event.flag) }}</dd></div>
+      <div><dt>Actor</dt><dd>{{ event.flagged_by | receiptLabel }}</dd></div>
+      <div><dt>Time</dt><dd><app-timestamp-display [value]="event.flagged_at_ms" mode="local" /></dd></div>
+      <div><dt>Behavior</dt><dd>{{ event.behavioral_equivalence.verdict | receiptLabel }}</dd></div>
+      <div><dt>Tolerance</dt><dd>{{ (event.behavioral_equivalence.tolerance ?? 'n/a') | receiptLabel }}</dd></div>
+      <div><dt>Snapshot</dt><dd><code>{{ event.evidence_snapshot_sha256 }}</code></dd></div>
+    </dl>
+    <p>{{ event.behavioral_equivalence.detail }}</p>
+    <p>{{ event.reason }}</p>
+  </section>
+}

@@ -18,8 +18,8 @@ test('inspects the blocked PUT candidate and one retained trade without replayin
     else if (path === '/api/jobs') await route.fulfill({ json: [] });
     else await route.fulfill({ status: 503, json: { detail: 'Outside this retained fixture.' } });
   });
-  await page.goto(`/options-golden-search/${study.id}`);
-  const workbench = page.locator('app-options-golden-search-page');
+  await page.goto(`/options-setups/evidence/study/${study.id}`);
+  const workbench = page.locator('app-options-study-workbench');
   await workbench.getByRole('button', { name: 'Compare and final test', exact: true }).click();
   await expect(workbench.getByRole('heading', { name: 'All candidate outcomes' })).toBeVisible();
   expect(reads).toEqual([]);
