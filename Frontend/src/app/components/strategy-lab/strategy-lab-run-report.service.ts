@@ -34,9 +34,9 @@ function hasPendingParity(run: BacktestRunDetail | null): boolean {
 /**
  * Every derivation the one-page workbench needs from one persisted run.
  *
- * Component-scoped and provided by `StrategyLabComponent`, alongside
- * `StrategyLabConfigStore` and `StrategyLabRunner`, so the screen cannot
- * inherit run state from a retired product surface.
+ * Provided by a strategy's Explore scope, alongside `StrategyLabConfigStore` and
+ * `StrategyLabRunner`, so the report belongs to that strategy and no other
+ * surface can inherit its run state.
  */
 @Injectable()
 export class StrategyLabRunReport {

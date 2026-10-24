@@ -74,6 +74,8 @@ class _RunResponse(BaseModel):
     verdict_grade: str | None
     verdict_signal: str | None
     parity_group_id: str | None
+    # The run executed LEAN source pasted by the owner, whichever strategy it is filed under.
+    custom_source: bool = _column("ran_custom_source", "customSource")
 
     @field_validator("data_policy", mode="before")
     @classmethod

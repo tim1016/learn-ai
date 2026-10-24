@@ -81,6 +81,11 @@ export interface ParamProperty {
   default?: unknown;
   minimum?: number;
   maximum?: number;
+  /** Bounds a value may approach but not reach (pydantic `gt` / `lt`). */
+  exclusiveMinimum?: number;
+  exclusiveMaximum?: number;
+  /** Longest text a string parameter may hold. */
+  maxLength?: number;
   description?: string;
   title?: string;
 }

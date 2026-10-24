@@ -1,0 +1,44 @@
+<app-signal-strategy-section
+  title="Program proof"
+  scope="The proof of the strategy's program, and one person's flag on it. Neither says anything about a symbol's settings."
+  [read]="proof()"
+  (retry)="retry.emit()"
+>
+  @if (proof(); as state) {
+    @if (state.kind === 'ready') {
+      @if (state.value; as record) {
+        @let proof = summaryOf(record);
+        <dl class="facts">
+          <dt>Proof</dt>
+          <dd>
+            <app-signal-strategy-chip [tone]="tones[proof.state]">{{ proof.state | receiptLabel }}</app-signal-strategy-chip>
+            @if (proof.totalStages > 0) {
+              {{ proof.completedStages }} of {{ proof.totalStages }} stages complete
+            }
+          </dd>
+          @if (proof.blockingSummary; as blocking) {
+            <dt>Blocked by</dt>
+            <dd>{{ blocking }}</dd>
+          }
+          <dt>Person's flag</dt>
+          <dd>
+            {{ record.validation_state | receiptLabel }}
+            @if (record.current_flag_event; as event) {
+              · {{ event.flag | receiptLabel }} by {{ event.flagged_by }}
+              <app-timestamp-display [value]="event.flagged_at_ms" mode="local" />
+            }
+          </dd>
+          <dt>Corpus case</dt>
+          <dd>
+            {{ record.validation_case_symbol ?? 'no symbol recorded' }}
+            @if (record.reconciliation_status; as reconciliation) {
+              · {{ reconciliation | receiptLabel }}
+            }
+          </dd>
+        </dl>
+      } @else {
+        <p class="note">The proof catalog holds no record for this strategy, so nothing about its proof is known.</p>
+      }
+    }
+  }
+</app-signal-strategy-section>

@@ -154,6 +154,19 @@ async def test_filters_and_pages_narrow_rows_but_never_hide_a_gap(fleet, secret)
 
 
 @pytest.mark.asyncio
+async def test_a_strategy_filter_counts_that_strategys_bots_and_still_names_every_gap(fleet, secret) -> None:
+    service, deliveries, _paper, live, _unbound = fleet
+
+    async with AsyncClient(transport=ASGITransport(app=_app(service, deliveries)), base_url="http://test") as client:
+        own = (await client.get(_ROUTE, params={"strategy_key": "ema_crossover"}, headers=secret)).json()
+        other = (await client.get(_ROUTE, params={"strategy_key": "rsi_mean_reversion"}, headers=secret)).json()
+
+    assert [row["strategy_instance_id"] for row in own["rows"]] == ["newer", "older"] and own["total"] == 2
+    assert other["rows"] == [] and other["total"] == 0
+    assert live.clerk_id in {gap["clerk_id"] for gap in other["gaps"]}
+
+
+@pytest.mark.asyncio
 async def test_one_account_filter_reads_only_that_account(fleet, secret) -> None:
     service, deliveries, paper, live, _unbound = fleet
 

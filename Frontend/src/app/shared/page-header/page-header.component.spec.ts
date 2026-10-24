@@ -69,7 +69,7 @@ describe('PageHeaderComponent trail', () => {
   const routes = [
     { path: 'golden-search', component: RouteStub },
     { path: 'research', component: RouteStub },
-    { path: 'golden-search/:studyId', component: RouteStub },
+    { path: 'research/feature/:studyId', component: RouteStub },
     { path: 'docs/broker-manual', component: RouteStub },
     { path: '**', component: RouteStub, data: { notFound: true } },
   ];
@@ -86,13 +86,13 @@ describe('PageHeaderComponent trail', () => {
   }
 
   it('leads a page back to its menu group, landing on the group\'s first page', async () => {
-    expect(await trailAt('/golden-search/study-9', 'Golden Search')).toEqual(['Signal strategies -> /strategy-lab']);
+    expect(await trailAt('/research/feature/study-9', 'Feature study')).toEqual(['Research -> /research']);
   });
 
   it('also leads back to the listed page a deeper heading sits inside', async () => {
-    expect(await trailAt('/golden-search/study-9', 'Study 9')).toEqual([
-      'Signal strategies -> /strategy-lab',
-      'Golden Search -> /golden-search',
+    expect(await trailAt('/research/feature/study-9', 'Study 9')).toEqual([
+      'Research -> /research',
+      'Feature study -> /research/feature',
     ]);
   });
 
@@ -101,12 +101,12 @@ describe('PageHeaderComponent trail', () => {
   });
 
   it('adds no link from a page to itself, though its heading differs from the menu label', async () => {
-    expect(await trailAt('/golden-search', 'Find a golden study')).toEqual(['Signal strategies -> /strategy-lab']);
+    expect(await trailAt('/golden-search', 'Find a golden study')).toEqual(['Signal strategies -> /signal-strategies']);
   });
 
   it.each([
     ['a document, which belongs to no group', '/docs/broker-manual'],
-    ['an address no page answers, which must not borrow a prefix\'s group', '/golden-search/study-9/nothing'],
+    ['an address no page answers, which must not borrow a prefix\'s group', '/research/feature/study-9/nothing'],
   ])('draws no trail for %s', async (_name, url) => {
     expect(await trailAt(url, 'Anything')).toEqual([]);
   });

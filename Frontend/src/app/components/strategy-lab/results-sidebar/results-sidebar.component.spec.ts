@@ -69,6 +69,7 @@ function run(): BacktestRunDetail {
     dataPolicy: null,
     insightSummaryJson: null,
     parityGroupId: "pair-1",
+    customSource: false,
     trades: [],
     metricDocumentation: [],
     notes: null,

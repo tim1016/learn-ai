@@ -1,7 +1,7 @@
 <section class="history" aria-labelledby="walk-forward-history-title">
   <header class="history__header">
     <h2 id="walk-forward-history-title">History</h2>
-    <app-research-history-filters [strategies]="strategies()" [statuses]="statuses" (filterChange)="onFilters($event)" (refresh)="refresh()" />
+    <app-research-history-filters [statuses]="statuses" (filterChange)="onFilters($event)" (refresh)="refresh()" />
   </header>
 
   @if (error(); as message) { <p class="refusal" role="alert">{{ message }}</p> }

@@ -193,6 +193,9 @@ async def aggregate_broker_clerks_bot_history(
     strategy_instance_id: str | None = Query(
         None, min_length=1, max_length=128, description="Only this bot, with all of its runs.",
     ),
+    strategy_key: str | None = Query(
+        None, min_length=1, max_length=128, description="Only this strategy's bots, by registry key.",
+    ),
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
 ) -> Response:
@@ -264,6 +267,7 @@ async def aggregate_broker_clerks_bot_history(
         extra_gaps=account_less,
         filters=BotHistoryFilters(
             status=status, world=world, symbol=symbol, strategy_instance_id=strategy_instance_id,
+            strategy_key=strategy_key,
         ),
         page=page,
         page_size=page_size,

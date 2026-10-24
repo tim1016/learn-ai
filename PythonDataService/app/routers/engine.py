@@ -26,12 +26,14 @@ from app.research.sweep.eligibility import sweep_eligibility
 from app.schemas.engine_backtest import EngineBacktestRequest, EngineBacktestResponse
 from app.schemas.engine_chart import EngineChartRequest, EngineChartResponse
 from app.schemas.strategy_lean_source import StrategyLeanSourceResponse
+from app.schemas.strategy_registry import StrategyRegistryEntry
 from app.services.engine_backtest_service import execute_engine_backtest
 from app.services.engine_chart_service import build_engine_chart
 from app.services.strategy_lean_source_service import (
     StrategyLeanSourceNotFoundError,
     resolve_strategy_lean_source,
 )
+from app.services.strategy_registry_capabilities import strategy_registry_entries
 from app.utils.session_anchors import require_schedulable_end
 
 router = APIRouter()
@@ -132,6 +134,18 @@ def list_engine_strategies() -> list[StrategyInfo]:
             )
         )
     return result
+
+
+@router.get("/strategy-registry", response_model=list[StrategyRegistryEntry])
+def list_strategy_registry() -> list[StrategyRegistryEntry]:
+    """Every registered strategy with what the registry allows for it (#3508).
+
+    Unlike ``GET /strategies`` this lists the compatibility entries the picker
+    hides, and it answers Sweep, Golden Search and Live for each, with the
+    reason when one is not allowed. Allowed never means proven, approved or
+    deployable: those are judged by their own reads.
+    """
+    return strategy_registry_entries()
 
 
 @router.get(

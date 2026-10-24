@@ -1,0 +1,36 @@
+<app-signal-strategy-section
+  title="Description"
+  scope="The registry's own words about this strategy. Nothing here is written from its name."
+  [read]="declared"
+>
+  @if (entry().experimental_notice; as notice) {
+    <app-experimental-notice [notice]="notice" />
+  }
+
+  @for (paragraph of paragraphs(); track $index) {
+    <p class="prose">{{ paragraph }}</p>
+  } @empty {
+    <p class="note">No description is recorded for this strategy in the registry.</p>
+  }
+
+  <h3 class="group__heading">Rules, in the program's own statement</h3>
+  @if (entry().rule_statement; as statement) {
+    <p class="prose">{{ statement }}</p>
+  } @else {
+    <p class="note">This strategy has no governed Signal Program, so no statement of its rules is recorded.</p>
+  }
+
+  <dl class="facts">
+    <dt>Program</dt>
+    <dd class="mono">{{ entry().program_version ?? 'none' }}</dd>
+    <dt>Kind</dt>
+    <dd>
+      {{ entry().strategy_category === 'production_candidate' ? 'Production candidate' : 'Operational validation harness' }}
+      @if (!entry().catalog_visible) { · compatibility entry, not offered in Strategy Lab's picker }
+    </dd>
+  </dl>
+
+  <div>
+    <button type="button" class="link-button" (click)="viewSource.emit()">View source</button>
+  </div>
+</app-signal-strategy-section>

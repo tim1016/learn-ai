@@ -1,0 +1,50 @@
+@let state = store.entry();
+@if (state.kind === 'found') {
+  @let strategy = state.entry;
+  <app-workspace-header [title]="title()" [breadcrumb]="breadcrumb()" [secondaryActions]="actions()" (actionTriggered)="onAction($event)">
+    @if (activeTab() === 'define') {
+      <app-how-this-works workspaceHelp route="/strategy-docs" />
+    } @else if (activeTab() === 'golden') {
+      <ng-container workspaceHelp>
+        <app-how-this-works route="/docs/golden-search-manual" [query]="{ study: studyId() }" />
+        <app-how-this-works route="/docs/golden-search-guide" label="Chart guide" />
+      </ng-container>
+    }
+    <div workspaceFacts class="facts">
+      <code>{{ strategy.strategy_key }}</code>
+      <span>program {{ strategy.program_version ?? 'none' }}</span>
+      <app-signal-strategy-chip>
+        {{ strategy.strategy_category === 'production_candidate' ? 'Production candidate' : 'Operational harness' }}
+      </app-signal-strategy-chip>
+      @if (store.proof(); as proof) {
+        @if (proof.kind === 'ready' && proof.value !== null) {
+          @let summary = summaryOf(proof.value);
+          <app-signal-strategy-chip [tone]="proofTones[summary.state]">
+            Program proof: {{ summary.state | receiptLabel | lowercase }}
+          </app-signal-strategy-chip>
+        } @else if (proof.kind === 'failed') {
+          <app-signal-strategy-chip tone="unknown">Program proof: unknown</app-signal-strategy-chip>
+        }
+      }
+    </div>
+  </app-workspace-header>
+
+  @if (strategy.experimental_notice; as notice) {
+    <div class="notice"><app-experimental-notice [notice]="notice" /></div>
+  }
+
+  @if (deployOpen()) {
+    <div class="notice"><app-signal-strategy-deploy (closed)="closeDeploy()" /></div>
+  }
+
+  <app-workspace-tab-list [tabs]="tabs()" [activeId]="activeTab()" label="Strategy sections" />
+
+  @for (key of scopeKeys(); track key) {
+    <app-explore-scope />
+  }
+} @else {
+  <app-workspace-header [title]="title()" [breadcrumb]="breadcrumb()" />
+  <div class="notice">
+    <app-workspace-state-block [state]="notice()" (actionTriggered)="onAction($event)" />
+  </div>
+}

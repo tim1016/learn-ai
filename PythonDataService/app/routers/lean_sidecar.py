@@ -287,6 +287,17 @@ class TrustedRunRequestModel(BaseModel):
             "report for. Ignored when ``algorithm_source`` is provided."
         ),
     )
+    strategy_key: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        description=(
+            "Registry key of the strategy whose Explore submitted ``algorithm_source``. A custom source is not a "
+            "bundled template, so this key becomes the saved run's owner (its ``strategy_name``) and the run opens "
+            "under that strategy. Accepted only with ``algorithm_source``: a bundled template run is already owned "
+            "by the strategy that registers the template as its LEAN twin."
+        ),
+    )
     strategy_parameters: (
         EmaCrossover2BpsStrategyParametersModel
         | EmaCrossoverSignalStrategyParametersModel
@@ -425,6 +436,14 @@ class TrustedRunRequestModel(BaseModel):
             object.__setattr__(self, "strategy_parameters", parameters)
         elif self.strategy_parameters is not None:
             raise ValueError(f"template {self.template.value} does not accept strategy_parameters")
+        if self.strategy_key is not None:
+            if self.algorithm_source is None:
+                raise ValueError("strategy_key is accepted only with algorithm_source")
+            # Local import: the registry pulls in every strategy implementation.
+            from app.engine.strategy.registry import _STRATEGY_REGISTRY
+
+            if self.strategy_key not in _STRATEGY_REGISTRY:
+                raise ValueError(f"strategy_key {self.strategy_key!r} is not a registered strategy")
         self._validate_window_normalized()
         return self
 
@@ -592,6 +611,7 @@ async def post_trusted_run(payload: TrustedRunRequestModel) -> TrustedRunRespons
         starting_cash=payload.starting_cash,
         algorithm_source=payload.algorithm_source,
         template=payload.template,
+        strategy_key=payload.strategy_key,
         data_policy=data_policy,
         requested_engine=payload.requested_engine,
         parity_group_id=payload.parity_group_id,

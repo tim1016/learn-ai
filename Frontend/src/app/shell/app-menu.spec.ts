@@ -135,11 +135,18 @@ describe('app menu projections', () => {
     ['/research/history', 'Research', 'History'],
     ['/research/history/signal-report/42', 'Research', 'History'],
     ['/golden-search/study-9', 'Signal strategies', 'Golden Search'],
+    // The old Strategy Lab address of a saved run is not listed; it ends under its own entry.
+    ['/engine/runs/204', 'Signal strategies', 'Strategy Lab'],
+    // A strategy's place, and what it hosts, light the list's entry.
+    ['/signal-strategies/ema_crossover_signal/overview', 'Signal strategies', 'Signal strategies'],
+    ['/signal-strategies/ema_crossover_signal/define', 'Signal strategies', 'Signal strategies'],
+    ['/signal-strategies/ema_crossover_signal/explore/sweep', 'Signal strategies', 'Signal strategies'],
+    ['/signal-strategies/ema_crossover_signal/golden/studies/study-9', 'Signal strategies', 'Signal strategies'],
+    ['/signal-strategies/ema_crossover_signal/golden/configuration', 'Signal strategies', 'Signal strategies'],
+    ['/signal-strategies/ema_crossover_signal/proof', 'Signal strategies', 'Signal strategies'],
+    ['/signal-strategies/evidence/run/91', 'Signal strategies', 'Signal strategies'],
     ['/options-setups/SPY%200DTE/golden', 'Options setups', 'Options setups'],
     ['/options-setups/evidence/study/study-9', 'Options setups', 'Options setups'],
-    // Pages the menu does not list, though another place's shell still hosts them:
-    // the multi-strategy comparison is Signal strategies'.
-    ['/research-lab/backtests/recency-chart', 'Signal strategies', 'Recency Chart'],
     // The analytical views are not setups: the list links to them and the menu does not (#3516).
     ['/options-setups/analysis', 'Options setups', 'Strategy Builder'],
     ['/options-setups/analysis/finder', 'Options setups', 'Strategy Finder (not available)'],

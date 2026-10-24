@@ -127,6 +127,7 @@ def _run(run_id: int, source: str, **overrides) -> RunDetail:
         metric_documentation_json=None,
         data_policy_json=json.dumps(MATCHING_DATA_POLICY),
         parity_group_id="pg-test",
+        custom_source=False,
         notes=None,
         trades=(_trade_row(),),
         trades_truncated=False,
