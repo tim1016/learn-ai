@@ -52,3 +52,16 @@ superseded and one is reworded.
   configuration, so a future clock supplies them.
 - The title no longer names a .NET schedule. When a Python clock is built,
   record it here as a new amendment and delete `references/csharp-jobs/`.
+
+## Amendment 2026-10-24 — Realized vs IV reads the lake, and where a recorded snapshot lands on a bar (#3525)
+
+- The route `POST /api/edge/realized-vs-iv/series` is retired, and with it `app/routers/edge.py::_iv_series_from_recorder`
+  that decision 11 names. The Realized vs IV study is a job that reads admitted lake bars; it still takes IV recorded or
+  caller-supplied, and the live IV30 marker stays a separate call. The recorder read is `recorded_iv_points` in
+  `app/services/realized_vs_iv_study_service.py`, and the series composition is
+  `app/engine/edge/realized_vs_iv_series.py`. `iv_source`, `coverage.iv_first_ts` and `coverage.iv_last_ts` are reported as before.
+- Decision 9 stands: nothing is forward-filled at the service layer. What changes is how a snapshot meets a bar. Equal
+  timestamps almost never held, since a snapshot carries the moment it was taken. `app/engine/edge/iv_alignment.py` now
+  puts each snapshot on the bar that contains it; the latest in a bar wins, a bar with none has no IV, and the response
+  counts the snapshots read, superseded, and inside no bar. Nothing is carried or interpolated. The one carry-forward
+  that exists is the VRP z-score's `iv.ffill()`, unchanged. **This alignment rule awaits the owner's confirmation (D02 of PRD #3490).**

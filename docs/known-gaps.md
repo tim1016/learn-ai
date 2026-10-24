@@ -85,6 +85,26 @@ previously tracked items (issues #1655, #1671, #1672, #1674, #1677, #1664,
   and stable moments within the inference sample. Numerical equation fixtures
   do not establish finite-sample interval coverage or DSR calibration for this
   intraday setting. Graduation gates remain independent of these diagnostics.
+- **Realized vs IV reads the lake: divergences from the provider path (#3525, 2026-10-24).** Measured on a pinned
+  payload in `tests/research/test_realized_vs_iv_lake_vs_provider.py`; the first four are owner decisions (D02 of PRD
+  #3490).
+  - *Winsorization is gone (P2).* `DataSanitizer` clipped every price column to its 1st to 99th percentile of level
+    across the window, so the provider path computed on bars whose highest- and lowest-priced days were rewritten.
+    Lake bars are not clipped. On the payload the trailing Yang-Zhang moves by up to 0.038 (15m) and 0.021 (daily).
+  - *A daily bar is the regular session by default (P2).* The census could not confirm Polygon's day bar is
+    regular-session only, and a real day bar opens and closes at the auction prints where the lake folds the first and
+    last minute (3 bps either way moves the payload's Yang-Zhang by 0.002). Folding the day from extended minutes moves
+    it by up to 0.12. A 15-minute bar keeps `extended`, as it was.
+  - *Recorded IV reaches a bar by containment (P2).* `snapshot_in_bar_latest` replaces timestamp equality, which almost
+    never held. The VRP z-score still reads `iv.ffill()`; nothing else is filled. Whether to keep either is undecided.
+  - *Nothing schedules the IV recorder (P2).* Until something calls `POST /api/iv-recorder/snapshot` at the slots the
+    page reads "No IV30 at these bars", honestly. Recorded rows carry no tenor (the recorder defaults to 30 days), so
+    the Tenor control converts a recorded 30-day IV as if it were the tenor chosen.
+  - *The intraday window barely holds a forward value (P3, unchanged).* One month is about 21 sessions and the HF
+    forward RV looks 21 sessions ahead, so nearly every 15-minute bar is in the blind tail. The 15-minute
+    Yang-Zhang lines are annualized at 26 bars a day over extended-hours bars (64 a day).
+  - *Unverified assumptions:* Polygon's own 15-minute and day aggregates equal a fold of its minute aggregates, and a
+    day bar is the regular session. Both are asserted against an independent stand-in, not live data.
 - **Temporal wire/storage contracts outside Alpaca V2 remain non-numeric
   (medium).** The 2026-08-18 census confirmed 4 Pydantic, 29 C# (since removed
   with the C# backend, ADR 0081), and 22 real

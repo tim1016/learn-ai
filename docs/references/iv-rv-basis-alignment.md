@@ -69,14 +69,12 @@ mathematical gain.
 `pandas_market_calendars` (NYSE schedule) was already present in
 `requirements-light.txt` — no new dependency.
 
-## Wiring (deferred to Step 3)
+## Wiring
 
-The router `app/routers/edge.py` still calls `iv30_atm_50d` (ACT/365) and
-passes that into `compute_vrp` against TRD/252 RV — the bug is still live.
-Step 3 (HF realized variance) replaces both the RV input *and* swaps in
-`iv30_atm_50d_trading_basis` so the two sides finally agree. This step
-adds the conversion infrastructure with passing tests; Step 3 lands the
-fix into the production pipeline.
+Step 3 landed the fix. The composition in `app/engine/edge/realized_vs_iv_series.py`
+(it lived in the route `app/routers/edge.py` until #3525 retired that route) converts each
+bar's IV with `convert_iv_act365_to_trading252` before `compute_vrp`, against the HF
+realized vol, so the two sides share the TRD/252 basis.
 
 ## What this does NOT fix
 
