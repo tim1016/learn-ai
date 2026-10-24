@@ -33,7 +33,7 @@ A day captured before the study's session policy finished forming
 and nothing in the lake refreshes a committed day. Admission refuses it as
 ``captured_before_final`` and asks the vendor for nothing — it neither computes
 on that tape nor rewrites the day, which every other reader of the lake shares.
-Re-capturing such a day is an owner decision (``docs/known-gaps.md``). A study
+A held early day stays refused: there is no re-capture path (``docs/known-gaps.md``). A study
 starts only a claim lease after a session's final instant, so a capture it makes
 itself is one that rule calls final, and a writer that claimed before the final
 instant has published or expired.

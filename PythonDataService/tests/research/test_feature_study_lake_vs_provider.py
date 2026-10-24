@@ -1,4 +1,4 @@
-"""Feature study inputs: the old provider path against the admitted lake path, on one pinned vendor payload (#3521; R14, T08, D02).
+"""Feature study inputs: the old provider path against the admitted lake path, on one pinned vendor payload (#3521; R14, T08).
 
 Slice 31 of the UX redesign moves the study's bars from ``PolygonClientService.fetch_aggregates`` to the lake. This
 module is the receipt for what that move changes, case by case. Both paths read the *same* pinned vendor payload:
@@ -11,7 +11,7 @@ module is the receipt for what that move changes, case by case. Both paths read 
 Each case records changed timestamps, prices, counts and derived outputs (every feature's values, the mean IC, the
 forward-target validity), and names the cause in the reconcile taxonomy (``timestamp``, ``warmup``, ``precision``,
 ``off-by-one``, ``data-quality``). A case that moves nothing says so by asserting zero. Unexplained drift fails here; an
-*intentional* divergence is the owner's decision (D02) and is listed in the PR.
+*intentional* divergence is one the owner decided on 2026-10-24 and is listed in ``docs/known-gaps.md``.
 
 The lake's 1/10,000 price grid is ``data-quality``, never ``precision``: it changes the input data, and ``precision``
 is floating-point accumulation. A tolerance may loosen only for the latter, so each output this divergence moves is
@@ -381,7 +381,7 @@ def test_prices_finer_than_the_lake_grid_move_each_output_by_its_recorded_amount
     the provider path does not. That changes the input data, so it is not ``precision`` and no float tolerance covers it.
 
     Each recorded output is pinned to the movement measured on the pinned tape, so a lake encoding change that moved the
-    mean IC by 1e-3 would fail here. The table above is what D02 is decided on: RSI moves by about 0.01 point on a $150
+    mean IC by 1e-3 would fail here. The table above is the cost the owner accepted: RSI moves by about 0.01 point on a $150
     name, 0.1 on a $12 name and 0.6 on a $2 name; the mean IC by 5e-6, 4e-4 and 4e-4. The recording itself is read back
     at the float noise of the computation (``precision``, derived under "What float noise can move"): a feature to
     ``FEATURE_ATOL``, the mean IC to the reach of the near-ties in the two series it is taken from, which is nil when
@@ -431,7 +431,7 @@ def test_an_early_close_week_matches_under_extended_hours(world):
 
 
 def test_regular_hours_is_a_different_sample_from_what_the_study_has_always_read(world):
-    """Cause: ``data-quality`` (session scope). The study ran on 04:00-20:00 ET; ``regular`` removes the rest. D02.
+    """Cause: ``data-quality`` (session scope). The study ran on 04:00-20:00 ET; ``regular`` removes the rest, and the page offers both.
 
     The sample changes, and a feature remembers its sample: an RSI at the same bar differs because its history does.
     The numbers below are on the pinned synthetic tape, a measure of how much the policy moves the inputs, not of how
@@ -483,7 +483,7 @@ def test_a_split_announced_after_capture_is_not_in_a_held_window_until_the_lake_
     assert stale.causes == ["data-quality"] and stale.prices_changed == stale.provider_bars
     assert stale.max_price_diff > 100, "the held days still carry the pre-split basis"
     assert stale.errors == (None, None)
-    # The derived outputs the owner decides D02 on: a split rescales the price level, not the shape of the series.
+    # The derived outputs of the split the owner accepted: a split rescales the price level, not the shape of the series.
     # Ratios, momentum and volatility are unit-free and do not move; MACD's signal line is in price units and does.
     for unit_free in ("momentum_5m", "rsi_14", "realized_vol_30", "volume_zscore"):
         assert stale.feature_max_diff[unit_free] <= 1e-9, unit_free
@@ -505,8 +505,8 @@ def test_a_day_captured_before_its_after_hours_tape_finished_was_a_shorter_sampl
     """Cause: ``data-quality`` (capture time). A regular-hours chart opened at 16:30 ET leaves the day with its
     after-hours tape cut at 16:15, and the lake reads it as complete. The provider path re-fetched the whole day on
     every run, so the lake path would compute on a shorter sample. Admission sees when the day was captured and refuses
-    it (``captured_before_final``): it neither computes on the short tape nor rewrites a day other readers share. Until
-    the owner decides how a held day is captured again (``docs/known-gaps.md``), the divergence is a refusal. A day with
+    it (``captured_before_final``): it neither computes on the short tape nor rewrites a day other readers share. A held
+    early day stays refused, with no re-capture path (``docs/known-gaps.md``), so the divergence is a refusal. A day with
     no recorded capture time cannot be judged: that is the residual.
     """
     tape = tape_for(DST_WINDOW)

@@ -18,18 +18,18 @@ and what it reads now, field by field:
   identity. Prices sit on the lake's 1/10,000 grid (rounded half-up): a change
   to the input data, not float rounding, whose effect on RSI and the mean IC
   grows as the price falls (measured at $150, $12 and $2 in the comparison test).
-* **Session.** Before and now: **extended hours** — every bar the provider
-  served, 04:00 to 20:00 ET. The request's ``session`` is the one control and
-  defaults to ``extended``, so no caller's sample moves (the old route never
-  read the field the browser sent); ``rth`` is the scheduled session, named
-  ``regular`` in the identity (``session_policy``). Which session the study
-  *should* use is an owner decision (D02). A session
-  counts as complete only once the vendor has delivered its whole tape (the
-  close, plus four hours of after-hours for ``extended``, plus the vendor's
-  15-minute delay), and a held day captured before that is refused
-  (``captured_before_final``) rather than read as complete or captured again
-  (``app.data_lake.capture_finality``; how to capture it again is an owner
-  decision in ``docs/known-gaps.md``).
+* **Session.** Before: **extended hours** — every bar the provider served,
+  04:00 to 20:00 ET, whatever the request said (the old route never read the
+  field the browser sent). Now the request's ``session`` is the one control and
+  the person's choice (#3521): ``extended`` is the default, so no caller's
+  sample moves, and ``rth`` is the scheduled session, named ``regular`` in the
+  identity (``session_policy``). The two are different samples with different
+  cache identities, and the page offers both. A session counts as complete only
+  once the vendor has delivered its whole tape (the close, plus four hours of
+  after-hours for ``extended``, plus the vendor's 15-minute delay), and a held
+  day captured before that is refused (``captured_before_final``) rather than
+  read as complete or captured again (``app.data_lake.capture_finality``). A
+  refused day stays refused: there is no re-capture path (``docs/known-gaps.md``).
 * **Warmup.** None. Features use only bars inside the window (RSI-14, MACD
   12/26/9, rolling 30, ``pct_change(5)``), over one continuous series straight
   across overnight gaps; their first values in the window are NaN.

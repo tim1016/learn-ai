@@ -60,3 +60,13 @@ def test_signal_engine_job_result_fixture_is_what_the_job_serializer_writes() ->
     written = json.loads(json.dumps(_serialize_signal_report(a_busy_signal_report())))
 
     assert _fixture("signal-engine-job-result-v1.json") == written
+
+
+def test_feature_study_bar_sizes_offered_by_the_page_are_the_ones_the_server_accepts() -> None:
+    """The Feature page offers exactly this list (it imports the file); the study accepts exactly these minute bars."""
+    from app.services.feature_study_service import SUPPORTED_BAR_MINUTES
+
+    manifest = json.loads((_FIXTURES.parent / "feature-study-bar-minutes.json").read_text())
+
+    assert manifest["canonical"] == "PythonDataService/app/services/feature_study_service.py::SUPPORTED_BAR_MINUTES"
+    assert tuple(manifest["bar_minutes"]) == SUPPORTED_BAR_MINUTES

@@ -51,8 +51,10 @@ from tests._helpers.lake_study import (
     commit_payload,
     corrected_day,
     lake_file,
+    leave_early_capture,
     leave_publication_in_flight,
     minute_bar,
+    row_of,
 )
 from tests._helpers.pinned_vendor import VendorCalls, mock_vendor, scaled, vendor_history
 
@@ -408,25 +410,6 @@ def test_a_minute_study_neither_waits_on_nor_builds_the_daily_rollup(catalog, la
 # ---------------------------------------------------------------------------
 
 
-def _row_of(catalog: FakeCatalog, day: date, mode: str = "raw") -> dict:
-    return next(
-        r
-        for r in catalog.rows.values()
-        if r["trading_date"] == day and r["resolution"] == "minute" and r["price_adjustment_mode"] == mode
-    )
-
-
-def _capture_early(catalog: FakeCatalog, lake: Path, tape, day: date, *, completed_at_ms: int | None, mode: str = "raw") -> None:
-    """Leave ``day`` as a regular-hours chart opened right after the close leaves it.
-
-    The artifact holds the vendor's bars up to the quarter hour it had delivered by then, and the catalog says when
-    the capture completed. The next fetch of the day would return the whole tape.
-    """
-    delivered_until = session_close_ms_utc(day) + VENDOR_DELAY_MS
-    commit_bars(catalog, lake, day, corrected_day(day, [b for b in tape[day] if b["t"] < delivered_until], bump="0"), mode=mode)
-    _row_of(catalog, day, mode)["completed_at_ms"] = completed_at_ms
-
-
 def _after_regular_final(day: date) -> int:
     """A capture that surely began after the regular session was final, and surely before the extended one was."""
     return capture_final_ms(day, "regular") + CLAIM_LEASE_MS
@@ -438,7 +421,7 @@ def _held_with_an_early_day(catalog: FakeCatalog, lake: Path, *, day: date = MAR
     tape = vendor_history(MARCH)
     route = mock_vendor("SPY", tape, calls=calls)
     admit(identity(MARCH))
-    _capture_early(catalog, lake, tape, day, completed_at_ms=_after_regular_final(day))
+    leave_early_capture(catalog, lake, tape, day, completed_at_ms=_after_regular_final(day))
     calls.requests.clear()
     return route, calls
 
@@ -448,7 +431,7 @@ def test_an_extended_study_refuses_a_day_captured_before_its_after_hours_tape_fi
     mock_launcher()
     day = MARCH[2]
     _, calls = _held_with_an_early_day(catalog, lake, day=day)
-    row_before, bytes_before = dict(_row_of(catalog, day)), lake_file(lake, "raw", day).read_bytes()
+    row_before, bytes_before = dict(row_of(catalog, day)), lake_file(lake, "raw", day).read_bytes()
 
     refusal = refusal_of(identity(MARCH, session="extended"))
 
@@ -463,7 +446,7 @@ def test_an_extended_study_refuses_a_day_captured_before_its_after_hours_tape_fi
     assert "(2024-03-11 20:15 ET)" in reason, "the instant the tape is final, in New York time across the DST change"
     assert day.isoformat() in refusal.reason
     assert calls.count == 0, "the study asks the vendor for nothing"
-    assert _row_of(catalog, day) == row_before, "the shared day is as committed as it was"
+    assert row_of(catalog, day) == row_before, "the shared day is as committed as it was"
     assert lake_file(lake, "raw", day).read_bytes() == bytes_before
 
 
@@ -513,7 +496,7 @@ def test_refusing_an_early_day_leaves_it_readable_for_every_other_consumer_even_
     report = check_availability(roots, "SPY", MARCH[0], MARCH[-1], resolution="minute", session="regular")
     regular = admit(identity(MARCH, session="regular"))
 
-    assert _row_of(catalog, day)["status"] == "complete"
+    assert row_of(catalog, day)["status"] == "complete"
     assert report.unreadable_days == [] and report.missing_days == []
     assert counts(regular.coverage.window) == (len(MARCH), 0, 0, 0)
     assert (plain.fetched_artifact_count, plain.refreshed_artifact_count) == (0, 0), "the shared capture reuses the day"
@@ -529,7 +512,7 @@ def test_a_window_with_an_early_day_and_a_missing_one_names_the_early_day_and_fe
     mock_vendor("SPY", tape, calls=calls)
     admit(identity(MARCH[:2]))
     admit(identity(MARCH[3:]))
-    _capture_early(catalog, lake, tape, MARCH[0], completed_at_ms=_after_regular_final(MARCH[0]))
+    leave_early_capture(catalog, lake, tape, MARCH[0], completed_at_ms=_after_regular_final(MARCH[0]))
     calls.requests.clear()
 
     refusal = refusal_of(identity(MARCH, session="extended"))
@@ -562,7 +545,7 @@ def test_a_day_captured_before_the_regular_close_plus_the_vendor_delay_is_refuse
     mock_vendor("SPY", tape, calls=calls)
     admit(identity(MARCH, session="regular"))
     day = MARCH[0]
-    _capture_early(catalog, lake, tape, day, completed_at_ms=capture_final_ms(day, "regular") - 1)
+    leave_early_capture(catalog, lake, tape, day, completed_at_ms=capture_final_ms(day, "regular") - 1)
     calls.requests.clear()
 
     refusal = refusal_of(identity(MARCH, session="regular"))
@@ -579,7 +562,7 @@ def test_an_early_day_is_refused_the_same_way_once_the_provider_no_longer_serves
     calls = VendorCalls()
     mock_vendor("SPY", tape, calls=calls)
     admit(identity(MARCH))
-    _capture_early(catalog, lake, tape, MARCH[1], completed_at_ms=_after_regular_final(MARCH[1]))
+    leave_early_capture(catalog, lake, tape, MARCH[1], completed_at_ms=_after_regular_final(MARCH[1]))
     calls.requests.clear()
 
     refusal = refusal_of(identity(MARCH), now_ms=LATER_MS)
@@ -598,7 +581,7 @@ def test_a_day_with_no_recorded_capture_time_is_not_called_early(catalog, lake):
     tape = vendor_history(MARCH)
     mock_vendor("SPY", tape, calls=calls)
     admit(identity(MARCH))
-    _capture_early(catalog, lake, tape, MARCH[1], completed_at_ms=None)
+    leave_early_capture(catalog, lake, tape, MARCH[1], completed_at_ms=None)
     calls.requests.clear()
 
     admitted = admit(identity(MARCH))
@@ -699,7 +682,7 @@ def test_a_writer_that_claimed_before_the_final_instant_and_is_still_publishing_
     short = [b for b in tape[day] if b["t"] + 60_000 + VENDOR_DELAY_MS <= asked_at]
     assert 0 < len(short) < len(tape[day]), "the vendor had delivered part of the day"
     leave_publication_in_flight(catalog, lake, day, lease_ms_from_now=60_000)
-    row = _row_of(catalog, day)
+    row = row_of(catalog, day)
     calls.requests.clear()
 
     def publish_short_tape() -> None:
