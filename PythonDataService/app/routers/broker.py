@@ -32,6 +32,7 @@ from app.broker.ibkr.client import (
 from app.broker.ibkr.contracts import OptionQualificationError
 from app.broker.ibkr.health import (
     build_broker_health,
+    current_broker_health,
     synthetic_disconnected_health,
 )
 from app.broker.ibkr.market_data import stream_option_chain
@@ -75,17 +76,7 @@ _ibkr_client_factory: type[IbkrClient] = IbkrClient
 @read_router.get("/health", response_model=IbkrConnectionHealth)
 async def broker_health() -> IbkrConnectionHealth:
     """Connection diagnostic. Never raises on disconnect."""
-    if is_broker_disabled():
-        return synthetic_disconnected_health(
-            state="disabled",
-            disabled=True,
-            reason="IBKR_BROKER_ENABLED=false — the data-plane IBKR client is switched off",
-        )
-    try:
-        client = get_client()
-    except NotConnectedError:
-        return synthetic_disconnected_health()
-    return build_broker_health(client, get_monitor())
+    return current_broker_health()
 
 
 # ── /connect | /disconnect | /reconnect ────────────────────────────────
