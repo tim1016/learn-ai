@@ -17,6 +17,6 @@ export const DATA_LAB_ROUTES: Routes = [
   { path: 'explore', pathMatch: 'full', redirectTo: redirectLegacyDataLab('chart') },
   { path: 'export', pathMatch: 'full', redirectTo: redirectLegacyDataLab('build') },
   { path: 'returns', pathMatch: 'full', redirectTo: redirectLegacyDataLab('returns') },
-  // Validate became Operations → Data checks → TradingView comparison; its scope (`ticker`, `from`, `to`) is the query that goes with it.
+  // Validate became Operations → Data checks → TradingView comparison; its query goes with it, and the comparison reads the `ticker` from it.
   { path: 'validate', pathMatch: 'full', redirectTo: redirectKeepingState(dataCheckRoute('tradingview')) },
 ];
