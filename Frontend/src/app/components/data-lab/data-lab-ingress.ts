@@ -1,27 +1,29 @@
 import { inject } from '@angular/core';
 import { Router, type RedirectFunction } from '@angular/router';
 
+import { dataCheckRoute } from '../../operations/data-checks/data-checks';
+import { operationsTabRoute, type OperationsTab } from '../../operations/operations-tabs';
+
 /* Legacy Data Lab URL ingress.
  *
  * The router owns which page a legacy address opens: `redirectLegacyDataLab`
- * sends `/data-lab` and `/data-quality` straight to the child their `mode`
- * names, and on a canonical child the path wins. What is left for the shell is
- * the workspace state the bookmark carried, which `resolveLegacyDataLabUrl`
- * validates into a string-only param bag, and the notes on what it ignored:
- * unknown keys, a `mode` the path already answers, invalid values (bad mode,
- * non-UUID sessionId, empty scope). Ignored keys stay in the URL, which is why
- * they are reported as ignored rather than dropped. Resolved state may
- * populate the workspace but never auto-fetches — that decision lives in the
- * shell, not here.
+ * sends `/data-lab` straight to the child its `mode` names (or to the
+ * Operations check Validate moved to), and on a canonical child the path wins.
+ * What is left for the shell is the workspace state the bookmark carried,
+ * which `resolveLegacyDataLabUrl` validates into a string-only param bag, and
+ * the notes on what it ignored: unknown keys, a `mode` the path already
+ * answers, invalid values (bad mode, non-UUID sessionId, empty scope). Ignored
+ * keys stay in the URL, which is why they are reported as ignored rather than
+ * dropped. Resolved state may populate the workspace but never auto-fetches —
+ * that decision lives in the shell, not here.
  *
  * Indicator recipe params are treated opaquely for now (Phase 1): known keys
  * are kept verbatim, everything else is ignored with a note. */
 
-export type DataLabRoute =
-  | '/data-lab/explore'
-  | '/data-lab/export'
-  | '/data-lab/validate'
-  | '/data-lab/returns';
+export type DataLabRoute = '/data-lab/explore' | '/data-lab/export' | '/data-lab/returns';
+
+/** Validate left Data Lab for Operations → Data checks → TradingView comparison; `mode=validate` ends there. */
+const TRADINGVIEW_CHECK = dataCheckRoute('tradingview').join('/');
 
 export interface LegacyDataLabResolution {
   /** Surviving, validated query params (string values only). */
@@ -40,31 +42,49 @@ const KNOWN_KEYS: ReadonlySet<string> = new Set([
   'mode',
 ]);
 
-const MODE_TO_ROUTE: Readonly<Record<string, DataLabRoute>> = {
+const MODE_TO_ROUTE: Readonly<Record<string, string>> = {
   explore: '/data-lab/explore',
   build: '/data-lab/export',
   export: '/data-lab/export',
-  validate: '/data-lab/validate',
+  validate: TRADINGVIEW_CHECK,
 };
 
-/** The child a legacy `mode` names, or `undefined` for a value that names none. */
-function routeForMode(mode: unknown): DataLabRoute | undefined {
+/** The page a legacy `mode` names, or `undefined` for a value that names none. */
+function routeForMode(mode: unknown): string | undefined {
   return typeof mode === 'string' && Object.hasOwn(MODE_TO_ROUTE, mode) ? MODE_TO_ROUTE[mode] : undefined;
 }
 
 /**
- * The redirect for a legacy Data Lab address (`/data-lab`, `/data-quality`).
+ * The Operations tab a retired archive-card anchor belongs to. The card sat on
+ * top of every Data Lab tab with one anchor per underlying (`#option-archive-SPY`)
+ * and one each for the lake backup and the weekly restore check; those moved to
+ * Operations, so an old link carrying one goes there.
+ */
+function archiveTabFor(fragment: string | null | undefined): OperationsTab | null {
+  if (typeof fragment !== 'string' || !/^option-archive(-|$)/.test(fragment)) return null;
+  return fragment === 'option-archive-backup' || fragment === 'option-archive-restore' ? 'backups' : 'option-archive';
+}
+
+/**
+ * The redirect for a legacy Data Lab address (`/data-lab`).
  *
- * It goes straight to the child the address names — `mode` decides, else
+ * It goes straight to the page the address names — `mode` decides, else
  * `fallback` — in the navigation the router is already making. Everything
  * else the bookmark carried stays in the URL: the query, which the shell
  * reads to populate the workspace and to name what it ignored, and the
- * fragment (`#option-archive-…`). Only a `mode` that names a child is spent,
- * because the path now says it; one that names none stays so the shell can
- * report it.
+ * fragment. Only a `mode` that names a page is spent, because the path now
+ * says it; one that names none stays so the shell can report it.
+ *
+ * An archive-card anchor (`#option-archive-…`) names a card that now lives in
+ * Operations, so such an address leaves Data Lab for that tab, query and
+ * fragment intact.
  */
 export function redirectLegacyDataLab(fallback: DataLabRoute): RedirectFunction {
   return ({ queryParams, fragment }) => {
+    const archiveTab = archiveTabFor(fragment);
+    if (archiveTab !== null) {
+      return inject(Router).createUrlTree([...operationsTabRoute(archiveTab)], { queryParams, fragment: fragment ?? undefined });
+    }
     const named = routeForMode(queryParams['mode']);
     const { mode: _spent, ...rest } = queryParams;
     return inject(Router).createUrlTree([named ?? fallback], {
@@ -81,8 +101,8 @@ function isUuid(v: string): boolean {
   return UUID_RE.test(v);
 }
 
-/** Resolve a legacy /data-lab or /data-quality URL to the workspace params it
- *  carries and the notes on what it ignored. Pure. */
+/** Resolve a legacy /data-lab URL to the workspace params it carries and the
+ *  notes on what it ignored. Pure. */
 export function resolveLegacyDataLabUrl(url: string): LegacyDataLabResolution {
   const warnings: string[] = [];
   const params: Record<string, string> = {};

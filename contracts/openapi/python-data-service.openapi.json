@@ -31508,6 +31508,102 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "HealthItem": {
+        "properties": {
+          "affects": {
+            "items": {
+              "enum": [
+                "stock_history",
+                "options_history",
+                "recovery",
+                "live_chain",
+                "bot_feed"
+              ],
+              "type": "string"
+            },
+            "readOnly": true,
+            "title": "Affects",
+            "type": "array"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "freshness": {
+            "enum": [
+              "fresh",
+              "cached",
+              "unknown"
+            ],
+            "title": "Freshness",
+            "type": "string"
+          },
+          "link": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HealthLink"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "needs_attention": {
+            "description": "The server's call on whether a page that depends on this should say so.",
+            "readOnly": true,
+            "title": "Needs Attention",
+            "type": "boolean"
+          },
+          "observed_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Observed Ms",
+            "type": "integer"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/HealthScope"
+          },
+          "severity": {
+            "enum": [
+              "critical",
+              "unknown",
+              "warning",
+              "info",
+              "ok"
+            ],
+            "title": "Severity",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "lake_catalog",
+              "option_archive",
+              "backups",
+              "ibkr_feed"
+            ],
+            "readOnly": true,
+            "title": "Source",
+            "type": "string"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "observed_ms",
+          "freshness",
+          "severity",
+          "summary",
+          "explanation",
+          "source",
+          "affects",
+          "needs_attention"
+        ],
+        "title": "HealthItem",
+        "type": "object"
+      },
       "HealthLineView": {
         "additionalProperties": false,
         "description": "One health fact: what it is, its state, a short value and the backend's note.",
@@ -31567,6 +31663,122 @@
           "value"
         ],
         "title": "HealthLineView",
+        "type": "object"
+      },
+      "HealthLink": {
+        "description": "Where the evidence is: an Operations tab, with the filters and card that show it.",
+        "properties": {
+          "fragment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fragment"
+          },
+          "query": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Query",
+            "type": "object"
+          },
+          "tab": {
+            "enum": [
+              "lake",
+              "option-archive",
+              "backups"
+            ],
+            "title": "Tab",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tab"
+        ],
+        "title": "HealthLink",
+        "type": "object"
+      },
+      "HealthScope": {
+        "description": "Which evidence an item is about.",
+        "properties": {
+          "breadth": {
+            "description": "``scoped`` only when an instrument is named; otherwise the item concerns every instrument.",
+            "enum": [
+              "broad",
+              "scoped"
+            ],
+            "readOnly": true,
+            "title": "Breadth",
+            "type": "string"
+          },
+          "data_kind": {
+            "enum": [
+              "stock_bars",
+              "option_archive",
+              "lake_backup",
+              "restore_check",
+              "ibkr_market_data"
+            ],
+            "title": "Data Kind",
+            "type": "string"
+          },
+          "instrument": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instrument"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "raw",
+                  "polygon_split_adjusted",
+                  "lean_adjusted"
+                ],
+                "type": "string"
+              },
+              {
+                "enum": [
+                  "paper",
+                  "live"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "session_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Ms"
+          }
+        },
+        "required": [
+          "data_kind",
+          "breadth"
+        ],
+        "title": "HealthScope",
         "type": "object"
       },
       "HeldPositionFact": {
@@ -38813,10 +39025,6 @@
       },
       "OptionArchiveHealth": {
         "properties": {
-          "attention": {
-            "title": "Attention",
-            "type": "boolean"
-          },
           "backup": {
             "$ref": "#/components/schemas/ArchiveJobHealth"
           },
@@ -38844,7 +39052,6 @@
         "required": [
           "enabled",
           "generated_ms",
-          "attention",
           "underlyings",
           "backup",
           "test_restore"
@@ -57580,6 +57787,29 @@
           "example"
         ],
         "title": "SavedSetupResponse",
+        "type": "object"
+      },
+      "ScopedHealthResponse": {
+        "properties": {
+          "generated_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Generated Ms",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/HealthItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "generated_ms",
+          "items"
+        ],
+        "title": "ScopedHealthResponse",
         "type": "object"
       },
       "SealedBotProgram": {
@@ -97385,6 +97615,88 @@
         "summary": "Get Walk Forward Fold Curves",
         "tags": [
           "research-walk-forward-study"
+        ]
+      }
+    },
+    "/api/scoped-health": {
+      "get": {
+        "description": "Health findings with their scope, observed time, severity, affected operations and Operations link.\n\nA source that cannot be read answers ``unknown``, never healthy.",
+        "operationId": "scoped_health_api_scoped_health_get",
+        "parameters": [
+          {
+            "description": "Only findings that get in the way of these operations. Omitted: every finding.",
+            "in": "query",
+            "name": "operation",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "enum": [
+                      "stock_history",
+                      "options_history",
+                      "recovery",
+                      "live_chain",
+                      "bot_feed"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only findings that get in the way of these operations. Omitted: every finding.",
+              "title": "Operation"
+            }
+          },
+          {
+            "description": "Only findings about this instrument, plus those that cannot name one (broad).",
+            "in": "query",
+            "name": "instrument",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 20,
+                  "pattern": "^[A-Z][A-Z0-9.]*$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only findings about this instrument, plus those that cannot name one (broad).",
+              "title": "Instrument"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopedHealthResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Scoped Health",
+        "tags": [
+          "scoped-health"
         ]
       }
     },

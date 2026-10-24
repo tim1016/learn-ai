@@ -1,0 +1,242 @@
+@use '../../../styles/tokens' as *;
+
+:host {
+  display: block;
+}
+
+.preflight-root {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-bottom: 24px;
+}
+
+h3 {
+  margin: 0 0 4px;
+  font-size: 18px;
+  font-weight: 600;
+  color: $text-primary;
+}
+
+h4 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: $text-primary;
+}
+
+.subtitle {
+  margin: 0;
+  max-width: 820px;
+  font-size: 13px;
+  color: $text-secondary;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+
+  .full {
+    grid-column: 1 / -1;
+  }
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  font-size: 13px;
+  color: $text-secondary;
+
+  &.inline {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+  }
+
+  input[type='text'],
+  input[type='number'],
+  select {
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid $border;
+    background: $bg-surface;
+    color: $text-primary;
+    font-size: 13px;
+  }
+}
+
+.indicator-table {
+  width: 100%;
+  max-width: 520px;
+  border-collapse: collapse;
+  font-size: 13px;
+
+  th,
+  td {
+    padding: 4px 8px;
+    text-align: left;
+    border-bottom: 1px solid $border;
+  }
+
+  input[type='number'],
+  select {
+    padding: 4px 6px;
+    border-radius: 6px;
+    border: 1px solid $border;
+    background: $bg-surface;
+    color: $text-primary;
+    font-size: 13px;
+  }
+
+  input[type='number'] {
+    width: 5rem;
+  }
+}
+
+.btn,
+.btn-mini {
+  border: none;
+  border-radius: 6px;
+  background: $border-light;
+  color: $text-primary;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+
+  &:hover:not(:disabled) {
+    background: $border;
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+}
+
+.btn {
+  padding: 6px 14px;
+  font-size: 13px;
+}
+
+.btn-mini {
+  padding: 2px 10px;
+  font-size: 12px;
+}
+
+.btn-primary,
+.btn-mini.primary {
+  background: $accent;
+  color: #fff;
+
+  &:hover:not(:disabled) {
+    background: $accent-hover;
+  }
+}
+
+.run-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+
+  .error {
+    color: $bear;
+    font-size: 13px;
+    overflow-wrap: anywhere;
+  }
+}
+
+.verdict-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  border: 1px solid $border;
+
+  &[data-severity='ok'] {
+    background: rgba($bull, 0.1);
+    border-color: rgba($bull, 0.3);
+  }
+
+  &[data-severity='warning'] {
+    background: rgba($warn, 0.1);
+    border-color: rgba($warn, 0.3);
+  }
+
+  &[data-severity='blocking'] {
+    background: rgba($bear, 0.1);
+    border-color: rgba($bear, 0.3);
+  }
+
+  .big-icon {
+    font-size: 24px;
+    font-weight: 700;
+  }
+
+  .verdict-title {
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  .verdict-summary {
+    font-size: 13px;
+    color: $text-secondary;
+  }
+}
+
+.checks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.check-row {
+  display: flex;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid $border;
+  background: $bg-elevated;
+
+  &[data-severity='warning'] {
+    border-left: 3px solid $warn;
+  }
+
+  &[data-severity='blocking'] {
+    border-left: 3px solid $bear;
+  }
+
+  &[data-severity='ok'] {
+    border-left: 3px solid $bull;
+  }
+
+  .check-icon {
+    width: 1.5rem;
+    font-weight: 700;
+    text-align: center;
+  }
+
+  .check-body {
+    min-width: 0;
+    font-size: 13px;
+    overflow-wrap: anywhere;
+  }
+
+  .check-label {
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  .check-message {
+    color: $text-secondary;
+  }
+
+  .check-fix {
+    margin-top: 4px;
+    color: $text-primary;
+  }
+}

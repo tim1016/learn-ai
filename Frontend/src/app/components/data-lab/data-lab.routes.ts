@@ -1,5 +1,7 @@
 import { Routes } from '@angular/router';
 
+import { dataCheckRoute } from '../../operations/data-checks/data-checks';
+import { redirectKeepingState } from '../../shell/route-redirects';
 import { redirectLegacyDataLab } from './data-lab-ingress';
 import {
   createDataLabWorkspaceStore,
@@ -8,13 +10,14 @@ import {
 
 /* /data-lab route family.
  *
- * One shell component with three lazy child routes. The workspace store is
- * provided on the parent route's injector so the shell and every child
- * (explore / export / validate) share one instance — state survives child
- * route navigation and dies with the shell. `/data-lab` redirects straight to
- * the child its legacy `mode` names, `/data-lab/explore` by default, with its
+ * One shell component with three lazy child routes (explore / export /
+ * returns). The workspace store is provided on the parent route's injector so
+ * the shell and every child share one instance — state survives child route
+ * navigation and dies with the shell. `/data-lab` redirects straight to the
+ * child its legacy `mode` names, `/data-lab/explore` by default, with its
  * query and fragment intact; the shell then applies that query to the
- * workspace. */
+ * workspace. Validate left for Operations → Data checks, so
+ * `/data-lab/validate` is only a redirect. */
 
 export const DATA_LAB_ROUTES: Routes = [
   {
@@ -38,11 +41,9 @@ export const DATA_LAB_ROUTES: Routes = [
         loadComponent: () =>
           import('./export/export.component').then((m) => m.ExportComponent),
       },
-      {
-        path: 'validate',
-        loadComponent: () =>
-          import('./validate/validate.component').then((m) => m.ValidateComponent),
-      },
+      // Validate became Operations → Data checks → TradingView comparison.
+      // Its scope (`ticker`, `from`, `to`) is the query that goes with it.
+      { path: 'validate', pathMatch: 'full', redirectTo: redirectKeepingState(dataCheckRoute('tradingview')) },
       {
         path: 'returns',
         loadComponent: () =>

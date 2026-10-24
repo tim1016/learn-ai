@@ -10,6 +10,8 @@ import {
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
+import { HealthNoticeComponent } from '../../../shared/scoped-health/health-notice.component';
+import { HEALTH_NEEDS } from '../../../shared/scoped-health/scoped-health';
 import { PageGuideComponent } from '../../../shared/page-guide/page-guide.component';
 import { DataSourceComponent } from '../../../shared/data-source/data-source.component';
 import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
@@ -86,6 +88,7 @@ interface EngineInput {
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     FormsModule,
+    HealthNoticeComponent,
     PageHeaderComponent,
     PageGuideComponent,
     DataSourceComponent,
@@ -97,6 +100,8 @@ interface EngineInput {
 export class BrokerOptionsChainComponent {
   private readonly broker = inject(MarketDataFeedService);
   private readonly health = inject(BrokerHealthService);
+  /** The stream is the IBKR feed; its own reason stays where the controls are. */
+  protected readonly healthNeeds = HEALTH_NEEDS.liveChain;
   readonly bannerState = this.health.bannerState;
   private readonly quantlib = inject(QuantLibService);
   private readonly injector = inject(Injector);

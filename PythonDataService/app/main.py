@@ -1341,9 +1341,10 @@ PROTECTED_DATA_PLANE_READ_DEPENDENCIES = [Depends(require_data_plane_control_sec
 if _ROLE_RUNS_DATA_PLANE_CORE:
     app.include_router(aggregates.router, prefix="/api/aggregates", tags=["aggregates"])
     app.include_router(options.router, prefix="/api/options", tags=["options"])
-    from app.routers import option_archive
+    from app.routers import option_archive, scoped_health
 
     app.include_router(option_archive.router)
+    app.include_router(scoped_health.router)
     app.include_router(snapshot.router, prefix="/api/snapshot", tags=["snapshot"])
     app.include_router(tickers.router, prefix="/api/tickers", tags=["tickers"])
     app.include_router(trading_calendar.router, prefix="/api/calendar", tags=["calendar"])

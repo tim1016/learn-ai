@@ -508,10 +508,11 @@ additive `DataLabSession` ms-UTC columns (dual-read).
   avoid URL state triggering fetches.
 - **`computeAllIndicators` has no UI toggle in the new Explore (low).** The
   signal defaults to false; wire a control if the legacy behavior is missed.
-- **Export and Validate templates still exceed the ~80-line path rule
-  (low).** Explore was split into drawer/controls/headlines children; the
-  Export four-section form (~230 lines) and Validate (~115 lines) remain
-  single templates — same follow-up refactor class as the shell split.
+- **Export and TradingView-check templates still exceed the ~80-line path
+  rule (low).** Explore was split into drawer/controls/headlines children; the
+  Export four-section form (~230 lines) and the TradingView check (Validate,
+  now Operations → Data checks; ~130 lines) remain single templates — same
+  follow-up refactor class as the shell split.
 - **Responsive overflow assertions need a browser pass (medium).** The §8
   structural rules are in place, but the 320–1920px `scrollWidth === clientWidth`
   checks and AXE scans have not been executed against a live browser.
