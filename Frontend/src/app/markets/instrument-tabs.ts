@@ -15,7 +15,7 @@ export const INSTRUMENT_TABS = defineWorkspaceTabs<InstrumentTab>(
  * no other edit.
  */
 export const UNAVAILABLE_INSTRUMENT_TABS: Readonly<Partial<Record<InstrumentTab, string>>> = {
-  returns: 'Not routed here yet. Return Distribution in the Markets menu still runs the study.',
-  data: 'Not routed here yet. The Data Lake Observatory under Operations shows what the lake holds.',
-  options: 'Not routed here yet. Options Lab in the Markets menu still shows the chain.',
+  returns: 'Not in this place yet. Return Distribution, in the Markets menu, still runs the study.',
+  data: 'Not in this place yet. The Data Lake Observatory, under Operations, shows what the lake holds.',
+  options: 'Not in this place yet. Options Lab, in the Markets menu, still shows the chain.',
 };

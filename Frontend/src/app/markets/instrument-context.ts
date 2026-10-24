@@ -1,4 +1,5 @@
 import { barTimeframeByValue, parseYmdMsUtc } from '../components/data-lab/data-lab-scope';
+import { utcDayEndMs } from '../components/data-lab/data-lab-request-mapper';
 
 /*
  * The context an instrument's tabs share: the window, the bar timeframe and
@@ -99,6 +100,17 @@ export function readInstrumentContext(query: QueryReader): ContextRead {
     return { kind: 'invalid', problems, timeframe, session };
   }
   return { kind: 'ready', context: { window: { from, to }, timeframe, session } };
+}
+
+/**
+ * The window as the int64 ms UTC the Data Lab commits: the start date's UTC
+ * midnight, and the end date's final UTC instant, so one trading date is a
+ * non-degenerate window for a half-open reader. `null` for a date that is not one.
+ */
+export function windowMsUtc(window: InstrumentWindow): { readonly startMsUtc: number; readonly endMsUtc: number } | null {
+  const start = parseYmdMsUtc(window.from);
+  const end = parseYmdMsUtc(window.to);
+  return start === null || end === null ? null : { startMsUtc: start, endMsUtc: utcDayEndMs(end) };
 }
 
 /** The query a context writes: only the keys the context owns. */

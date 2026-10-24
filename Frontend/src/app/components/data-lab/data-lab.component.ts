@@ -20,7 +20,6 @@ import { SymbolPickerComponent } from '../../shared/symbol-picker/symbol-picker.
 import { DEFAULT_ADJUSTMENT_MODE } from '../../shared/ticker-catalog';
 import type { PriceAdjustmentMode } from '../../shared/data-lake';
 import { RunDockComponent } from '../../shared/run-dock/run-dock.component';
-import { menuLabelFor } from '../../shell/app-menu';
 import { CurrentUrlService } from '../../shell/current-url.service';
 import {
   RUN_DOCK_SOURCE,
@@ -98,9 +97,7 @@ export class DataLabComponent {
   /** The page is titled by the menu entry that leads to it (PRD #3490 R01):
    *  Build dataset, Return Distribution or Validate. */
   private readonly menuNode = inject(CurrentUrlService).menuNode;
-  protected readonly pageTitle = computed(
-    () => this.menuNode()?.item.title ?? menuLabelFor('/data-lab/returns'),
-  );
+  protected readonly pageTitle = computed(() => this.menuNode()?.item.title ?? 'Data Lab');
 
   readonly barTimeframes = BAR_TIMEFRAMES;
 

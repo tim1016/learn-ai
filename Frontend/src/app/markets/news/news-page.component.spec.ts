@@ -1,4 +1,4 @@
-import { provideZonelessChangeDetection } from '@angular/core';
+import { provideZonelessChangeDetection, signal } from '@angular/core';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
@@ -9,7 +9,16 @@ import { describe, expect, it } from 'vitest';
 import { provideRouter } from '@angular/router';
 
 import { environment } from '../../../environments/environment';
+import type { InstrumentContext } from '../instrument-context';
+import { InstrumentContextService } from '../instrument-context.service';
 import { NewsPageComponent } from './news-page.component';
+
+/** The place's context as the page reads it: the instrument, and the window committed for it. */
+function placeContext(symbol: string, context: InstrumentContext | null = null) {
+  return { symbol: signal(symbol), context: signal(context) };
+}
+
+const COMMITTED: InstrumentContext = { window: { from: '2026-04-15', to: '2026-05-15' }, timeframe: '1d', session: 'regular' };
 
 const NEWS_URL = `${environment.pythonServiceUrl}/api/news`;
 
@@ -40,10 +49,15 @@ function responseBody(overrides: Record<string, unknown> = {}) {
   };
 }
 
-async function renderPage(symbol = 'SPY') {
+async function renderPage(place = placeContext('SPY')) {
   const rendered = await render(NewsPageComponent, {
-    inputs: { symbol },
-    providers: [provideZonelessChangeDetection(), provideRouter([]), provideHttpClient(), provideHttpClientTesting()],
+    providers: [
+      provideZonelessChangeDetection(),
+      provideRouter([]),
+      provideHttpClient(),
+      provideHttpClientTesting(),
+      { provide: InstrumentContextService, useValue: place },
+    ],
   });
   const http = TestBed.inject(HttpTestingController);
   return { ...rendered, http };
@@ -51,7 +65,7 @@ async function renderPage(symbol = 'SPY') {
 
 describe('NewsPageComponent', () => {
   it('fetches the instrument the address names, newest first, and omits blank optional parameters from the request', async () => {
-    const { http } = await renderPage('QQQ');
+    const { http } = await renderPage(placeContext('QQQ'));
 
     const req = http.expectOne((r) => r.url === NEWS_URL);
 
@@ -80,6 +94,21 @@ describe('NewsPageComponent', () => {
     expect.soft(screen.getByText(/not validated by us/), 'per-card note says the sentiment is not validated').toBeTruthy();
   });
 
+  it('asks for the headlines of the window the chart\'s were read for, and for no window when none is committed', async () => {
+    const withWindow = await renderPage(placeContext('SPY', COMMITTED));
+    const req = withWindow.http.expectOne((r) => r.url === NEWS_URL);
+    expect.soft(req.request.params.get('published_utc_gte'), 'starts at the window\'s first instant').toBe(new Date(Date.UTC(2026, 3, 15)).toISOString());
+    expect.soft(req.request.params.get('published_utc_lt'), 'ends after the window\'s last day').toBe(new Date(Date.UTC(2026, 4, 15) + 86_399_999).toISOString());
+    req.flush(responseBody());
+    TestBed.resetTestingModule();
+
+    const without = await renderPage(placeContext('SPY'));
+    const open = without.http.expectOne((r) => r.url === NEWS_URL);
+    expect.soft(open.request.params.has('published_utc_gte')).toBe(false);
+    expect.soft(open.request.params.has('published_utc_lt')).toBe(false);
+    open.flush(responseBody());
+  });
+
   it('does not refetch while the user edits — only on submit, and the instrument stays the address\'s', async () => {
     const { http, fixture } = await renderPage();
     http.expectOne((r) => r.url === NEWS_URL).flush(responseBody());
@@ -99,11 +128,12 @@ describe('NewsPageComponent', () => {
   });
 
   it('asks for the other instrument\'s headlines when the address moves to it, never showing the first one\'s under it', async () => {
-    const { http, fixture } = await renderPage('SPY');
+    const place = placeContext('SPY');
+    const { http, fixture } = await renderPage(place);
     http.expectOne((r) => r.url === NEWS_URL).flush(responseBody());
     expect(await screen.findByText('SPY climbs on strong data')).toBeTruthy();
 
-    fixture.componentRef.setInput('symbol', 'QQQ');
+    place.symbol.set('QQQ');
     TestBed.tick();
     const req = http.expectOne((r) => r.url === NEWS_URL);
     expect(req.request.params.get('ticker')).toBe('QQQ');

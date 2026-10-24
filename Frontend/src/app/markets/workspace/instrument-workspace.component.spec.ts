@@ -214,7 +214,7 @@ describe('an instrument\'s place', () => {
       expect(screen.getByRole('link', { name: 'Chart' }).getAttribute('href')).toBe(`/markets/SPY/chart?${WINDOW_QUERY}`);
       for (const name of ['Returns', 'Data', 'Options']) {
         expect(screen.queryByRole('link', { name }), `${name} is not a link`).toBeNull();
-        expect(screen.getByText(new RegExp(`^${name}`)).getAttribute('title'), `${name} says why`).toContain('Not routed here yet');
+        expect(screen.getByText(new RegExp(`^${name}`)).getAttribute('title'), `${name} says why`).toContain('Not in this place yet');
       }
     });
   });

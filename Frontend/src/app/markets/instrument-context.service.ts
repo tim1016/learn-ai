@@ -7,10 +7,9 @@ import {
   PRESET_DEFAULT_TIMEFRAMES,
   PRESET_LABELS,
   barTimeframeByValue,
-  parseYmdMsUtc,
   presetQuickRanges,
 } from '../components/data-lab/data-lab-scope';
-import { utcDayEndMs, utcMsToIsoDate } from '../components/data-lab/data-lab-request-mapper';
+import { utcMsToIsoDate } from '../components/data-lab/data-lab-request-mapper';
 import { DataLabWorkspaceStore } from '../components/data-lab/data-lab-workspace-store';
 import type { QuickRangeKey, QuickRangeOffer } from '../shared/date-picker';
 import { isUsEquitySymbol } from '../shared/symbol-catalog/us-equity-symbol';
@@ -22,6 +21,7 @@ import {
   type InstrumentContext,
   type InstrumentSession,
   type InstrumentWindow,
+  windowMsUtc,
 } from './instrument-context';
 
 /** The quick range an instrument opens on when its address names no window. */
@@ -156,12 +156,10 @@ export class InstrumentContextService {
 
   /** Commits the address's context into the workspace store, once per distinct request. */
   private followAddress(symbol: string, context: InstrumentContext): void {
-    const start = parseYmdMsUtc(context.window.from);
-    const end = parseYmdMsUtc(context.window.to);
+    const window = windowMsUtc(context.window);
     const timeframe = barTimeframeByValue(context.timeframe);
-    if (start === null || end === null || timeframe === undefined) return;
-    const startMsUtc = start;
-    const endMsUtc = utcDayEndMs(end);
+    if (window === null || timeframe === undefined) return;
+    const { startMsUtc, endMsUtc } = window;
     const held = this.store.committedScope();
     if (
       held !== null &&

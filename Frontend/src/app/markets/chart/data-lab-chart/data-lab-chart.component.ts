@@ -1,7 +1,7 @@
 import {
   Component, signal, computed, inject, input, output,
   viewChild, ElementRef, AfterViewInit, OnDestroy,
-  ChangeDetectionStrategy,
+  ChangeDetectionStrategy, Injector, afterNextRender,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
@@ -223,6 +223,7 @@ function getEmaRibbonColor(length: number): string | null {
 })
 export class DataLabChartComponent implements AfterViewInit, OnDestroy {
   private http = inject(HttpClient);
+  private readonly injector = inject(Injector);
 
   // Inputs from parent (shared controls). The chart is purely a renderer
   // for the parent's chosen (ticker, range, timeframe) — it no longer owns
@@ -442,6 +443,11 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
     this.destroyAllSubPanels();
   }
 
+  /** Resolves once what was just set has been drawn into the page. */
+  private afterRender(): Promise<void> {
+    return new Promise((resolve) => afterNextRender(() => resolve(), { injector: this.injector }));
+  }
+
   private async fetchChartData(): Promise<void> {
     const ticker = this.ticker();
     const fromDate = this.fromDate();
@@ -505,6 +511,10 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
         : resp.indicators.map(i => i.id);
       this.visibleIndicators.set(new Set(visibleIds));
 
+      // The candles container is shown only once there are bars. Drawing into
+      // it before that render measures a hidden box and squeezes the series.
+      await this.afterRender();
+      if (turn !== this.fetchTurn) return;
       this.renderMainChart();
       this.renderOverlays();
       this.renderSubPanels();
@@ -666,6 +676,11 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
 
     const bars = this.bars();
     if (!bars.length) return;
+
+    // Measure the container as it is now shown, so the visible range below is
+    // fitted to a real width.
+    const container = this.mainChartContainer()?.nativeElement;
+    if (container) this.mainChart?.applyOptions({ width: container.clientWidth });
 
     const candleData: CandlestickData[] = bars.map(bar => {
       const isRth = bar.session === 'rth';
