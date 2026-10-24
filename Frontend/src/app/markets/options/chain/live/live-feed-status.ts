@@ -128,7 +128,7 @@ export function subscriptionLine(evidence: FeedEvidence): StatusLine {
       };
     case 'error':
       return {
-        text: `Stopped: ${sentence(streamError ?? 'the stream reported an error')}${snapshot === null ? '' : ` The snapshot on screen is from ${atTime(snapshot.as_of_ms)} and is stale.`}`,
+        text: `Stopped: ${sentence(streamError ?? 'the stream reported an error and gave no reason')}${snapshot === null ? '' : ` The snapshot on screen is from ${atTime(snapshot.as_of_ms)} and is stale.`} The stream is closed and its lines are released. It does not reconnect by itself: Resume subscribes again.`,
         tone: 'bad',
       };
     case 'connecting':

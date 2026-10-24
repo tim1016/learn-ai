@@ -122,6 +122,39 @@ describe('the page\'s one live subscription', () => {
     expect(feed.live()).toBe(false);
   });
 
+  it.each([
+    ['gave a reason', 'The option-chain stream stopped: the broker dropped the market-data request.'],
+    ['gave none, as a dropped connection does', null],
+  ])('closes a stream that reports an error, once, and opens no other: a browser would reconnect and subscribe again (it %s)', (_case, reason) => {
+    const { feed, streams } = feedOf();
+    feed.start(chain);
+    streams[0].emit(ibkrFrame({ underlying_price: 111 }));
+    expect(feed.live()).toBe(true);
+
+    streams[0].fail(reason);
+    TestBed.tick();
+
+    expect(streams[0].closes).toBe(1);
+    expect(feed.state()).toBe('error');
+    expect(feed.error()).toBe(reason);
+    expect(feed.live()).toBe(false);
+    expect(feed.snapshot()?.underlying_price, 'the last snapshot stays, to be shown as stale').toBe(111);
+
+    // Nothing the closed stream delivers afterwards is shown, and nothing is subscribed by the feed itself.
+    streams[0].emit(ibkrFrame({ underlying_price: 222 }));
+    TestBed.tick();
+    expect(feed.snapshot()?.underlying_price).toBe(111);
+    expect(streams).toHaveLength(1);
+    expect(streams[0].closes).toBe(1);
+
+    // Subscribing again is the operator's call.
+    feed.resume();
+    expect(streams).toHaveLength(2);
+    expect(streams[1].url).toBe(streams[0].url);
+    expect(feed.state()).toBe('connecting');
+    expect(feed.error()).toBeNull();
+  });
+
   it('stops calling the snapshot current once no frame has arrived for the stall limit, though the stream never reported an error', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
     const { feed, streams } = feedOf();

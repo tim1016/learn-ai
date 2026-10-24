@@ -252,6 +252,29 @@ describe('Now · Live IBKR with a session', () => {
     expect(statement()).toContain('Compared 0 of 2 contracts. Not compared: 2 stream not live.');
   });
 
+  it('closes a stream that reports an error and opens no other by itself: only the operator\'s Resume subscribes again', async () => {
+    const world = liveWorld(vi);
+    await renderLive(vi, world);
+    await startWith(500);
+    world.feed.streams[0].emit(ibkrFrame({ underlying_price: 111.11 }));
+    await grid();
+    const user = userEvent.setup();
+
+    world.feed.streams[0].fail('The option-chain stream stopped: the broker dropped the market-data request.');
+
+    await waitFor(() => expect(world.feed.streams[0].closes).toBe(1));
+    await waitFor(() => expect(facts()).toContain('It does not reconnect by itself: Resume subscribes again.'));
+    expect(facts()).toContain('SPY 111.11');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(world.feed.streams, 'the page reopened nothing').toHaveLength(1);
+    expect(world.feed.streams[0].closes).toBe(1);
+
+    await user.click(screen.getByRole('button', { name: 'Resume' }));
+
+    expect(world.feed.streams).toHaveLength(2);
+    expect(world.feed.streams[1].url).toBe(world.feed.streams[0].url);
+  });
+
   it('fails in place when IBKR cannot list the expirations, with the reason, and offers to try again', async () => {
     const world = liveWorld(vi);
     world.expirations.mockRejectedValueOnce(new HttpErrorResponse({ status: 503, error: { detail: 'IBKR client not connected to Gateway.' } }));

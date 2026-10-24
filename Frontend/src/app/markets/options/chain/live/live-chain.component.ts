@@ -159,7 +159,7 @@ export class LiveChainComponent {
           kind: 'failed',
           happened: 'The chain stream stopped before a snapshot arrived.',
           why: this.feed.error() ?? 'The stream reported an error and gave no reason.',
-          next: 'Start it again when the strikes are as you want them.',
+          next: 'The stream is closed and does not reconnect by itself. Resume, or press Start again when the strikes are as you want them.',
         };
       case 'stopped':
         return { kind: 'idle', happened: 'Paused before a snapshot arrived.', next: 'Resume, or start again.' };
@@ -173,7 +173,8 @@ export class LiveChainComponent {
   });
 
   protected readonly canStart = computed(() => this.serving() && this.chainExpiry() !== null && this.selectedStrikes().size > 0);
-  protected readonly paused = computed(() => this.feed.state() === 'stopped');
+  /** The subscription is held but its stream is closed, by a pause or by an error: the operator can subscribe again. */
+  protected readonly resumable = computed(() => this.feed.state() === 'stopped' || this.feed.state() === 'error');
   protected readonly canPause = computed(() => this.feed.state() !== 'none');
 
   /** Why the strikes within the band cannot be picked yet: the band is read around a price, and the only price is the stream's. */
@@ -253,7 +254,7 @@ export class LiveChainComponent {
   }
 
   protected togglePause(): void {
-    if (this.paused()) this.feed.resume();
+    if (this.resumable()) this.feed.resume();
     else this.feed.pause();
   }
 

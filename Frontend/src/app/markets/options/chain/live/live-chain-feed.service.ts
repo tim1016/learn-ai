@@ -1,4 +1,4 @@
-import { DestroyRef, Injectable, InjectionToken, Injector, computed, inject, runInInjectionContext, signal } from '@angular/core';
+import { DestroyRef, Injectable, InjectionToken, Injector, computed, effect, inject, runInInjectionContext, signal, untracked } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { interval } from 'rxjs';
 
@@ -40,10 +40,12 @@ export interface LiveSubscription {
 export type LiveFeedState = 'none' | 'connecting' | 'open' | 'error' | 'stopped';
 
 interface Held extends LiveSubscription {
-  /** The open stream; null once the operator has paused it. */
+  /** The open stream; null once it has been paused, or stopped by an error. */
   readonly stream: SseStream<IbkrChainSnapshot> | null;
-  /** The last snapshot of a paused stream, kept so it can be shown as stale. */
+  /** The last snapshot of a paused or failed stream, kept so it can be shown as stale. */
   readonly last: IbkrChainSnapshot | null;
+  /** Set when the stream reported an error and the feed closed it: the reason it gave, or null when it gave none. */
+  readonly failure: { readonly reason: string | null } | null;
 }
 
 /**
@@ -55,6 +57,12 @@ interface Held extends LiveSubscription {
  * market-data line it opened. A frame is shown only if it comes from the subscription now held and
  * names that underlying and expiry, so an event that arrives after a switch lands nowhere: the
  * snapshot is read from the held stream alone, never copied out of an old one.
+ *
+ * A stream that reports an error is closed here, not left to the browser: an `EventSource` that is
+ * still open reconnects by itself, and every reconnect would qualify the picked contracts and
+ * subscribe to their market-data lines again on the data plane's one shared IBKR session. The
+ * subscription then reads as stopped with the stream's reason, keeps its last snapshot as stale,
+ * and subscribes again only when the operator presses Resume or Start.
  */
 @Injectable()
 export class LiveChainFeed {
@@ -72,13 +80,16 @@ export class LiveChainFeed {
   readonly state = computed<LiveFeedState>(() => {
     const held = this.held();
     if (held === null) return 'none';
-    if (held.stream === null) return 'stopped';
+    if (held.stream === null) return held.failure === null ? 'stopped' : 'error';
     const status = held.stream.status();
     return status === 'open' ? 'open' : status === 'error' ? 'error' : 'connecting';
   });
 
   /** The reason the stream gave for stopping, when it gave one. */
-  readonly error = computed<string | null>(() => this.held()?.stream?.lastError() ?? null);
+  readonly error = computed<string | null>(() => {
+    const held = this.held();
+    return held === null ? null : (held.failure?.reason ?? held.stream?.lastError() ?? null);
+  });
 
   /** The latest snapshot of the subscription now held: a paused one keeps its last, and a frame for another chain is never one. */
   readonly snapshot = computed<IbkrChainSnapshot | null>(() => {
@@ -102,6 +113,11 @@ export class LiveChainFeed {
     const destroyRef = inject(DestroyRef);
     destroyRef.onDestroy(() => this.release());
     interval(CLOCK_TICK_MS).pipe(takeUntilDestroyed(destroyRef)).subscribe(() => this.nowMs.set(Date.now()));
+    // An error ends the stream for good: the browser would otherwise reconnect and subscribe again by itself.
+    effect(() => {
+      const held = this.held();
+      if (held?.stream?.status() === 'error') untracked(() => this.stopOnError(held));
+    });
   }
 
   /** Subscribes to one chain, releasing whatever was subscribed before it. */
@@ -110,7 +126,7 @@ export class LiveChainFeed {
     const strikes = [...subscription.strikes].sort((a, b) => a - b);
     const symbol = subscription.symbol.toUpperCase();
     const stream = this.open(chainStreamUrl(symbol, subscription.expiryMs, strikes), this.injector);
-    this.held.set({ symbol, expiryMs: subscription.expiryMs, strikes, stream, last: null });
+    this.held.set({ symbol, expiryMs: subscription.expiryMs, strikes, stream, last: null, failure: null });
   }
 
   /** Pauses: closes the stream, which releases every line, and keeps the last snapshot to show as stale. */
@@ -119,12 +135,22 @@ export class LiveChainFeed {
     if (held === null || held.stream === null) return;
     const last = this.snapshot();
     held.stream.close();
-    this.held.set({ ...held, stream: null, last });
+    this.held.set({ ...held, stream: null, last, failure: null });
   }
 
+  /** Subscribes again to the chain held, after a pause or an error. It is the operator's call and never made by the feed. */
   resume(): void {
     const held = this.held();
     if (held !== null && held.stream === null) this.start(held);
+  }
+
+  /** Closes a stream that reported an error, keeping its reason and its last snapshot (to be shown as stale). */
+  private stopOnError(held: Held): void {
+    if (this.held() !== held || held.stream === null) return;
+    const last = this.snapshot();
+    const reason = held.stream.lastError();
+    held.stream.close();
+    this.held.set({ ...held, stream: null, last, failure: { reason } });
   }
 
   /** Lets go of the subscription: the stream is closed and nothing of it is kept. */

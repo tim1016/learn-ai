@@ -139,7 +139,7 @@ describe('the subscription line', () => {
     const snapshot = ibkrFrame({ as_of_ms: AS_OF_MS });
 
     expect(subscriptionLine(feed({ subscription: held, state: 'stopped', snapshot }))).toMatchObject({ tone: 'warn', text: expect.stringMatching(/^Paused\. The stream is closed and its lines are released\..* is stale\.$/) });
-    expect(subscriptionLine(feed({ subscription: held, state: 'error', snapshot, streamError: 'The option-chain stream stopped.' }))).toMatchObject({ tone: 'bad', text: expect.stringMatching(/^Stopped: The option-chain stream stopped\. The snapshot on screen is from .* and is stale\.$/) });
+    expect(subscriptionLine(feed({ subscription: held, state: 'error', snapshot, streamError: 'The option-chain stream stopped.' }))).toMatchObject({ tone: 'bad', text: expect.stringMatching(/^Stopped: The option-chain stream stopped\. The snapshot on screen is from .* and is stale\. The stream is closed and its lines are released\. It does not reconnect by itself: Resume subscribes again\.$/) });
     expect(subscriptionLine(feed({ subscription: held, state: 'open', snapshot, live: false }))).toMatchObject({ tone: 'bad', text: expect.stringContaining('no snapshot has arrived for over 5 s') });
   });
 });
