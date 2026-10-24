@@ -23366,8 +23366,6 @@ export interface components {
         };
         /** OptionArchiveHealth */
         OptionArchiveHealth: {
-            /** Attention */
-            attention: boolean;
             backup: components["schemas"]["ArchiveJobHealth"];
             /** Enabled */
             enabled: boolean;

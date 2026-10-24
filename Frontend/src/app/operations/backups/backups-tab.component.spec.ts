@@ -7,7 +7,7 @@ import { formatTimestampDisplay } from '../../shared/timestamp/timestamp-display
 import { BackupsTabComponent } from './backups-tab.component';
 
 function status(): OptionArchiveHealth {
-  return { enabled: true, generated_ms: 1792558800000, attention: false,
+  return { enabled: true, generated_ms: 1792558800000,
     underlyings: [{ underlying: 'SPY', severity: 'healthy', reason: 'Every requested session is preserved.',
       pending_sessions: 0, partial_sessions: 0, lost_sessions: 0, gaps: [], phase: 'complete',
       snapshot_missed_evenings: 0, snapshot_incomplete: 0, snapshot_field_gaps: 0 }],
@@ -31,7 +31,7 @@ describe('Operations → Backups', () => {
     expect(screen.queryByText('Every requested session is preserved.')).toBeNull();
   });
   it('keeps a failed backup visible and dates the oldest capture awaiting one', async () => {
-    const health = status(); health.attention = true;
+    const health = status();
     health.backup = { severity: 'failed', reason: 'The configured destination is missing.', oldest_unbacked_capture_ms: 1792558000000 };
     await renderTab(world(health));
     expect(screen.getByText('The configured destination is missing.')).toBeTruthy();

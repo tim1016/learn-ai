@@ -39007,10 +39007,6 @@
       },
       "OptionArchiveHealth": {
         "properties": {
-          "attention": {
-            "title": "Attention",
-            "type": "boolean"
-          },
           "backup": {
             "$ref": "#/components/schemas/ArchiveJobHealth"
           },
@@ -39038,7 +39034,6 @@
         "required": [
           "enabled",
           "generated_ms",
-          "attention",
           "underlyings",
           "backup",
           "test_restore"

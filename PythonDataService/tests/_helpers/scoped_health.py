@@ -95,7 +95,6 @@ def archive_health(
     return OptionArchiveHealth(
         enabled=True,
         generated_ms=NOW_MS,
-        attention=False,
         underlyings=underlyings or [underlying("SPY"), underlying("QQQ"), underlying("IWM")],
         backup=backup or job(),
         test_restore=restore or job(reason="The latest test restore passed verification."),
