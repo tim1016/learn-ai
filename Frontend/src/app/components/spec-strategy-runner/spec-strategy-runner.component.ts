@@ -6,7 +6,6 @@ import {
   inject,
   signal,
 } from '@angular/core';
-import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 import { FormsModule } from '@angular/forms';
 import { FILL_MODE_OPTIONS, type FillModeName } from '../../models/fill-mode';
 import { SpecStrategyService } from '../../services/spec-strategy.service';
@@ -61,11 +60,14 @@ import {
   updateSurvivalRuleAt,
 } from './spec-mutators';
 import { SpecStrategyStore } from './strategy-store.service';
+import { RULE_SANDBOX } from '../../research/research-studies';
+import { menuLabelFor } from '../../shell/app-menu';
 import { TickerRangePickerComponent } from '../../shared/ticker-range-picker/ticker-range-picker.component';
 import type {
   Resolution,
   TickerRange,
 } from '../../shared/ticker-range-picker/ticker-range-picker.types';
+import { WorkspaceHeaderComponent } from '../../shared/workspace/workspace-header.component';
 
 type LifecycleTab = 'entry' | 'manage' | 'exit';
 
@@ -87,6 +89,11 @@ interface QuickManageRule {
 }
 
 /**
+ * The Rule sandbox (PRD #3490 R27): the form-driven Strategy Spec runner at
+ * `/research/rule-sandbox`. It replays rules on past prices and is labelled not
+ * deployable; it has no Deploy action and its saved specs live only in this
+ * browser.
+ *
  * Form-driven Strategy Spec runner.
  *
  * Edits the underlying ``StrategySpec`` via three tabs (Entry / Manage /
@@ -108,8 +115,8 @@ interface QuickManageRule {
   imports: [
     CommonModule,
     FormsModule,
-    PageHeaderComponent,
     TickerRangePickerComponent,
+    WorkspaceHeaderComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './spec-strategy-runner.component.html',
@@ -118,6 +125,9 @@ interface QuickManageRule {
 export class SpecStrategyRunnerComponent {
   private readonly specService = inject(SpecStrategyService);
   private readonly store = inject(SpecStrategyStore);
+
+  protected readonly title = menuLabelFor(RULE_SANDBOX.route);
+  protected readonly purpose = RULE_SANDBOX.summary;
 
   // ---- Static data ------------------------------------------------------
   readonly fixtures: readonly CanonicalFixture[] = CANONICAL_FIXTURES;

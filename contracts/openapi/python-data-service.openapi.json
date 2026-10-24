@@ -12295,6 +12295,18 @@
             "title": "Multiplier",
             "type": "integer"
           },
+          "rerunOf": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerunof"
+          },
           "session": {
             "default": "rth",
             "enum": [
@@ -17934,6 +17946,18 @@
             "minimum": 1.0,
             "title": "Multiplier",
             "type": "integer"
+          },
+          "rerunOf": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerunof"
           },
           "session": {
             "default": "rth",
@@ -33578,6 +33602,19 @@
             "minimum": 1.0,
             "title": "Multiplier",
             "type": "integer"
+          },
+          "rerun_of": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The saved run this one was prefilled from (the History's Rerun); lineage only, never an input.",
+            "title": "Rerun Of"
           },
           "session": {
             "default": "rth",
@@ -54243,6 +54280,19 @@
             "description": "Optional [{ts, iv30, health_score?, variance_contribution_synthetic?}] history. iv30 must be ACT/365 (the solver's native basis); the router converts to TRD/252 before VRP. When health_score and variance_contribution_synthetic are supplied, the response includes per-bar confidence and the VRP signal is gated by it (Step E of IV-ownership plan).",
             "title": "Iv Series"
           },
+          "rerun_of": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The saved run this one was prefilled from (the History's Rerun); lineage only, never an input.",
+            "title": "Rerun Of"
+          },
           "session": {
             "default": "ETH",
             "description": "Session for the HF RV estimator. ETH = 04:00-20:00 ET (default), RTH = 09:30-16:00 ET.",
@@ -56191,16 +56241,22 @@
         "title": "ResearchExperimentRefusalBody",
         "type": "object"
       },
-      "ResearchExperimentResponse": {
-        "description": "One stored feature-research (information-coefficient) experiment.",
+      "ResearchHistoryEntry": {
+        "description": "One stored study or run, as its own store describes it.",
         "properties": {
-          "adf_p_value": {
-            "title": "Adf P Value",
-            "type": "number"
-          },
-          "bars_used": {
-            "title": "Bars Used",
-            "type": "integer"
+          "completed_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "``null`` when the store records no completion time.",
+            "title": "Completed At Ms"
           },
           "created_at_ms": {
             "maximum": 253402300799999.0,
@@ -56208,78 +56264,351 @@
             "title": "Created At Ms",
             "type": "integer"
           },
-          "end_date": {
-            "title": "End Date",
+          "headline": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The stored headline result, for a store whose list row holds one.",
+            "title": "Headline"
+          },
+          "native_id": {
+            "title": "Native Id",
             "type": "string"
           },
-          "feature_name": {
-            "title": "Feature Name",
+          "parent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResearchHistoryRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The record this one was derived from, when the store links one."
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The inputs and data it ran on, as the store recorded them; ``null`` when none.",
+            "title": "Provenance"
+          },
+          "question": {
+            "description": "What this record asked, in a sentence built from what the store holds.",
+            "title": "Question",
             "type": "string"
           },
-          "ic_p_value": {
-            "title": "Ic P Value",
-            "type": "number"
+          "status": {
+            "enum": [
+              "running",
+              "completed",
+              "partial",
+              "failed",
+              "cancelled",
+              "unreadable"
+            ],
+            "title": "Status",
+            "type": "string"
           },
-          "ic_t_stat": {
-            "title": "Ic T Stat",
-            "type": "number"
+          "status_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why it failed, or what part failed; ``null`` when none was recorded.",
+            "title": "Status Detail"
           },
-          "id": {
-            "title": "Id",
+          "symbols": {
+            "description": "The instrument (one symbol) or the universe (several) it covered; empty when not recorded.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Symbols",
+            "type": "array"
+          },
+          "type": {
+            "enum": [
+              "spec-run",
+              "walk-forward",
+              "monte-carlo",
+              "baseline",
+              "signal-report",
+              "feature-experiment",
+              "feature-study",
+              "signal-study",
+              "cross-sectional-study",
+              "indicator-reliability",
+              "realized-vs-iv"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "window": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResearchHistoryWindow"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The requested window; ``null`` when not recorded."
+          }
+        },
+        "required": [
+          "type",
+          "native_id",
+          "question",
+          "symbols",
+          "window",
+          "status",
+          "status_detail",
+          "created_at_ms",
+          "completed_at_ms",
+          "provenance",
+          "headline",
+          "parent"
+        ],
+        "title": "ResearchHistoryEntry",
+        "type": "object"
+      },
+      "ResearchHistoryPage": {
+        "description": "One page of the merged history, with the count it is a page of.",
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/ResearchHistoryEntry"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "page": {
+            "title": "Page",
             "type": "integer"
           },
-          "is_monotonic": {
-            "title": "Is Monotonic",
+          "page_size": {
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "partial": {
+            "description": "A queried store was unavailable or held unreadable records: ``total`` and the entries leave them out.",
+            "title": "Partial",
             "type": "boolean"
           },
-          "is_stationary": {
-            "title": "Is Stationary",
-            "type": "boolean"
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/ResearchHistorySource"
+            },
+            "title": "Sources",
+            "type": "array"
           },
-          "kpss_p_value": {
-            "title": "Kpss P Value",
-            "type": "number"
+          "symbols": {
+            "description": "Every symbol in the stores read, within the time filter, for the symbol filter to offer.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Symbols",
+            "type": "array"
           },
-          "mean_ic": {
-            "title": "Mean Ic",
-            "type": "number"
-          },
-          "monotonicity_ratio": {
-            "title": "Monotonicity Ratio",
-            "type": "number"
-          },
-          "passed_validation": {
-            "title": "Passed Validation",
-            "type": "boolean"
-          },
-          "start_date": {
-            "title": "Start Date",
+          "total": {
+            "description": "Matching records across every ``read`` store; the pages add up to exactly this.",
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "entries",
+          "total",
+          "page",
+          "page_size",
+          "partial",
+          "sources",
+          "symbols"
+        ],
+        "title": "ResearchHistoryPage",
+        "type": "object"
+      },
+      "ResearchHistoryRef": {
+        "description": "Another record, named the only way a record can be named: its type and its native id.",
+        "properties": {
+          "native_id": {
+            "title": "Native Id",
             "type": "string"
           },
-          "ticker": {
-            "title": "Ticker",
+          "type": {
+            "enum": [
+              "spec-run",
+              "walk-forward",
+              "monte-carlo",
+              "baseline",
+              "signal-report",
+              "feature-experiment",
+              "feature-study",
+              "signal-study",
+              "cross-sectional-study",
+              "indicator-reliability",
+              "realized-vs-iv"
+            ],
+            "title": "Type",
             "type": "string"
           }
         },
         "required": [
-          "id",
-          "ticker",
-          "feature_name",
-          "start_date",
-          "end_date",
-          "bars_used",
-          "mean_ic",
-          "ic_t_stat",
-          "ic_p_value",
-          "adf_p_value",
-          "kpss_p_value",
-          "is_stationary",
-          "passed_validation",
-          "monotonicity_ratio",
-          "is_monotonic",
-          "created_at_ms"
+          "type",
+          "native_id"
         ],
-        "title": "ResearchExperimentResponse",
+        "title": "ResearchHistoryRef",
+        "type": "object"
+      },
+      "ResearchHistoryRefusal": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/ResearchHistorySource"
+            },
+            "title": "Sources",
+            "type": "array"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "sources"
+        ],
+        "title": "ResearchHistoryRefusal",
+        "type": "object"
+      },
+      "ResearchHistoryRefusalBody": {
+        "description": "The 503 body: FastAPI wraps an ``HTTPException`` detail as ``{\"detail\": ...}``.",
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/ResearchHistoryRefusal"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "ResearchHistoryRefusalBody",
+        "type": "object"
+      },
+      "ResearchHistorySource": {
+        "description": "What one registered store contributed to this page, so a gap is never mistaken for an empty store.",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why the store could not be read; ``null`` unless ``unavailable``.",
+            "title": "Error"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "state": {
+            "description": "``read``: counted in ``total``. ``unavailable``: failed, so absent from ``total``. ``not_queried``: left out by the type filter.",
+            "enum": [
+              "read",
+              "unavailable",
+              "not_queried"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Records in this store matching the filters; ``null`` unless ``read``.",
+            "title": "Total"
+          },
+          "type": {
+            "enum": [
+              "spec-run",
+              "walk-forward",
+              "monte-carlo",
+              "baseline",
+              "signal-report",
+              "feature-experiment",
+              "feature-study",
+              "signal-study",
+              "cross-sectional-study",
+              "indicator-reliability",
+              "realized-vs-iv"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "unreadable": {
+            "description": "Stored records that could not be read and so are in neither ``total`` nor the entries.",
+            "title": "Unreadable",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "type",
+          "label",
+          "state",
+          "total",
+          "unreadable",
+          "error"
+        ],
+        "title": "ResearchHistorySource",
+        "type": "object"
+      },
+      "ResearchHistoryWindow": {
+        "description": "The window the study was asked about: the store's own start and end instants.",
+        "properties": {
+          "end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Start Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start_ms",
+          "end_ms"
+        ],
+        "title": "ResearchHistoryWindow",
         "type": "object"
       },
       "Resolution": {
@@ -59858,6 +60187,18 @@
             "title": "Regimegateenabled",
             "type": "boolean"
           },
+          "rerunOf": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerunof"
+          },
           "session": {
             "default": "rth",
             "enum": [
@@ -60122,92 +60463,6 @@
           "error"
         ],
         "title": "SignalExperimentReport",
-        "type": "object"
-      },
-      "SignalExperimentResponse": {
-        "description": "One stored signal-engine experiment: the headline of its report.",
-        "properties": {
-          "bars_used": {
-            "title": "Bars Used",
-            "type": "integer"
-          },
-          "best_cost_bps": {
-            "title": "Best Cost Bps",
-            "type": "number"
-          },
-          "best_threshold": {
-            "title": "Best Threshold",
-            "type": "number"
-          },
-          "created_at_ms": {
-            "maximum": 253402300799999.0,
-            "minimum": 0.0,
-            "title": "Created At Ms",
-            "type": "integer"
-          },
-          "end_date": {
-            "title": "End Date",
-            "type": "string"
-          },
-          "feature_name": {
-            "title": "Feature Name",
-            "type": "string"
-          },
-          "flip_sign": {
-            "title": "Flip Sign",
-            "type": "boolean"
-          },
-          "id": {
-            "title": "Id",
-            "type": "integer"
-          },
-          "mean_oos_sharpe": {
-            "title": "Mean Oos Sharpe",
-            "type": "number"
-          },
-          "overall_grade": {
-            "title": "Overall Grade",
-            "type": "string"
-          },
-          "overall_passed": {
-            "title": "Overall Passed",
-            "type": "boolean"
-          },
-          "regime_gate_enabled": {
-            "title": "Regime Gate Enabled",
-            "type": "boolean"
-          },
-          "start_date": {
-            "title": "Start Date",
-            "type": "string"
-          },
-          "status_label": {
-            "title": "Status Label",
-            "type": "string"
-          },
-          "ticker": {
-            "title": "Ticker",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "ticker",
-          "feature_name",
-          "start_date",
-          "end_date",
-          "bars_used",
-          "overall_grade",
-          "status_label",
-          "overall_passed",
-          "mean_oos_sharpe",
-          "best_threshold",
-          "best_cost_bps",
-          "flip_sign",
-          "regime_gate_enabled",
-          "created_at_ms"
-        ],
-        "title": "SignalExperimentResponse",
         "type": "object"
       },
       "SignalReportAlphaDecay": {
@@ -62551,6 +62806,175 @@
         "title": "StorageSummaryResponse",
         "type": "object"
       },
+      "StoredStudyRecord": {
+        "description": "A finished run, read back without running anything.",
+        "properties": {
+          "completed_at_ms": {
+            "description": "When it ended, whichever way it ended.",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Completed At Ms",
+            "type": "integer"
+          },
+          "created_at_ms": {
+            "description": "When the run started.",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "data_identity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A digest of the data the request carried (Realized vs IV); ``null`` for a study that reads its own data.",
+            "title": "Data Identity"
+          },
+          "data_source": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The result's own provenance block, when it carried one; ``null`` reads \"not recorded\".",
+            "title": "Data Source"
+          },
+          "inputs": {
+            "description": "What the run was asked, as its request validated it. The study's page prefills a rerun from this.",
+            "title": "Inputs",
+            "type": "object"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The job that produced it; ``null`` for a synchronous study.",
+            "title": "Job Id"
+          },
+          "question": {
+            "description": "What the run asked, in a sentence built from its inputs.",
+            "title": "Question",
+            "type": "string"
+          },
+          "record_id": {
+            "title": "Record Id",
+            "type": "string"
+          },
+          "rerun_of": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResearchHistoryRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The record this run was prefilled from, when it was a rerun."
+          },
+          "result": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The study's result as delivered; ``null`` when the run produced none (a failed or cancelled run).",
+            "title": "Result"
+          },
+          "schema_version": {
+            "description": "The version of the record's files, for a reader that must know it.",
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "completed",
+              "partial",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "status_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why it failed or stopped, or what part of it failed; ``null`` for a clean finish.",
+            "title": "Status Detail"
+          },
+          "study": {
+            "enum": [
+              "feature-study",
+              "signal-study",
+              "cross-sectional-study",
+              "indicator-reliability",
+              "realized-vs-iv"
+            ],
+            "title": "Study",
+            "type": "string"
+          },
+          "symbols": {
+            "description": "The instrument (one symbol) or the universe (several) it covered.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Symbols",
+            "type": "array"
+          },
+          "window": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResearchHistoryWindow"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The requested window; ``null`` when not recorded."
+          }
+        },
+        "required": [
+          "study",
+          "record_id",
+          "schema_version",
+          "status",
+          "status_detail",
+          "question",
+          "symbols",
+          "window",
+          "created_at_ms",
+          "completed_at_ms",
+          "inputs",
+          "data_source",
+          "data_identity",
+          "job_id",
+          "rerun_of",
+          "result"
+        ],
+        "title": "StoredStudyRecord",
+        "type": "object"
+      },
       "StrategyAnalyzeRequest": {
         "description": "Request to analyze an options strategy.",
         "properties": {
@@ -63685,23 +64109,6 @@
           "capabilities"
         ],
         "title": "StrategyRegistryEntry",
-        "type": "object"
-      },
-      "StrategyRunListResponse": {
-        "description": "Response payload for listing \u2014 ledgers only, no results.\n\nKeeps the listing payload small. Clients fetch full results\non-demand via ``GET /{run_id}``.",
-        "properties": {
-          "runs": {
-            "items": {
-              "$ref": "#/components/schemas/RunLedger"
-            },
-            "title": "Runs",
-            "type": "array"
-          }
-        },
-        "required": [
-          "runs"
-        ],
-        "title": "StrategyRunListResponse",
         "type": "object"
       },
       "StrategyRunRequest": {
@@ -65190,6 +65597,37 @@
           "qualification_status"
         ],
         "title": "StudyDetail",
+        "type": "object"
+      },
+      "StudyRecordRefusal": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "StudyRecordRefusal",
+        "type": "object"
+      },
+      "StudyRecordRefusalBody": {
+        "description": "The 404 and 500 body: FastAPI wraps an ``HTTPException`` detail as ``{\"detail\": ...}``.",
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/StudyRecordRefusal"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "StudyRecordRefusalBody",
         "type": "object"
       },
       "StudySummary": {
@@ -91224,57 +91662,6 @@
         ]
       }
     },
-    "/api/research/experiments": {
-      "get": {
-        "description": "A ticker's stored feature-research experiments, newest first.",
-        "operationId": "list_research_experiments_api_research_experiments_get",
-        "parameters": [
-          {
-            "description": "The ticker's symbol; case does not matter.",
-            "in": "query",
-            "name": "ticker",
-            "required": true,
-            "schema": {
-              "description": "The ticker's symbol; case does not matter.",
-              "maxLength": 50,
-              "minLength": 1,
-              "title": "Ticker",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/ResearchExperimentResponse"
-                  },
-                  "title": "Response List Research Experiments Api Research Experiments Get",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Research Experiments",
-        "tags": [
-          "research-experiments"
-        ]
-      }
-    },
     "/api/research/golden-option-setups": {
       "get": {
         "operationId": "list_golden_setups_api_research_golden_option_setups_get",
@@ -94572,6 +94959,192 @@
         ]
       }
     },
+    "/api/research/history": {
+      "get": {
+        "description": "One page of the merged history, newest first, with the count the pages add up to.",
+        "operationId": "list_research_history_api_research_history_get",
+        "parameters": [
+          {
+            "description": "Only this kind of record.",
+            "in": "query",
+            "name": "type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "spec-run",
+                    "walk-forward",
+                    "monte-carlo",
+                    "baseline",
+                    "signal-report",
+                    "feature-experiment",
+                    "feature-study",
+                    "signal-study",
+                    "cross-sectional-study",
+                    "indicator-reliability",
+                    "realized-vs-iv"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this kind of record.",
+              "title": "Type"
+            }
+          },
+          {
+            "description": "Only records that covered this symbol; case does not matter.",
+            "in": "query",
+            "name": "symbol",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 50,
+                  "minLength": 1,
+                  "pattern": "^\\S+$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only records that covered this symbol; case does not matter.",
+              "title": "Symbol"
+            }
+          },
+          {
+            "description": "Only records that ended this way.",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "running",
+                    "completed",
+                    "partial",
+                    "failed",
+                    "cancelled",
+                    "unreadable"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only records that ended this way.",
+              "title": "Status"
+            }
+          },
+          {
+            "description": "Only records created at or after this instant.",
+            "in": "query",
+            "name": "created_from_ms",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 253402300799999,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only records created at or after this instant.",
+              "title": "Created From Ms"
+            }
+          },
+          {
+            "description": "Only records created before this instant.",
+            "in": "query",
+            "name": "created_before_ms",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 253402300799999,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only records created before this instant.",
+              "title": "Created Before Ms"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchHistoryPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchHistoryRefusalBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "List Research History",
+        "tags": [
+          "research-history"
+        ]
+      }
+    },
     "/api/research/indicator-params/{indicator_name}": {
       "get": {
         "description": "Get configurable parameters for a specific indicator.",
@@ -97565,57 +98138,6 @@
         ]
       }
     },
-    "/api/research/signal-experiments": {
-      "get": {
-        "description": "A ticker's stored signal-engine experiments, newest first, each as its headline without the full report.",
-        "operationId": "list_signal_experiments_api_research_signal_experiments_get",
-        "parameters": [
-          {
-            "description": "The ticker's symbol; case does not matter.",
-            "in": "query",
-            "name": "ticker",
-            "required": true,
-            "schema": {
-              "description": "The ticker's symbol; case does not matter.",
-              "maxLength": 50,
-              "minLength": 1,
-              "title": "Ticker",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/SignalExperimentResponse"
-                  },
-                  "title": "Response List Signal Experiments Api Research Signal Experiments Get",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Signal Experiments",
-        "tags": [
-          "research-experiments"
-        ]
-      }
-    },
     "/api/research/signal-experiments/{experiment_id}/report": {
       "get": {
         "description": "One signal experiment's full report. A stored report that cannot be read is a 500 that says so, never a partial one.",
@@ -97682,167 +98204,6 @@
       }
     },
     "/api/research/strategy-runs": {
-      "get": {
-        "description": "List persisted runs, optionally filtered, newest first.",
-        "operationId": "list_runs_endpoint_api_research_strategy_runs_get",
-        "parameters": [
-          {
-            "description": "Filter by ``strategy_spec_hash``",
-            "in": "query",
-            "name": "spec_hash",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Filter by ``strategy_spec_hash``",
-              "title": "Spec Hash"
-            }
-          },
-          {
-            "description": "Filter by traded symbol",
-            "in": "query",
-            "name": "symbol",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Filter by traded symbol",
-              "title": "Symbol"
-            }
-          },
-          {
-            "description": "Filter by lifecycle status: running | completed | failed",
-            "in": "query",
-            "name": "status",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Filter by lifecycle status: running | completed | failed",
-              "title": "Status"
-            }
-          },
-          {
-            "description": "Filter by lineage \u2014 fold/MC/sweep parent",
-            "in": "query",
-            "name": "parent_run_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Filter by lineage \u2014 fold/MC/sweep parent",
-              "title": "Parent Run Id"
-            }
-          },
-          {
-            "description": "Filter by sensitivity-grid parent",
-            "in": "query",
-            "name": "parent_spec_hash",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Filter by sensitivity-grid parent",
-              "title": "Parent Spec Hash"
-            }
-          },
-          {
-            "description": "Only return runs created at or after this ``int64 ms UTC``",
-            "in": "query",
-            "name": "since_ms",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maximum": 253402300799999,
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Only return runs created at or after this ``int64 ms UTC``",
-              "title": "Since Ms"
-            }
-          },
-          {
-            "description": "Cap result count after sorting newest-first",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Cap result count after sorting newest-first",
-              "title": "Limit"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StrategyRunListResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Runs Endpoint",
-        "tags": [
-          "research-runs"
-        ]
-      },
       "post": {
         "description": "Run a strategy spec, persist the artifacts, return ``(ledger, result)``.\n\nFailed runs are persisted alongside successful ones. The runner\npopulates ``ledger.status`` and ``ledger.failure_reason`` so the\nclient can distinguish without an out-of-band channel.",
         "operationId": "create_run_api_research_strategy_runs_post",
@@ -98544,6 +98905,87 @@
         "summary": "Get Run",
         "tags": [
           "research-runs"
+        ]
+      }
+    },
+    "/api/research/study-records/{study}/{record_id}": {
+      "get": {
+        "description": "One recorded run. A record that cannot be read is a 500 that says so, never a partial one.",
+        "operationId": "get_study_record_api_research_study_records__study___record_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "study",
+            "required": true,
+            "schema": {
+              "enum": [
+                "feature-study",
+                "signal-study",
+                "cross-sectional-study",
+                "indicator-reliability",
+                "realized-vs-iv"
+              ],
+              "title": "Study",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "record_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Record Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoredStudyRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudyRecordRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudyRecordRefusalBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Get Study Record",
+        "tags": [
+          "research-study-records"
         ]
       }
     },

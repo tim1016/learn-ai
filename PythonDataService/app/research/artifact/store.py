@@ -209,6 +209,30 @@ class ArtifactStore:
 
         return config, result
 
+    def config_paths(self) -> list[tuple[str, Path]]:
+        """Every artifact id under this phase with the path of its config file, in no order.
+
+        A read-only listing for a caller that reads the configs itself and so
+        can count the ones it cannot read, which ``list_ids`` skips. An id is a
+        directory whose name matches the descriptor's pattern and that holds
+        the config file; a base directory that does not exist yet holds none.
+        Other directories (the sibling phases under a flat root, debris) are
+        not artifacts of this phase and are left out. Each path is confined to
+        the base the same way ``load`` confines it.
+        """
+        base = self._base()
+        if not base.is_dir():
+            return []
+        id_pattern = self._descriptor.id_pattern
+        found: list[tuple[str, Path]] = []
+        for child in base.iterdir():
+            if not child.is_dir() or not id_pattern.fullmatch(child.name):
+                continue
+            config_path = self._artifact_dir(child.name) / self._descriptor.config_filename
+            if config_path.is_file():
+                found.append((child.name, config_path))
+        return found
+
     def list_ids(
         self,
         *,

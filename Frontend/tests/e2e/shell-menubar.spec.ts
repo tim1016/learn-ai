@@ -78,8 +78,8 @@ test.describe('Shell menubar', () => {
     const panel = page.getByRole('menubar');
     await panel.getByRole('menuitem', { name: 'Research' }).click();
 
-    await expect(panel.getByRole('menuitem', { name: 'Edge Analysis' })).toBeVisible();
-    await expect(panel.getByRole('menuitem', { name: 'Regimes' })).toBeVisible();
+    await expect(panel.getByRole('menuitem', { name: 'Studies' })).toBeVisible();
+    await expect(panel.getByRole('menuitem', { name: 'Feature study' })).toBeVisible();
   });
 
   test('keeps navigation, brand, and the account pills in one header row', async ({ page }) => {

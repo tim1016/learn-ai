@@ -54,11 +54,11 @@ describe('AppComponent', () => {
           { path: 'markets/:symbol/chart/news', component: ShellSmokeRouteComponent },
           { path: 'options-lab', component: ShellSmokeRouteComponent, data: { fullBleed: true } },
           { path: 'options-backtest', component: ShellSmokeRouteComponent, data: { stickyContent: true } },
-          { path: 'research-lab/strategy-runs/:id', component: ShellSmokeRouteComponent },
-          { path: 'research-lab/walk-forward/:id', component: ShellSmokeRouteComponent },
-          { path: 'research-lab/monte-carlo/:id', component: ShellSmokeRouteComponent },
-          { path: 'research-lab/baselines/:id', component: ShellSmokeRouteComponent },
-          { path: 'research-lab/signal-report/:id', component: ShellSmokeRouteComponent },
+          { path: 'research/history/spec-run/:id', component: ShellSmokeRouteComponent },
+          { path: 'research/history/walk-forward/:id', component: ShellSmokeRouteComponent },
+          { path: 'research/history/monte-carlo/:id', component: ShellSmokeRouteComponent },
+          { path: 'research/history/baseline/:id', component: ShellSmokeRouteComponent },
+          { path: 'research/history/signal-report/:id', component: ShellSmokeRouteComponent },
           { path: 'strategy-lab/docs', component: ShellSmokeRouteComponent },
           { path: 'signal-strategies', pathMatch: 'full', component: ShellSmokeRouteComponent },
           { path: 'signal-strategies/recency', component: ShellSmokeRouteComponent },
@@ -236,7 +236,7 @@ describe('AppComponent', () => {
       ['/signal-strategies/recency', 'Recency Chart · Signal strategies'],
       // A strategy's page is titled by the entity and its tab, then the group.
       ['/signal-strategies/ema_crossover_signal/define', 'ema_crossover_signal · Define · Signal strategies'],
-      ['/research-lab/strategy-runs/run-42', 'Research Lab · Research'],
+      ['/research/history/spec-run/run-42', 'History · Research'],
       // A document is titled by itself: the help index is its home, not the page it explains.
       ['/strategy-lab/docs', 'Strategy Lab Manual'],
     ])('sets the browser title outside a workspace as Page · Group from the active menu node: %s', async (url, expected) => {
@@ -293,11 +293,11 @@ describe('AppComponent', () => {
 
     for (const url of [
       '/markets',
-      '/research-lab/strategy-runs/run-42',
-      '/research-lab/walk-forward/wf-42',
-      '/research-lab/monte-carlo/mc-42',
-      '/research-lab/baselines/baseline-42',
-      '/research-lab/signal-report/42',
+      '/research/history/spec-run/run-42',
+      '/research/history/walk-forward/wf-42',
+      '/research/history/monte-carlo/mc-42',
+      '/research/history/baseline/baseline-42',
+      '/research/history/signal-report/42',
     ]) {
       await router.navigateByUrl(url);
       fixture.detectChanges();

@@ -58,7 +58,7 @@ describe('app menu projections', () => {
     expect(APP_MENU[0].title).toBe('Markets');
   });
 
-  it('marks the active group and entry, including Edge pages nested within Research', () => {
+  it('marks the active group and entry, including demonstrations nested within Research', () => {
     const groups = menuItemsFor('/markets/SPY/options/pricing');
     const markets = groups.find((group) => group.label === 'Markets');
 
@@ -68,13 +68,14 @@ describe('app menu projections', () => {
     expect.soft(otherGroupsEntries.filter((item) => item.styleClass !== undefined), 'leaves the other entries unmarked').toEqual([]);
     expect.soft(groups.filter((group) => group.styleClass === ACTIVE_GROUP_CLASS), 'marks exactly one group').toHaveLength(1);
 
-    const edgeGroups = menuItemsFor('/edge/regimes');
-    const research = edgeGroups.find((group) => group.label === 'Research');
+    const demoGroups = menuItemsFor('/research/demos/regimes');
+    const research = demoGroups.find((group) => group.label === 'Research');
 
-    expect.soft(edgeGroups.map((group) => group.label), 'nests Edge Analysis within Research instead of a separate top-level group').not.toContain('Edge Analysis');
-    expect.soft(research?.items?.find((item) => item.label === 'Edge Analysis')?.routerLink, 'links Edge Analysis from Research').toBe('/edge');
-    expect.soft(research?.items?.find((item) => item.label === 'Regimes')?.styleClass, 'marks the Regimes entry active').toBe(ACTIVE_ITEM_CLASS);
-    expect.soft(research?.styleClass, 'marks the Research group active for an Edge page').toBe(ACTIVE_GROUP_CLASS);
+    expect.soft(demoGroups.map((group) => group.label), 'nests the demonstrations within Research instead of a separate top-level group').not.toContain('Edge Analysis');
+    expect.soft(research?.items?.find((item) => item.label === 'Studies')?.routerLink, 'opens Research on its study list').toBe('/research');
+    expect.soft(research?.items?.find((item) => item.label === 'Regimes demo')?.styleClass, 'marks the Regimes demo entry active').toBe(ACTIVE_ITEM_CLASS);
+    expect.soft(research?.items?.find((item) => item.label === 'Studies')?.styleClass, 'leaves the list entry unmarked inside a study').toBeUndefined();
+    expect.soft(research?.styleClass, 'marks the Research group active for a demonstration').toBe(ACTIVE_GROUP_CLASS);
   });
 
   it('marks the group but no entry for a page the menu does not list', () => {
@@ -124,8 +125,15 @@ describe('app menu projections', () => {
     ['/markets/SPY/chart/news', 'Markets', 'Markets'],
     ['/markets/SPY/data/build', 'Markets', 'Markets'],
     ['/options-lab/strategy-finder', 'Markets', 'Options Lab'],
-    ['/research-lab/strategy-runs/run-42', 'Research', 'Research Lab'],
-    ['/edge/regimes', 'Research', 'Regimes'],
+    // A spec run is Research evidence at its native address, never a registry strategy's.
+    ['/research/history/spec-run/run-42', 'Research', 'History'],
+    ['/research', 'Research', 'Studies'],
+    ['/research/feature', 'Research', 'Feature study'],
+    ['/research/realized-vs-iv', 'Research', 'Realized vs implied vol'],
+    ['/research/demos/regimes', 'Research', 'Regimes demo'],
+    ['/research/rule-sandbox', 'Research', 'Rule sandbox'],
+    ['/research/history', 'Research', 'History'],
+    ['/research/history/signal-report/42', 'Research', 'History'],
     ['/golden-search/study-9', 'Signal strategies', 'Golden Search'],
     // The old Strategy Lab address of a saved run is not listed; it ends under its own entry.
     ['/engine/runs/204', 'Signal strategies', 'Strategy Lab'],

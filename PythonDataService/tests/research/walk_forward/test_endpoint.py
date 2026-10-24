@@ -284,7 +284,6 @@ async def test_post_at_the_ceiling_is_a_400_naming_the_reason(client, overrides:
     "path",
     [
         _WALK_FORWARD,
-        "/api/research/strategy-runs",
         "/api/research/strategy-runs/baselines",
         "/api/research/strategy-runs/monte-carlo",
     ],

@@ -3,7 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { Observable, catchError, map, of, throwError } from 'rxjs';
 import type { components } from '../api/broker.types';
 import { environment } from '../../environments/environment';
-import { toResearchExperiment, toSignalEngineResult, toSignalExperiment } from './research-experiments.mappers';
+import { toSignalEngineResult } from './research-experiments.mappers';
 import { failureAsError, isPythonRefusal } from './python-http-failure';
 
 type Schema = components['schemas'];
@@ -194,7 +194,8 @@ export interface FeatureValidationVerdict {
   /** False when the spec marks signed forward return as the wrong
    *  target (e.g. realized_vol_30). Stage 0 fires immediately. */
   targetSignedAppropriate: boolean;
-  stageInfo: FeatureStageInfo;
+  /** Absent in a result stored before the stage was recorded; the page then says "not recorded". */
+  stageInfo?: FeatureStageInfo;
   finalDecision: string;
 }
 
@@ -226,25 +227,6 @@ export interface ResearchResult {
   targetMetadata?: TargetMetadata | null;
   validationVerdict?: FeatureValidationVerdict | null;
   error?: string;
-}
-
-export interface ResearchExperiment {
-  id: number;
-  ticker: string;
-  featureName: string;
-  startDate: string;
-  endDate: string;
-  barsUsed: number;
-  meanIC: number;
-  icTStat: number;
-  icPValue: number;
-  adfPValue: number;
-  kpssPValue: number;
-  isStationary: boolean;
-  passedValidation: boolean;
-  monotonicityRatio: number;
-  isMonotonic: boolean;
-  createdAt: number;
 }
 
 // ─── Signal Engine Interfaces ─────────────────────────────────
@@ -511,24 +493,6 @@ export interface SignalEngineResult {
   error?: string;
 }
 
-export interface SignalExperiment {
-  id: number;
-  ticker: string;
-  featureName: string;
-  startDate: string;
-  endDate: string;
-  barsUsed: number;
-  overallGrade: string;
-  statusLabel: string;
-  overallPassed: boolean;
-  meanOosSharpe: number;
-  bestThreshold: number;
-  bestCostBps: number;
-  flipSign: boolean;
-  regimeGateEnabled: boolean;
-  createdAt: number;
-}
-
 // ─── Batch / Cross-Sectional Interfaces ──────────────────
 
 export type TickerValidity = 'valid' | 'invalid_iv' | 'invalid_data' | 'error';
@@ -635,9 +599,10 @@ export interface BatchResearchResult {
 const SIGNAL_EXPERIMENT_NOT_FOUND = 'SIGNAL_EXPERIMENT_NOT_FOUND';
 
 /**
- * The Research Lab's stored experiment history, read from Python's
- * `/api/research/*`. A failed read rejects with an `Error` carrying Python's
- * sentence; the one resolved miss is a signal report nobody holds (`null`).
+ * A stored signal report, read from Python's `/api/research/*`: the detail a
+ * Research History entry of kind signal study opens. A failed read rejects with
+ * an `Error` carrying Python's sentence; the one resolved miss is a report
+ * nobody holds (`null`).
  */
 @Injectable({
   providedIn: 'root'
@@ -645,26 +610,6 @@ const SIGNAL_EXPERIMENT_NOT_FOUND = 'SIGNAL_EXPERIMENT_NOT_FOUND';
 export class ResearchService {
   private readonly http = inject(HttpClient);
   private readonly base = `${environment.pythonServiceUrl}/api/research`;
-
-  /** `GET /api/research/experiments?ticker=` — a ticker's feature experiments, newest first. */
-  getExperiments(ticker: string): Observable<ResearchExperiment[]> {
-    return this.http
-      .get<Schema['ResearchExperimentResponse'][]>(`${this.base}/experiments`, { params: { ticker } })
-      .pipe(
-        failureAsError('Could not load the experiment history'),
-        map(rows => rows.map(toResearchExperiment)),
-      );
-  }
-
-  /** `GET /api/research/signal-experiments?ticker=` — a ticker's signal experiments, newest first. */
-  getSignalExperiments(ticker: string): Observable<SignalExperiment[]> {
-    return this.http
-      .get<Schema['SignalExperimentResponse'][]>(`${this.base}/signal-experiments`, { params: { ticker } })
-      .pipe(
-        failureAsError('Could not load the signal history'),
-        map(rows => rows.map(toSignalExperiment)),
-      );
-  }
 
   /** `GET /api/research/signal-experiments/{id}/report` — `null` when no such experiment is held. */
   getSignalExperimentReport(id: number): Observable<SignalEngineResult | null> {

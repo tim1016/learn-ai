@@ -1,6 +1,8 @@
-@if (open()) {
-  <div class="tsd-scrim" (click)="closed.emit()" aria-hidden="true"></div>
-  <aside class="tsd" role="dialog" aria-label="Trade Simulator">
+@if (open() || inline()) {
+  @if (!inline()) {
+    <div class="tsd-scrim" (click)="closed.emit()" aria-hidden="true"></div>
+  }
+  <aside class="tsd" [class.tsd--inline]="inline()" [attr.role]="inline() ? null : 'dialog'" aria-label="Trade Simulator">
     <header class="tsd-header">
       <div>
         <h2 class="tsd-eyebrow">TRADE SIMULATOR · PESSIMISTIC FILL</h2>
@@ -8,7 +10,9 @@
           VRP signals · SPY · {{ data().trades.length }} trades · {{ tradableCount() }} tradable
         </div>
       </div>
-      <button class="tsd-close" (click)="closed.emit()" aria-label="Close simulator">✕</button>
+      @if (!inline()) {
+        <button class="tsd-close" (click)="closed.emit()" aria-label="Close simulator">✕</button>
+      }
     </header>
 
     <div class="tsd-body">

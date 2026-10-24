@@ -1,50 +1,35 @@
-<div class="runner-page">
-  @if (formCollapsed()) {
-    <div class="run-summary">
-      <div class="run-summary-left">
-        <i class="pi pi-check-circle run-summary-icon" aria-hidden="true"></i>
-        <span class="run-summary-text">{{ runSummary }}</span>
-        @if (cached()) {
-          <span class="cache-chip">from cache</span>
-        }
-      </div>
-      <div class="run-summary-right">
-        <p-button label="Modify & Re-run" icon="pi pi-pencil" severity="secondary" [text]="true" size="small" (onClick)="toggleForm()" />
-        <p-button label="New Run" icon="pi pi-plus" severity="secondary" [text]="true" size="small" (onClick)="newRun()" />
-      </div>
-    </div>
-  }
+<app-study-page
+  study="feature"
+  [readySummary]="readySummary()"
+  [canRun]="canRun()"
+  [running]="starting() || loading()"
+  [blockedReason]="blockedReason()"
+  [hasOutput]="hasOutput()"
+  [hasResult]="result()?.success === true"
+  [previous]="inputs.isPrevious()"
+  [captured]="inputs.captured()"
+  [prefill]="prefillNotice()"
+  (run)="runResearch()"
+>
+  <div studyInstrument>
+    <app-ticker-range-picker
+      [(value)]="range"
+      dateBounds="provider"
+      presentation="embedded"
+      sessionMode="hidden"
+      [showAutoFetch]="false"
+      [availableResolutions]="availableResolutions"
+      [availableMultipliers]="availableMultipliers"
+    />
+    @if (rangeWarning(); as warn) {
+      <p-message severity="warn" class="w-full">{{ warn }}</p-message>
+    }
+  </div>
 
-  @if (!formCollapsed()) {
-    <!-- Execution card — full width above the feature workspace. -->
-    <div class="runner-card">
-      <div class="card-head">
-        <span class="card-title">
-          <i class="pi pi-bolt" aria-hidden="true"></i>
-          Execution
-        </span>
-      </div>
-      <app-ticker-range-picker
-        [(value)]="range"
-        dateBounds="provider"
-        [showAutoFetch]="false"
-        [availableResolutions]="availableResolutions"
-        [availableMultipliers]="availableMultipliers"
-        title="Feature research data"
-      />
-
-      <div class="field-group">
-        <div class="field field--toggle">
-          <p-checkbox [binary]="true" [ngModel]="forceRun()" (ngModelChange)="forceRun.set($event)" inputId="force-run" />
-          <label class="toggle-label" for="force-run">Force re-run (bypass cache)</label>
-        </div>
-      </div>
-    </div>
-
-    <!-- Feature workspace — design-ported picker on the left, active
-         indicator card on the right. The picker is multi-select natively;
-         this host treats each (add) as a single-select replace via
-         onPickerSelect. -->
+  <div studyConfig class="study-config">
+    <!-- Design-ported picker on the left, active indicator card on the right.
+         The picker is multi-select natively; this host treats each (add) as a
+         single-select replace via onPickerSelect. -->
     <div class="indicator-workspace">
       <app-indicator-picker
         [categories]="catalogCategories()"
@@ -71,57 +56,53 @@
       </div>
     </div>
 
-    @if (rangeWarning(); as warn) {
-      <p-message severity="warn" class="w-full">{{ warn }}</p-message>
-    }
     @if (unsupportedReason(); as reason) {
       <p-message severity="info" class="w-full">{{ reason }}</p-message>
     }
 
-    <div class="run-bar">
-      <span class="run-hint">
-        Ready to analyze <strong>{{ selectedFeatureLabel }}</strong> on
-        <app-asset-identity [symbol]="range().symbol" size="sm" />
-      </span>
-      <div class="run-bar-actions">
-        <button class="btn-run" [disabled]="!canRun() || loading()" (click)="runResearch()">
-          <i [class]="loading() ? 'pi pi-spin pi-spinner' : 'pi pi-play'" aria-hidden="true"></i>
-          Run Feature Research
-        </button>
-      </div>
+    <div class="field field--toggle">
+      <p-checkbox [binary]="true" [ngModel]="forceRun()" (ngModelChange)="forceRun.set($event)" inputId="force-run" />
+      <label class="toggle-label" for="force-run">Force re-run (bypass cache)</label>
     </div>
-  }
+  </div>
 
-  @if (job(); as j) {
-    @if (!cached()) {
-      <app-run-progress-panel
-        class="block"
-        [job]="j"
-        [logs]="logEntries()"
-        title="Feature research run"
-        (cancelRun)="cancelRun()"
-      />
+  <div studyProgress class="study-progress">
+    @if (job(); as j) {
+      @if (!cached()) {
+        <app-run-progress-panel
+          class="block"
+          [job]="j"
+          [logs]="logEntries()"
+          title="Feature research run"
+          (cancelRun)="cancelRun()"
+        />
+      }
     }
-  }
 
-  @if (error(); as err) {
-    <p-message severity="error">{{ err }}</p-message>
-  }
-
-  @if (result(); as res) {
-    @if (res.success) {
-      <app-feature-report [result]="res" />
+    @if (error(); as err) {
+      <p-message severity="error">{{ err }}</p-message>
     }
-  }
+  </div>
 
-  <!-- Right-anchored config modal for the picked feature. -->
-  <app-indicator-config-modal
-    [(visible)]="configureModalOpen"
-    mode="configure"
-    [entry]="activeEntry()"
-    [paramConfigs]="activeParamConfigs()"
-    [showRelated]="false"
-    (paramChange)="onModalParamChange($event)"
-    (resetDefaults)="resetSelectedToDefaults()"
-    (resetParam)="resetSelectedParam($event)" />
-</div>
+  <div studyResult>
+    @if (cached()) {
+      <span class="cache-chip">from cache</span>
+    }
+    @if (result(); as res) {
+      @if (res.success) {
+        <app-feature-report [result]="res" />
+      }
+    }
+  </div>
+</app-study-page>
+
+<!-- Right-anchored config modal for the picked feature. -->
+<app-indicator-config-modal
+  [(visible)]="configureModalOpen"
+  mode="configure"
+  [entry]="activeEntry()"
+  [paramConfigs]="activeParamConfigs()"
+  [showRelated]="false"
+  (paramChange)="onModalParamChange($event)"
+  (resetDefaults)="resetSelectedToDefaults()"
+  (resetParam)="resetSelectedParam($event)" />
