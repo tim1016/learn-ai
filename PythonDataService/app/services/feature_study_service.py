@@ -1,6 +1,6 @@
 """Feature study (Research Lab → Features → Validate): computes from admitted lake inputs (#3521).
 
-The study's input contract. What it read before #3521 (slice-1 census, #3491),
+The study's input contract. What it read before #3521 (the data-source census, #3491),
 and what it reads now, field by field:
 
 * **Bars.** Before: one Polygon ``fetch_aggregates`` call, trade aggregates for

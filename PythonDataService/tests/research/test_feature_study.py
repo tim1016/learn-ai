@@ -40,7 +40,7 @@ from app.services.feature_study_service import (
 from tests._helpers.fake_lake_catalog import install_fake_catalog, mock_launcher, point_lake_writer_at_tmp
 from tests._helpers.pinned_vendor import mock_vendor, vendor_history
 
-#: The repo's strict-float default for indicators and closed-form calculations (numerical-rigor.md).
+#: The repo's strict-float default for indicators and closed-form calculations.
 ATOL = 1e-9
 RTOL = 0.0
 

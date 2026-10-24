@@ -282,15 +282,20 @@ def test_a_saved_result_is_byte_for_byte_unchanged_after_the_lake_is_repaired(ha
 
 
 def test_the_legacy_session_label_stays_inert_and_the_policy_defaults_to_extended_hours():
-    request = FeatureResearchJobRequest.model_validate(
-        {"jobId": "j", "symbol": "SPY", "featureName": "rsi_14", "fromDate": "2024-03-04", "toDate": "2024-03-15", "session": "rth"}
-    )
+    # Exactly the body the browser sends (tickerRangeToWire plus the job fields): `session` is always "rth".
+    browser = {
+        "job_id": "j", "symbol": "SPY", "from_date": "2024-03-04", "to_date": "2024-03-15",
+        "timespan": "minute", "multiplier": 5, "session": "rth", "feature_name": "rsi_14", "force": False,
+    }
+
+    request = FeatureResearchJobRequest.model_validate(browser)
 
     assert request.session == "rth"
     assert request.session_policy == "extended", "the browser's 'rth' must not silently change the sample (D02)"
-    assert FeatureResearchJobRequest.model_validate(
-        {"jobId": "j", "symbol": "SPY", "featureName": "rsi_14", "fromDate": "2024-03-04", "toDate": "2024-03-15", "sessionPolicy": "regular"}
-    ).session_policy == "regular"
+    camel = {"jobId": "j", "symbol": "SPY", "featureName": "rsi_14", "fromDate": "2024-03-04", "toDate": "2024-03-15"}
+    assert FeatureResearchJobRequest.model_validate({**camel, "sessionPolicy": "regular"}).session_policy == "regular"
+    with pytest.raises(ValueError, match=r"session_policy"):
+        FeatureResearchJobRequest.model_validate({**browser, "session_policy": "rth"})
 
 
 @pytest.mark.asyncio
