@@ -313,6 +313,25 @@ async def test_the_symbol_filter_reaches_studies_through_their_parent_run(client
     assert body["symbols"] == ["QQQ", "SPY"]
 
 
+async def test_a_run_posted_with_a_lowercase_symbol_is_found_by_the_symbol_the_page_offers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The spec is not normalised, so a run posted as "spy" is stored that way; the History must still match it."""
+    save_a_run(tmp_path, a_run(5, "spy", 1_700_000_300_000))
+    save_a_walk_forward(tmp_path, 15, None, 1_700_000_400_000)
+    files = default_history_sources(tmp_path)[:4]
+    sources = [*files, EmptyLegacyStore("signal-report"), EmptyLegacyStore("feature-experiment")]
+    monkeypatch.setitem(app.dependency_overrides, get_history_sources, lambda: sources)
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as http:
+        offered = (await http.get(URL)).json()["symbols"]
+        body = (await http.get(URL, params={"symbol": "spy"})).json()
+
+    assert offered == ["SPY"]
+    assert set(by_id(body)) == {hex_id(5), hex_id(15)}
+    assert by_id(body)[hex_id(5)]["symbols"] == ["SPY"]
+
+
 async def test_the_status_filter_counts_and_pages_by_each_studys_own_result(client: httpx.AsyncClient) -> None:
     partial = (await client.get(URL, params={"status": "partial"})).json()
     failed = (await client.get(URL, params={"status": "failed", "page_size": 2, "page": 2})).json()

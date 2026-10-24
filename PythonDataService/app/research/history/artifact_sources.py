@@ -7,8 +7,8 @@ result per study (ADR 0072). These sources only read them, through the same ``Ar
   study's lineage, reachable from its own detail, and are not History entries of their own.
 * A Monte Carlo or baseline config does not name its instrument or window; its parent run's ledger does, so those two
   read it from there. A parent that is gone leaves the instrument and window "not recorded".
-* A study's status lives in its result. Only the header of that file is read (``status``, the completion time and, for a
-  walk-forward, the per-fold status), and it is kept per file and stamp, so a listing reads each result once.
+* A study's status lives in its result. The whole result file is parsed, and only its status, completion time and, for a
+  walk-forward, per-fold status are kept, per file and stamp, so a listing parses each result once.
 
 A directory whose config cannot be parsed is not an entry; it is counted in ``unreadable`` so the page can say so. A
 config that parses but whose result cannot is an entry with status ``unreadable``: it is there, and its outcome is not
@@ -142,13 +142,14 @@ def _spec_label(*names: object) -> str:
 def _own_of_ledger(path: str) -> _Own:
     ledger = RunLedger.model_validate_json(_read_text(path))
     label = _spec_label(ledger.strategy_spec_id, ledger.strategy_spec_json.get("name"))
+    symbol = ledger.symbol.upper()  # the History matches symbols in upper case; a spec may have been posted as "spy"
     return _Own(
         native_id=ledger.run_id,
         created_at_ms=ledger.created_at_ms,
-        question=f'How did "{label}" trade {ledger.symbol}?',
+        question=f'How did "{label}" trade {symbol}?',
         provenance=f"data {ledger.data_snapshot_id}; engine {ledger.engine_version}",
         parent_run_id=ledger.parent_run_id,
-        symbols=(ledger.symbol,),
+        symbols=(symbol,),
         window=(ledger.start_ms, ledger.end_ms),
         settled=_Settled(ledger.status, ledger.failure_reason, ledger.completed_at_ms),
     )
@@ -158,13 +159,14 @@ def _own_of_walk_forward(path: str) -> _Own:
     config = WalkForwardConfig.model_validate_json(_read_text(path))
     label = _spec_label(config.strategy_spec_json.get("name"), config.strategy_spec_hash[:12])
     protocol = f"; protocol {config.protocol_id} {config.protocol_version}" if config.protocol_id else ""
+    symbol = config.symbol.upper()
     return _Own(
         native_id=config.walk_forward_id,
         created_at_ms=config.created_at_ms,
-        question=f'Did "{label}" hold up out of sample on {config.symbol}?',
+        question=f'Did "{label}" hold up out of sample on {symbol}?',
         provenance=f"spec {config.strategy_spec_hash[:12]}; seed {config.random_seed}{protocol}",
         parent_run_id=config.parent_run_id,
-        symbols=(config.symbol,),
+        symbols=(symbol,),
         window=(config.start_ms, config.end_ms),
         settled=None,
     )
