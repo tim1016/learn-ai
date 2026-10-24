@@ -58,19 +58,10 @@ import {
   sessionPolicyWords,
   toDataSourceProvenance,
   type LakeSessionPolicy,
-  type LakeStudyRefused,
+  type LakeStudyRefusalShown,
 } from '../../../shared/lake-study/lake-study';
+import { storedSession } from '../../../shared/lake-study/stored-session';
 import featureBarMinutes from '@repo-contracts/feature-study-bar-minutes.json';
-
-/** The session a saved run computed on: the one it names, or extended, which is what the study computed on before it named one. */
-function storedSession(stored: StoredInputs): Session {
-  if (!stored.has('session')) return 'extended';
-  const session = stored.text('session');
-  if (session !== 'rth' && session !== 'extended') {
-    throw new StoredInputsError(`"${session}" is not a session this page offers`);
-  }
-  return session;
-}
 
 /** What a Feature study's request is made from: the inputs a shown result answers. */
 interface FeatureStudyInputs {
@@ -192,7 +183,7 @@ export class FeatureRunnerComponent {
    * Why the lake could not supply the window, when the run failed on that; read from the payload the failed job
    * parked, with the session it judged: the one its source records, or the one the run asked for when nothing was read.
    */
-  readonly refusal = signal<{ readonly refused: LakeStudyRefused; readonly session: LakeSessionPolicy | null } | null>(null);
+  readonly refusal = signal<LakeStudyRefusalShown | null>(null);
 
   /**
    * The data-source line for what is on screen: the shown result's lake source, or the source a refused run was
@@ -346,7 +337,8 @@ export class FeatureRunnerComponent {
       to: stored.text('to_date'),
       resolution: 'minute',
       multiplier,
-      session: storedSession(stored),
+      // A run saved before it named a session computed on extended hours.
+      session: storedSession(stored, 'extended'),
     });
     this.selectedIndicator.set(mapping.indicator);
     this.selectedParams.set({ ...mapping.params });

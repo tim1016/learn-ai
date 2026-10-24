@@ -286,7 +286,7 @@ def tie_envelope(rows: list[dict]) -> TieEnvelope:
     frame = pd.DataFrame(rows).sort_values("timestamp").reset_index(drop=True)
     frame["feature"] = TechnicalFeatures.compute_feature("rsi_14", rows).to_numpy()
     frame["target"] = compute_forward_log_return(bars=rows, horizon_minutes=config.horizon_minutes).values.to_numpy()
-    frame["date"] = pd.to_datetime(frame["timestamp"], unit="ms", utc=True).dt.date.astype(str)
+    frame["date"] = pd.to_datetime(frame["timestamp"], unit="ms", utc=True).dt.tz_convert("America/New_York").dt.date.astype(str)
     counted = compute_information_coefficient(
         frame["feature"], frame["target"], frame["timestamp"], correlation_method=config.ic_correlation_method
     ).daily_ic_dates  # the days the study itself counts
@@ -363,13 +363,15 @@ def test_coarser_bars_fold_to_the_same_bars_as_the_vendor_side_aggregate(world, 
 #: price levels, as the largest absolute difference between the two paths' values at a shared bar, and the window's
 #: mean IC. Prices carry five or six decimals, finer than the grid. The movement of RSI and momentum grows as the price
 #: falls: a rounding of at most 5e-5 is a larger share of a bar-to-bar change on a $2 name than on a $150 one.
-#: Re-record (print ``feature_max_diff`` and ``abs(mean_ic[1] - mean_ic[0])`` per case) only when the pinned tape or the
-#: lake's encoding intentionally changes; never to make a failing test pass. Digits are kept to 1e-10 or finer, below
-#: ``FEATURE_ATOL``, so the recording adds no tolerance of its own.
+#: Re-record (print ``feature_max_diff`` and ``abs(mean_ic[1] - mean_ic[0])`` per case) only when the pinned tape, the
+#: lake's encoding or the IC's definition intentionally changes; never to make a failing test pass. Digits are kept to
+#: 1e-10 or finer, below ``FEATURE_ATOL``, so the recording adds no tolerance of its own. The mean IC was re-recorded
+#: once (#3523), when the daily IC moved from UTC to New York days: this tape holds extended hours in standard time,
+#: whose 19:00 to 20:00 ET bars changed day. Which bars make a day is pinned in ``tests/research/test_ic.py``.
 QUANTIZATION_RECORDED = {
-    "price_150": (150.0, 5, {"mean_ic": 4.640168e-6, "momentum_5m": 6.01537004e-7, "rsi_14": 1.108764307e-2, "realized_vol_30": 2.034791103e-7, "macd_signal": 8.521013899e-6}),
-    "price_12": (12.0, 5, {"mean_ic": 3.989265e-4, "momentum_5m": 7.499870746e-6, "rsi_14": 1.118103039e-1, "realized_vol_30": 2.211433761e-6, "macd_signal": 8.492849363e-6}),
-    "price_2": (2.0, 6, {"mean_ic": 4.171099e-4, "momentum_5m": 4.772232477e-5, "rsi_14": 6.354326903e-1, "realized_vol_30": 1.611649952e-5, "macd_signal": 8.984062728e-6}),
+    "price_150": (150.0, 5, {"mean_ic": 2.343130e-6, "momentum_5m": 6.01537004e-7, "rsi_14": 1.108764307e-2, "realized_vol_30": 2.034791103e-7, "macd_signal": 8.521013899e-6}),
+    "price_12": (12.0, 5, {"mean_ic": 2.674984e-5, "momentum_5m": 7.499870746e-6, "rsi_14": 1.118103039e-1, "realized_vol_30": 2.211433761e-6, "macd_signal": 8.492849363e-6}),
+    "price_2": (2.0, 6, {"mean_ic": 1.182750e-4, "momentum_5m": 4.772232477e-5, "rsi_14": 6.354326903e-1, "realized_vol_30": 1.611649952e-5, "macd_signal": 8.984062728e-6}),
 }
 
 
@@ -382,7 +384,7 @@ def test_prices_finer_than_the_lake_grid_move_each_output_by_its_recorded_amount
 
     Each recorded output is pinned to the movement measured on the pinned tape, so a lake encoding change that moved the
     mean IC by 1e-3 would fail here. The table above is the cost the owner accepted: RSI moves by about 0.01 point on a $150
-    name, 0.1 on a $12 name and 0.6 on a $2 name; the mean IC by 5e-6, 4e-4 and 4e-4. The recording itself is read back
+    name, 0.1 on a $12 name and 0.6 on a $2 name; the mean IC by 2e-6, 3e-5 and 1e-4. The recording itself is read back
     at the float noise of the computation (``precision``, derived under "What float noise can move"): a feature to
     ``FEATURE_ATOL``, the mean IC to the reach of the near-ties in the two series it is taken from, which is nil when
     the series hold none (the $150 tape) and widest on the $2 tape, where the lake's grid manufactures ties.

@@ -44,6 +44,29 @@ fills what is missing; the UI is never a writer), and
 `app/research/lake_study.py` owns the run around a study's math: cache identity,
 the data-source block and the typed refusal. No calculation ownership changes.
 
+**Indicator reliability data admission (#3523).** Indicator reliability (Research
+Lab → Backtests → Reliability) admits lake bars of the session the person picks
+(regular hours by default, or extended) before it computes; its Polygon fetch and its
+bar-length-blind session filter (#3527) are gone from the router.
+`app/services/indicator_reliability_service.py` keeps the warmup
+sizing (`dataset_service.resolve_indicator_window`, unchanged), admits the lead-in
+sessions with the window through the same `study_inputs` admission, folds the
+minute bars to the requested size, and reports the lead-in it really got
+(`data_source.warmup`) where the provider path used a shortened one without a
+word. The same sizing answers `POST /api/research/indicator-reliability/span`, the
+sessions a run asks the lake for, so the page counts what the lake lacks over the
+lead-in too and the browser derives none of it. The study reads minute artifacts only:
+it neither reads nor waits on the derived daily rollup. It has never cached; the
+response carries the identity (input identity, admitted snapshot digest, calculation
+version) a cache or a saved result would key on. No calculation ownership changes: the
+IC, correction, baseline, regime and IR-proxy math stay in
+`app/research/indicator_reliability.py`. Two inputs differ once extended hours are
+in play: a day is the New York date (the UTC date put late after-hours bars with the
+next day, so the overnight mask, the daily IC and the reported train and test dates all
+read the New York date), and the IR proxy's bars a year count the extended span under
+`extended`. Regular-hours numbers are what they were: those bars' New York and UTC dates
+agree, and their bars a year are the regular session's.
+
 Committed lake-file admission (#2456) is owned by
 `PythonDataService/app/data_lake/admission.py`, backed by committed catalog
 receipts. Python reads and LEAN preflight refuse files whose exact bytes have

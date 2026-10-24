@@ -31,7 +31,8 @@ export type LakeRefusalCode =
   | 'captured_before_final'
   | 'data_building'
   | 'data_missing'
-  | 'lake_unavailable';
+  | 'lake_unavailable'
+  | 'warmup_shortened';
 
 /**
  * The session a lake study reads: `regular` is the scheduled session, `extended` every bar the provider served.
@@ -199,6 +200,15 @@ export interface LakeStudyRefusal {
 export interface LakeStudyRefused {
   refusal: LakeStudyRefusal;
   dataSource: LakeStudyDataSource | null;
+}
+
+/**
+ * A refusal as a study's page holds it to show: the refusal, and the session it judged. That is the session its source
+ * records, or the one the run asked for when nothing was read.
+ */
+export interface LakeStudyRefusalShown {
+  readonly refused: LakeStudyRefused;
+  readonly session: LakeSessionPolicy | null;
 }
 
 // ---------------------------------------------------------------------------

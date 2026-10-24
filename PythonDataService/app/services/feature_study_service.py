@@ -40,8 +40,12 @@ and what it reads now, field by field:
   arrives outside 15 to 20 minutes. Nothing is read past the window's end, so
   the last bars of each session and of the window have no target.
 * **Window.** The scheduled sessions in ``[from_date, to_date]`` (inclusive,
-  canonical calendar). Daily IC groups by UTC date while the target masks by
-  New York date; both are unchanged.
+  canonical calendar). Daily IC, the robustness regimes and the target mask all
+  read the New York date. The IC and the regimes read the UTC date until
+  ``feature-study/2``: under ``extended`` in standard time a Friday's 19:00 to
+  20:00 ET bars (Saturday 00:00 to 01:00 UTC) formed a "Saturday" IC of their own,
+  and the last session's evening a day after ``to_date``. Regular hours, whose New
+  York and UTC dates agree, are unchanged to the last bit.
 * **Cache and result.** Before: Redis ``feature_research``, keyed on ticker,
   feature, dates and size, looked up before the fetch, 24 h, not shared across
   sources. Now: a new namespace keyed on the input identity, the admitted
@@ -68,7 +72,9 @@ from app.research.study_inputs import AdjustmentMode, MinuteWindowIdentity, Sess
 
 #: Bump when the feature, target, IC, stationarity, quantile or robustness math changes: a cached result is the
 #: product of the code that made it, and the cache key is the only thing that tells a new run apart from an old one.
-FEATURE_STUDY_CALCULATION_VERSION = "feature-study/1"
+#: /2: the daily IC and the robustness regimes group by New York date, not UTC date (#3523): extended hours in
+#: standard time moved.
+FEATURE_STUDY_CALCULATION_VERSION = "feature-study/2"
 
 #: The lake-sourced cache namespace. Entries written when the provider was the source live under
 #: ``feature_research`` and are never read by a lake request.

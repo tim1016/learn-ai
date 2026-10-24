@@ -27,6 +27,7 @@ from app.research.feature_validation import (
 )
 from app.research.features.ta_features import TechnicalFeatures
 from app.research.target import (
+    SESSION_TIMEZONE,
     TargetResult,
     compute_forward_log_return,
     validate_return_series,
@@ -270,6 +271,7 @@ def run_feature_research(
                 daily_ic_values=ic_result.daily_ic_values,
                 daily_ic_dates=ic_result.daily_ic_dates,
                 bars=bars,
+                date_zone=SESSION_TIMEZONE,
             )
             if report.robustness is not None and report.robustness.train_test is not None:
                 tt = report.robustness.train_test

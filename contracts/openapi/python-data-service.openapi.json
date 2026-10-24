@@ -33900,6 +33900,16 @@
             "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
             "title": "To Date",
             "type": "string"
+          },
+          "warmup_policy": {
+            "default": "allow_shortened",
+            "description": "What to do when the lake cannot supply the whole warmup lead-in the sizing asks for (history floor, symbol listing, sparse bars). 'allow_shortened' computes on the lead-in that exists and reports the shortfall in data_source.warmup; 'require_full' refuses with code 'warmup_shortened'. A lead-in session the vendor failed to supply (rather than answered with no bars) refuses under either policy.",
+            "enum": [
+              "allow_shortened",
+              "require_full"
+            ],
+            "title": "Warmup Policy",
+            "type": "string"
           }
         },
         "required": [
@@ -33968,6 +33978,14 @@
             },
             "title": "Daily Ic Values",
             "type": "array"
+          },
+          "data_source": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ReliabilityDataSource-Output"
+              }
+            ],
+            "description": "The lake input behind this result: identity, admitted snapshot, coverage and warmup"
           },
           "decay_curve": {
             "description": "IC at every integer horizon 1..N on the in-sample period",
@@ -34188,7 +34206,8 @@
           "display_name",
           "start_date",
           "end_date",
-          "bar_count"
+          "bar_count",
+          "data_source"
         ],
         "title": "IndicatorReliabilityResponse",
         "type": "object"
@@ -34965,6 +34984,57 @@
           "help"
         ],
         "title": "KnobDeclaration",
+        "type": "object"
+      },
+      "LakeCacheState": {
+        "properties": {
+          "cached_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the cache stored the result; null when not recorded",
+            "title": "Cached At Ms"
+          },
+          "hit": {
+            "title": "Hit",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "hit",
+          "cached_at_ms"
+        ],
+        "title": "LakeCacheState",
+        "type": "object"
+      },
+      "LakeEffectiveWindow": {
+        "description": "The first and last session admitted (ET midnight, int64 ms UTC), unlike the requested bounds in the identity.",
+        "properties": {
+          "end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Start Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start_ms",
+          "end_ms"
+        ],
+        "title": "LakeEffectiveWindow",
         "type": "object"
       },
       "LaneAccountQuietRead": {
@@ -56417,6 +56487,615 @@
         "title": "RegularSessionFlattenPricing",
         "type": "object"
       },
+      "ReliabilityDataSource-Input": {
+        "description": "The lake data source of a reliability run, plus its warmup report and the identity a stored result would key on.",
+        "properties": {
+          "aggregation": {
+            "title": "Aggregation",
+            "type": "string"
+          },
+          "bar_minutes": {
+            "title": "Bar Minutes",
+            "type": "integer"
+          },
+          "bars_used": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Bars the statistics ran on, after the folding and the warmup trim",
+            "title": "Bars Used"
+          },
+          "cache": {
+            "$ref": "#/components/schemas/LakeCacheState"
+          },
+          "calculation_version": {
+            "title": "Calculation Version",
+            "type": "string"
+          },
+          "corporate_action_versions": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Corporate Action Versions",
+            "type": "object"
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StudyCoverage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "data_root_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Root Id"
+          },
+          "effective_window": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LakeEffectiveWindow"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null until admission succeeds"
+          },
+          "identity_digest": {
+            "description": "Hash of every input that decides the numbers",
+            "title": "Identity Digest",
+            "type": "string"
+          },
+          "kind": {
+            "const": "lake",
+            "title": "Kind"
+          },
+          "minute_bars_read": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "One-minute bars read, warmup lead-in included",
+            "title": "Minute Bars Read"
+          },
+          "price_adjustment_mode": {
+            "enum": [
+              "raw",
+              "polygon_split_adjusted"
+            ],
+            "title": "Price Adjustment Mode",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "result_identity_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "identity + admitted snapshot + calculation version; null when nothing was admitted",
+            "title": "Result Identity Digest"
+          },
+          "session_policy": {
+            "enum": [
+              "regular",
+              "extended"
+            ],
+            "title": "Session Policy",
+            "type": "string"
+          },
+          "snapshot_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "sha256 of every byte admitted; null when nothing was admitted",
+            "title": "Snapshot Digest"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "warmup": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReliabilityWarmup"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Requested against admitted lead-in; null when a refusal came before any bar was read"
+          },
+          "warmup_sessions": {
+            "description": "Lead-in sessions the run read (after any unsupplied prefix was dropped)",
+            "title": "Warmup Sessions",
+            "type": "integer"
+          },
+          "window_end_ms": {
+            "description": "Requested last date, ET midnight, int64 ms UTC",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Window End Ms",
+            "type": "integer"
+          },
+          "window_start_ms": {
+            "description": "Requested first date, ET midnight, int64 ms UTC",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Window Start Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "provider",
+          "symbol",
+          "price_adjustment_mode",
+          "session_policy",
+          "window_start_ms",
+          "window_end_ms",
+          "effective_window",
+          "warmup_sessions",
+          "bar_minutes",
+          "aggregation",
+          "identity_digest",
+          "calculation_version",
+          "data_root_id",
+          "snapshot_digest",
+          "corporate_action_versions",
+          "coverage",
+          "minute_bars_read",
+          "bars_used",
+          "cache",
+          "warmup",
+          "result_identity_digest"
+        ],
+        "title": "ReliabilityDataSource",
+        "type": "object"
+      },
+      "ReliabilityDataSource-Output": {
+        "description": "The lake data source of a reliability run, plus its warmup report and the identity a stored result would key on.",
+        "properties": {
+          "aggregation": {
+            "title": "Aggregation",
+            "type": "string"
+          },
+          "bar_minutes": {
+            "title": "Bar Minutes",
+            "type": "integer"
+          },
+          "bars_used": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Bars the statistics ran on, after the folding and the warmup trim",
+            "title": "Bars Used"
+          },
+          "cache": {
+            "$ref": "#/components/schemas/LakeCacheState"
+          },
+          "calculation_version": {
+            "title": "Calculation Version",
+            "type": "string"
+          },
+          "corporate_action_versions": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Corporate Action Versions",
+            "type": "object"
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StudyCoverage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "data_root_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Root Id"
+          },
+          "effective_window": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LakeEffectiveWindow"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null until admission succeeds"
+          },
+          "identity_digest": {
+            "description": "Hash of every input that decides the numbers",
+            "title": "Identity Digest",
+            "type": "string"
+          },
+          "kind": {
+            "const": "lake",
+            "title": "Kind"
+          },
+          "minute_bars_read": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "One-minute bars read, warmup lead-in included",
+            "title": "Minute Bars Read"
+          },
+          "price_adjustment_mode": {
+            "enum": [
+              "raw",
+              "polygon_split_adjusted"
+            ],
+            "title": "Price Adjustment Mode",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "result_identity_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "identity + admitted snapshot + calculation version; null when nothing was admitted",
+            "title": "Result Identity Digest"
+          },
+          "session_policy": {
+            "enum": [
+              "regular",
+              "extended"
+            ],
+            "title": "Session Policy",
+            "type": "string"
+          },
+          "snapshot_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "sha256 of every byte admitted; null when nothing was admitted",
+            "title": "Snapshot Digest"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "warmup": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReliabilityWarmup"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Requested against admitted lead-in; null when a refusal came before any bar was read"
+          },
+          "warmup_sessions": {
+            "description": "Lead-in sessions the run read (after any unsupplied prefix was dropped)",
+            "title": "Warmup Sessions",
+            "type": "integer"
+          },
+          "window_end_ms": {
+            "description": "Requested last date, ET midnight, int64 ms UTC",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Window End Ms",
+            "type": "integer"
+          },
+          "window_start_ms": {
+            "description": "Requested first date, ET midnight, int64 ms UTC",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Window Start Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "provider",
+          "symbol",
+          "price_adjustment_mode",
+          "session_policy",
+          "window_start_ms",
+          "window_end_ms",
+          "effective_window",
+          "warmup_sessions",
+          "bar_minutes",
+          "aggregation",
+          "identity_digest",
+          "calculation_version",
+          "data_root_id",
+          "snapshot_digest",
+          "corporate_action_versions",
+          "coverage",
+          "minute_bars_read",
+          "bars_used",
+          "cache",
+          "warmup",
+          "result_identity_digest"
+        ],
+        "title": "ReliabilityDataSource",
+        "type": "object"
+      },
+      "ReliabilityRefusedResult": {
+        "description": "The body of a refused run (409, or 503 when the lake cannot be asked): the shared refusal for this study.",
+        "properties": {
+          "data_source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReliabilityDataSource-Input"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when the refusal came before anything was read"
+          },
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "refusal": {
+            "$ref": "#/components/schemas/StudyRefusal"
+          },
+          "status": {
+            "const": "refused",
+            "title": "Status"
+          },
+          "success": {
+            "const": false,
+            "title": "Success"
+          },
+          "ticker": {
+            "title": "Ticker",
+            "type": "string"
+          }
+        },
+        "required": [
+          "success",
+          "status",
+          "error",
+          "refusal",
+          "data_source",
+          "ticker"
+        ],
+        "title": "ReliabilityRefusedResult",
+        "type": "object"
+      },
+      "ReliabilitySpan": {
+        "description": "The scheduled sessions a run of this request asks the lake for: the warmup lead-in and the window.\n\nAnswered from the calendar and the warmup sizing alone; no bar and no lake row is read. ``start_ms`` and ``end_ms``\nare ET midnights (``int64 ms UTC``), like the ``data_source`` block's requested bounds. The lead-in is sized before\nthe lake is asked, so a symbol that lists inside it shortens it later: this is the span the run *asks* for.",
+        "properties": {
+          "end_ms": {
+            "description": "ET midnight of the window's last date",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "start_ms": {
+            "description": "ET midnight of the first session the run admits: the lead-in's first, or the window's start when there is none",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Start Ms",
+            "type": "integer"
+          },
+          "warmup_sessions": {
+            "description": "Lead-in sessions the sizing asks for, never before the provider's history floor",
+            "title": "Warmup Sessions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start_ms",
+          "end_ms",
+          "warmup_sessions"
+        ],
+        "title": "ReliabilitySpan",
+        "type": "object"
+      },
+      "ReliabilitySpanRequest": {
+        "additionalProperties": false,
+        "description": "The part of a reliability request that decides which sessions a run asks the lake for.\n\nIt carries no ``session``: the sessions a run asks the lake for are the same for ``rth`` and ``extended``, and a\nfield that cannot change the answer would be accepted and ignored. A body that sends one is refused (422).",
+        "properties": {
+          "from_date": {
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "title": "From Date",
+            "type": "string"
+          },
+          "indicator_name": {
+            "description": "pandas-ta indicator name (e.g., 'rsi', 'ema')",
+            "title": "Indicator Name",
+            "type": "string"
+          },
+          "indicator_params": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            "description": "Indicator parameters (e.g., {'length': 14}); the lookback they imply sizes the warmup lead-in",
+            "title": "Indicator Params",
+            "type": "object"
+          },
+          "multiplier": {
+            "default": 1,
+            "minimum": 1.0,
+            "title": "Multiplier",
+            "type": "integer"
+          },
+          "symbol": {
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Symbol",
+            "type": "string"
+          },
+          "timespan": {
+            "default": "minute",
+            "enum": [
+              "minute",
+              "hour",
+              "day"
+            ],
+            "title": "Timespan",
+            "type": "string"
+          },
+          "to_date": {
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "title": "To Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from_date",
+          "to_date",
+          "symbol",
+          "indicator_name"
+        ],
+        "title": "ReliabilitySpanRequest",
+        "type": "object"
+      },
+      "ReliabilityWarmup": {
+        "description": "The warmup lead-in the sizing asked for against the one the lake supplied.\n\nBefore the lake, a lead-in cut short by the provider's history floor, the symbol's listing date or sparse\nsessions was computed on without a word. ``shortened`` and ``cause`` say it, ``notice`` says it in a sentence,\nand ``policy`` is the request's ``warmup_policy``: what the run was allowed to do about it.",
+        "properties": {
+          "admitted_bars": {
+            "description": "Bars at the study's resolution before the window's first session",
+            "title": "Admitted Bars",
+            "type": "integer"
+          },
+          "admitted_sessions": {
+            "title": "Admitted Sessions",
+            "type": "integer"
+          },
+          "cause": {
+            "enum": [
+              "none",
+              "provider_history_floor",
+              "symbol_history_starts",
+              "sparse_session_bars"
+            ],
+            "title": "Cause",
+            "type": "string"
+          },
+          "notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The shortfall in a sentence; null when there is none",
+            "title": "Notice"
+          },
+          "policy": {
+            "enum": [
+              "allow_shortened",
+              "require_full"
+            ],
+            "title": "Policy",
+            "type": "string"
+          },
+          "requested_bars": {
+            "description": "Warmup bars the sizing asks for: indicator lookback x the warmup multiplier",
+            "title": "Requested Bars",
+            "type": "integer"
+          },
+          "requested_sessions": {
+            "description": "Lead-in sessions the sizing asks for, never before the provider floor",
+            "title": "Requested Sessions",
+            "type": "integer"
+          },
+          "shortened": {
+            "title": "Shortened",
+            "type": "boolean"
+          },
+          "shortfall_bars": {
+            "title": "Shortfall Bars",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "policy",
+          "requested_bars",
+          "requested_sessions",
+          "admitted_sessions",
+          "admitted_bars",
+          "shortened",
+          "shortfall_bars",
+          "cause",
+          "notice"
+        ],
+        "title": "ReliabilityWarmup",
+        "type": "object"
+      },
       "RemoveAction": {
         "additionalProperties": false,
         "description": "Move: soft-delete this bot from the operator catalog.",
@@ -65730,6 +66409,109 @@
         "title": "StrategyViewValueSpec",
         "type": "object"
       },
+      "StudyArtifactCounts": {
+        "description": "Artifact counts, kept apart from session counts (a session is one minute artifact plus metadata).",
+        "properties": {
+          "fetched": {
+            "title": "Fetched",
+            "type": "integer"
+          },
+          "refreshed": {
+            "title": "Refreshed",
+            "type": "integer"
+          },
+          "reused": {
+            "title": "Reused",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fetched",
+          "reused",
+          "refreshed"
+        ],
+        "title": "StudyArtifactCounts",
+        "type": "object"
+      },
+      "StudyCoverage": {
+        "properties": {
+          "artifacts": {
+            "$ref": "#/components/schemas/StudyArtifactCounts"
+          },
+          "warmup": {
+            "$ref": "#/components/schemas/StudyCoverageGroup"
+          },
+          "window": {
+            "$ref": "#/components/schemas/StudyCoverageGroup"
+          }
+        },
+        "required": [
+          "window",
+          "warmup",
+          "artifacts"
+        ],
+        "title": "StudyCoverage",
+        "type": "object"
+      },
+      "StudyCoverageGroup": {
+        "description": "Distinct-session counts from lake admission for the window or its warmup lead-in.",
+        "properties": {
+          "added": {
+            "description": "Sessions this run made ready",
+            "title": "Added",
+            "type": "integer"
+          },
+          "building": {
+            "title": "Building",
+            "type": "integer"
+          },
+          "captured_before_final": {
+            "description": "Held, but captured before the session's data stopped forming",
+            "title": "Captured Before Final",
+            "type": "integer"
+          },
+          "corrupt": {
+            "title": "Corrupt",
+            "type": "integer"
+          },
+          "expected_sessions": {
+            "title": "Expected Sessions",
+            "type": "integer"
+          },
+          "failed": {
+            "description": "building + corrupt + captured_before_final + unavailable_from_provider",
+            "title": "Failed",
+            "type": "integer"
+          },
+          "missing": {
+            "description": "Sessions not held and not fetched",
+            "title": "Missing",
+            "type": "integer"
+          },
+          "reused": {
+            "description": "Sessions ready before this run began",
+            "title": "Reused",
+            "type": "integer"
+          },
+          "unavailable_from_provider": {
+            "title": "Unavailable From Provider",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_sessions",
+          "reused",
+          "added",
+          "missing",
+          "failed",
+          "building",
+          "corrupt",
+          "captured_before_final",
+          "unavailable_from_provider"
+        ],
+        "title": "StudyCoverageGroup",
+        "type": "object"
+      },
       "StudyDetail": {
         "additionalProperties": false,
         "properties": {
@@ -65916,6 +66698,119 @@
           "detail"
         ],
         "title": "StudyRecordRefusalBody",
+        "type": "object"
+      },
+      "StudyRefusal": {
+        "properties": {
+          "code": {
+            "enum": [
+              "resolution_unsupported",
+              "symbol_not_addressable",
+              "no_sessions_in_window",
+              "window_not_complete",
+              "data_unavailable_from_provider",
+              "data_corrupt",
+              "captured_before_final",
+              "data_building",
+              "data_missing",
+              "lake_unavailable",
+              "warmup_shortened"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StudyCoverage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when admission never started"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "sessions": {
+            "description": "The sessions that could not be made ready; the first of sessions_total",
+            "items": {
+              "$ref": "#/components/schemas/StudySessionIssue"
+            },
+            "title": "Sessions",
+            "type": "array"
+          },
+          "sessions_total": {
+            "title": "Sessions Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "code",
+          "reason",
+          "sessions",
+          "sessions_total",
+          "coverage"
+        ],
+        "title": "StudyRefusal",
+        "type": "object"
+      },
+      "StudySessionIssue": {
+        "description": "One required session admission could not make ready, and why.",
+        "properties": {
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The materializer's own reason code for the session, when it gave one",
+            "title": "Failure Reason"
+          },
+          "group": {
+            "enum": [
+              "window",
+              "warmup"
+            ],
+            "title": "Group",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "missing",
+              "building",
+              "corrupt",
+              "captured_before_final",
+              "unavailable_from_provider"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "trading_date_ms": {
+            "description": "The session's canonical open, int64 ms UTC",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Trading Date Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "group",
+          "trading_date_ms",
+          "outcome",
+          "reason",
+          "failure_reason"
+        ],
+        "title": "StudySessionIssue",
         "type": "object"
       },
       "Subtract-Input": {
@@ -95443,7 +96338,7 @@
     },
     "/api/research/indicator-reliability": {
       "post": {
-        "description": "Analyze indicator reliability using IC with OOS validation.\n\nThis endpoint:\n1. Fetches OHLCV bars for the ticker and date range\n2. Calculates the specified indicator using pandas-ta\n3. Splits data into 70% train / 30% test\n4. Computes IC on both splits for each horizon\n5. Applies Bonferroni and FDR multiple testing corrections\n6. Compares against random baseline (100 shuffled signals)\n7. Returns warnings about overfit risk and data issues\n\nIMPORTANT: This is time-series IC for a single asset, NOT cross-sectional factor IC.",
+        "description": "Analyze indicator reliability using IC with OOS validation.\n\nThis endpoint:\n1. Admits OHLCV bars of the requested session (regular hours by default, or extended) for the ticker and\n   date range (warmup lead-in included) from the data lake, materializing what it lacks; a window the lake\n   cannot admit is refused with a typed code and the coverage counts (409, or 503 when the lake cannot be\n   asked), never computed on a shorter series\n2. Calculates the specified indicator using pandas-ta\n3. Splits data into 70% train / 30% test\n4. Computes IC on both splits for each horizon\n5. Applies Bonferroni and FDR multiple testing corrections\n6. Compares against random baseline (100 shuffled signals)\n7. Returns warnings about overfit risk and data issues\n\nIMPORTANT: This is time-series IC for a single asset, NOT cross-sectional factor IC.",
         "operationId": "calculate_indicator_reliability_api_research_indicator_reliability_post",
         "requestBody": {
           "content": {
@@ -95466,6 +96361,78 @@
             },
             "description": "Successful Response"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReliabilityRefusedResult"
+                }
+              }
+            },
+            "description": "The study did not run: the request names an input it cannot read (a bar size the lake cannot form, a symbol it cannot hold, a window with no session or one still forming), the lake cannot admit the window, or the warmup policy refuses a shortened lead-in. The refusal carries a typed code, the reason, the sessions that could not be made ready and the counts admission reached."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReliabilityRefusedResult"
+                }
+              }
+            },
+            "description": "The data lake's catalog is unavailable; same body as 409."
+          }
+        },
+        "summary": "Calculate Indicator Reliability",
+        "tags": [
+          "research"
+        ]
+      }
+    },
+    "/api/research/indicator-reliability/span": {
+      "post": {
+        "description": "The scheduled sessions a run of this request asks the lake for: the warmup lead-in and the window.\n\nA read: it answers from the calendar and the warmup sizing and touches neither a bar nor the lake. The page counts\nthe sessions of this span that the lake does not hold yet, so its slow-first-run warning covers the lead-in the\nrun admits with the window, which the browser has no calendar to derive.",
+        "operationId": "read_indicator_reliability_span_api_research_indicator_reliability_span_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReliabilitySpanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReliabilitySpan"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReliabilityRefusedResult"
+                }
+              }
+            },
+            "description": "The request names a bar size the lake cannot form, so no span is asked of it; same body as a refused run."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -95477,7 +96444,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Calculate Indicator Reliability",
+        "summary": "Read Indicator Reliability Span",
         "tags": [
           "research"
         ]
