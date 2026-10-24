@@ -104,6 +104,14 @@ previously tracked items (issues #1655, #1671, #1672, #1674, #1677, #1664,
   or `str()` it, and both are exact for `Decimal`. But a future
   `bar.volume * <float>` raises `TypeError` only on lake bars. Fix the
   annotation, to `Decimal | int`, at the next seal re-qualification.
+- **Cross-sectional IV history chooses an expiry's strikes once per run, not once per date
+  (P2, 2026-10-24).** `find_bracket_contracts` picks an expiry's ATM and 25Δ strikes at its
+  first use in the run and reuses them until it leaves the pair: about 13 days on weekly
+  chains, up to 38 on monthly-spaced ones. So a date's IV can depend on where the window
+  starts (measured up to 1.9e-2 on a fully-listed weekly chain), and can differ from the
+  pre-#3528 value on a date that code computed too, where a re-list moves an expiry's first
+  use (measured up to 2.4e-2 ATM on irregular chains). The owner kept the reuse on
+  2026-10-24. #3545
 - **The live option-chain cross-check computes its gap and its tolerance band in Angular (medium,
   2026-10-24).** On an instrument's Options chain in Now · Live IBKR,
   `Frontend/src/app/markets/options/chain/live/live-cross-check.ts` computes
