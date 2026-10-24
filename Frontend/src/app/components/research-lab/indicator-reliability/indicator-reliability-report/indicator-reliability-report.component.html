@@ -1,0 +1,461 @@
+<div class="indicator-reliability">
+  @let res = result();
+  @let best = getBestRow();
+
+  <!-- Run strip — compact "what produced this?" metadata -->
+  <div class="rl-runstrip">
+    <div class="rl-runstrip-field">
+      <span class="rl-runstrip-label">Indicator</span>
+      <span class="rl-runstrip-value">{{ res.display_name }}</span>
+    </div>
+    <div class="rl-runstrip-field">
+      <span class="rl-runstrip-label">Ticker</span>
+      <app-asset-identity class="rl-runstrip-value" [symbol]="res.ticker" size="sm" />
+    </div>
+    <div class="rl-runstrip-field">
+      <span class="rl-runstrip-label">Period</span>
+      <span class="rl-runstrip-value">{{ res.start_date }} → {{ res.end_date }}</span>
+    </div>
+    <div class="rl-runstrip-field">
+      <span class="rl-runstrip-label">Bars</span>
+      <span class="rl-runstrip-value">{{ res.bar_count | number }}</span>
+    </div>
+    <div class="rl-runstrip-field">
+      <span class="rl-runstrip-label">Horizons</span>
+      <span class="rl-runstrip-value">{{ res.results.length }}-bar sweep</span>
+    </div>
+    <div class="rl-runstrip-spacer"></div>
+    <div class="rl-runstrip-status">
+      <span class="rl-runstrip-dot" style="background: var(--bull); box-shadow: 0 0 0 3px rgba(38,166,154,.15)"></span>
+      <span>Complete</span>
+    </div>
+  </div>
+
+  <!-- Verdict hero — decide-for-me summary up top -->
+  @if (verdictAnalysis(); as va) {
+    <div class="verdict-hero-wrap mb-4">
+      <app-indicator-verdict-hero [analysis]="va" />
+    </div>
+  }
+
+  <!-- Warnings (high-priority) -->
+  @if (res.warnings.length > 0) {
+    <div class="warnings-section mb-4">
+      @for (warning of res.warnings; track warning) {
+        <p-message severity="warn" class="mb-2">{{ warning }}</p-message>
+      }
+    </div>
+  }
+
+  @if (best) {
+    <!-- ═══ Hero Verdict Band ═══ -->
+    <section class="hero-band" [attr.data-verdict]="getConfidenceBucket()">
+      <div class="hero-inner">
+        <!-- Confidence gauge -->
+        @let gauge = getGaugeDash();
+        <div class="hero-gauge">
+          <svg viewBox="0 0 220 220" width="220" height="220" aria-hidden="true">
+            <circle cx="110" cy="110" r="90"
+                    stroke="var(--border)" stroke-width="10" fill="none"
+                    [attr.stroke-dasharray]="gauge.full + ' ' + gauge.circumference"
+                    transform="rotate(135 110 110)"
+                    stroke-linecap="round" />
+            <circle cx="110" cy="110" r="90"
+                    [attr.stroke]="getConfidenceColor()" stroke-width="10" fill="none"
+                    [attr.stroke-dasharray]="gauge.filled + ' ' + gauge.circumference"
+                    transform="rotate(135 110 110)"
+                    stroke-linecap="round"
+                    class="hero-gauge-arc" />
+          </svg>
+          <div class="hero-gauge-center">
+            <span class="hero-gauge-label">Confidence</span>
+            <span class="hero-gauge-score mono" [style.color]="getConfidenceColor()">{{ getConfidenceScore() }}</span>
+            <span class="hero-gauge-max mono">/ 100</span>
+            <span class="hero-gauge-verdict mono" [style.borderColor]="getConfidenceColor()" [style.color]="getConfidenceColor()">{{ getConfidenceBucket() }}</span>
+          </div>
+        </div>
+
+        <!-- Verdict copy -->
+        <div class="hero-copy">
+          <h2 class="hero-headline">
+            <span [style.color]="getConfidenceColor()">{{ getVerdictVerb() }}</span>
+            <span class="text-slate-400"> at </span>
+            <span class="mono">{{ best.horizon }}-bar</span>
+            <app-info-icon refKey="confidenceScore" />
+          </h2>
+          <p class="hero-desc">
+            A <b>{{ (best.direction_label).toLowerCase() }}</b><app-info-icon refKey="directionLabel" /> signal.
+            Out-of-sample IC <b class="mono">{{ best.oos_mean_ic !== null ? best.oos_mean_ic.toFixed(3) : '—' }}</b><app-info-icon refKey="heroOosIc" />
+            @if (best.retention_delta_pct !== null) {
+              — <b [style.color]="best.retention_delta_pct >= -30 ? 'var(--bull)' : 'var(--warn)'">{{ best.retention_delta_pct >= 0 ? '+' : '' }}{{ best.retention_delta_pct.toFixed(0) }}% vs in-sample</b><app-info-icon refKey="heroOosVsIs" />,
+            }
+            beats random by <b class="mono">{{ Math.abs(best.ic_vs_random_zscore).toFixed(1) }}σ</b><app-info-icon refKey="heroZvsRandom" />.
+          </p>
+          <div class="reason-pills">
+            @for (pill of getReasonPills(); track pill.label) {
+              <span class="reason-pill" [attr.data-kind]="pill.kind">{{ pill.label }}</span>
+            }
+            <app-info-icon refKey="pillSingleAsset" />
+          </div>
+        </div>
+
+        <!-- Actions -->
+        @if (canRerun()) {
+          <div class="hero-actions">
+            <button class="big-action" (click)="runOnAnotherTicker.emit()">
+              <span class="big-action-title">Run on another ticker</span>
+              <span class="big-action-sub">MSFT · GOOGL · NVDA</span>
+            </button>
+          </div>
+        }
+      </div>
+    </section>
+
+    <!-- ═══ Decision cells: WHEN / WHERE / HOW ═══ -->
+    <section class="decision-band">
+      @let whenCell = getWhenCell();
+      @let whereCell = getWhereCell();
+      @let howCell = getHowCell();
+
+      <div class="decision-cell">
+        <div class="decision-head">
+          <span class="decision-num mono">01</span>
+          <span class="decision-q">When to trade</span>
+          <app-info-icon refKey="whenCell" />
+        </div>
+        <div class="decision-a">{{ whenCell?.answer ?? '—' }}</div>
+        <div class="decision-detail">{{ whenCell?.detail ?? '' }}</div>
+      </div>
+      <div class="decision-cell">
+        <div class="decision-head">
+          <span class="decision-num mono">02</span>
+          <span class="decision-q">Where it works</span>
+          <app-info-icon refKey="whereCell" />
+        </div>
+        <div class="decision-a">{{ whereCell?.answer ?? 'No regime split' }}</div>
+        <div class="decision-detail">{{ whereCell?.detail ?? 'Not enough bars per regime.' }}</div>
+      </div>
+      <div class="decision-cell">
+        <div class="decision-head">
+          <span class="decision-num mono">03</span>
+          <span class="decision-q">How to enter</span>
+          <app-info-icon refKey="howCell" />
+        </div>
+        <div class="decision-a">{{ howCell?.answer ?? '—' }}</div>
+        <div class="decision-detail">{{ howCell?.detail ?? '' }}</div>
+      </div>
+    </section>
+  }
+
+  <!-- ═══ Two-column content grid ═══ -->
+  <section class="content-grid">
+    <!-- LEFT: decay curve + horizon cards + regime bars -->
+    <div class="col-left">
+      @if (res.decay_curve && res.decay_curve.length > 0) {
+        <div class="panel">
+          <header class="panel-header">
+            <div class="panel-title">IC across horizons <app-info-icon refKey="decayCurvePanel" /></div>
+            <div class="panel-subtitle">In-sample. Find where the signal peaks and dies.</div>
+          </header>
+          <div class="panel-body">
+            <div class="chart-container" style="height: 260px">
+              <canvas #decayChart></canvas>
+            </div>
+          </div>
+          @if (getHorizonCards().length > 0) {
+            <div class="horizon-table-wrap">
+              <table class="horizon-table" role="grid" aria-label="IC by forward horizon">
+                <thead>
+                  <tr>
+                    <th scope="col">Horizon</th>
+                    <th scope="col" class="num-col">IC (IS)</th>
+                    <th scope="col" class="num-col">NW t</th>
+                    <th scope="col" class="num-col">p (FDR)</th>
+                    <th scope="col" class="num-col">IC (OOS)</th>
+                    <th scope="col" class="num-col">OOS t</th>
+                    <th scope="col" class="num-col">OOS vs IS</th>
+                    <th scope="col" class="num-col">vs Random</th>
+                    <th scope="col" class="num-col">Sharpe</th>
+                    <th scope="col" class="num-col">n</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (h of getHorizonCards(); track h.horizon) {
+                    @let isSel = selectedHorizon() === h.horizon;
+                    @let isBest = h.horizon === res.best_horizon;
+                    <tr
+                      class="ht-row"
+                      [class.ht-row--selected]="isSel"
+                      [class.ht-row--best]="isBest"
+                      (click)="selectHorizon(h.horizon)"
+                      (keydown.enter)="selectHorizon(h.horizon)"
+                      tabindex="0"
+                      role="row"
+                      [attr.aria-selected]="isSel"
+                    >
+                      <td class="ht-cell ht-cell--horizon">
+                        <span class="ht-horizon-label">{{ h.horizon }}-bar</span>
+                        @if (isBest) {
+                          <span class="ht-best-tag">BEST</span>
+                        }
+                        <span class="ht-strength">{{ h.strength_label }}</span>
+                      </td>
+                      <td class="ht-cell num-col" [style.color]="h.is_mean_ic < 0 ? 'var(--bear)' : 'var(--bull)'">
+                        {{ h.is_mean_ic.toFixed(4) }}
+                      </td>
+                      <td class="ht-cell num-col ht-muted">
+                        {{ (h.is_nw_t_stat ?? h.is_t_stat).toFixed(2) }}
+                      </td>
+                      <td class="ht-cell num-col" [style.color]="h.fdr_p < 0.05 ? 'var(--bull)' : 'var(--text-muted)'">
+                        {{ formatPValue(h.fdr_p) }}
+                      </td>
+                      <td class="ht-cell num-col ht-bold" [style.color]="h.oos_mean_ic !== null ? (h.oos_mean_ic < 0 ? 'var(--bear)' : 'var(--bull)') : 'var(--text-muted)'">
+                        {{ h.oos_mean_ic !== null ? h.oos_mean_ic.toFixed(4) : '—' }}
+                      </td>
+                      <td class="ht-cell num-col ht-muted">
+                        {{ h.oos_t_stat !== null ? h.oos_t_stat.toFixed(2) : '—' }}
+                      </td>
+                      <td class="ht-cell num-col" [style.color]="h.retention_delta_pct !== null ? (h.retention_delta_pct >= -20 ? 'var(--bull)' : 'var(--bear)') : 'var(--text-muted)'">
+                        {{ h.retention_delta_pct !== null ? formatRetentionDelta(h.retention_delta_pct) : '—' }}
+                      </td>
+                      <td class="ht-cell num-col" [style.color]="Math.abs(h.ic_vs_random_zscore) > 3 ? 'var(--bull)' : 'var(--text-muted)'">
+                        {{ formatZScore(h.ic_vs_random_zscore) }}
+                      </td>
+                      <td class="ht-cell num-col ht-muted">
+                        {{ h.sharpe_estimate.toFixed(2) }}
+                      </td>
+                      <td class="ht-cell num-col ht-muted">
+                        {{ h.is_effective_n }}
+                      </td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+              <div class="ht-footer">
+                <span><b class="ht-bull">●</b> {{ countFdrPasses() }}/{{ res.results.length }} horizons pass FDR</span>
+                @if (res.any_significant_after_bonferroni) {
+                  <span><b class="ht-bull">●</b> Bonferroni-corrected</span>
+                }
+                <span>Click a row to focus that horizon</span>
+              </div>
+            </div>
+          }
+        </div>
+      }
+
+      @if (res.regime_results && (res.regime_results.high_vol || res.regime_results.low_vol)) {
+        @let rr = res.regime_results;
+        <div class="panel">
+          <header class="panel-header">
+            <div class="panel-title">Volatility regime crosscheck <app-info-icon refKey="regimePanel" /></div>
+            <div class="panel-subtitle">High vol = above rolling {{ rr.vol_window }}-bar realized-vol median. When does this signal actually work?</div>
+          </header>
+          <div class="panel-body regime-grid">
+            <div class="regime-col">
+              <div class="regime-head"><span class="regime-swatch high"></span><span class="eyebrow">High vol</span><app-info-icon refKey="regimeRowHigh" />@if (rr.high_vol?.[0]?.bars_in_regime; as bars) { <span class="mono text-slate-500 ml-auto">{{ bars | number }} bars</span> }</div>
+              @if (rr.high_vol) {
+                @for (p of rr.high_vol; track p.horizon) {
+                  <div class="regime-row" [class.is-best]="p.horizon === res.best_horizon">
+                    <span class="mono text-xs text-slate-400">{{ p.horizon }}-bar</span>
+                    <span class="mono" [style.color]="p.mean_ic < 0 ? 'var(--bear)' : 'var(--bull)'">{{ p.mean_ic.toFixed(3) }}</span>
+                    <span class="mono text-xs text-slate-500">t {{ p.t_stat.toFixed(1) }} · hit {{ (p.hit_rate * 100).toFixed(0) }}%</span>
+                  </div>
+                }
+              } @else {
+                <div class="regime-empty text-xs text-slate-500">Not enough bars in this regime (need ≥ 50).</div>
+              }
+            </div>
+            <div class="regime-col">
+              <div class="regime-head"><span class="regime-swatch low"></span><span class="eyebrow">Low vol</span><app-info-icon refKey="regimeRowLow" />@if (rr.low_vol?.[0]?.bars_in_regime; as bars) { <span class="mono text-slate-500 ml-auto">{{ bars | number }} bars</span> }</div>
+              @if (rr.low_vol) {
+                @for (p of rr.low_vol; track p.horizon) {
+                  <div class="regime-row" [class.is-best]="p.horizon === res.best_horizon">
+                    <span class="mono text-xs text-slate-400">{{ p.horizon }}-bar</span>
+                    <span class="mono" [style.color]="p.mean_ic < 0 ? 'var(--bear)' : 'var(--bull)'">{{ p.mean_ic.toFixed(3) }}</span>
+                    <span class="mono text-xs text-slate-500">t {{ p.t_stat.toFixed(1) }} · hit {{ (p.hit_rate * 100).toFixed(0) }}%</span>
+                  </div>
+                }
+              } @else {
+                <div class="regime-empty text-xs text-slate-500">Not enough bars in this regime (need ≥ 50).</div>
+              }
+            </div>
+          </div>
+        </div>
+      }
+    </div>
+
+    <!-- RIGHT: checklist + noise floor + sparkline -->
+    <div class="col-right">
+      <div class="panel">
+        <header class="panel-header">
+          <div class="panel-title">Decision checklist <app-info-icon refKey="checklistPanel" /></div>
+          <div class="panel-subtitle">5 tests — every one must pass to trade.</div>
+        </header>
+        <div class="panel-body">
+          <div class="checklist">
+            @for (item of getChecklist(); track item.label; let i = $index) {
+              <div class="checklist-item">
+                <span class="checklist-mark" [attr.data-pass]="item.pass">{{ item.pass ? '✓' : '✗' }}</span>
+                <div class="checklist-body">
+                  <div class="checklist-label">
+                    {{ item.label }}
+                    @switch (i) {
+                      @case (0) { <app-info-icon refKey="checklistFdr" /> }
+                      @case (1) { <app-info-icon refKey="checklistBonferroni" /> }
+                      @case (2) { <app-info-icon refKey="checklistOosHolds" /> }
+                      @case (3) { <app-info-icon refKey="checklistBeatsRandom" /> }
+                      @case (4) { <app-info-icon refKey="checklistEconomicallyMeaningful" /> }
+                    }
+                  </div>
+                  <div class="checklist-detail mono">{{ item.detail }}</div>
+                </div>
+              </div>
+            }
+          </div>
+        </div>
+      </div>
+
+      @let noise = getNoiseFloorBar();
+      @if (noise && best) {
+        <div class="panel">
+          <header class="panel-header">
+            <div class="panel-title">Random baseline <app-info-icon refKey="noiseFloorPanel" /></div>
+            <div class="panel-subtitle">Noise floor from {{ res.random_simulations }} shuffles.</div>
+          </header>
+          <div class="panel-body">
+            <div class="noise-row text-xs mono">
+              <span class="text-slate-500">Random IC</span>
+              <span>{{ best.random_baseline_mean.toFixed(4) }} ± {{ best.random_baseline_std.toFixed(4) }}</span>
+            </div>
+            <div class="noise-bar">
+              <div class="noise-band" [style.left.%]="noise.bandLeftPct" [style.width.%]="noise.bandWidthPct"></div>
+              <div class="noise-center" [style.left.%]="noise.center"></div>
+              <div class="noise-marker" [style.left.%]="noise.icPct" [style.backgroundColor]="best.is_mean_ic < 0 ? 'var(--bear)' : 'var(--bull)'" [style.boxShadow]="'0 0 8px ' + (best.is_mean_ic < 0 ? 'var(--bear)' : 'var(--bull)')"></div>
+              <div class="noise-marker-label mono" [style.left.%]="noise.icPct" [style.color]="best.is_mean_ic < 0 ? 'var(--bear)' : 'var(--bull)'">{{ best.is_mean_ic.toFixed(3) }}</div>
+            </div>
+            <div class="noise-row text-xs mono">
+              <span class="text-slate-500">Your IC ({{ best.horizon }}-bar)</span>
+              <span><b [style.color]="Math.abs(best.ic_vs_random_zscore) > 3 ? 'var(--bull)' : 'var(--warn)'">{{ formatZScore(best.ic_vs_random_zscore) }}</b> from noise</span>
+            </div>
+            @if (best.random_baseline_distribution.length > 0) {
+              <div class="chart-container mt-3" style="height: 180px">
+                <canvas #baselineHist></canvas>
+              </div>
+            }
+          </div>
+        </div>
+      }
+
+      @if (res.daily_ic_values.length > 0) {
+        <div class="panel">
+          <header class="panel-header">
+            <div class="panel-title">Daily IC over time <app-info-icon refKey="dailyIcPanel" /></div>
+            <div class="panel-subtitle">Raw (light) + 20-day rolling mean (bold).</div>
+          </header>
+          <div class="panel-body">
+            <div class="chart-container" style="height: 200px">
+              <canvas #icChart></canvas>
+            </div>
+          </div>
+        </div>
+      }
+    </div>
+  </section>
+
+  <!-- Next Steps -->
+  @if (res.next_steps && res.next_steps.length > 0) {
+    <div class="panel next-steps mt-4">
+      <header class="panel-header">
+        <div class="panel-title">Suggested next steps <app-info-icon refKey="nextStepsPanel" /></div>
+      </header>
+      <div class="panel-body">
+        <ul class="next-steps-list">
+          @for (step of res.next_steps; track step) {
+            <li>{{ step }}</li>
+          }
+        </ul>
+      </div>
+    </div>
+  }
+
+  <!-- Slope analysis (preserved for power users) -->
+  @if (res.slope_results && res.slope_results.length > 0) {
+    <details class="panel mt-4 slope-panel">
+      <summary class="panel-header"><span class="panel-title">Slope variant (indicator's rate of change) <app-info-icon refKey="slopePanel" /></span></summary>
+      <div class="panel-body">
+        <p-table [value]="res.slope_results" size="small" [stripedRows]="true" [scrollable]="true">
+          <ng-template #header>
+            <tr>
+              <th>Horizon</th>
+              <th>IS IC</th>
+              <th>IS NW t</th>
+              <th>IS p (FDR)</th>
+              <th>OOS IC</th>
+              <th>OOS vs IS</th>
+              <th pTooltip="Slope IC is materially stronger (>20%) than raw AND more significant">Adds value?</th>
+              <th pTooltip="Adds value AND OOS-validated. Dash = no OOS data yet.">Use this variant?</th>
+            </tr>
+          </ng-template>
+          <ng-template #body let-row>
+            <tr>
+              <td class="font-medium">{{ row.horizon }}-bar</td>
+              <td>
+                <div class="flex flex-col gap-1">
+                  <p-tag [value]="formatIc(row.is_mean_ic)" [severity]="getIsSeverity(row)" />
+                  <span class="text-[10px] text-slate-500">{{ row.strength_label }}</span>
+                </div>
+              </td>
+              <td class="mono">{{ (row.is_nw_t_stat ?? row.is_t_stat).toFixed(2) }}</td>
+              <td class="mono">{{ formatPValue(row.fdr_p) }}</td>
+              <td>
+                @if (row.oos_mean_ic !== null) {
+                  <p-tag [value]="formatIc(row.oos_mean_ic)" [severity]="getOosSeverity(row)" />
+                } @else {
+                  <span class="text-slate-500">-</span>
+                }
+              </td>
+              <td>
+                @if (row.retention_delta_pct !== null) {
+                  <p-tag
+                    [value]="formatRetentionDelta(row.retention_delta_pct)"
+                    [severity]="getRetentionDeltaSeverity(row.retention_delta_pct)"
+                  />
+                } @else {
+                  <span class="text-slate-500">-</span>
+                }
+              </td>
+              <td>
+                <p-tag
+                  [value]="formatSlopeDecision(row.slope_adds_value)"
+                  [severity]="getSlopeDecisionSeverity(row.slope_adds_value)"
+                />
+              </td>
+              <td>
+                <p-tag
+                  [value]="formatSlopeDecision(row.slope_recommended)"
+                  [severity]="getSlopeDecisionSeverity(row.slope_recommended)"
+                />
+              </td>
+            </tr>
+          </ng-template>
+        </p-table>
+      </div>
+    </details>
+  }
+
+  <!-- Methodology & caveats (collapsible footer) -->
+  <details class="methodology-footer mt-4">
+    <summary>Methodology &amp; caveats</summary>
+    <div class="methodology-grid">
+      <div><b>Train/Test:</b> chronological {{ (res.train_ratio * 100).toFixed(0) }}/{{ (100 - res.train_ratio * 100).toFixed(0) }} split ({{ res.train_start }} → {{ res.test_end }}).</div>
+      <div><b>Multiple testing:</b> {{ res.num_horizons_tested }} horizons; Bonferroni + FDR (Benjamini-Hochberg).</div>
+      <div><b>Random baseline:</b> {{ res.random_simulations }} shuffles as noise floor.</div>
+      <div><b>OOS delta:</b> (|OOS|/|IS| − 1) × 100. Negative = degradation.</div>
+      @if (res.info_footnotes) {
+        @for (note of res.info_footnotes; track note) {
+          <div class="methodology-note"><i class="pi pi-info-circle mr-1" aria-hidden="true"></i>{{ note }}</div>
+        }
+      }
+    </div>
+  </details>
+</div>
