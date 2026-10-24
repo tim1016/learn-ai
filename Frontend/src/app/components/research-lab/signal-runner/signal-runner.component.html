@@ -138,6 +138,7 @@
     mode="configure"
     [entry]="activeEntry()"
     [paramConfigs]="activeParamConfigs()"
+    [showRelated]="false"
     (paramChange)="onModalParamChange($event)"
     (resetDefaults)="resetSelectedToDefaults()"
     (resetParam)="resetSelectedParam($event)" />
