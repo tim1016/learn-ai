@@ -52,7 +52,9 @@ fetch of the underlying, are gone. `app/research/cross_sectional_inputs.py`
 admits each member through the same `study_inputs.admit_minute_inputs` and folds
 the admitted minutes to daily rows with the lake's own reduction
 (`derived_daily.aggregate_minute_to_daily`); a member the lake cannot admit is
-excluded with a typed reason, and a universe with no admissible member refuses.
+excluded with a typed reason (`app/research/study_universe.py` names every
+exclusion and builds the universe block), and a universe with no admissible member
+refuses.
 `app/services/cross_sectional_study_service.py` runs the job and keys the result
 cache on each member's admitted snapshot digest in a new namespace.
 The option inputs (expiries, contracts, option bars, the risk-free rate) stay
