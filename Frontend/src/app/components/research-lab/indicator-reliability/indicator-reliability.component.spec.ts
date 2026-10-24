@@ -23,6 +23,7 @@ const group = (over: Record<string, number> = {}) => ({
   failed: 0,
   building: 0,
   corrupt: 0,
+  captured_before_final: 0,
   unavailable_from_provider: 0,
   ...over,
 });

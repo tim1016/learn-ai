@@ -115,7 +115,7 @@ async def test_a_completed_study_carries_a_lake_data_source_with_coverage_warmup
     assert (source["session_policy"], source["bar_minutes"], source["price_adjustment_mode"]) == ("regular", 1, "polygon_split_adjusted")
     assert source["coverage"]["window"] == {
         "expected_sessions": len(WINDOW), "reused": 0, "added": len(WINDOW), "missing": 0, "failed": 0,
-        "building": 0, "corrupt": 0, "unavailable_from_provider": 0,
+        "building": 0, "corrupt": 0, "captured_before_final": 0, "unavailable_from_provider": 0,
     }
     assert source["coverage"]["warmup"]["expected_sessions"] == 1 and source["coverage"]["warmup"]["added"] == 1
     assert source["warmup"] == {

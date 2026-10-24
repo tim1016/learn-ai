@@ -64641,6 +64641,11 @@
             "title": "Building",
             "type": "integer"
           },
+          "captured_before_final": {
+            "description": "Held, but captured before the session's data stopped forming",
+            "title": "Captured Before Final",
+            "type": "integer"
+          },
           "corrupt": {
             "title": "Corrupt",
             "type": "integer"
@@ -64650,7 +64655,7 @@
             "type": "integer"
           },
           "failed": {
-            "description": "building + corrupt + unavailable_from_provider",
+            "description": "building + corrupt + captured_before_final + unavailable_from_provider",
             "title": "Failed",
             "type": "integer"
           },
@@ -64677,6 +64682,7 @@
           "failed",
           "building",
           "corrupt",
+          "captured_before_final",
           "unavailable_from_provider"
         ],
         "title": "StudyCoverageGroup",
@@ -64849,6 +64855,7 @@
               "window_not_complete",
               "data_unavailable_from_provider",
               "data_corrupt",
+              "captured_before_final",
               "data_building",
               "data_missing",
               "lake_unavailable",
@@ -64923,6 +64930,7 @@
               "missing",
               "building",
               "corrupt",
+              "captured_before_final",
               "unavailable_from_provider"
             ],
             "title": "Outcome",

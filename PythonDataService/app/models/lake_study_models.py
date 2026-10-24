@@ -28,9 +28,10 @@ class StudyCoverageGroup(BaseModel):
     reused: int = Field(..., description="Sessions ready before this run began")
     added: int = Field(..., description="Sessions this run made ready")
     missing: int = Field(..., description="Sessions not held and not fetched")
-    failed: int = Field(..., description="building + corrupt + unavailable_from_provider")
+    failed: int = Field(..., description="building + corrupt + captured_before_final + unavailable_from_provider")
     building: int
     corrupt: int
+    captured_before_final: int = Field(..., description="Held, but captured before the session's data stopped forming")
     unavailable_from_provider: int
 
 
@@ -90,7 +91,7 @@ class StudySessionIssue(BaseModel):
 
     group: Literal["window", "warmup"]
     trading_date_ms: TimestampMs = Field(..., description="The session's canonical open, int64 ms UTC")
-    outcome: Literal["missing", "building", "corrupt", "unavailable_from_provider"]
+    outcome: Literal["missing", "building", "corrupt", "captured_before_final", "unavailable_from_provider"]
     reason: str
     failure_reason: str | None = Field(..., description="The materializer's own reason code for the session, when it gave one")
 
