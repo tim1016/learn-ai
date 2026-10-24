@@ -1,12 +1,9 @@
 import { ChangeDetectionStrategy, Component, computed, effect, inject, untracked } from '@angular/core';
-import { toSignal } from '@angular/core/rxjs-interop';
-import { ActivatedRoute, Router } from '@angular/router';
 
 import { formatReceiptLabel } from '../../shared/pipes/receipt-label.pipe';
 import type { WorkspaceStateContent } from '../../shared/workspace/workspace-state';
 import { WorkspaceStateBlockComponent } from '../../shared/workspace/workspace-state-block.component';
 import { TimestampDisplayPipe } from '../../shared/timestamp';
-import { ADJUSTMENT_QUERY_KEY as TREE_QUERY_KEY } from '../instrument-context';
 import { InstrumentContextService } from '../instrument-context.service';
 import { DataFillComponent } from './data-fill.component';
 import { DataGapsComponent } from './data-gaps.component';
@@ -15,12 +12,10 @@ import type { AdjustmentTree } from './instrument-data';
 import { InstrumentDataStore, type InspectionRequest } from './instrument-data.store';
 import { QualityEvidenceComponent } from './quality-evidence/quality-evidence.component';
 
-/** The tab keeps its tree in `TREE_QUERY_KEY`; the context's own keys are the shell's. */
-const DEFAULT_TREE: AdjustmentTree = 'polygon_split_adjusted';
-
+/** The lake trees the place can read. The choice is the context's, so the Chart and this tab read the same one. */
 const TREE_CHOICES: readonly { readonly value: AdjustmentTree; readonly label: string }[] = [
-  { value: 'polygon_split_adjusted', label: 'Split-adjusted (the chart reads this)' },
-  { value: 'raw', label: 'Raw (Returns reads this, with its factor file)' },
+  { value: 'polygon_split_adjusted', label: 'Split-adjusted' },
+  { value: 'raw', label: 'Raw' },
 ];
 
 /**
@@ -29,7 +24,10 @@ const TREE_CHOICES: readonly { readonly value: AdjustmentTree; readonly label: s
  *
  * Opening it reads Python's coverage and readiness for the request and fills
  * nothing, so a gap can be looked at before anything repairs it. Coming back
- * with the request unchanged shows the reading the place holds. Check reads
+ * with the request unchanged shows the reading the place holds. The price
+ * adjustment is part of the place's context, in the address: the Chart reads
+ * the same tree this tab inspects, a tab change carries it, and a reload keeps
+ * it. Returns reads its own (split and dividend adjusted from the raw bars). Check reads
  * again and Fill repairs the gaps through the lake's own admission; both are
  * the person's explicit action. The lake stores whole-day minute bars, so the
  * timeframe and the session of the context do not change what it holds, and
@@ -52,23 +50,18 @@ const TREE_CHOICES: readonly { readonly value: AdjustmentTree; readonly label: s
 export class InstrumentDataComponent {
   private readonly context = inject(InstrumentContextService);
   private readonly store = inject(InstrumentDataStore);
-  private readonly route = inject(ActivatedRoute);
-  private readonly router = inject(Router);
-  private readonly query = toSignal(this.route.queryParamMap, { initialValue: this.route.snapshot.queryParamMap });
 
   protected readonly treeChoices = TREE_CHOICES;
   protected readonly inspection = this.store.inspection;
 
-  protected readonly tree = computed<AdjustmentTree>(() =>
-    this.query().get(TREE_QUERY_KEY) === 'raw' ? 'raw' : DEFAULT_TREE,
-  );
+  protected readonly tree = computed<AdjustmentTree>(() => this.context.shown().adjustment);
 
   /** What the lake is asked about: the committed window of the address and this tab's tree. */
   protected readonly request = computed<InspectionRequest | null>(() => {
     const context = this.context.context();
     return context === null
       ? null
-      : { symbol: this.context.symbol(), from: context.window.from, to: context.window.to, tree: this.tree() };
+      : { symbol: this.context.symbol(), from: context.window.from, to: context.window.to, tree: context.adjustment };
   });
 
   /** Said when the context names a setting the lake's whole-day files do not depend on. */
@@ -122,13 +115,7 @@ export class InstrumentDataComponent {
   }
 
   protected onTreePicked(event: Event): void {
-    if (!(event.target instanceof HTMLSelectElement)) return;
-    const tree = event.target.value === 'raw' ? 'raw' : DEFAULT_TREE;
-    void this.router.navigate([], {
-      relativeTo: this.route,
-      queryParams: { [TREE_QUERY_KEY]: tree === DEFAULT_TREE ? null : tree },
-      queryParamsHandling: 'merge',
-    });
+    if (event.target instanceof HTMLSelectElement) this.context.commitAdjustment(event.target.value);
   }
 
   protected check(): void {

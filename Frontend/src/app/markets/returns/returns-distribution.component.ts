@@ -3,10 +3,11 @@ import {
   Component,
   computed,
   inject,
+  linkedSignal,
   signal,
 } from '@angular/core';
 import { rxResource } from '@angular/core/rxjs-interop';
-import { EMPTY, of, tap } from 'rxjs';
+import { of, tap } from 'rxjs';
 
 import { AssetIdentityComponent } from '../../shared/asset-identity/asset-identity.component';
 import { etIsoDate } from '../../shared/date/et-midnight';
@@ -31,9 +32,13 @@ const KIND_LABELS: readonly { kind: ReturnKind; label: string; hint: string }[] 
 
 interface StudyRequest {
   ticker: string;
-  startMsUtc: number | null;
-  endMsUtc: number | null;
+  startMsUtc: number;
+  endMsUtc: number;
   binWidthPct: number;
+}
+
+function scopeKey(scope: { ticker: string; startMsUtc: number; endMsUtc: number }): string {
+  return `${scope.ticker}|${scope.startMsUtc}|${scope.endMsUtc}`;
 }
 
 /** Exhaustive capture-status copy — one branch per member of the closed
@@ -75,6 +80,13 @@ function captureLineFor(receipt: {
  * same request shows the study the place already holds (`ReturnsStudyHold`).
  * The window travels to Python as the workspace's int64 ms UTC numbers — no
  * client-side date math.
+ *
+ * The study fetches the sessions the lake lacks into the lake before it
+ * computes (capture on demand), so opening the tab must not run it: it runs
+ * only on the person's Run, for the instrument and window that Run named, and
+ * a study the place already holds is shown again without one. Another
+ * instrument or window waits for its own Run; the bin width of a study that
+ * was run is a parameter of that study and re-runs it.
  */
 @Component({
   selector: 'app-returns-distribution',
@@ -102,15 +114,32 @@ export class ReturnsDistributionComponent {
   readonly windowStartMs = computed(() => this.store.committedWindow()?.startMsUtc ?? null);
   readonly windowEndMs = computed(() => this.store.committedWindow()?.endMsUtc ?? null);
 
-  readonly study = rxResource<ReturnDistributionStudy, StudyRequest>({
-    params: (): StudyRequest => ({
-      ticker: this.ticker(),
-      startMsUtc: this.windowStartMs(),
-      endMsUtc: this.windowEndMs(),
-      binWidthPct: this.binWidthPct(),
-    }),
+  /** The instrument and window the study would be about, or `null` while the place has no committed window. */
+  private readonly scope = computed(() => {
+    const ticker = this.ticker();
+    const startMsUtc = this.windowStartMs();
+    const endMsUtc = this.windowEndMs();
+    return !ticker || startMsUtc === null || endMsUtc === null ? null : { ticker, startMsUtc, endMsUtc };
+  });
+
+  /** Whether the person pressed Run for the current instrument and window. Another scope starts unrun, and so does coming back to this one. */
+  private readonly ran = linkedSignal<string | null, boolean>({
+    source: () => {
+      const scope = this.scope();
+      return scope === null ? null : scopeKey(scope);
+    },
+    computation: () => false,
+  });
+
+  readonly study = rxResource<ReturnDistributionStudy, StudyRequest | undefined>({
+    // Idle (no request) until this scope was run, or is already held from a run.
+    params: (): StudyRequest | undefined => {
+      const scope = this.scope();
+      if (scope === null) return undefined;
+      const asked = this.ran() || this.hold.holdsScope(scope.ticker, scope.startMsUtc, scope.endMsUtc);
+      return asked ? { ...scope, binWidthPct: this.binWidthPct() } : undefined;
+    },
     stream: ({ params }) => {
-      if (!params.ticker || params.startMsUtc === null || params.endMsUtc === null) return EMPTY;
       const query = {
         symbol: params.ticker,
         fromMsUtc: params.startMsUtc,
@@ -124,6 +153,14 @@ export class ReturnsDistributionComponent {
         : this.service.distribution(query).pipe(tap((study) => this.hold.put(query, study)));
     },
   });
+
+  /** The scope is committed and nobody has asked for the study over it: the tab says so and waits. */
+  readonly waitingForRun = computed(() => this.scope() !== null && this.study.status() === 'idle');
+
+  /** The person's Run: the study over the committed instrument and window, and the capture it may need. */
+  run(): void {
+    if (this.scope() !== null) this.ran.set(true);
+  }
 
   readonly activeKindDistribution = computed(() => {
     const kinds = this.study.value()?.kinds ?? [];

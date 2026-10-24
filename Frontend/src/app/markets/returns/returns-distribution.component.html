@@ -4,6 +4,18 @@
       <p class="rd__empty">
         Pick a window above — the study follows the committed window.
       </p>
+    } @else if (waitingForRun()) {
+      <div class="rd__idle">
+        <p class="rd__empty">
+          The study has not been run for <app-asset-identity [symbol]="t" size="sm" /> over this window.
+          Opening this tab fetches nothing.
+        </p>
+        <p class="rd__empty">
+          Running it first fetches any sessions the lake lacks for the window into the lake, then measures the
+          daily moves from the lake's minute bars. A first-time capture can take a minute.
+        </p>
+        <button type="button" class="rd__run" (click)="run()">Run the study</button>
+      </div>
     } @else if (study.isLoading()) {
       <p class="rd__empty rd__loading">
         Fetching <app-asset-identity [symbol]="t" size="sm" /> minute bars into

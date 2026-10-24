@@ -40,10 +40,16 @@ logger = logging.getLogger(__name__)
 LIVE_QUOTE_MAX_AGE_MS = 2 * 60_000
 #: The vendor stamps a snapshot with the nanosecond it was updated; one stamped further ahead than this is wrong.
 SNAPSHOT_FUTURE_TOLERANCE_MS = 60_000
+#: How long the one vendor snapshot request may take, pacing included, before the rows fall back to the last close. A
+#: header or a list page waits at most this long on a slow vendor (the SDK's own timeouts are 10 s each, with retries).
+SNAPSHOT_DEADLINE_S = 5.0
 _NANOSECONDS_PER_MILLISECOND = 1_000_000
 #: Nanoseconds since the epoch for 1973 and for the end of year 9999: outside it, the stamp is not nanoseconds.
 _MIN_PLAUSIBLE_NS = 10**17
 _MAX_PLAUSIBLE_NS = MAX_TIMESTAMP_MS * _NANOSECONDS_PER_MILLISECOND
+#: The same bounds in milliseconds, for the minute bar's own start.
+_MIN_PLAUSIBLE_MS = _MIN_PLAUSIBLE_NS // _NANOSECONDS_PER_MILLISECOND
+_MINUTE_MS = 60_000
 
 
 class LiveBars(Protocol):
@@ -89,16 +95,32 @@ class SnapshotBatchClient(Protocol):
 
 
 class PolygonSnapshotSource:
-    """The vendor's delayed snapshot: one request for every symbol that wants it."""
+    """The vendor's delayed snapshot: one paced request for every symbol that wants it, with a deadline of its own.
 
-    def __init__(self, client: SnapshotBatchClient) -> None:
+    The client paces the request against the plan's per-minute allowance (``get_stock_snapshots`` takes the same
+    throttle every other vendor call does). ``deadline_s`` bounds the whole call, pacing included: a vendor that does
+    not answer in time costs the rows their snapshot, said as a reason, and not the page its answer. The request
+    itself runs on a worker thread that cannot be interrupted, so a late answer is dropped, not used.
+    """
+
+    def __init__(self, client: SnapshotBatchClient, *, deadline_s: float = SNAPSHOT_DEADLINE_S) -> None:
         self._client = client
+        self._deadline_s = deadline_s
 
     async def latest(self, symbols: Sequence[str], now_ms: int) -> Mapping[str, Reading]:
         if not symbols:
             return {}
         try:
-            rows = await asyncio.to_thread(self._client.get_stock_snapshots, list(symbols))
+            rows = await asyncio.wait_for(
+                asyncio.to_thread(self._client.get_stock_snapshots, list(symbols)), timeout=self._deadline_s
+            )
+        except TimeoutError:
+            logger.warning(
+                "The vendor snapshot did not answer in time",
+                extra={"action": "instrument_facts_snapshot_timeout", "symbols": len(symbols), "deadline_s": self._deadline_s},
+            )
+            reason = f"The vendor snapshot did not answer within {self._deadline_s:g} s."
+            return {symbol: Miss(reason) for symbol in symbols}
         except Exception as exc:
             # The vendor SDK raises its own errors and urllib3's; whichever it is, the snapshot is unavailable for this
             # batch and the rows fall back to the last close, saying so. The failure itself is logged in full.
@@ -122,24 +144,39 @@ def _positive_price(value: object) -> float | None:
     return float(value) if isinstance(value, (int, float)) and math.isfinite(value) and value > 0 else None
 
 
+def _plausible_ms(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and _MIN_PLAUSIBLE_MS <= value <= MAX_TIMESTAMP_MS
+
+
 def _snapshot_reading(row: Mapping[str, Any], now_ms: int) -> Reading:
-    """The snapshot's latest trade price and the instant the vendor says it updated.
+    """The snapshot's latest trade price and the instant that price belongs to.
 
     The price is the newest minute bar's close, else the day's close so far. The vendor clears a snapshot at
     midnight ET and repopulates it from about 04:00, so before that it holds no price and the read falls through.
+
+    A minute bar's close is stated as of the end of its own minute, never later than the snapshot's update stamp
+    (a minute still forming is no later than the vendor's own clock). The update stamp alone is not the price's time:
+    a quote can move it after the last trade. The day bar has no time of its own, so a price taken from it carries
+    the snapshot's update stamp, the only time the vendor gives for it, which is an upper bound on when it traded.
     """
     minute: Mapping[str, Any] = row.get("min") or {}
     day: Mapping[str, Any] = row.get("day") or {}
-    price = _positive_price(minute.get("close")) or _positive_price(day.get("close"))
+    minute_price = _positive_price(minute.get("close"))
+    price = minute_price or _positive_price(day.get("close"))
     if price is None:
         return Miss("The vendor snapshot carries no trade price yet today.")
     updated = row.get("updated")
     if not isinstance(updated, int) or isinstance(updated, bool) or not _MIN_PLAUSIBLE_NS <= updated <= _MAX_PLAUSIBLE_NS:
         return Miss("The vendor snapshot carries no readable observation time.")
-    as_of_ms = updated // _NANOSECONDS_PER_MILLISECOND
-    if as_of_ms > now_ms + SNAPSHOT_FUTURE_TOLERANCE_MS:
+    updated_ms = updated // _NANOSECONDS_PER_MILLISECOND
+    if updated_ms > now_ms + SNAPSHOT_FUTURE_TOLERANCE_MS:
         return Miss("The vendor snapshot is stamped after now, so its time cannot be trusted.")
-    return Observation(price=price, as_of_ms=as_of_ms)
+    if minute_price is None:
+        return Observation(price=price, as_of_ms=updated_ms)
+    started = minute.get("timestamp")
+    if not _plausible_ms(started):
+        return Miss("The vendor snapshot's minute bar carries no readable time, so when its price traded is not known.")
+    return Observation(price=price, as_of_ms=min(started + _MINUTE_MS, updated_ms))
 
 
 class LakeCloseSource:

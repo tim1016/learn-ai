@@ -47,7 +47,7 @@ vi.mock('lightweight-charts', () => {
 const SESSIONS_URL = `${environment.pythonServiceUrl}/api/data-lab/sessions`;
 const SPY_SETUP = '6f9619ff-8b86-d011-b42d-00c04fc964ff';
 const QQQ_SETUP = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
-const OPENED_ADDRESS = '/markets/SPY/chart?timeframe=5m&session=extended&from=2026-04-15&to=2026-05-15';
+const OPENED_ADDRESS = '/markets/SPY/chart?timeframe=5m&session=extended&forwardFill=off&from=2026-04-15&to=2026-05-15';
 const ELSEWHERE = 'from=2026-01-02&to=2026-02-27';
 const OLD_ADDRESSES = [{ path: 'data-lab', loadChildren: () => DATA_LAB_ROUTES }];
 
@@ -174,6 +174,30 @@ describe('a saved Data Lab setup, under its instrument (T21)', () => {
     expect(await screen.findByText(/Quality issues found: 2 total/)).toBeTruthy();
     await expectNoChartRequest(opened);
     expectRecordsUntouched(opened.http);
+  });
+
+  it('writes the setup\'s raw prices and forward-fill choice into the address, so the chart keeps them through a reload and the tabs', async () => {
+    const opened = await openLoaded(`/markets/SPY/chart?${ELSEWHERE}`);
+
+    await openFromDrawer(opened, 'Apple review', SPY_SETUP, setup(SPY_SETUP, 'SPY', { adjusted: false }), [summary(SPY_SETUP, 'SPY', 'Apple review')]);
+
+    const address = '/markets/SPY/chart?timeframe=5m&session=extended&adjustment=raw&forwardFill=off&from=2026-04-15&to=2026-05-15';
+    await waitFor(() => expect(opened.router.url).toBe(address));
+    expect(opened.store().committedScope()).toMatchObject({ adjusted: false, forwardFill: false });
+    // The saved chart answered exactly this request, so the address agreeing with the store asks for nothing.
+    expect(await screen.findByText(/Quality issues found: 2 total/)).toBeTruthy();
+    await expectNoChartRequest(opened);
+    expect(screen.getByRole('link', { name: 'Data' }).getAttribute('href')).toBe(
+      '/markets/SPY/data?from=2026-04-15&to=2026-05-15&timeframe=5m&session=extended&adjustment=raw&forwardFill=off',
+    );
+  });
+
+  it('asks the chart for the tree and the forward fill the address names when it is loaded again, as after a reload', async () => {
+    const opened = await openPlace('/markets/SPY/chart?timeframe=5m&adjustment=raw&forwardFill=off&from=2026-04-15&to=2026-05-15');
+
+    const request = await chartRequest(opened.http);
+    expect(request.request.body).toMatchObject({ adjusted: false, forward_fill: false });
+    request.flush(chartResponse(500));
   });
 
   it('opens a setup saved for another instrument under that instrument', async () => {

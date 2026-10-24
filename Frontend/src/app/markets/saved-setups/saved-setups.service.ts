@@ -13,7 +13,7 @@ import {
 } from '../../services/data-lab-session.service';
 import { chartRequestIdentity } from '../chart/chart-request';
 import { MARKETS_ROUTE, instrumentPageOf } from '../instrument-address';
-import { SETUP_QUERY_KEY } from '../instrument-context';
+import { ADJUSTMENT_QUERY_KEY, DEFAULT_ADJUSTMENT, FORWARD_FILL_QUERY_KEY, SETUP_QUERY_KEY } from '../instrument-context';
 import { InstrumentContextService } from '../instrument-context.service';
 import { isShowableChart, planSetupOpening, type SetupOpening } from './saved-setup';
 
@@ -206,13 +206,21 @@ export class SavedSetupsService {
   }
 
   /**
-   * Moves the address to the setup's instrument and context. A setup opened from
+   * Moves the address to the setup's instrument and context (window, bar timeframe, session, price adjustment and
+   * forward fill: the address is where the tabs read them, so a reload or Back keeps the setup's). A setup opened from
    * the drawer is a chart, so it opens on the Chart tab; one an address asked
    * for stays on the page that address named (Build dataset, Returns, Data).
    */
   private async moveTo(plan: SetupOpening, fromAddress: boolean): Promise<void> {
-    const { window, timeframe, session } = plan.address;
-    const queryParams: Params = { timeframe, session, ...(window === null ? {} : { from: window.from, to: window.to }) };
+    const { window, timeframe, session, adjustment, forwardFill } = plan.address;
+    const queryParams: Params = {
+      timeframe,
+      session,
+      // The defaults are an absent key, as the place writes them.
+      ...(adjustment === DEFAULT_ADJUSTMENT ? {} : { [ADJUSTMENT_QUERY_KEY]: adjustment }),
+      ...(forwardFill ? {} : { [FORWARD_FILL_QUERY_KEY]: 'off' }),
+      ...(window === null ? {} : { from: window.from, to: window.to }),
+    };
     const page = (fromAddress ? instrumentPageOf(this.router.url) : null) ?? ['chart'];
     await this.router.navigate([MARKETS_ROUTE, plan.ticker, ...page], { queryParams, replaceUrl: fromAddress });
   }

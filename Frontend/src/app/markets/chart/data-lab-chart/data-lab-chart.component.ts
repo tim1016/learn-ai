@@ -15,6 +15,8 @@ import {
   UTCTimestamp,
 } from 'lightweight-charts';
 import { environment } from '../../../../environments/environment';
+import { utcDayEndMs } from '../../../components/data-lab/data-lab-request-mapper';
+import { parseYmdMsUtc } from '../../../components/data-lab/data-lab-scope';
 import { createAppChart } from '../../../shared/charts/chart-utils';
 import { QualityModalComponent } from '../quality-modal/quality-modal.component';
 import type {
@@ -719,15 +721,27 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
 
     this.volumeSeries.setData(volumeData);
 
-    // Set visible range to actual data bounds, clamped to the input date range
-    const inputFrom = new Date(this.fromDate()).getTime() / 1000;
-    const inputTo = new Date(this.toDate() + 'T23:59:59').getTime() / 1000;
+    // Set visible range to actual data bounds, clamped to the committed window
+    const { startMs, endMs } = this.windowBoundsMs();
     const dataFrom = candleData[0].time as number;
     const dataTo = candleData[candleData.length - 1].time as number;
     this.mainChart?.timeScale().setVisibleRange({
-      from: Math.max(inputFrom, dataFrom) as UTCTimestamp,
-      to: Math.min(inputTo, dataTo) as UTCTimestamp,
+      from: (startMs === null ? dataFrom : Math.max(Math.floor(startMs / 1000), dataFrom)) as UTCTimestamp,
+      to: (endMs === null ? dataTo : Math.min(Math.floor(endMs / 1000), dataTo)) as UTCTimestamp,
     });
+  }
+
+  /**
+   * The committed window as int64 ms UTC: the numeric window the host gave, else the same anchors built from its
+   * dates (UTC midnight of the first, the final instant of the last). A date string is never parsed in the viewer's
+   * zone. `null` for an end that is not a date, so the range follows the data there.
+   */
+  private windowBoundsMs(): { readonly startMs: number | null; readonly endMs: number | null } {
+    const lastDay = parseYmdMsUtc(this.toDate());
+    return {
+      startMs: this.startMsUtc() ?? parseYmdMsUtc(this.fromDate()),
+      endMs: this.endMsUtc() ?? (lastDay === null ? null : utcDayEndMs(lastDay)),
+    };
   }
 
   // ──────────────────────────────────────────────

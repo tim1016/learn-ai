@@ -1,4 +1,4 @@
-import { Component, signal } from '@angular/core';
+import { Component, signal, type WritableSignal } from '@angular/core';
 import { render, screen, waitFor } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { of } from 'rxjs';
@@ -44,6 +44,11 @@ function fakeStore() {
       endMsUtc: Date.UTC(2024, 6, 30, 23, 59, 59),
     }),
   } as unknown as DataLabWorkspaceStore;
+}
+
+/** The person's Run: opening the tab runs nothing, so every study on screen starts with this click. */
+async function run(): Promise<void> {
+  await userEvent.click(await screen.findByRole('button', { name: 'Run the study' }));
 }
 
 function fakeService() {
@@ -98,8 +103,9 @@ describe('ReturnsDistributionComponent', () => {
         ReturnsStudyHold,
       ],
     });
+    await run();
 
-    expect(screen.getByText('Days studied')).toBeTruthy();
+    expect(await screen.findByText('Days studied')).toBeTruthy();
     expect(screen.getAllByText('2').length).toBeGreaterThan(0);
     expect(screen.getByText('VaR 95% (1 day)')).toBeTruthy();
     expect(
@@ -126,9 +132,10 @@ describe('ReturnsDistributionComponent', () => {
         ReturnsStudyHold,
       ],
     });
+    await run();
 
     expect(
-      screen.getByText(/This request could not populate the data lake/),
+      await screen.findByText(/This request could not populate the data lake/),
     ).toBeTruthy();
     expect(screen.getByText(/TimeoutError: deadline/)).toBeTruthy();
     expect(screen.queryByText(/already up to date/)).toBeNull();
@@ -144,10 +151,12 @@ describe('ReturnsDistributionComponent', () => {
       ],
     });
 
+    await run();
+
     // Both kinds report nDays=2 in this fixture; the kind identity is what
     // the toggle must swap — visible through which bins the chart redraws
     // with when the signal changes.
-    await userEvent.click(screen.getByRole('button', { name: 'Session only' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Session only' }));
     await waitFor(() => {
       const chart = harness.instances.at(-1);
       expect(chart?.config.options.onClick).toBeTypeOf('function');
@@ -164,6 +173,8 @@ describe('ReturnsDistributionComponent', () => {
       ],
     });
 
+    await run();
+
     expect(screen.queryByText(/^Basket /)).toBeNull();
     await waitFor(() => expect(harness.instances.length).toBeGreaterThan(0));
     harness.instances[0]?.config.options.onClick?.(null, [{ index: 0 }]);
@@ -176,9 +187,10 @@ describe('ReturnsDistributionComponent', () => {
     expect(service.minuteCandles).toHaveBeenCalledWith('SPY', DAY_MS(2));
   });
 
-  it('shows the study the place already holds when it is mounted again with the request unchanged, and asks Python nothing', async () => {
+  it('shows the study the place already holds when it is mounted again with the request unchanged, with no Run and nothing asked of Python', async () => {
     const service = fakeService();
     const { host, fixture } = await renderRemountable(service, new ReturnsStudyHold());
+    await run();
     await screen.findByText('Days studied');
     expect(service.distribution).toHaveBeenCalledTimes(1);
 
@@ -192,10 +204,11 @@ describe('ReturnsDistributionComponent', () => {
     expect(service.distribution, 'a remount alone is no reason to ask again').toHaveBeenCalledTimes(1);
   });
 
-  it('asks again once the place drops the instrument\'s studies, since the lake changed under them', async () => {
+  it('waits for a Run again once the place drops the instrument\'s studies, since the lake changed under them', async () => {
     const service = fakeService();
     const hold = new ReturnsStudyHold();
     const { host, fixture } = await renderRemountable(service, hold);
+    await run();
     await screen.findByText('Days studied');
 
     host.mounted.set(false);
@@ -204,8 +217,82 @@ describe('ReturnsDistributionComponent', () => {
     host.mounted.set(true);
     fixture.detectChanges();
 
+    // Reopening the tab runs nothing, even though the last study is gone.
+    expect(await screen.findByRole('button', { name: 'Run the study' })).toBeTruthy();
+    expect(service.distribution).toHaveBeenCalledTimes(1);
+
+    await run();
     expect(await screen.findByText('Days studied')).toBeTruthy();
     expect(service.distribution).toHaveBeenCalledTimes(2);
+  });
+
+  describe('opening the tab (the study fetches missing sessions into the lake)', () => {
+    it('runs nothing, says what a run would do, and fetches only when Run is pressed', async () => {
+      const service = fakeService();
+      await render(ReturnsDistributionComponent, {
+        providers: [
+          { provide: DataLabWorkspaceStore, useValue: fakeStore() },
+          { provide: ReturnsDistributionService, useValue: service },
+          ReturnsStudyHold,
+        ],
+      });
+
+      expect(screen.getByText(/has not been run for/)).toBeTruthy();
+      expect(screen.getByText(/Opening this tab fetches nothing/)).toBeTruthy();
+      expect(screen.getByText(/first fetches any sessions the lake lacks/)).toBeTruthy();
+      expect(screen.queryByText('Days studied')).toBeNull();
+      expect(service.distribution).not.toHaveBeenCalled();
+
+      await run();
+
+      expect(await screen.findByText('Days studied')).toBeTruthy();
+      expect(service.distribution).toHaveBeenCalledTimes(1);
+    });
+
+    it('waits for its own Run when the committed window changes, and again when it comes back to a window that was run', async () => {
+      const service = fakeService();
+      const store = fakeStore();
+      await render(ReturnsDistributionComponent, {
+        providers: [
+          { provide: DataLabWorkspaceStore, useValue: store },
+          { provide: ReturnsDistributionService, useValue: service },
+          // A hold that keeps nothing: the study of the first window did not finish its capture.
+          { provide: ReturnsStudyHold, useValue: { get: () => undefined, put: () => undefined, holdsScope: () => false } },
+        ],
+      });
+      await run();
+      await screen.findByText('Days studied');
+      expect(service.distribution).toHaveBeenCalledTimes(1);
+
+      const window = store.committedWindow as unknown as WritableSignal<{ startMsUtc: number; endMsUtc: number }>;
+      const first = window();
+      window.set({ startMsUtc: Date.UTC(2024, 7, 1), endMsUtc: Date.UTC(2024, 7, 30, 23, 59, 59) });
+      expect(await screen.findByRole('button', { name: 'Run the study' })).toBeTruthy();
+      expect(service.distribution, 'a new window is not run for the asking').toHaveBeenCalledTimes(1);
+
+      window.set(first);
+      expect(await screen.findByRole('button', { name: 'Run the study' })).toBeTruthy();
+      expect(service.distribution, 'nor is the window that was run before').toHaveBeenCalledTimes(1);
+    });
+
+    it('re-bins a study that was run without asking again for the lake', async () => {
+      const service = fakeService();
+      await render(ReturnsDistributionComponent, {
+        providers: [
+          { provide: DataLabWorkspaceStore, useValue: fakeStore() },
+          { provide: ReturnsDistributionService, useValue: service },
+          ReturnsStudyHold,
+        ],
+      });
+      await run();
+      await screen.findByText('Days studied');
+
+      await userEvent.selectOptions(screen.getByRole('combobox'), '1');
+
+      await waitFor(() => expect(service.distribution).toHaveBeenCalledTimes(2));
+      expect(service.distribution).toHaveBeenLastCalledWith(expect.objectContaining({ binWidthPct: 1 }));
+      expect(screen.queryByRole('button', { name: 'Run the study' })).toBeNull();
+    });
   });
 
   it('asks for scope before anything else when the store has no committed window', async () => {

@@ -106,14 +106,18 @@ async def test_a_live_line_answers_a_live_quote_and_asks_the_vendor_nothing(tmp_
 async def test_without_a_gateway_session_the_delayed_snapshot_answers_and_says_it_is_not_live(tmp_path: Path) -> None:
     lake_with_closes(tmp_path)
     now = et_ms(THU, 11)
-    trade_ms = now - 16 * 60_000
-    vendor = RecordingVendor([vendor_row("SPY", minute_close=767.1, day_close=767.0, updated_ns=trade_ms * NS_PER_MS)])
+    minute_start = now - 16 * 60_000
+    # The vendor touched the snapshot a minute and a half after the minute began (a quote moved its stamp).
+    vendor = RecordingVendor(
+        [vendor_row("SPY", minute_close=767.1, day_close=767.0, updated_ns=(minute_start + 90_000) * NS_PER_MS, minute_start_ms=minute_start)]
+    )
 
     status, body = await get(make_app(now, tmp_path, vendor=vendor), "SPY")
 
     assert status == 200
     quote = body["facts"][0]["quote"]
-    assert (quote["basis"], quote["price"], quote["as_of_ms"]) == ("delayed_snapshot", 767.1, trade_ms)
+    # As of the end of the price's own minute, not the later update stamp.
+    assert (quote["basis"], quote["price"], quote["as_of_ms"]) == ("delayed_snapshot", 767.1, minute_start + 60_000)
     assert [item["basis"] for item in quote["not_used"]] == ["live_quote"]
     assert vendor.calls == [("stocks", ["SPY"])]
 

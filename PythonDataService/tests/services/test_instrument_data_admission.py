@@ -34,7 +34,9 @@ from app.data_lake.backfill import BackfillResult, run_backfill
 from app.data_lake.types import DataRunSpec, trading_date_to_calendar_anchor_ms
 from app.lean_sidecar.config import PINNED_LEAN_IMAGE_DIGEST
 from app.lean_sidecar.trading_calendar import session_open_ms_utc, session_windows_ms_utc
+from app.routers import data_lake as data_lake_router
 from app.routers import instrument_data as instrument_data_router
+from app.services import instrument_data_service
 from tests._helpers.fake_lake_catalog import (
     FakeCatalog,
     install_fake_catalog,
@@ -146,6 +148,20 @@ async def _inspect(start: date = WEEK_START, end: date = WEEK_END, mode: str = "
         )
     assert response.status_code == 200, response.text
     return response.json()
+
+
+def _ms(day: date) -> int:
+    return int(datetime(day.year, day.month, day.day, 12, tzinfo=UTC).timestamp() * 1000)
+
+
+async def _refusal(path: str, params: dict[str, object]) -> tuple[int, object]:
+    """What a route answers for a request, over the bare app: its status and its ``detail``."""
+    app = FastAPI()
+    app.include_router(instrument_data_router.router)
+    app.include_router(data_lake_router.router)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(path, params=params)
+    return response.status_code, response.json().get("detail")
 
 
 def _states(report: dict) -> list[str]:
@@ -293,6 +309,34 @@ async def test_a_session_the_provider_has_no_bars_for_is_named_and_not_offered_a
     assert report["fill_window"] is None
 
 
+# ── a window the coverage read refuses ──────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("symbol", "start", "end", "reason"),
+    [
+        ("not a symbol", _ms(WEEK_START), _ms(WEEK_END), "invalid_symbol"),
+        (SYMBOL, _ms(WEEK_END), _ms(WEEK_START), "invalid_range"),
+        (SYMBOL, _ms(date(2015, 1, 5)), _ms(date(2026, 1, 5)), "range_too_large"),
+        (SYMBOL, 2**62, 2**62 + 1, "invalid_trading_date_ms"),
+    ],
+    ids=["symbol", "reversed", "too wide", "not milliseconds"],
+)
+async def test_a_window_the_coverage_read_refuses_is_refused_here_with_the_same_typed_reason(
+    lake: Path, symbol: str, start: int, end: int, reason: str
+) -> None:
+    """Both routes read the coverage through one function, so neither can refuse a window the other accepts."""
+    params = {"symbol": symbol, "start_trading_date_ms": start, "end_trading_date_ms": end, "price_adjustment_mode": "raw"}
+
+    coverage = await _refusal("/api/data-lake/coverage", {**params, "market": "usa", "data_type": "trade"})
+    inspected = await _refusal("/api/data-lake/instrument-data", params)
+
+    assert coverage[0] == inspected[0] == 422
+    assert coverage[1] == inspected[1]
+    assert isinstance(inspected[1], dict)
+    assert inspected[1]["reason"] == reason
+
+
 # ── corrupt adjustment ──────────────────────────────────────────────────────
 
 
@@ -357,6 +401,28 @@ async def test_a_stale_daily_file_never_makes_a_minute_session_unready(lake: Pat
 
 
 @respx.mock
+async def test_an_adjusted_daily_file_whose_adjustment_record_is_gone_is_stale_for_that_evidence(
+    lake: Path, fake_catalog: FakeCatalog
+) -> None:
+    mode = "polygon_split_adjusted"
+    _serve()
+    result = await _fill(WEEK_START, WEEK_END, mode)
+    assert result.overall_status == "complete", result.failures
+    assert (await _inspect(mode=mode))["daily_rollup"] == {"state": "current", "reason": None}
+
+    (daily_path,) = [
+        row["file_path"]
+        for row in fake_catalog.rows.values()
+        if row["artifact_kind"] == "time_series_bars" and row["resolution"] == "daily" and row["price_adjustment_mode"] == mode
+    ]
+    (path_policy.resolve_lake_root(mode) / companion_path(PurePosixPath(daily_path))).unlink()
+    report = await _inspect(mode=mode)
+
+    assert report["daily_rollup"] == {"state": "stale", "reason": "adjustment_evidence_invalid"}
+    assert report["summary"]["run_readable"] is True, "a minute run never opens the daily file"
+
+
+@respx.mock
 async def test_a_lake_only_ever_charted_has_no_daily_file_and_every_minute_session_ready(lake: Path) -> None:
     _serve()
     chart = await _chart_capture(WEEK_START, WEEK_END)
@@ -396,7 +462,7 @@ async def test_history_the_provider_no_longer_serves_stays_readable_and_a_missin
 
     def _clock(year: int, month: int, day: int) -> None:
         now_ms = int(datetime(year, month, day, 15, tzinfo=UTC).timestamp() * 1000)
-        monkeypatch.setattr(instrument_data_router, "now_ms_utc", lambda: now_ms)
+        monkeypatch.setattr(instrument_data_service, "now_ms_utc", lambda: now_ms)
 
     _clock(2026, 6, 1)  # the provider still serves back past 2024-05
     serving = await _inspect(start, end)

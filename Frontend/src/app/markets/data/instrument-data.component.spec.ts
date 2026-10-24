@@ -108,6 +108,27 @@ describe('an instrument\'s Data tab', () => {
     expect(screen.getByRole('button', { name: 'Fill 2 sessions' })).toBeTruthy();
   });
 
+  it('does not promise that a Fill leaves a no-bars session alone when it lies between two the Fill fetches', async () => {
+    const opened = await openPlace(`/markets/SPY/data?${WINDOW_QUERY}`);
+    await flushRead(
+      opened,
+      dataReport(
+        [
+          dataSession(0, 'missing', { fetchable: true }),
+          dataSession(1, 'failed', { reason: 'provider_no_data', blocked_by: 'provider_no_data' }),
+          dataSession(2, 'missing', { fetchable: true }),
+        ],
+        { fill_window: { start_trading_date_ms: Date.UTC(2026, 3, 15, 12), end_trading_date_ms: Date.UTC(2026, 3, 17, 12) } },
+      ),
+    );
+
+    const gaps = await screen.findByRole('region', { name: 'Gaps in the window' });
+    expect(within(gaps).getByText(/asks the provider again if it lies inside the span the Fill covers/)).toBeTruthy();
+    expect(screen.getByText(/A session in between that failed, or that drew no bars from the provider, is asked for again/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Fill 2 sessions' })).toBeTruthy();
+    expect(screen.queryByText(/A Fill does not ask again/)).toBeNull();
+  });
+
   it('says nothing is left to fetch, and offers no Fill, when only the provider\'s history is out of reach', async () => {
     const opened = await openPlace(`/markets/SPY/data?${WINDOW_QUERY}`);
     await flushRead(
@@ -158,6 +179,35 @@ describe('an instrument\'s Data tab', () => {
     await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Price adjustment' }), 'raw');
     opened.harness.fixture.detectChanges();
     opened.http.expectNone(READ_URL);
+  });
+
+  it('keeps the tree in the place\'s address, so a reload reads it, and takes the key out when the default is picked again', async () => {
+    const reloaded = await openPlace(`/markets/SPY/data?${WINDOW_QUERY}&adjustment=raw`);
+
+    const raw = await waitFor(() => reloaded.http.expectOne(READ_URL));
+    expect(raw.request.params.get('price_adjustment_mode')).toBe('raw');
+    raw.flush(dataReport([dataSession(0, 'ready')], { price_adjustment_mode: 'raw' }));
+    expect((await screen.findByRole<HTMLSelectElement>('combobox', { name: 'Price adjustment' })).value).toBe('raw');
+
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Price adjustment' }), 'polygon_split_adjusted');
+    const split = await waitFor(() => reloaded.http.expectOne(READ_URL));
+    expect(split.request.params.get('price_adjustment_mode')).toBe('polygon_split_adjusted');
+    split.flush(dataReport([dataSession(0, 'ready')]));
+    await waitFor(() => expect(reloaded.router.url).toBe(`/markets/SPY/data?${WINDOW_QUERY}&timeframe=1d&session=regular`));
+    expect(reloaded.router.url).not.toContain('adjustment');
+  });
+
+  it('says in place that an adjustment this place does not offer cannot be used, and reads nothing for it', async () => {
+    const opened = await openPlace(`/markets/SPY/data?${WINDOW_QUERY}&adjustment=dividend`);
+
+    expect(await screen.findByText(/The price adjustment "dividend" is not one this place offers/)).toBeTruthy();
+    opened.http.expectNone(READ_URL);
+
+    // Committing a window writes a context the place offers, so the refused value does not outlive the pick.
+    opened.context().commitWindow({ from: '2026-04-20', to: '2026-05-20' });
+    await waitFor(() => expect(opened.router.url).not.toContain('dividend'));
+    const read = await waitFor(() => opened.http.expectOne(READ_URL));
+    expect(read.request.params.get('price_adjustment_mode')).toBe('polygon_split_adjusted');
   });
 
   describe('Fill', () => {

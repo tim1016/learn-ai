@@ -15,7 +15,8 @@
     <p class="data-fill__note">
       A Fill asks for the span {{ span.start_trading_date_ms | timestampDisplay: 'date-et' : 'date' }}
       to {{ span.end_trading_date_ms | timestampDisplay: 'date-et' : 'date' }}.
-      Sessions it already holds in between are reused, not fetched again.
+      Sessions it already holds in between are reused, not fetched again. A session in between that failed, or that
+      drew no bars from the provider, is asked for again, so a Fill can ask for more than the sessions counted above.
     </p>
   } @else {
     <p class="data-fill__note">There is no session here a Fill could fetch.</p>

@@ -4,5 +4,8 @@
   @if (sessionNote(); as note) {
     <p class="returns-tab__note" role="status">{{ note }}</p>
   }
+  @if (adjustmentNote(); as note) {
+    <p class="returns-tab__note" role="status">{{ note }}</p>
+  }
   <app-returns-distribution />
 }

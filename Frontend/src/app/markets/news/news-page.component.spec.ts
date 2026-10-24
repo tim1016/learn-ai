@@ -18,7 +18,13 @@ function placeContext(symbol: string, context: InstrumentContext | null = null) 
   return { symbol: signal(symbol), context: signal(context) };
 }
 
-const COMMITTED: InstrumentContext = { window: { from: '2026-04-15', to: '2026-05-15' }, timeframe: '1d', session: 'regular' };
+const COMMITTED: InstrumentContext = {
+  window: { from: '2026-04-15', to: '2026-05-15' },
+  timeframe: '1d',
+  session: 'regular',
+  adjustment: 'polygon_split_adjusted',
+  forwardFill: true,
+};
 
 const NEWS_URL = `${environment.pythonServiceUrl}/api/news`;
 

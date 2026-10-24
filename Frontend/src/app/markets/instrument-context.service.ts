@@ -14,13 +14,17 @@ import { DataLabWorkspaceStore } from '../components/data-lab/data-lab-workspace
 import type { QuickRangeKey, QuickRangeOffer } from '../shared/date-picker';
 import { isUsEquitySymbol } from '../shared/symbol-catalog/us-equity-symbol';
 import {
+  ADJUSTMENT_QUERY_KEY,
   CONTEXT_QUERY_KEYS,
+  DEFAULT_ADJUSTMENT,
+  FORWARD_FILL_QUERY_KEY,
   SETUP_QUERY_KEY,
   readInstrumentContext,
   sameContext,
   type ContextRead,
+  type ContextSettings,
+  type InstrumentAdjustment,
   type InstrumentContext,
-  type InstrumentSession,
   type InstrumentWindow,
   windowMsUtc,
 } from './instrument-context';
@@ -28,11 +32,9 @@ import {
 /** The quick range an instrument opens on when its address names no window. */
 const DEFAULT_RANGE_KEY = '1Y';
 
-/** What the controls show while the committed context is not usable: no window, and the timeframe and session the address names or defaults. */
-export interface ShownContext {
+/** What the controls show while the committed context is not usable: no window, and the other settings the address names or defaults. */
+export interface ShownContext extends ContextSettings {
   readonly window: InstrumentWindow | null;
-  readonly timeframe: string;
-  readonly session: InstrumentSession;
 }
 
 /**
@@ -122,7 +124,8 @@ export class InstrumentContextService {
     const read = this.read();
     if (read.kind === 'ready') return read.context;
     const window = read.kind === 'window-missing' ? this.defaultWindow() : null;
-    return { window, timeframe: read.timeframe, session: read.session };
+    const { timeframe, session, adjustment, forwardFill } = read;
+    return { window, timeframe, session, adjustment, forwardFill };
   });
 
   /**
@@ -133,8 +136,8 @@ export class InstrumentContextService {
    */
   readonly context = computed<InstrumentContext | null>(
     () => {
-      const { window, timeframe, session } = this.shown();
-      return window === null ? null : { window, timeframe, session };
+      const { window, ...settings } = this.shown();
+      return window === null ? null : { window, ...settings };
     },
     { equal: (a, b) => a === b || (a !== null && b !== null && sameContext(a, b)) },
   );
@@ -167,6 +170,7 @@ export class InstrumentContextService {
     const timeframe = barTimeframeByValue(context.timeframe);
     if (window === null || timeframe === undefined) return;
     const { startMsUtc, endMsUtc } = window;
+    const adjusted = context.adjustment === DEFAULT_ADJUSTMENT;
     const held = this.store.committedScope();
     if (
       held !== null &&
@@ -175,7 +179,9 @@ export class InstrumentContextService {
       held.window.endMsUtc === endMsUtc &&
       held.timespan === timeframe.timespan &&
       held.multiplier === timeframe.multiplier &&
-      held.session === context.session
+      held.session === context.session &&
+      held.adjusted === adjusted &&
+      held.forwardFill === context.forwardFill
     ) {
       return;
     }
@@ -186,6 +192,8 @@ export class InstrumentContextService {
       timespan: timeframe.timespan,
       multiplier: timeframe.multiplier,
       session: context.session,
+      adjusted,
+      forwardFill: context.forwardFill,
     });
     this.store.commitScope();
   }
@@ -210,6 +218,11 @@ export class InstrumentContextService {
   /** Commits a session. Returns whether the address changed. */
   commitSession(session: string): boolean {
     return session === 'regular' || session === 'extended' ? this.commit({ session }) : false;
+  }
+
+  /** Commits the price adjustment the Chart and the Data tab read. Returns whether the address changed. */
+  commitAdjustment(adjustment: string): boolean {
+    return adjustment === 'raw' || adjustment === 'polygon_split_adjusted' ? this.commit({ adjustment }) : false;
   }
 
   /**
@@ -254,6 +267,9 @@ export class InstrumentContextService {
     this.writeQuery({
       timeframe: change.timeframe ?? shown.timeframe,
       session: change.session ?? shown.session,
+      // The defaults are an absent key, so an address the place wrote reads the same as one nobody edited.
+      [ADJUSTMENT_QUERY_KEY]: adjustmentParam(change.adjustment ?? shown.adjustment),
+      [FORWARD_FILL_QUERY_KEY]: forwardFillParam(change.forwardFill ?? shown.forwardFill),
       ...(window === null ? {} : { from: window.from, to: window.to }),
     });
     return true;
@@ -269,9 +285,22 @@ export class InstrumentContextService {
     void this.router.navigate(['/', ...segments], { queryParams: tree.queryParams, fragment: tree.fragment ?? undefined });
   }
 
+  /** Merges `patch` into the address's query; a `null` value takes its key out. */
   private writeQuery(patch: Params): void {
     const tree = this.router.parseUrl(this.router.url);
-    tree.queryParams = { ...tree.queryParams, ...patch };
+    tree.queryParams = Object.fromEntries(
+      Object.entries({ ...tree.queryParams, ...patch }).filter(([, value]) => value !== null),
+    );
     void this.router.navigateByUrl(tree);
   }
+}
+
+/** The query value of an adjustment: `raw`, or `null` (no key) for the default. */
+function adjustmentParam(adjustment: InstrumentAdjustment): string | null {
+  return adjustment === DEFAULT_ADJUSTMENT ? null : adjustment;
+}
+
+/** The query value of the forward-fill choice: `off`, or `null` (no key) for the default, which is on. */
+function forwardFillParam(forwardFill: boolean): string | null {
+  return forwardFill ? null : 'off';
 }

@@ -42,7 +42,7 @@ export function gapCauseText(cause: GapCause): string {
     }
     case 'failed':
       if (cause.blockedBy === 'provider_no_data') {
-        return 'The provider returned no bars for it, as when a symbol had not listed yet. A Fill does not ask again.';
+        return 'The provider returned no bars for it, as when a symbol had not listed yet. A Fill does not count it, but asks the provider again if it lies inside the span the Fill covers.';
       }
       if (older) return 'The last fetch failed, and it is older than the provider serves, so it can no longer be fetched.';
       return `The last fetch failed${cause.reason === null ? '' : ` (${formatReceiptLabel(cause.reason)})`}. A Fill tries again.`;

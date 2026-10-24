@@ -24,21 +24,22 @@ Raw-tree files are judged by their catalog row alone, as ``/coverage`` judges
 them; a split-adjusted file also needs its adjustment record, which
 ``/coverage`` already checks.
 
-Nothing here writes. The Fill is the existing backfill job over ``fill_window``.
+:func:`read_instrument_data` is the one entry point: it accepts the window the way
+``/coverage`` does (the same ``CoverageRequestError``), then reads the coverage and the
+daily file together. Nothing here writes. The Fill is the existing backfill job over
+``fill_window``.
 """
 
 from __future__ import annotations
 
 import asyncio
 from datetime import date
-from pathlib import Path
 
-from app.data_lake import catalog_client, path_policy
-from app.data_lake.adjustment_versions import AdjustmentVersionError, current_version
-from app.data_lake.ensure_data import _cache_matches, _daily_dch, _daily_trade_sources
-from app.data_lake.run_readiness import needs_adjustment_record
+from app.data_lake import catalog_client
+from app.data_lake.coverage import coverage_window, read_coverage
+from app.data_lake.ensure_data import daily_rollup_state
+from app.data_lake.polygon_fetcher import polygon_history_floor
 from app.data_lake.types import (
-    ArtifactIdentity,
     CoverageDay,
     CoverageResponse,
     PriceAdjustmentMode,
@@ -55,6 +56,7 @@ from app.schemas.instrument_data import (
     InstrumentSession,
 )
 from app.services.chart_bar_source import split_sessions_at_boundary
+from app.utils.timestamps import now_ms_utc
 
 #: The failure reason the catalog records when the provider answered with no bars.
 PROVIDER_NO_DATA = "provider_no_data"
@@ -168,35 +170,35 @@ def build_instrument_data(
 async def read_daily_rollup(*, symbol: str, price_adjustment_mode: PriceAdjustmentMode, floor: date) -> DailyRollup:
     """Is the symbol's derived daily file the one the minute sessions it holds would build?
 
-    Judged by the writer's own rule (``ensure_data._daily_dch`` over
-    ``_daily_trade_sources``, and ``_cache_matches`` for the adjustment
-    evidence), so this says "current" exactly when ``ensure_data`` would reuse
-    the file, and "stale" exactly when it would rebuild it.
+    The writer's own reuse rule (``ensure_data.daily_rollup_state``) judged against the lake's recorded
+    corporate-action version: "current" when the writer would reuse the file as it stands, "stale" with the
+    evidence that no longer holds when it would not.
     """
-    identity = ArtifactIdentity(
-        artifact_kind="time_series_bars",
-        market="usa",
-        symbol=symbol,
-        trading_date=None,
-        resolution="daily",
-        data_type="trade",
-        provider="learn_ai_derived",
-        price_adjustment_mode=price_adjustment_mode,
-    )
-    cached = await catalog_client.select_complete_aggregated_bar_artifact(identity)
-    if cached is None:
+    state = await daily_rollup_state(symbol, price_adjustment_mode, floor)
+    if state == "not_built":
         return DailyRollup(state="not_built")
-    lake_root: Path = path_policy.resolve_lake_root(price_adjustment_mode)
-    version: str | None = None
-    if needs_adjustment_record(price_adjustment_mode):
-        try:
-            version = await asyncio.to_thread(current_version, lake_root, symbol)
-        except AdjustmentVersionError:
-            return DailyRollup(state="stale", reason="adjustment_evidence_invalid")
-    sources = await _daily_trade_sources(identity, lake_root, version, floor)
-    contract = _daily_dch([source.id for source in sources], [source.file_sha256 for source in sources], price_adjustment_mode, version)
-    if cached.data_contract_hash != contract:
-        return DailyRollup(state="stale", reason="sources_changed")
-    if not await asyncio.to_thread(_cache_matches, cached, contract, lake_root, version):
-        return DailyRollup(state="stale", reason="adjustment_evidence_invalid")
-    return DailyRollup(state="current")
+    if state == "current":
+        return DailyRollup(state="current")
+    return DailyRollup(state="stale", reason=state)
+
+
+async def read_instrument_data(
+    *,
+    symbol: str,
+    start_trading_date_ms: int,
+    end_trading_date_ms: int,
+    price_adjustment_mode: PriceAdjustmentMode,
+) -> InstrumentDataResponse:
+    """One instrument's data for a window, read-only: the per-session coverage and the daily file, read together.
+
+    Raises ``CoverageRequestError`` for a symbol or window the coverage read refuses, before either read starts.
+    """
+    window = coverage_window(symbol, start_trading_date_ms, end_trading_date_ms)
+    await catalog_client.init_pool()
+    now_ms = now_ms_utc()
+    floor = polygon_history_floor(trading_date_at_ms(now_ms))
+    coverage, rollup = await asyncio.gather(
+        read_coverage(window, market="usa", data_type="trade", price_adjustment_mode=price_adjustment_mode),
+        read_daily_rollup(symbol=symbol, price_adjustment_mode=price_adjustment_mode, floor=floor),
+    )
+    return build_instrument_data(coverage, start=window.start, end=window.end, now_ms=now_ms, floor=floor, rollup=rollup)

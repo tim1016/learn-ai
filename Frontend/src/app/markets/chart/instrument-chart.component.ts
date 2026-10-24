@@ -18,6 +18,7 @@ import { IndicatorConfigModalComponent } from '../../components/data-lab/indicat
 import { mapSessionToWire, utcMsToIsoDate } from '../../components/data-lab/data-lab-request-mapper';
 import { barTimeframeFor, parseChartTimeframe } from '../../components/data-lab/data-lab-scope';
 import { DataLabWorkspaceStore } from '../../components/data-lab/data-lab-workspace-store';
+import { DEFAULT_ADJUSTMENT } from '../instrument-context';
 import { InstrumentContextService } from '../instrument-context.service';
 import { ChartHeadlinesComponent } from './chart-headlines/chart-headlines.component';
 import { chartRequestIdentity, chartTimeframeOf } from './chart-request';
@@ -87,6 +88,15 @@ export class InstrumentChartComponent {
       untracked(() => this.request(identity));
     });
   }
+
+  /** What the context reads that the chart's defaults do not, so bars on raw prices or without forward fill say so. */
+  readonly settingsNote = computed<string | null>(() => {
+    const { adjustment, forwardFill } = this.context.shown();
+    const parts: string[] = [];
+    if (adjustment !== DEFAULT_ADJUSTMENT) parts.push('raw prices, not adjusted for splits');
+    if (!forwardFill) parts.push('minute gaps that are not forward-filled');
+    return parts.length === 0 ? null : `This chart reads ${parts.join(' and ')}.`;
+  });
 
   // ── Committed scope → chart inputs ────────────────────────
   readonly chartTicker = computed(() => this.store.committedTicker());
