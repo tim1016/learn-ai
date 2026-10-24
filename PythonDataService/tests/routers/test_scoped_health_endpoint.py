@@ -286,9 +286,31 @@ async def test_a_long_list_of_lake_problems_is_cut_and_the_rest_folded_into_one_
     assert len(scoped) == 20
     assert folded["summary"] == "5 more symbols need attention"
     assert folded["link"] == {"tab": "lake", "query": {}, "fragment": None}
+    # It stands for several symbols, so it cannot call the other symbols unaffected.
+    assert "other symbols are not" not in folded["explanation"]
     # A page that asks about one of the folded symbols still gets that symbol's own item.
     last = await get_health(readers(lake=serving(lake_readiness(*rows))), operation="stock_history", instrument="S24")
     assert [item["scope"]["instrument"] for item in last["items"]] == ["S24"]
+
+
+async def test_an_unreadable_lake_does_not_call_any_symbol_unaffected() -> None:
+    body = await get_health(readers(lake=failing()), operation="stock_history")
+
+    [lake] = body["items"]
+    assert (lake["severity"], lake["scope"]["breadth"]) == ("unknown", "broad")
+    assert "other symbols" not in lake["explanation"]
+
+
+async def test_a_lake_holding_nothing_is_a_notice_and_never_ok() -> None:
+    emptied = lake_readiness().model_copy(update={"symbols": []})
+
+    body = await get_health(readers(lake=serving(emptied)), operation="stock_history")
+
+    [lake] = body["items"]
+    assert (lake["severity"], lake["scope"]["breadth"], lake["needs_attention"]) == ("info", "broad", False)
+    assert "no minute sessions" in lake["explanation"]
+    # Asked about one symbol, a lake that does not hold it still has no finding for it.
+    assert (await get_health(readers(lake=serving(emptied)), operation="stock_history", instrument="SPY"))["items"] == []
 
 
 async def test_a_lake_with_no_problem_is_one_broad_ok_item() -> None:

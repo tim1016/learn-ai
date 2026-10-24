@@ -56,6 +56,14 @@ _ARCHIVE_SEVERITY: Final[dict[ArchiveSeverity, HealthSeverity]] = {
 _STOCK_IMPACT: Final = (
     "Studies and exports that read this symbol's stock history are affected; option history, quotes and other symbols are not."
 )
+#: For the folded item, which stands for several symbols: it must not call the others unaffected.
+_STOCK_IMPACT_FOLDED: Final = (
+    "Studies and exports that read those symbols' stock history are affected; option history and quotes are not."
+)
+#: For an unreadable catalog, which cannot say which symbols are affected.
+_STOCK_IMPACT_UNKNOWN: Final = (
+    "Studies and exports that read stock history from the lake may be affected; option history and quotes are not."
+)
 _ARCHIVE_IMPACT: Final = (
     "Options runs that need archived sessions may be refused or incomplete; stock charts, quotes and the live chain are not affected."
 )
@@ -67,7 +75,7 @@ _UNREADABLE: Final[dict[HealthDataKind, tuple[str, str, str]]] = {
     "stock_bars": (
         "Lake status unknown",
         "The lake catalog could not be read, so which stock sessions a run can use is unknown.",
-        _STOCK_IMPACT,
+        _STOCK_IMPACT_UNKNOWN,
     ),
     "option_archive": (
         "Option archive status unknown",
@@ -184,9 +192,9 @@ def lake_items(reading: Reading[RunReadinessResponse], *, instrument: str | None
 
     Asked for one ``instrument``, only that symbol is answered: its problem, or
     that it is clean (nothing at all when the lake does not hold it). Asked for
-    the whole lake, a clean lake is one broad item and a long list of problems
-    is cut at ``limit``, the rest folded into one broad item, since the Lake tab
-    holds the full list.
+    the whole lake, a clean lake is one broad item (a lake holding nothing is a
+    notice, not a pass) and a long list of problems is cut at ``limit``, the
+    rest folded into one broad item, since the Lake tab holds the full list.
     """
     response = reading.value
     if response is None:
@@ -196,6 +204,11 @@ def lake_items(reading: Reading[RunReadinessResponse], *, instrument: str | None
 
     def item(row: SymbolRunReadiness | None, severity: HealthSeverity, summary: str, explanation: str) -> HealthItem:
         return _lake_item(reading, response.price_adjustment_mode, row, severity, summary, explanation)
+
+    if not rows and instrument is None:
+        # Nothing held is not "every held symbol is complete": a remounted or emptied lake must not read OK.
+        return [item(None, "info", "Lake holds no sessions",
+                     "The lake holds no minute sessions for this view, so there is nothing to confirm as readable.")]
 
     if not problems:
         if instrument is not None:
@@ -208,7 +221,7 @@ def lake_items(reading: Reading[RunReadinessResponse], *, instrument: str | None
     if folded := problems[len(shown):]:
         count = _count(len(folded), "more symbol")
         items.append(item(None, "warning", f"{count} need attention",
-                          f"{count} have sessions a run refuses or that are missing; the Lake tab lists them. {_STOCK_IMPACT}"))
+                          f"{count} have sessions a run refuses or that are missing; the Lake tab lists them. {_STOCK_IMPACT_FOLDED}"))
     return items
 
 
