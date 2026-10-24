@@ -159,6 +159,10 @@
   &.real { background: rgba(38, 166, 154, 0.15); color: $bull; border: 1px solid rgba(38, 166, 154, 0.4); }
 }
 
+.run-status { font-size: 11px; color: $text-subtle; font-family: $font-mono; }
+.run-settings { font-size: 11px; color: $text-subtle; }
+.lake-refused { margin-bottom: 12px; }
+
 .compute-error {
   background: rgba(239, 83, 80, 0.10);
   border: 1px solid rgba(239, 83, 80, 0.4);
@@ -267,4 +271,5 @@
   .r-blind { color: $warn; }
   .r-unavailable { color: $text-muted; }
   .r-meta { color: $text-subtle; margin-left: 6px; font-size: 10px; }
+  .r-reason { display: block; margin-left: 0; white-space: normal; }
 }

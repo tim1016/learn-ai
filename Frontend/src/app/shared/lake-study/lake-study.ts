@@ -247,8 +247,13 @@ export function readLakeStudyRefusal(payload: unknown): LakeStudyRefused | null 
 // The shared data-source line
 // ---------------------------------------------------------------------------
 
+/** Minutes in the fold that makes a daily bar (`DAY_BAR_MINUTES` in the Realized vs IV study). */
+const DAILY_BAR_MINUTES = 24 * 60;
+
 function resolutionText(barMinutes: number): string {
-  return barMinutes === 1 ? '1-minute bars' : `${barMinutes}-minute bars, folded from 1-minute bars`;
+  if (barMinutes === 1) return '1-minute bars';
+  if (barMinutes === DAILY_BAR_MINUTES) return 'daily bars, folded from 1-minute bars';
+  return `${barMinutes}-minute bars, folded from 1-minute bars`;
 }
 
 function warmupText(sessions: number): string {

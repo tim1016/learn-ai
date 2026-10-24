@@ -7,15 +7,19 @@ import { screen, within } from "@testing-library/angular";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
 import { routes } from "../../app.routes";
+import { JobsService } from "../../services/jobs.service";
 import { fakePickerWorld } from "../../shared/symbol-picker/testing/fake-picker-world";
-import { answerCompute } from "./testing/edge-compute-world";
+import { answerCompute, FakeJobs } from "./testing/edge-compute-world";
 
 describe("EdgeComponent — sample labeling", () => {
   let harness: RouterTestingHarness;
+  let jobs: FakeJobs;
 
   beforeEach(async () => {
+    jobs = new FakeJobs();
     TestBed.configureTestingModule({
       providers: [
+        { provide: JobsService, useValue: jobs },
         provideRouter(routes),
         provideHttpClient(),
         provideHttpClientTesting(),
@@ -61,7 +65,7 @@ describe("EdgeComponent — sample labeling", () => {
     const user = userEvent.setup();
     await harness.navigateByUrl("/edge/realized-vs-iv");
     await user.click(screen.getByRole("button", { name: "Compute" }));
-    await answerCompute(TestBed.inject(HttpTestingController));
+    await answerCompute({ http: TestBed.inject(HttpTestingController), jobs });
     harness.detectChanges();
     expect(screen.getByTestId("rviv-source-tag"), "the real study is on screen").toBeTruthy();
     expect(screen.queryByTestId("sample-data-banner"), "nothing on the study page is synthetic").toBeNull();

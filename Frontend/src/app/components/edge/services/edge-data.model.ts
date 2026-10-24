@@ -1,3 +1,5 @@
+import type { LakeStudyDataSource } from "../../../shared/lake-study/lake-study";
+
 export interface Candle { o: number; h: number; l: number; c: number; v: number; }
 export interface SignalMark { i: number; dir: "long" | "short"; }
 export interface EdgeComponents { vrp: number; regime: number; iv: number; trend: number; }
@@ -23,6 +25,12 @@ export interface LiveIv30Marker {
   varianceContributionSynthetic: number;
   strikeCoverageScore: number;
 }
+
+/** The current-IV marker, kept apart from the IV series: it is a reading taken now, never a value on a past date. When
+ *  neither live endpoint answered, the reason says why, rather than the marker silently going missing. */
+export type LiveIv30State =
+  | { readonly kind: "available"; readonly marker: LiveIv30Marker }
+  | { readonly kind: "unavailable"; readonly reason: string };
 
 export interface IvConfidenceSummary {
   ivSource: "caller_supplied" | "recorder" | "absent";
@@ -92,8 +100,33 @@ export interface RvWindowSeries {
   values: number[];
 }
 
-/** What `/api/edge/realized-vs-iv/series` measured for one symbol. Only fields
- *  the endpoint computes exist here: edge score, regimes, oracle signals and
+/** Bar sizes the study is defined for. */
+export type BarSize = "15m" | "1D";
+/** The HF estimator's session filter; applies to 15-minute bars only. */
+export type HfSession = "ETH" | "RTH";
+
+/** The settings the run actually used, as the server echoed them: what the page's controls must show after a run. */
+export interface RunSettings {
+  barSize: BarSize;
+  tenorDays: number;
+  /** `null` for daily bars: there is no HF estimator, so no session was used. */
+  hfSession: HfSession | null;
+}
+
+/** How recorded or supplied IV snapshots reached the bars (`app/engine/edge/iv_alignment.py`): each snapshot belongs to
+ *  the bar that contains it, the latest wins, and nothing is carried or interpolated. */
+export interface IvAlignment {
+  rule: string;
+  snapshotsRead: number;
+  barsWithIv: number;
+  /** Dropped because a later snapshot in the same bar was kept. */
+  superseded: number;
+  /** Inside no bar: a weekend, the hours between sessions, a bar with no trades. */
+  outsideBars: number;
+}
+
+/** What the Realized vs IV study measured for one symbol. Only fields
+ *  the study computes exist here: edge score, regimes, oracle signals and
  *  the trade simulator are not part of this study, so they are absent, never
  *  zero-filled. */
 export interface RealizedVsIvData {
@@ -119,7 +152,12 @@ export interface RealizedVsIvData {
   /** Populated only when the response carried IV provenance; null on the
    *  legacy "absent" path. */
   ivConfidence: IvConfidenceSummary | null;
-  /** Live IV30 snapshot from /api/edge/iv30/{vix-style,parametric}; null
-   *  when both endpoints errored. */
-  liveIv30: LiveIv30Marker | null;
+  /** Where the IV came from and how many of its snapshots reached a bar. */
+  ivAlignment: IvAlignment;
+  /** The settings this result was computed with. */
+  run: RunSettings;
+  /** Where the bars came from: the lake, the window read, the counts. */
+  dataSource: LakeStudyDataSource;
+  /** Live IV30 from /api/edge/iv30/{vix-style,parametric}, or why neither answered. */
+  liveIv30: LiveIv30State;
 }

@@ -2,32 +2,39 @@ import { provideHttpClient } from "@angular/common/http";
 import { HttpTestingController, provideHttpClientTesting } from "@angular/common/http/testing";
 import { TestBed } from "@angular/core/testing";
 import { provideRouter } from "@angular/router";
-import { render, screen } from "@testing-library/angular";
+import { render, screen, within } from "@testing-library/angular";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
+import { JobsService } from "../../../services/jobs.service";
 import { fakePickerWorld } from "../../../shared/symbol-picker/testing/fake-picker-world";
 import type {
   IvConfidenceSummary,
-  LiveIv30Marker,
+  LiveIv30State,
   RealizedVsIvData,
 } from "../services/edge-data.model";
-import { answerCompute, failBarsFetch, tick, YZ_RV_BY_WINDOW } from "../testing/edge-compute-world";
+import {
+  answerCompute, failCompute, FakeJobs, lakeDataSource, refuseCompute, tick, YZ_RV_BY_WINDOW, type ComputeWorld,
+} from "../testing/edge-compute-world";
+import { mapLakeStudyDataSource } from "../../../shared/lake-study/lake-study";
 import { RealizedVsIvComponent } from "./realized-vs-iv.component";
 
 async function renderPage() {
+  const jobs = new FakeJobs();
   const view = await render(RealizedVsIvComponent, {
     providers: [
       ...fakePickerWorld().providers,
+      { provide: JobsService, useValue: jobs },
       provideHttpClient(),
       provideHttpClientTesting(),
       provideRouter([]),
     ],
   });
-  return { ...view, http: TestBed.inject(HttpTestingController), user: userEvent.setup() };
+  const world: ComputeWorld = { http: TestBed.inject(HttpTestingController), jobs };
+  return { ...view, world, user: userEvent.setup() };
 }
 
 /** A real-shaped result, for states that are easier to set than to drive
- *  through three HTTP round trips. */
+ *  through a job and the live-IV requests. */
 function realData(overrides: Partial<RealizedVsIvData> = {}): RealizedVsIvData {
   const N = 12;
   const flat = (v: number) => Array.from({ length: N }, () => v);
@@ -48,7 +55,10 @@ function realData(overrides: Partial<RealizedVsIvData> = {}): RealizedVsIvData {
     signals: [],
     coverage: { forwardBlindTail: 2, ivFirstTsMs: Date.UTC(2026, 0, 6, 14) },
     ivConfidence: null,
-    liveIv30: null,
+    ivAlignment: { rule: "snapshot_in_bar_latest", snapshotsRead: N, barsWithIv: N, superseded: 0, outsideBars: 0 },
+    run: { barSize: "1D", tenorDays: 30, hfSession: null },
+    dataSource: mapLakeStudyDataSource(lakeDataSource()),
+    liveIv30: { kind: "unavailable", reason: "Neither live IV30 endpoint answered." },
     ...overrides,
   };
 }
@@ -65,15 +75,84 @@ describe("RealizedVsIvComponent — opens idle", () => {
     expect(screen.queryByTestId("rviv-source-tag")).toBeNull();
     expect(screen.queryByTestId("sample-data-banner")).toBeNull();
     expect(screen.queryByTestId("rviv-error")).toBeNull();
+    expect(screen.queryByTestId("rviv-refused")).toBeNull();
+  });
+});
+
+describe("RealizedVsIvComponent — the controls show what the run uses", () => {
+  const select = (testId: string) => screen.getByTestId(testId) as HTMLSelectElement;
+
+  it("opens with the bar size and tenor the first Compute would use, not the first option of each list", async () => {
+    await renderPage();
+
+    expect(select("rviv-bar-size").value).toBe("1D");
+    expect(select("rviv-tenor").value).toBe("30D");
+  });
+
+  it("offers only the bar sizes the study is defined for", async () => {
+    await renderPage();
+
+    const options = (testId: string) => within(select(testId)).getAllByRole("option").map((o) => o.textContent?.trim());
+    expect(options("rviv-bar-size")).toEqual(["15m", "1D"]);
+    expect(options("rviv-tenor")).toEqual(["7D", "14D", "30D", "60D"]);
+  });
+
+  it("runs the bar size and tenor on screen, says so beside the result, and keeps showing them", async () => {
+    const { world, user, fixture } = await renderPage();
+
+    await user.selectOptions(select("rviv-bar-size"), "15m");
+    await user.selectOptions(select("rviv-tenor"), "60D");
+    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await answerCompute(world, { run: { bar_size: "15m", tenor_days: 60, hf_session: "ETH" } });
+    fixture.detectChanges();
+
+    expect(world.jobs.started[0].payload).toMatchObject({ bar_size: "15m", tenor_days: 60, hf_session: "ETH" });
+    expect(select("rviv-bar-size").value).toBe("15m");
+    expect(select("rviv-tenor").value).toBe("60D");
+    expect(screen.getByTestId("rviv-run-settings").textContent?.replace(/\s+/g, " ").trim()).toBe("15m bars · 60D tenor · HF ETH");
+  });
+
+  it("says which settings produced the result on screen even after a control is changed without computing again", async () => {
+    const { world, user, fixture } = await renderPage();
+    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await answerCompute(world);
+    fixture.detectChanges();
+
+    await user.selectOptions(select("rviv-bar-size"), "15m");
+    fixture.detectChanges();
+
+    expect(screen.getByTestId("rviv-run-settings").textContent?.replace(/\s+/g, " ").trim()).toBe("1D bars · 30D tenor");
+  });
+
+  it("offers the HF session for 15-minute bars only, since a daily run has no HF estimator", async () => {
+    const { user } = await renderPage();
+    expect(screen.queryByTestId("rviv-hf-session"), "daily is the opening size").toBeNull();
+
+    await user.selectOptions(select("rviv-bar-size"), "15m");
+    expect(screen.getByTestId("rviv-hf-session")).toBeTruthy();
+
+    await user.selectOptions(select("rviv-bar-size"), "1D");
+    expect(screen.queryByTestId("rviv-hf-session")).toBeNull();
+  });
+
+  it("sends the HF session the user chose with a 15-minute run", async () => {
+    const { world, user } = await renderPage();
+
+    await user.selectOptions(select("rviv-bar-size"), "15m");
+    await user.click(within(screen.getByTestId("rviv-hf-session")).getByRole("button", { name: "RTH" }));
+    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await tick();
+
+    expect(world.jobs.started[0].payload).toMatchObject({ bar_size: "15m", hf_session: "RTH" });
   });
 });
 
 describe("RealizedVsIvComponent — real response", () => {
   it("draws the returned study and reads edge score as unavailable, not zero", async () => {
-    const { http, user, fixture } = await renderPage();
+    const { world, user, fixture } = await renderPage();
 
     await user.click(screen.getByRole("button", { name: "Compute" }));
-    await answerCompute(http);
+    await answerCompute(world);
     fixture.detectChanges();
 
     expect(screen.getByTestId("rviv-source-tag").textContent).toContain("SPY");
@@ -89,10 +168,10 @@ describe("RealizedVsIvComponent — real response", () => {
   });
 
   it("reports the 30-bar Yang-Zhang series as rv_yz_30_daily, not the first series the server sent", async () => {
-    const { http, user, fixture } = await renderPage();
+    const { world, user, fixture } = await renderPage();
 
     await user.click(screen.getByRole("button", { name: "Compute" }));
-    await answerCompute(http);
+    await answerCompute(world);
     fixture.detectChanges();
 
     const key = screen.getByText("rv_yz_30_daily");
@@ -100,6 +179,18 @@ describe("RealizedVsIvComponent — real response", () => {
     expect(screen.getByTestId("rviv-readout").textContent, "the 5-bar series is not the readout").not.toContain(
       `${(YZ_RV_BY_WINDOW[5] * 100).toFixed(1)}%`,
     );
+  });
+
+  it("names the Yang-Zhang readout for the bars it was measured on: 15-minute bars are not daily bars", async () => {
+    const { world, user, fixture } = await renderPage();
+
+    await user.selectOptions(screen.getByTestId("rviv-bar-size"), "15m");
+    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await answerCompute(world, { run: { bar_size: "15m", tenor_days: 30, hf_session: "ETH" } });
+    fixture.detectChanges();
+
+    expect(screen.getByText("rv_yz_30_15m")).toBeTruthy();
+    expect(screen.queryByText("rv_yz_30_daily")).toBeNull();
   });
 
   it("offers no estimator chips, since the page computes Yang-Zhang alone", async () => {
@@ -110,25 +201,145 @@ describe("RealizedVsIvComponent — real response", () => {
     }
   });
 
-  it("says there is no IV30 when the response carries none, rather than drawing an IV line", async () => {
-    const { http, user, fixture } = await renderPage();
+  it("keeps the forward-realized tail unavailable, saying how many bars", async () => {
+    const { world, user, fixture } = await renderPage();
 
     await user.click(screen.getByRole("button", { name: "Compute" }));
-    await answerCompute(http, { ivPresent: false });
+    await answerCompute(world);
+    fixture.detectChanges();
+
+    expect(screen.getByText(/Forward RV unavailable for last 3 bars/)).toBeTruthy();
+  });
+});
+
+describe("RealizedVsIvComponent — where the bars came from", () => {
+  it("prints the data-source line with the lake, the window, the resolution and the added, reused and missing counts", async () => {
+    const { world, user, fixture } = await renderPage();
+
+    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await answerCompute(world);
+    fixture.detectChanges();
+
+    const summary = screen.getByText("Data source").closest("summary");
+    expect(summary?.textContent).toContain("Data lake, Polygon");
+    expect(summary?.textContent).toContain("daily bars, folded from 1-minute bars");
+    expect(screen.getByText("10 added · 30 reused · 0 missing")).toBeTruthy();
+  });
+
+  it("shows a refused run as no result, with the server's reason and the counts, and draws nothing", async () => {
+    const { world, user, fixture } = await renderPage();
+    const refusal = {
+      success: false, status: "refused", symbol: "SPY",
+      error: "The lake cannot admit this window.",
+      refusal: {
+        code: "data_unavailable_from_provider",
+        reason: "The lake cannot admit this window: 1 of 252 sessions cannot be supplied by the provider: 2025-06-04 (provider_no_data).",
+        sessions: [{ group: "window", trading_date_ms: Date.UTC(2025, 5, 4, 13, 30), outcome: "unavailable_from_provider", reason: "provider_no_data", failure_reason: "provider_no_data" }],
+        sessions_total: 1,
+        coverage: {
+          window: { expected_sessions: 252, reused: 200, added: 51, missing: 0, failed: 1, building: 0, corrupt: 0, unavailable_from_provider: 1 },
+          warmup: { expected_sessions: 0, reused: 0, added: 0, missing: 0, failed: 0, building: 0, corrupt: 0, unavailable_from_provider: 0 },
+          artifacts: { fetched: 51, reused: 200, refreshed: 0 },
+        },
+      },
+      data_source: lakeDataSource({ snapshot_digest: null, effective_window: null }),
+    };
+
+    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await refuseCompute(world, refusal);
+    fixture.detectChanges();
+
+    const refused = screen.getByTestId("rviv-refused");
+    expect(refused.textContent).toContain("No result");
+    expect(refused.textContent).toContain("1 of 252 sessions cannot be supplied by the provider");
+    expect(refused.textContent).toContain("252 sessions · 200 reused · 51 added · 0 missing · 1 failed");
+    expect(chartCount()).toBe(0);
+    expect(screen.queryByTestId("rviv-readout")).toBeNull();
+    expect(screen.queryByTestId("rviv-idle"), "the page is not idle: it was refused").toBeNull();
+    expect(screen.queryByTestId("rviv-error")).toBeNull();
+  });
+
+  it("refuses a bar size the study was not defined for with the server's reason, as a refusal and not an error", async () => {
+    const { world, user, fixture } = await renderPage();
+    const reason = "5m bars are not supported: the annualization and the HF estimator are defined for 15m and 1d bars only.";
+
+    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await refuseCompute(world, {
+      success: false, status: "refused", symbol: "SPY", error: reason,
+      refusal: { code: "resolution_unsupported", reason, sessions: [], sessions_total: 0, coverage: null }, data_source: null,
+    });
+    fixture.detectChanges();
+
+    expect(screen.getByTestId("rviv-refused").textContent).toContain(reason);
+    expect(screen.queryByText("Data source"), "nothing was read, so there is no source to name").toBeNull();
+  });
+});
+
+describe("RealizedVsIvComponent — no IV at these bars", () => {
+  it("says there is no IV30 when the response carries none, rather than drawing an IV line, and why", async () => {
+    const { world, user, fixture } = await renderPage();
+
+    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await answerCompute(world, { ivPresent: false });
     fixture.detectChanges();
 
     expect(document.querySelector(".banner-iv-missing")).not.toBeNull();
     expect(screen.getByTestId("rviv-readout").textContent).toContain("—");
+    expect(screen.getByTestId("iv-missing-reason").textContent).toContain("The IV recorder holds no snapshot for SPY in this window");
+  });
+
+  it("says when snapshots exist but none lands inside a bar, instead of claiming the recorder is empty", async () => {
+    const { world, user, fixture } = await renderPage();
+
+    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await answerCompute(world, {
+      ivPresent: false,
+      alignment: { snapshots_read: 3, bars_with_iv: 0, superseded: 0, outside_bars: 3 },
+    });
+    fixture.detectChanges();
+
+    const reason = screen.getByTestId("iv-missing-reason").textContent ?? "";
+    expect(reason).toContain("SPY");
+    expect(reason).toMatch(/none falls inside a bar/);
+    expect(reason).not.toContain("holds no snapshot");
+  });
+
+  it("counts how many snapshots reached a bar when only some did, and says nothing is carried forward", async () => {
+    const { world, user, fixture } = await renderPage();
+
+    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await answerCompute(world, { alignment: { snapshots_read: 40, bars_with_iv: 35, superseded: 2, outside_bars: 3 } });
+    fixture.detectChanges();
+
+    const line = screen.getByTestId("iv-alignment").textContent?.replace(/\s+/g, " ") ?? "";
+    expect(line).toContain("35 of 40 bars hold an IV30");
+    expect(line).toContain("40 snapshots read");
+    expect(line).toContain("2 superseded by a later one in the same bar");
+    expect(line).toContain("3 inside no bar");
+    expect(line).toContain("nothing is carried forward");
+  });
+
+  it("never puts the current IV on a past date: with no recorded IV the live value appears only in its own row", async () => {
+    const { world, user, fixture } = await renderPage();
+
+    await user.click(screen.getByRole("button", { name: "Compute" }));
+    await answerCompute(world, { ivPresent: false, live: "vix" });
+    fixture.detectChanges();
+
+    const readout = screen.getByTestId("rviv-readout");
+    const ivRow = within(readout).getByText("iv30", { exact: true });
+    expect(ivRow.nextElementSibling?.textContent?.trim(), "the series IV at the middle bar stays empty").toBe("—");
+    expect(screen.getByTestId("live-iv30-readout").textContent).toContain("21.3%");
+    expect(document.querySelector(".banner-iv-missing"), "and the page still says there is no IV30 at these bars").not.toBeNull();
   });
 });
 
 describe("RealizedVsIvComponent — failed request", () => {
   it("shows the error and no numbers", async () => {
-    const { http, user, fixture } = await renderPage();
+    const { world, user, fixture } = await renderPage();
 
     await user.click(screen.getByRole("button", { name: "Compute" }));
-    failBarsFetch(http, "Polygon is unavailable");
-    await tick();
+    await failCompute(world, "Polygon is unavailable");
     fixture.detectChanges();
 
     expect(screen.getByTestId("rviv-error").textContent).toContain("Polygon is unavailable");
@@ -139,14 +350,15 @@ describe("RealizedVsIvComponent — failed request", () => {
   });
 
   it("drops an earlier result when a later Compute fails, so it never reads as this request's answer", async () => {
-    const { http, user, fixture } = await renderPage();
+    const { world, user, fixture } = await renderPage();
     await user.click(screen.getByRole("button", { name: "Compute" }));
-    await answerCompute(http);
+    await answerCompute(world);
     fixture.detectChanges();
     expect(screen.getByTestId("rviv-readout")).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "Compute" }));
-    failBarsFetch(http, "Polygon is unavailable");
+    await tick();
+    world.jobs.fail("internal_error", "Polygon is unavailable");
     await tick();
     fixture.detectChanges();
 
@@ -293,41 +505,54 @@ describe("RealizedVsIvComponent — IV confidence banner", () => {
 });
 
 describe("RealizedVsIvComponent — live IV30 readout", () => {
-  async function renderWithLive(live: LiveIv30Marker | null): Promise<void> {
+  async function renderWithLive(live: LiveIv30State): Promise<void> {
     const { fixture } = await renderPage();
     fixture.componentInstance.data.set(realData({ liveIv30: live }));
     fixture.detectChanges();
   }
 
-  it("does not render the live_iv30 readout row when liveIv30 is null", async () => {
-    await renderWithLive(null);
+  it("says the live_iv30 row is unavailable, and why, when neither endpoint answered", async () => {
+    await renderWithLive({ kind: "unavailable", reason: "Neither live IV30 endpoint answered. vix-style: 503 the chain is dark; parametric: 503 the chain is dark." });
+
     expect(screen.queryByTestId("live-iv30-readout")).toBeNull();
+    expect(screen.getByTestId("live-iv30-unavailable").textContent).toBe("unavailable");
+    const reason = screen.getByTestId("live-iv30-reason").textContent ?? "";
+    expect(reason).toContain("vix-style: 503 the chain is dark");
+    expect(reason).toContain("parametric: 503 the chain is dark");
   });
 
-  it("renders the live IV30 percent and the vix-style method label", async () => {
+  it("renders the live IV30 percent, the vix-style method label and when it was taken", async () => {
     await renderWithLive({
-      method: "vix_style",
-      iv30Act365: 0.213,
-      snapshotTsMs: 1_700_000_000_000,
-      spot: 591,
-      varianceContributionSynthetic: 0.04,
-      strikeCoverageScore: 0.92,
+      kind: "available",
+      marker: {
+        method: "vix_style",
+        iv30Act365: 0.213,
+        snapshotTsMs: 1_700_000_000_000,
+        spot: 591,
+        varianceContributionSynthetic: 0.04,
+        strikeCoverageScore: 0.92,
+      },
     });
 
     const readout = screen.getByTestId("live-iv30-readout");
     expect(readout.textContent).toContain("21.3%");
     expect(screen.getByTestId("live-iv30-method").textContent).toContain("vix-style");
     expect(screen.getByTestId("live-iv30-synth").textContent).toContain("4%");
+    expect(screen.getByTestId("live-iv30-asof").textContent).toContain("as of");
+    expect(screen.queryByTestId("live-iv30-unavailable")).toBeNull();
   });
 
   it("labels the parametric fallback when method=parametric", async () => {
     await renderWithLive({
-      method: "parametric",
-      iv30Act365: 0.18,
-      snapshotTsMs: 1_700_000_000_000,
-      spot: 591,
-      varianceContributionSynthetic: 0.0,
-      strikeCoverageScore: 0.5,
+      kind: "available",
+      marker: {
+        method: "parametric",
+        iv30Act365: 0.18,
+        snapshotTsMs: 1_700_000_000_000,
+        spot: 591,
+        varianceContributionSynthetic: 0.0,
+        strikeCoverageScore: 0.5,
+      },
     });
 
     const method = screen.getByTestId("live-iv30-method");

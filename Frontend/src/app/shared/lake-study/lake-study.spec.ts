@@ -77,6 +77,11 @@ describe('lake study data source', () => {
     });
   });
 
+  it('words a bar a day long as a daily bar, not as 1440 minutes', () => {
+    const line = toDataSourceProvenance(mapLakeStudyDataSource(block({ bar_minutes: 1440 })));
+    expect(line.resolution).toBe('daily bars, folded from 1-minute bars');
+  });
+
   it('adds the warmup sessions to the counts and words them', () => {
     const line = toDataSourceProvenance(
       mapLakeStudyDataSource(block({

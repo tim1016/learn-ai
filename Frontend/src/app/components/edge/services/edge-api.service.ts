@@ -1,38 +1,26 @@
-import { HttpClient } from "@angular/common/http";
+import { HttpClient, HttpErrorResponse } from "@angular/common/http";
 import { inject, Injectable } from "@angular/core";
 import { firstValueFrom } from "rxjs";
+import { JobsService } from "../../../services/jobs.service";
+import {
+  mapLakeStudyDataSource,
+  readLakeStudyRefusal,
+  type LakeDataSourceRaw,
+  type LakeStudyRefused,
+} from "../../../shared/lake-study/lake-study";
 import {
   RV_READOUT_WINDOW, RV_WINDOWS,
-  type Candle, type IvConfidenceSummary, type LiveIv30Marker, type RealizedVsIvData,
+  type BarSize, type Candle, type HfSession, type IvAlignment, type IvConfidenceSummary,
+  type LiveIv30Marker, type LiveIv30State, type RealizedVsIvData, type RunSettings,
   type RvWindowSeries, type SignalMark, type VrpBin,
 } from "./edge-data.model";
 
-interface BarPayload {
-  ts: number;
-  open: number; high: number; low: number; close: number; volume: number;
-}
-
-interface AggregatesResponse {
-  success: boolean;
-  data: AggregateBarRaw[];
-  summary: Record<string, unknown>;
-  ticker: string;
-  error?: string;
-}
-
-/** The python /api/aggregates/fetch sanitizer normalizes to long-form fields:
- *  open/high/low/close/volume + int64-ms `timestamp`. The Polygon SDK shorthand
- *  (t/o/h/l/c/v) is also supported below in case a different code path returns it. */
-interface AggregateBarRaw {
-  timestamp?: number;
-  t?: number;
-  open?: number; high?: number; low?: number; close?: number; volume?: number;
-  o?: number;    h?: number;    l?: number;   c?: number;     v?: number;
-}
-
-interface RealizedVsIvSeriesResponse {
+/** What the `realized_vs_iv` job parks as its result (`app/services/realized_vs_iv_study_service.py`): the series, the
+ *  bars it was computed on, the settings it used, and where the bars came from. */
+interface RealizedVsIvResultRaw {
   symbol: string;
   ts: number[];
+  bars: { open: number[]; high: number[]; low: number[]; close: number[]; volume: number[] };
   rv_trailing: Record<string, (number | null)[]>;
   rv_forward: Record<string, (number | null)[]>;
   iv30: (number | null)[];
@@ -41,9 +29,8 @@ interface RealizedVsIvSeriesResponse {
   rv_hf_forward: (number | null)[];
   vrp_forward: (number | null)[];
   vrp_z: (number | null)[];
-  // IV-ownership Step E + recorder-fallback additions. Optional because old
-  // server builds and the "absent" path may omit them.
-  iv_source?: "caller_supplied" | "recorder" | "absent";
+  // IV-ownership Step E + recorder-fallback additions.
+  iv_source: "caller_supplied" | "recorder" | "absent";
   confidence?: (number | null)[] | null;
   vrp_z_scaled?: (number | null)[] | null;
   floor_gated?: boolean[] | null;
@@ -59,15 +46,26 @@ interface RealizedVsIvSeriesResponse {
      *  pre-date the field. */
     health_imputed_now?: boolean;
   } | null;
+  bar_size: "15m" | "1d";
+  tenor_days: number;
+  hf_session: HfSession | null;
   coverage: {
     n_bars: number;
     iv_first_ts: number | null;
     iv_last_ts: number | null;
     forward_nan_bars: number;
-    session?: string;
+    session: string | null;
     vrp_basis?: string;
     has_confidence?: boolean;
+    iv_alignment: {
+      rule: string;
+      snapshots_read: number;
+      bars_with_iv: number;
+      superseded: number;
+      outside_bars: number;
+    };
   };
+  data_source: LakeDataSourceRaw;
 }
 
 interface Iv30LiveResponse {
@@ -90,123 +88,144 @@ interface Iv30LiveResponse {
   };
 }
 
-export type BarSize = "5m" | "15m" | "1h" | "1D";
+export type { BarSize };
 export type Tenor = "7D" | "14D" | "30D" | "60D";
 export type Estimator = "ctc" | "parkinson" | "gk" | "yz";
-export type Session = "ETH" | "RTH";
+export type Session = HfSession;
 
 export interface ComputeRvIvRequest {
   symbol: string;
   barSize: BarSize;
   tenor: Tenor;
   estimators: readonly Estimator[];
-  session?: Session;
+  /** The HF estimator's session; only 15-minute bars have an HF estimator, so it is sent for them alone. */
+  hfSession?: HfSession;
   windows?: readonly number[];
+}
+
+/** The lake could not supply the study's bars: the reason and the counts admission reached, for the data-source line. */
+export class LakeStudyRefusedError extends Error {
+  constructor(readonly refused: LakeStudyRefused) {
+    super(refused.refusal.reason);
+    this.name = "LakeStudyRefusedError";
+  }
+}
+
+type JobEnd =
+  | { kind: "completed" }
+  | { kind: "failed"; message: string }
+  | { kind: "cancelled"; reason: string };
+
+/** The wire's bar size for the page's. The server is defined for these two and refuses any other with a reason. */
+const WIRE_BAR_SIZE: Readonly<Record<BarSize, RealizedVsIvResultRaw["bar_size"]>> = { "15m": "15m", "1D": "1d" };
+
+function barSizeFromWire(wire: RealizedVsIvResultRaw["bar_size"]): BarSize {
+  return wire === "1d" ? "1D" : "15m";
 }
 
 @Injectable({ providedIn: "root" })
 export class EdgeApiService {
   private readonly http = inject(HttpClient);
+  private readonly jobs = inject(JobsService);
 
-  /** Fetch bars from /api/aggregates, post to /api/edge/realized-vs-iv/series,
-   *  project the response into the RealizedVsIvData shape used by the chart
-   *  components. Also fires a parallel live-IV30 fetch (vix-style → parametric
-   *  fallback) and attaches the result so the chart can draw the live marker.
-   *  A failed request rejects; there is no fallback dataset. */
-  async computeRealizedVsIv(req: ComputeRvIvRequest): Promise<RealizedVsIvData> {
-    const bars = await this.fetchBars(req.symbol, req.barSize, req.tenor);
-    if (bars.length === 0) {
-      throw new Error(`no bars returned for ${req.symbol}`);
-    }
+  /** Start the `realized_vs_iv` job (the worker reads the bars from the data lake, never the browser), wait for it, and
+   *  project its result into the RealizedVsIvData shape used by the chart components. Also fires a parallel live-IV30
+   *  fetch (vix-style → parametric fallback) and attaches the result, or why there is none, so the page can show the
+   *  current-IV marker without it ever being placed on a past date.
+   *
+   *  A run the lake could not supply rejects with a {@link LakeStudyRefusedError} carrying the reason and the counts;
+   *  any other failure rejects with its message. There is no fallback dataset. `onStatus` receives the job's log lines. */
+  async computeRealizedVsIv(req: ComputeRvIvRequest, onStatus?: (message: string) => void): Promise<RealizedVsIvData> {
     const tenorDays = this.tenorToDays(req.tenor);
     const windows = req.windows ?? RV_WINDOWS;
-    const seriesP = firstValueFrom(this.http.post<RealizedVsIvSeriesResponse>(
-      "/api/edge/realized-vs-iv/series",
-      {
-        symbol: req.symbol,
-        bar_size: req.barSize === "1D" ? "1d" : req.barSize === "15m" ? "15m" : "1d",
-        tenor_days: tenorDays,
-        session: req.session ?? "ETH",
-        estimators: req.estimators,
-        windows,
-        bars,
-      }
-    ));
+    const wireBarSize = WIRE_BAR_SIZE[req.barSize];
+    const jobId = await this.jobs.startJob("realized_vs_iv", {
+      symbol: req.symbol,
+      bar_size: wireBarSize,
+      tenor_days: tenorDays,
+      ...(wireBarSize === "15m" ? { hf_session: req.hfSession ?? "ETH" } : {}),
+      estimators: req.estimators,
+      windows,
+    });
     const liveIvP = this.getLiveIv30(req.symbol, tenorDays);
-    const series = await seriesP;
-    return { ...this.projectSeries(req.symbol, bars, series, windows), liveIv30: await liveIvP };
+    const end = await this.settle(jobId, onStatus);
+    if (end.kind === "cancelled") throw new Error(end.reason);
+    if (end.kind === "failed") {
+      const refused = readLakeStudyRefusal(await this.parkedResult(jobId));
+      if (refused !== null) throw new LakeStudyRefusedError(refused);
+      throw new Error(end.message);
+    }
+    const result = await this.jobs.fetchResult<RealizedVsIvResultRaw>(jobId);
+    return { ...this.projectResult(result, windows), liveIv30: await liveIvP };
   }
 
   /** Fetch the live IV30 value for `symbol`. Tries `vix-style` first
    *  (matches the server-side recorder preference); on failure falls back
-   *  to `parametric`. Returns null when both endpoints error — the marker
-   *  is non-load-bearing UI, so we don't surface the error to the page. */
-  async getLiveIv30(symbol: string, targetCalendarDays = 30): Promise<LiveIv30Marker | null> {
-    const tryOne = async (path: string, method: LiveIv30Marker["method"]) => {
-      const resp = await firstValueFrom(this.http.post<Iv30LiveResponse>(
-        path, { symbol, target_calendar_days: targetCalendarDays },
-      ));
-      return liveResponseToMarker(resp, method);
-    };
-    try { return await tryOne("/api/edge/iv30/vix-style", "vix_style"); }
-    catch { /* fall through to parametric */ }
-    try { return await tryOne("/api/edge/iv30/parametric", "parametric"); }
-    catch { return null; }
-  }
-
-  private async fetchBars(symbol: string, barSize: BarSize, _tenor: Tenor): Promise<BarPayload[]> {
-    const today = new Date();
-    const from = new Date(today);
-    // Reach back ~1 year for daily, ~30 days for intraday — enough warmup + a meaningful window.
-    if (barSize === "1D") from.setFullYear(today.getFullYear() - 1);
-    else from.setMonth(today.getMonth() - 1);
-
-    const { multiplier, timespan } = this.barSizeToPolygon(barSize);
-    const resp = await firstValueFrom(this.http.post<AggregatesResponse>(
-      "/api/aggregates/fetch",
-      {
-        ticker: symbol,
-        multiplier,
-        timespan,
-        from_date: from.toISOString().slice(0, 10),
-        to_date: today.toISOString().slice(0, 10),
-        limit: 50000,
-        adjusted: true,
+   *  to `parametric`. When both fail the answer is `unavailable` with each
+   *  endpoint's reason: the marker is non-load-bearing, but a missing one is
+   *  never left to look like a market with no IV. */
+  async getLiveIv30(symbol: string, targetCalendarDays = 30): Promise<LiveIv30State> {
+    const attempts: readonly { path: string; method: LiveIv30Marker["method"]; label: string }[] = [
+      { path: "/api/edge/iv30/vix-style", method: "vix_style", label: "vix-style" },
+      { path: "/api/edge/iv30/parametric", method: "parametric", label: "parametric" },
+    ];
+    const failures: string[] = [];
+    for (const { path, method, label } of attempts) {
+      try {
+        const resp = await firstValueFrom(this.http.post<Iv30LiveResponse>(
+          path, { symbol, target_calendar_days: targetCalendarDays },
+        ));
+        return { kind: "available", marker: liveResponseToMarker(resp, method) };
+      } catch (error) {
+        failures.push(`${label}: ${describeFailure(error)}`);
       }
-    ));
-    if (!resp.success || !resp.data) {
-      throw new Error(resp.error ?? "aggregates fetch failed");
     }
-    return resp.data
-      .map((d) => this.normalizeBar(d))
-      .filter((b): b is BarPayload => b !== null);
+    return { kind: "unavailable", reason: `Neither live IV30 endpoint answered. ${failures.join("; ")}.` };
   }
 
-  private normalizeBar(d: AggregateBarRaw): BarPayload | null {
-    let ts: number;
-    if (typeof d.timestamp === "number") ts = d.timestamp;
-    else if (typeof d.t === "number") ts = d.t;
-    else return null;
-    if (!Number.isFinite(ts) || ts <= 0) return null;
-
-    const open = d.open ?? d.o;
-    const high = d.high ?? d.h;
-    const low = d.low ?? d.l;
-    const close = d.close ?? d.c;
-    if (open == null || high == null || low == null || close == null) return null;
-
-    return {
-      ts, open, high, low, close,
-      volume: d.volume ?? d.v ?? 0,
-    };
+  /** Resolve when the job reaches a terminal state, passing its log lines on as it goes. `onEvent` replays what this
+   *  tab already saw, so a job that finished before the listener attached still settles. */
+  private settle(id: string, onStatus?: (message: string) => void): Promise<JobEnd> {
+    return new Promise<JobEnd>((resolve) => {
+      let unsubscribe: (() => void) | null = null;
+      let settled = false;
+      const finish = (end: JobEnd): void => {
+        if (settled) return;
+        settled = true;
+        unsubscribe?.();
+        resolve(end);
+      };
+      unsubscribe = this.jobs.onEvent(id, (event) => {
+        switch (event.type) {
+          case "job.log":
+            if (typeof event["message"] === "string") onStatus?.(event["message"]);
+            break;
+          case "job.completed":
+            finish({ kind: "completed" });
+            break;
+          case "job.failed":
+            finish({ kind: "failed", message: typeof event["message"] === "string" ? event["message"] : "The run failed." });
+            break;
+          case "job.cancelled":
+            finish({ kind: "cancelled", reason: typeof event["reason"] === "string" ? event["reason"] : "The run was cancelled." });
+            break;
+          default:
+            break;
+        }
+      });
+      // A terminal event replayed during the call above settled before `unsubscribe` was assigned.
+      if (settled) unsubscribe();
+    });
   }
 
-  private barSizeToPolygon(b: BarSize): { multiplier: number; timespan: string } {
-    switch (b) {
-      case "5m":  return { multiplier: 5,  timespan: "minute" };
-      case "15m": return { multiplier: 15, timespan: "minute" };
-      case "1h":  return { multiplier: 1,  timespan: "hour" };
-      case "1D":  return { multiplier: 1,  timespan: "day" };
+  /** The result a failed job parked, or null when it parked none: only a refused window leaves one, so a 404 is the
+   *  ordinary answer for any other failure. Anything else is a real error and is not swallowed. */
+  private async parkedResult(id: string): Promise<unknown> {
+    try {
+      return await this.jobs.fetchResult<unknown>(id);
+    } catch (error) {
+      if (error instanceof HttpErrorResponse && error.status === 404) return null;
+      throw error;
     }
   }
 
@@ -214,27 +233,27 @@ export class EdgeApiService {
     return Number(t.replace("D", ""));
   }
 
-  /** Map the API series response into the chart-friendly RealizedVsIvData.
-   *  Only what the endpoint returns is projected; nothing is defaulted for the
+  /** Map the job result into the chart-friendly RealizedVsIvData.
+   *  Only what the study returns is projected; nothing is defaulted for the
    *  edge score, regimes or oracle signals it does not compute. */
-  private projectSeries(
-    symbol: string, bars: BarPayload[], series: RealizedVsIvSeriesResponse, windows: readonly number[],
+  private projectResult(
+    result: RealizedVsIvResultRaw, windows: readonly number[],
   ): Omit<RealizedVsIvData, "liveIv30"> {
-    const N = bars.length;
-    const candles: Candle[] = bars.map((b) => ({
-      o: b.open, h: b.high, l: b.low, c: b.close, v: b.volume,
+    const N = result.ts.length;
+    const candles: Candle[] = result.ts.map((_, i) => ({
+      o: result.bars.open[i], h: result.bars.high[i], l: result.bars.low[i], c: result.bars.close[i], v: result.bars.volume[i],
     }));
-    const dates = bars.map((b) => new Date(b.ts));
-    const iv30 = nullsToNaN(series.iv30);
-    const iv30Trd252 = nullsToNaN(series.iv30_trd252 ?? []);
-    const rvYzByWindow = yangZhangTrailing(series, windows);
+    const dates = result.ts.map((t) => new Date(t));
+    const iv30 = nullsToNaN(result.iv30);
+    const iv30Trd252 = nullsToNaN(result.iv30_trd252 ?? []);
+    const rvYzByWindow = yangZhangTrailing(result, windows);
     const rvYZ = rvYzByWindow.find((s) => s.window === RV_READOUT_WINDOW)?.values;
     if (!rvYZ) {
       throw new Error(`the series response has no ${yzKey(RV_READOUT_WINDOW)} trailing RV for the readout`);
     }
-    const rvHf21d = nullsToNaN(series.rv_hf_forward ?? []);
-    const vrpForward = nullsToNaN(series.vrp_forward);
-    const vrpZ = nullsToNaN(series.vrp_z);
+    const rvHf21d = nullsToNaN(result.rv_hf_forward ?? []);
+    const vrpForward = nullsToNaN(result.vrp_forward);
+    const vrpZ = nullsToNaN(result.vrp_z);
 
     const validVrp = vrpForward.filter((x) => !Number.isNaN(x));
     const vrpHistogram: VrpBin[] = validVrp.length
@@ -249,9 +268,23 @@ export class EdgeApiService {
       else if (z < -1) signals.push({ i, dir: "long" });
     }
 
+    const run: RunSettings = {
+      barSize: barSizeFromWire(result.bar_size),
+      tenorDays: result.tenor_days,
+      hfSession: result.hf_session,
+    };
+    const alignment = result.coverage.iv_alignment;
+    const ivAlignment: IvAlignment = {
+      rule: alignment.rule,
+      snapshotsRead: alignment.snapshots_read,
+      barsWithIv: alignment.bars_with_iv,
+      superseded: alignment.superseded,
+      outsideBars: alignment.outside_bars,
+    };
+
     return {
       provenance: "real",
-      symbol,
+      symbol: result.symbol,
       N,
       dates,
       candles,
@@ -265,10 +298,13 @@ export class EdgeApiService {
       vrpHistogram,
       signals,
       coverage: {
-        forwardBlindTail: series.coverage.forward_nan_bars,
-        ivFirstTsMs: series.coverage.iv_first_ts,
+        forwardBlindTail: result.coverage.forward_nan_bars,
+        ivFirstTsMs: result.coverage.iv_first_ts,
       },
-      ivConfidence: extractIvConfidence(series),
+      ivConfidence: extractIvConfidence(result),
+      ivAlignment,
+      run,
+      dataSource: mapLakeStudyDataSource(result.data_source),
     };
   }
 }
@@ -279,7 +315,7 @@ const yzKey = (window: number): string => `yz_${window}`;
  *  response holds one series per estimator per window, so position says
  *  nothing about which estimator or window a series is. */
 function yangZhangTrailing(
-  series: RealizedVsIvSeriesResponse, windows: readonly number[],
+  series: RealizedVsIvResultRaw, windows: readonly number[],
 ): RvWindowSeries[] {
   return [...windows]
     .sort((a, b) => a - b)
@@ -304,7 +340,7 @@ function liveResponseToMarker(
 }
 
 function extractIvConfidence(
-  series: RealizedVsIvSeriesResponse,
+  series: RealizedVsIvResultRaw,
 ): IvConfidenceSummary | null {
   if (!series.iv_source) return null;
   const nGated = series.floor_gated
@@ -318,6 +354,16 @@ function extractIvConfidence(
     nGated,
     healthImputed: series.explanation?.health_imputed_now ?? null,
   };
+}
+
+/** Why a live-IV request failed, in words: the server's own detail when it sent one, else the HTTP status. */
+function describeFailure(error: unknown): string {
+  if (error instanceof HttpErrorResponse) {
+    if (error.status === 0) return "the data service did not answer";
+    const detail: unknown = (error.error as { detail?: unknown } | null)?.detail;
+    return typeof detail === "string" && detail !== "" ? `${error.status} ${detail}` : `${error.status} ${error.statusText}`;
+  }
+  return error instanceof Error ? error.message : "an unexpected error";
 }
 
 function nullsToNaN(arr: readonly (number | null)[]): number[] {
