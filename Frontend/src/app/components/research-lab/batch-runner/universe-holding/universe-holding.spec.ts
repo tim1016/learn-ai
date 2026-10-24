@@ -10,7 +10,6 @@ describe('describeUniverseHolding', () => {
 
     expect(content?.kind).toBe('partial');
     expect(content?.happened).toBe('42 member-sessions of stock bars aren’t in the lake yet, across 2 of 5 members.');
-    expect(content?.why).toContain('about one vendor call per member-session');
   });
 
   it('speaks in the singular for one member-session of one member', () => {

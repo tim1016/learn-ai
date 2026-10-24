@@ -709,7 +709,7 @@ describe('BatchRunnerComponent: the stock bars the lake lacks, before Run (#3524
     await renderPage(undefined, lacking);
 
     expect(await screen.findByText(/42 member-sessions of stock bars aren’t in the lake yet, across 2 of 3 members\./)).toBeTruthy();
-    expect(screen.getByText(/about one vendor call per member-session, so a cold universe is slow/)).toBeTruthy();
+    expect(screen.getByText(/so a cold universe is slow/)).toBeTruthy();
     expect(within(screen.getByTestId('holding-QQQ')).getByRole('button', { name: 'Capture 12 sessions' })).toBeTruthy();
     expect(within(screen.getByTestId('holding-AAPL')).getByRole('button', { name: 'Capture 30 sessions' })).toBeTruthy();
     expect(screen.queryByTestId('holding-SPY'), 'SPY is held in full').toBeNull();

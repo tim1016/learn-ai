@@ -44,29 +44,24 @@ fills what is missing; the UI is never a writer), and
 `app/research/lake_study.py` owns the run around a study's math: cache identity,
 the data-source block and the typed refusal. No calculation ownership changes.
 
-**Cross-sectional study data admission (#3524).** The Cross-sectional study
-(Research Lab → Features → Cross-sectional) computes its stock bars from
-admitted lake inputs; its Polygon daily fetch, and the IV builder's second
-fetch of the underlying, are gone. `app/research/cross_sectional_inputs.py`
-admits each member through the same `study_inputs.admit_minute_inputs` and folds
-the admitted minutes to daily rows with the lake's own reduction
-(`derived_daily.aggregate_minute_to_daily`); a member the lake cannot admit is
-excluded with a typed reason (`app/research/study_universe.py` names every
-exclusion and builds the universe block), and a universe with no admissible member
-refuses.
-`app/services/cross_sectional_study_service.py` runs the job and keys the result
-cache on each member's admitted snapshot digest in a new namespace.
-The option inputs (expiries, contracts, option bars, the risk-free rate) stay
-provider-sourced and are named, counted and fingerprinted per run by
-`app/research/options/option_input_ledger.py`; a request the provider did not
-answer is a typed failure, a risk-free rate that is the default only because FRED
-did not answer (a key is configured) is a degraded input, and a result holding
-either is not cached. A study in which no member is evaluated fails with
-`no_member_evaluated` instead of completing. No calculation
-ownership changes: IV, IC, N_eff, binomial and graduation math is untouched. The
-daily bar is the regular session (the owner's decision, #3524), measured against
-the vendor's own daily bars in golden fixture `SPY-DAILY-001`; `extended` is
-reachable only through the API.
+**Cross-sectional study data admission (#3524).** The Cross-sectional study admits
+stock bars and option inputs from the lake before computing. Stock targets use
+split-adjusted regular-session daily folds; IV spots and strike picks use raw
+regular-session closes. `app/research/cross_sectional_inputs.py` owns admission
+of the universe through the shared minute reader, and
+`app/research/options/option_inputs.py` owns listing and contract-day admission
+through the lake's existing capture driver and process-wide vendor gate.
+A member with any unavailable stock or option input is excluded with its reason;
+when no member remains the job refuses. The option price is the last minute
+close wholly inside the regular session, with regular volume at least 50
+(owner decision, #3524; ADR 0078). Listings are read as of first use, standard
+contracts only, without a count cap. The session archive and retained contract
+files are interchangeable because identity pins each member's original bytes.
+`app/services/cross_sectional_study_service.py` keys the cache on adjusted, raw
+and option-input digests. FRED remains a separate live reference input; a default
+rate due to its outage degrades the member and prevents caching. IC, N_eff,
+binomial and graduation calculation ownership remains unchanged.
+
 **Indicator reliability data admission (#3523).** Indicator reliability (Research
 Lab → Backtests → Reliability) admits lake bars of the session the person picks
 (regular hours by default, or extended) before it computes; its Polygon fetch and its

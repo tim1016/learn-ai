@@ -152,9 +152,8 @@ export class BatchRunnerComponent {
   targetType = signal('directional');
 
   // Single MultiTickerRange replaces (selectedTickers, fromDate, toDate).
-  // Cross-sectional research reads daily bars whatever is sent: the worker
-  // ignores the resolution, so the page fixes it at daily / multiplier=1 and
-  // offers no sampling control (#3527).
+  // Cross-sectional research accepts only daily regular-session bars (#3524),
+  // so the page fixes the resolution and offers no sampling control.
   range = signal<MultiTickerRange>({
     symbols: [...DEFAULT_TICKERS],
     from: '2025-09-02',

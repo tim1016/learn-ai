@@ -123,6 +123,23 @@ previously tracked items (issues #1655, #1671, #1672, #1674, #1677, #1664,
   pre-#3528 value on a date that code computed too, where a re-list moves an expiry's first
   use (measured up to 2.4e-2 ATM on irregular chains). The owner kept the reuse on
   2026-10-24. #3545
+- **Cross-sectional risk-free rates remain live FRED inputs (P2, #3524).** Stock
+  and option inputs are retained with byte identities, but a forced recomputation
+  can use revised FRED rates. The result names FRED separately and records a digest
+  of the rates used; a cached result keeps the rates its original computation used.
+- **Cross-sectional warm archive reads decode entire option-session containers
+  (P2, [#3551](https://github.com/tim1016/learn-ai/issues/3551)).** The current reader
+  validates the whole container before exposing any member. The retained SPY
+  2025-04-09 container took 3.49 seconds to decode and the isolated process peaked
+  at 437.69 MiB on the development host. Repeating that busy day for 252 sessions
+  projects 15.13 minutes; this is not a measured annual run. Measure a real warm
+  year and reduce the cost if it exceeds the owner's approximately five-minute
+  threshold, preserving whole-container validation and stable member identities.
+- **Cross-sectional cold option capture asks for contract days separately (P3,
+  #3524).** It uses one listing per needed session and up to eight contract-day
+  requests, rather than a single multi-day request per contract. A cold
+  non-archived member can cost roughly 10–21 requests per session; retained reruns
+  make no option-vendor requests. The page warns before Run.
 - **The live option-chain cross-check computes its gap and its tolerance band in Angular (medium,
   2026-10-24).** On an instrument's Options chain in Now · Live IBKR,
   `Frontend/src/app/markets/options/chain/live/live-cross-check.ts` computes

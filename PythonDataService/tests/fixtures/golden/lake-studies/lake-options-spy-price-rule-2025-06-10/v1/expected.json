@@ -1,0 +1,22 @@
+{
+  "call": {
+    "regular_close": "5.57",
+    "regular_volume": 31657,
+    "daily_vwap": "4.4091",
+    "daily_close": "5.14",
+    "daily_volume": 31899,
+    "close_minus_daily_vwap": "1.1609",
+    "after_close_bars": 12,
+    "after_close_volume": 242
+  },
+  "put": {
+    "regular_close": "2.08",
+    "regular_volume": 28954,
+    "daily_vwap": "2.7747",
+    "daily_close": "2.39",
+    "daily_volume": 30078,
+    "close_minus_daily_vwap": "-0.6947",
+    "after_close_bars": 14,
+    "after_close_volume": 1124
+  }
+}

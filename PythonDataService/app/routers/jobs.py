@@ -200,13 +200,12 @@ class CrossSectionalJobRequest(_CamelCaseMultiTickerRequest):
     The study runs on daily bars (``app.research.cross_sectional_inputs``), so the
     inherited ``timespan`` default of ``minute`` is overridden to ``day``: a caller
     that names no resolution gets the study it always got, and any other resolution
-    is refused with a reason. ``session`` is the one control for which minutes each
-    daily bar folds: ``rth`` (the base default, which the browser sends) is the
-    scheduled session, ``extended`` is 04:00-20:00 ET. The study's session is the regular
-    one (the owner's decision, #3524); the browser always sends it, and ``extended`` is reachable only through the API.
+    is refused with a reason. Daily bars use only the scheduled regular session
+    (the owner's decision, #3524); ``extended`` is refused at the request boundary.
     """
 
     timespan: Timespan = "day"
+    session: Literal["rth"] = "rth"
     job_id: str = Field(..., min_length=1)
     feature_name: str = Field(..., min_length=1)
     target_type: str = "directional"

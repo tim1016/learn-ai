@@ -57,10 +57,11 @@ from polygon.rest.models import Agg
 from app.config import settings
 from app.lean_sidecar.trading_calendar import expected_sessions, session_close_ms_utc, session_open_ms_utc
 from app.research.batch_runner import _extract_daily_returns
-from app.research.cross_sectional_inputs import admit_universe, cross_sectional_identity
+from app.research.cross_sectional_inputs import admit_universe, cross_sectional_identity, daily_rows
 from app.research.options.iv_builder import build_iv_history
 from app.research.options.option_inputs import RateTally
 from app.research.options_runner import _compute_daily_forward_return
+from app.research.study_inputs import MinuteWindowIdentity, admit_minute_inputs
 from app.services.polygon_client import PolygonClientService
 from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 from app.utils.session_anchors import et_midnight_ms
@@ -146,6 +147,13 @@ def provider_rows(tape: Mapping[date, list[VendorBar]], window: list[date]) -> l
 
 
 def lake_rows(window: list[date], *, session: str = "regular", now_ms: int = NOW_MS) -> list[dict]:
+    if session == "extended":
+        # A counterfactual fold for comparison: the study itself admits regular hours only (#3524).
+        admitted = admit_minute_inputs(
+            MinuteWindowIdentity("SPY", "polygon_split_adjusted", "extended", window[0], window[-1]),
+            requester="comparison", now_ms=now_ms,
+        )
+        return daily_rows(admitted.window_bars)
     identity = cross_sectional_identity(
         ["SPY"], window[0], window[-1], timespan="day", multiplier=1, session_policy=session  # type: ignore[arg-type]
     )

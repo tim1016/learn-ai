@@ -427,7 +427,12 @@ class LakeChainSource:
         """The whole stored listing of ``day``, which :meth:`ensure` has already made sure the lake holds."""
         if self._latest is not None and self._latest[0] == day:
             return self._latest[1]
-        listing = self._read(day)
+        try:
+            listing = self._read(day)
+        except _STORED_FILE_ERRORS as error:
+            raise OptionInputRefusal(
+                [_issue_from_stored_file("listing", day, self._underlying, error)], expected=1
+            ) from error
         if listing is None:
             raise OptionInputRefusal([_issue_not_there_after_capture("listing", day, self._underlying)], expected=1)
         self._remember(day, listing)

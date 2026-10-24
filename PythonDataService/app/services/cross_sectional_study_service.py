@@ -19,9 +19,8 @@ The study's input contract. Each requested member needs two kinds of input, and 
 * **Adjustment.** The lake's ``polygon_split_adjusted`` mode for the target, named in the identity; ``raw`` for the spot. Prices
   sit on the lake's 1/10,000 grid, each minute rounded half-up before the fold: a change to the input data, not float rounding.
 * **Session.** The study's daily bar is the regular session, ``[open, close)``, which leaves out the minute stamped 16:00
-  (owner, 2026-10-24, #3524). ``session_policy`` is an identity field, set from the request's ``session`` (``rth`` is
-  ``regular``, the default and the only one the page sends; ``extended`` folds 04:00-20:00 ET and is reachable only
-  through the API). The stock close sets the IV spot and the ATM strike, so the policy moves IVs and contract picks, not
+  (owner, 2026-10-24, #3524). ``session_policy`` remains in the identity as ``regular``; the request accepts only
+  ``rth``, and an internal request for extended hours is refused before admission. The stock close sets the IV spot and the ATM strike, so the policy moves IVs and contract picks, not
   only the target. Measured against Polygon's own daily bars for SPY, 2025-01-13 to 17 (golden fixture ``SPY-DAILY-001``,
   ``tests/research/test_cross_sectional_lake_vs_provider.py``): the open, high and low are exact; the close differs by up
   to $0.15 because the vendor's is the official print and the study's is the last regular minute, the instant the option

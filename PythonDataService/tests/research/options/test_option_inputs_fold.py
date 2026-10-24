@@ -129,6 +129,7 @@ def test_a_stored_bar_that_cannot_be_placed_in_the_session_fails_the_whole_day_a
 # ── the vendor's real answer ────────────────────────────────────────────────────────────────────────────────────
 
 RECORDING = Path(__file__).parents[2] / "fixtures/golden/options-backtest/options-backtest-spy-2025-06-10/v1"
+DAILY_RECORDING = Path(__file__).parents[2] / "fixtures/golden/lake-studies/lake-options-spy-price-rule-2025-06-10/v1"
 LISTING_PATH = "/v3/reference/options/contracts"
 STOCK_PATH = "/v2/aggs/ticker/SPY/range/1/minute/2025-06-10/2025-06-10"
 CALL_PATH = "/v2/aggs/ticker/O:SPY250613C00600000/range/1/minute/2025-06-10/2025-06-10"
@@ -144,7 +145,7 @@ PUT_600 = OptionContract.of(root="SPY", expiry_date=date(2025, 6, 13), right="pu
 
 #: Read off the recorded bodies with the standard library's ``json`` (not our code): for each contract, the number of bars the
 #: vendor sent and how many lie wholly inside the session; the close and the volume summed over them; and the full-day numbers
-#: the vendor's own daily bar would have used (the last print of the day, and all the volume).
+#: in the vendor's own daily bar (the last print of the day, and all the volume), pinned separately in DAILY_RECORDING.
 #: Call 600: 389 bars, 377 inside; the 15:59 bar closes at 5.57; 31,657 contracts inside, 31,899 in all; the last print of
 #: the day, at 16:13, is 5.14. Put 600: 400 bars, 386 inside; the 15:59 bar closes at 2.08; 28,954 inside, 30,078 in all;
 #: the minute stamped 16:00 closes at 2.26 and the last print of the day is 2.39.
@@ -183,3 +184,16 @@ async def test_the_vendors_real_spy_day_through_the_lake_prices_each_option_at_i
     assert folded == (close, volume, TUESDAY_CLOSE - MINUTE) and folded[:2] == recorded_oracle(file)[2:]
     assert sum((b.volume for b in stored.bars), D(0)) == all_volume > volume, "regular-hours volume is less than the day's"
     assert stored.bars[-1].close == last_print != close, "the last print of the day is not the price: it sits in the tail"
+
+    daily_payload = json.loads((DAILY_RECORDING / file.replace("_minute_", "_day_")).read_bytes(), parse_float=D)
+    daily = daily_payload["results"][0]
+    expected = json.loads((DAILY_RECORDING / "expected.json").read_bytes())[kind]
+    tail = [b for b in stored.bars if b.start_ms >= TUESDAY_CLOSE]
+    assert daily_payload["adjusted"] is False
+    assert folded[:2] == (D(expected["regular_close"]), D(expected["regular_volume"]))
+    assert daily["vw"] == D(expected["daily_vwap"])
+    assert daily["c"] == last_print == D(expected["daily_close"])
+    assert daily["v"] == all_volume == expected["daily_volume"]
+    assert close - daily["vw"] == D(expected["close_minus_daily_vwap"]), "D-A: the chosen close differs from daily VWAP"
+    assert len(tail) == expected["after_close_bars"]
+    assert sum((b.volume for b in tail), D(0)) == all_volume - volume == D(expected["after_close_volume"])

@@ -40,7 +40,7 @@ from app.research.cross_sectional_inputs import (
     universe_refusal,
 )
 from app.research.lake_study import FoldedStudyIdentity, data_source_block
-from app.research.study_inputs import StudyInputRefusal
+from app.research.study_inputs import MinuteWindowIdentity, StudyInputRefusal, admit_minute_inputs
 from app.utils.session_anchors import et_midnight_ms
 from tests._helpers.fake_lake_catalog import FakeCatalog, install_fake_catalog, mock_launcher, point_lake_writer_at_tmp
 from tests._helpers.lake_study import commit_bars, lake_file, minute_bar
@@ -385,9 +385,10 @@ def test_daily_rows_equal_the_lakes_own_daily_rollup(catalog, lake):
     spec = run_materialization._build_engine_run_spec(symbol="SPY", start=JULY[0], end=JULY[-1], requester="test")
     asyncio.run(run_materialization._materialize_run_data(spec, resolution="minute"))
 
-    admission = admit(identity_for(["SPY"], JULY, session="extended"))
-
-    study = admission.members["SPY"].rows
+    minutes = admit_minute_inputs(
+        MinuteWindowIdentity("SPY", "raw", "extended", JULY[0], JULY[-1]), requester="test", now_ms=NOW_MS
+    )
+    study = daily_rows(minutes.window_bars)
     rollup = _rollup_rows("SPY", "raw")
     assert [r["day"] for r in rollup] == JULY and len(study) == len(rollup)
     for ours, theirs in zip(study, rollup, strict=True):
@@ -423,19 +424,18 @@ def _pandas_daily(bars: list[VendorBar], day: date, *, regular_only: bool) -> di
 
 
 @respx.mock
-@pytest.mark.parametrize("policy", ["regular", "extended"])
 @pytest.mark.parametrize("window", [MARCH, JULY], ids=["dst_week", "early_close_week"])
-def test_daily_rows_match_an_independent_reference_across_dst_and_an_early_close(catalog, lake, policy, window):
+def test_daily_rows_match_an_independent_reference_across_dst_and_an_early_close(catalog, lake, window):
     """The session policy decides which minutes a day holds; the canonical calendar decides when the session ends."""
     mock_launcher()
     tape = vendor_history(window, seed=9, start_price=75.0)
     mock_vendor("SPY", tape)
 
-    rows = admit(identity_for(["SPY"], window, session=policy)).members["SPY"].rows
+    rows = admit(identity_for(["SPY"], window)).members["SPY"].rows
 
     assert [r["timestamp"] for r in rows] == [session_open_ms_utc(day) for day in window]
     for row, day in zip(rows, window, strict=True):
-        expected = _pandas_daily(tape[day], day, regular_only=policy == "regular")
+        expected = _pandas_daily(tape[day], day, regular_only=True)
         for column, value in expected.items():
             np.testing.assert_allclose(row[column], value, atol=1e-9, rtol=0, err_msg=f"{day} {column}")
     if window is JULY:
@@ -508,9 +508,9 @@ def test_prices_finer_than_the_lake_grid_round_half_up_to_the_ten_thousandth_bef
     mock_vendor("SPY", tape)
     quantize = lambda value: float(Decimal(repr(value)).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP))  # noqa: E731
 
-    row = admit(identity_for(["SPY"], JULY[:1], session="extended")).members["SPY"].rows[0]
+    row = admit(identity_for(["SPY"], JULY[:1])).members["SPY"].rows[0]
 
-    bars = tape[JULY[0]]
+    bars = [b for b in tape[JULY[0]] if session_open_ms_utc(JULY[0]) <= b["t"] < session_close_ms_utc(JULY[0])]
     assert row["high"] == max(quantize(b["h"]) for b in bars) and row["low"] == min(quantize(b["l"]) for b in bars)
     assert row["open"] == quantize(bars[0]["o"]) and row["close"] == quantize(bars[-1]["c"])
     drift = max(abs(row["high"] - max(b["h"] for b in bars)), abs(row["low"] - min(b["l"] for b in bars)), abs(row["close"] - bars[-1]["c"]))
@@ -523,9 +523,9 @@ def test_fractional_volume_sums_exactly(catalog, lake):
     tape = vendor_history(JULY[:1], fractional_volume=True)
     mock_vendor("SPY", tape)
 
-    row = admit(identity_for(["SPY"], JULY[:1], session="extended")).members["SPY"].rows[0]
+    row = admit(identity_for(["SPY"], JULY[:1])).members["SPY"].rows[0]
 
-    exact = sum(Decimal(repr(b["v"])) for b in tape[JULY[0]])
+    exact = sum(Decimal(repr(b["v"])) for b in tape[JULY[0]] if session_open_ms_utc(JULY[0]) <= b["t"] < session_close_ms_utc(JULY[0]))
     assert row["volume"] == float(exact), "six-decimal volume survives the text encoding and sums as an exact decimal"
     assert row["volume"] != int(row["volume"])
 
@@ -566,7 +566,6 @@ def test_the_identity_digest_follows_every_scientific_input_and_ignores_member_o
 
     assert base.digest() == identity_for(["QQQ", "SPY"], MARCH).digest(), "the order a universe is typed in is not science"
     for changed in (
-        identity_for(["SPY", "QQQ"], MARCH, session="extended"),
         identity_for(["SPY", "QQQ"], MARCH, mode="polygon_split_adjusted"),
         identity_for(["SPY", "QQQ"], MARCH[:-1]),
         identity_for(["SPY", "IWM"], MARCH),

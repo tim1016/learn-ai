@@ -756,7 +756,6 @@ def test_force_recomputes_even_when_the_identity_matches(harness):
 @pytest.mark.parametrize(
     "change",
     [
-        pytest.param({"session_policy": "extended"}, id="session_policy"),
         pytest.param({"feature_name": "log_skew"}, id="feature"),
         pytest.param({"target_type": "abs_return"}, id="target"),
         pytest.param({"symbols": ("SPY",)}, id="universe"),
@@ -906,15 +905,14 @@ async def test_the_route_hands_the_worker_the_study_it_was_asked_for(monkeypatch
     assert captured["thread"]["cancel_check_every_n"] == 1
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("session", "policy"), [("rth", "regular"), ("extended", "extended")])
-async def test_the_one_session_field_chooses_the_session_the_daily_bars_fold(monkeypatch: pytest.MonkeyPatch, session, policy):
-    """#3524: ``extended`` used to be accepted by the route and silently computed on the regular session."""
-    captured: dict[str, Any] = {}
-    monkeypatch.setattr("app.routers.jobs.run_in_thread", lambda job_id, work, **kwargs: captured.update(work=work))
-    monkeypatch.setattr("app.routers.jobs.run_cross_sectional_job", lambda study_params, **kwargs: captured.update(params=study_params))
+def test_extended_hours_are_refused_at_the_request_boundary():
+    with pytest.raises(ValidationError, match="rth"):
+        CrossSectionalJobRequest.model_validate({**_BROWSER_BODY, "session": "extended"})
 
-    await start_cross_sectional_job(CrossSectionalJobRequest.model_validate({**_BROWSER_BODY, "session": session}))
-    captured["work"]("emit", "cancel")
 
-    assert captured["params"].session_policy == policy
+def test_extended_hours_are_refused_before_an_internal_job_reads_the_lake(harness):
+    state = harness.run(params(session_policy="extended"), job_id="unsupported-session")
+
+    assert state["status"] == "failed" and state["error_code"] == "resolution_unsupported"
+    assert "regular hours only" in state["error_message"]
+    assert harness.catalog.rows == {} and harness.computed == 0 and harness.cache_keys() == []

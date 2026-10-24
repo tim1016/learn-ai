@@ -15,8 +15,8 @@ The study's input contract, field by field and before/after, is the docstring of
 * **Daily rows** (:func:`daily_rows`): the lake holds minute bars, so a daily bar is a fold of the admitted minutes of
   one New York session, by the lake's own reduction (:func:`app.data_lake.derived_daily.aggregate_minute_to_daily`) —
   not the whole-symbol daily rollup. The rollup is rebuilt whenever a symbol's catalogued coverage changes, offers no
-  session choice, and is not part of a per-session receipt. Under the ``extended`` policy the study's rows equal the
-  rollup's rows (``tests/research/test_cross_sectional_inputs.py``); under ``regular``, the study's session, they fold the
+  session choice, and is not part of a per-session receipt. The shared fold also reproduces the full-day rollup
+  (``tests/research/test_cross_sectional_inputs.py``), but the study admits regular hours only: the
   scheduled session ``[open, close)``, which leaves out the minute stamped 16:00. Against the vendor's own daily bars for
   SPY, 2025-01-13 to 17, the open, high and low are exact; the close differs by up to $0.15 (the vendor's is the official
   print, the fold's is the last regular minute, the instant the option minute bars price at) and the fold holds 71.5 to
@@ -148,6 +148,12 @@ def cross_sectional_identity(
             "resolution_unsupported",
             f"The cross-sectional study runs on daily bars only (its targets look one and five sessions ahead); "
             f"{multiplier}-{timespan} bars were requested. Use daily bars.",
+        )
+    if session_policy != "regular":
+        raise StudyInputRefusal(
+            "resolution_unsupported",
+            "The cross-sectional study folds daily bars from regular hours only, so its stock close and option prices "
+            "refer to the same session. Ask for regular hours.",
         )
     return CrossSectionalIdentity(
         symbols=tuple(symbols),

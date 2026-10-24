@@ -16,6 +16,10 @@ import { describeUniverseHolding, type UniverseHoldingTally } from './universe-h
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [WorkspaceStateBlockComponent, MemberLakeHoldingComponent],
   template: `
+    <p class="text-sm text-color-secondary">
+      A first run may be slow even when stock bars are held: option listings and contract bars must also be saved.
+      A cold member outside the nightly archive can cost about 10–21 requests per session. Later runs reuse those files.
+    </p>
     @if (summary(); as content) {
       <app-workspace-state-block [state]="content" />
     }

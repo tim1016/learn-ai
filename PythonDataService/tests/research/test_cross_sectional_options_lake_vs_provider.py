@@ -7,7 +7,7 @@ contract-day whose close is the payload's daily price and whose volume is 500), 
 admission, contract finder and IV builder run over what the lake stored. The provider path is gone from the tree, so the
 frozen frames are the comparison; ``tests/fixtures/golden/options-pricing/XSIV-001/v1/attribution.md`` says how they were made.
 
-Every difference is classified with the reconcile taxonomy (``.claude/rules/numerical-rigor.md``):
+Every difference is classified against the owner decisions on #3524:
 
 * on the payload itself the two paths agree on every selection column and every IV column, to the bit; the one column that
   differs is ``price_source``, ``vwap`` on the provider path and ``close_filtered`` on the lake path (a *price rule* change,
@@ -26,23 +26,29 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
+import httpx
 import numpy as np
 import pandas as pd
 import pytest
 import respx
 
 from app.config import settings
+from app.data_lake.option_listing import read_option_listing
+from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.options_backtest.fetching import LakeOptionCapture
-from app.research.options.iv_builder import build_iv_history
+from app.research.options.iv_builder import _get_option_price, build_iv_history
 from app.research.options.option_inputs import (
     MemberOptionInputs,
+    OptionInputRefusal,
     RateTally,
     admit_member_option_inputs,
 )
+from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 from app.utils.session_anchors import et_midnight_ms
 from tests._helpers.fake_lake_catalog import FakeCatalog, install_fake_catalog, point_lake_writer_at_tmp
-from tests._helpers.option_chain import OptionChain
+from tests._helpers.option_chain import OptionChain, member_inputs, parse_option_ticker, stock_rows
 from tests._helpers.option_chain_vendor import ChainVendor, payload_by_ticker
+from tests._helpers.option_vendor import bar_row
 from tests.fixtures.golden_support.registry import default as registry
 from tests.options_backtest._lake import fake_catalog as fake_catalog
 from tests.options_backtest._lake import tmp_lake as tmp_lake
@@ -184,3 +190,165 @@ def test_an_identical_rerun_asks_the_vendor_for_nothing_and_returns_the_same_dig
     assert again.coverage.days_reused == first.coverage.days_expected
     assert first.coverage.listings_added == first.coverage.listings_expected and first.coverage.days_added == first.coverage.days_expected
     assert again.coverage.listings_expected < first.coverage.listings_expected, "a warm run needs no proof listing for a stored day"
+
+
+# ---------------------------------------------------------------------------
+# Classified differences: each changes a scientific input or its admission
+# ---------------------------------------------------------------------------
+
+CASE_DAYS = (date(2024, 10, 1), date(2024, 10, 2))
+CASE_EXPIRIES = (date(2024, 10, 25), date(2024, 11, 1))
+
+
+def case(*, strike_step: float = 1.0) -> tuple[dict, OptionChain]:
+    """Two sessions that reuse one bracket, with no expiry or month transition to obscure the input change."""
+    rows = stock_rows(CASE_DAYS, step=0.0)
+    chain = OptionChain(
+        "SPY", dict.fromkeys(CASE_DAYS, 150.0), rate=DEFAULT_RISK_FREE_RATE,
+        strike_step=strike_step, expiries=CASE_EXPIRIES,
+    )
+    return {"underlying": "SPY", "window": [day.isoformat() for day in CASE_DAYS], "stock_rows": rows}, chain
+
+
+def assert_recovers_sigma(inputs: MemberOptionInputs, chain: OptionChain) -> pd.DataFrame:
+    frame = build_iv_history("SPY", inputs, RateTally())
+    for column in ("iv_30d_atm", "iv_30d_put", "iv_30d_call"):
+        np.testing.assert_allclose(
+            frame[column].to_numpy(dtype=float), [chain.sigma(day) for day in CASE_DAYS], atol=IV_ATOL, rtol=0,
+            err_msg=column,
+        )
+    return frame
+
+
+def test_a_last_trade_different_from_the_daily_vwap_changes_iv_without_changing_contracts(the_vendor):
+    """D-A, data-quality: keep the frozen daily VWAP; a 20% higher last regular trade is a different IV input."""
+    data, expected = payload(), frozen()
+    data = {**data, "window": data["window"][:2], "stock_rows": data["stock_rows"][:2]}
+    daily_vwap = payload_by_ticker(data["priced_bars"])
+
+    def last_trade(ticker: str, day: date) -> float | None:
+        price = daily_vwap(ticker, day)
+        return None if price is None else round(price * 1.2, 4)
+
+    inputs = admit(the_vendor, ChainVendor(chain_of(data), price=last_trade), data)
+    frame = build_iv_history("SPY", inputs, RateTally())
+
+    assert records(inputs.bracket) == expected["bracket"][:2]
+    assert frame["price_source"].tolist() == ["close_filtered", "close_filtered"]
+    for column in ("iv_30d_atm", "iv_30d_put", "iv_30d_call"):
+        old = np.array([row[column] for row in expected["iv"][:2]])
+        assert np.all(frame[column].to_numpy(dtype=float) - old > 0.01), column
+
+
+def test_more_than_250_contracts_in_the_band_does_not_cut_off_the_puts_or_the_atm_strike(the_vendor):
+    """D-B, decision: the old 250-row cap could consume calls before it reached the put side of an expiry."""
+    data, chain = case(strike_step=0.1)
+    vendor = ChainVendor(chain, page_size=1000)
+
+    inputs = admit(the_vendor, vendor, data)
+
+    for expiry in CASE_EXPIRIES:
+        in_band = [row for row in chain.contracts_alive(CASE_DAYS[0]) if row[3] == expiry and 127.5 <= row[2] <= 172.5]
+        assert len(in_band) > 250 and all(row[1] == "call" for row in in_band[:250])
+    assert vendor.listing_pages > len(vendor.listing_requests), "whole listings cross the vendor's page boundary"
+    for prefix in ("low", "high"):
+        for suffix in ("atm_contract", "atm_put_contract"):
+            assert {parse_option_ticker(ticker)[3] for ticker in inputs.bracket[f"{prefix}_dte_{suffix}"]} == {150.0}
+        assert inputs.bracket[f"{prefix}_dte_put_contract"].notna().all(), "the put wing survives the old cap"
+    assert_recovers_sigma(inputs, chain)
+
+
+def test_a_strike_listed_after_first_use_never_enters_that_expirys_kept_picks(the_vendor):
+    """D-B, timestamp/decision: a later $150 listing cannot retroactively become the first session's ATM strike."""
+    data, chain = case()
+    vendor = ChainVendor(chain, unlisted=lambda ticker, day: day == CASE_DAYS[0] and parse_option_ticker(ticker)[3] == 150.0)
+
+    inputs = admit(the_vendor, vendor, data)
+
+    later = read_option_listing("SPY", CASE_DAYS[1])
+    assert later is not None and any(option.strike_thousandths == 150_000 for option in later.rows)
+    for prefix in ("low", "high"):
+        for suffix in ("atm_contract", "atm_put_contract"):
+            chosen = inputs.bracket[f"{prefix}_dte_{suffix}"]
+            assert len(set(chosen)) == 1, "the owner kept strike reuse within an expiry"
+            assert {parse_option_ticker(ticker)[3] for ticker in chosen} == {149.0}
+    assert_recovers_sigma(inputs, chain)
+
+
+@pytest.mark.parametrize("override", [{"shares_per_contract": 50}, {"additional_underlyings": [{"underlying": "CASH", "amount": 1}]}])
+def test_the_nearest_strike_is_not_selected_when_its_contract_is_nonstandard(the_vendor, override):
+    """D-B, decision: retain the vendor row in the lake, but do not price an adjusted deliverable as 100 shares."""
+    data, chain = case()
+    vendor = ChainVendor(chain, row_overrides=lambda ticker, day: override if parse_option_ticker(ticker)[3] == 150.0 else None)
+
+    inputs = admit(the_vendor, vendor, data)
+
+    listing = read_option_listing("SPY", CASE_DAYS[0])
+    assert listing is not None
+    nearest = [option for option in listing.rows if option.strike_thousandths == 150_000]
+    assert nearest and all(not option.standard for option in nearest), "nonstandard is stored evidence, not a discarded row"
+    for prefix in ("low", "high"):
+        for suffix in ("atm_contract", "atm_put_contract"):
+            assert {parse_option_ticker(ticker)[3] for ticker in inputs.bracket[f"{prefix}_dte_{suffix}"]} == {149.0}
+    assert_recovers_sigma(inputs, chain)
+
+
+def test_after_close_volume_cannot_make_a_thin_regular_hours_price_pass_the_iv_gate(the_vendor):
+    """D-A, data-quality: 49 regular-hours contracts plus 451 after the close passes the old daily input, not the lake rule."""
+    data, chain = case()
+
+    def tail(symbol: str, day: date) -> list[dict]:
+        price = chain.daily_price(f"O:{symbol}", day)
+        assert price is not None
+        return [bar_row(0, o=price, h=price, l=price, c=price, v=451, vw=price, n=5, t=session_close_ms_utc(day))]
+
+    inputs = admit(the_vendor, ChainVendor(chain, volume=49, tail=tail), data)
+    frame = build_iv_history("SPY", inputs, RateTally())
+
+    assert inputs.days and all(day.volume == Decimal(49) for day in inputs.days.values())
+    for ticker, day in inputs.days:
+        daily_price = chain.daily_price(ticker, day)
+        assert _get_option_price({"vw": daily_price, "c": daily_price, "v": 500}) == (daily_price, "vwap")
+        assert _get_option_price(inputs.bar(ticker, day)) == (None, "rejected")
+    assert frame[["iv_30d_atm", "iv_30d_put", "iv_30d_call"]].isna().all().all()
+    assert frame["iv_quality"].tolist() == ["missing", "missing"]
+
+
+def test_an_incomplete_second_listing_page_refuses_the_member_instead_of_using_the_first_page(the_vendor):
+    """D-G, refusal: an interrupted chain is not an empty/skipped expiry and cannot produce a partial IV history."""
+    data, chain = case()
+
+    class BrokenSecondPage(ChainVendor):
+        async def _listing(self, request: httpx.Request) -> httpx.Response:
+            response = await super()._listing(request)
+            if int(request.url.params.get("cursor", 0)) > 0:
+                return httpx.Response(401, json={"status": "NOT_AUTHORIZED", "request_id": "second-page"})
+            return response
+
+    vendor = BrokenSecondPage(chain, page_size=100)
+    with pytest.raises(OptionInputRefusal) as caught:
+        admit(the_vendor, vendor, data)
+
+    assert vendor.listing_pages == 2 and vendor.bar_requests == []
+    assert caught.value.code == "data_unavailable_from_provider"
+    assert [(issue.kind, issue.failure_reason) for issue in caught.value.issues] == [("listing", "provider_auth_error")]
+    assert read_option_listing("SPY", CASE_DAYS[0]) is None, "the first page was never published as a whole listing"
+
+
+def test_raw_spot_recovers_iv_where_split_adjusted_stock_prices_would_select_no_matching_contracts(the_vendor):
+    """D-C, data-quality/decision: option strikes stay on the raw basis; a two-for-one adjusted target cannot be the IV spot.
+
+    The job test ``test_the_option_side_is_handed_the_raw_closes_and_the_target_is_measured_on_the_adjusted_ones``
+    proves the real stock-admission routing. Here the actual finder/solver demonstrate why that separation matters.
+    """
+    data, chain = case()
+    inputs = admit(the_vendor, ChainVendor(chain), data)
+    frame = assert_recovers_sigma(inputs, chain)
+    adjusted_rows = [{**row, **{field: row[field] / 2 for field in ("open", "high", "low", "close")}} for row in data["stock_rows"]]
+    wrong_basis = member_inputs(chain, adjusted_rows, CASE_DAYS)
+    wrong_iv = build_iv_history("SPY", wrong_basis, RateTally())
+
+    assert frame["stock_close"].tolist() == [150.0, 150.0]
+    assert wrong_basis.bracket["stock_close"].tolist() == [75.0, 75.0]
+    assert wrong_basis.bracket["bracket_gap"].tolist() == ["no_expiries_listed", "no_expiries_listed"]
+    assert wrong_iv[["iv_30d_atm", "iv_30d_put", "iv_30d_call"]].isna().all().all()

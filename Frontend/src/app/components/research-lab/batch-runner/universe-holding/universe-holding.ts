@@ -3,8 +3,7 @@
  *
  * Each member is counted on its own by the shared lake-holding control (`createLakeHolding`): its sessions come from
  * the server, and so does the span a capture asks for. This adds the one thing a universe has that a single
- * instrument does not: the total. A cold member costs about one vendor call per session, so the total is what tells a
- * reader how slow the first run will be.
+ * instrument does not: the total. Option capture has its own cost, which the page also names before Run.
  */
 import type { WorkspaceStateContent } from '../../../../shared/workspace/workspace-state';
 
@@ -14,7 +13,7 @@ export interface UniverseHoldingTally {
   readonly members: number;
   /** Members with at least one session a capture can fetch. */
   readonly lacking: number;
-  /** Sessions a capture can fetch, summed over the members: one vendor call each. */
+  /** Sessions a capture can fetch, summed over the members. */
   readonly memberSessions: number;
 }
 
@@ -28,7 +27,7 @@ export function describeUniverseHolding(tally: UniverseHoldingTally): WorkspaceS
   return {
     kind: 'partial',
     happened: `${plural(tally.memberSessions, 'member-session', 'member-sessions')} of stock bars ${tally.memberSessions === 1 ? 'isn’t' : 'aren’t'} in the lake yet, across ${tally.lacking} of ${plural(tally.members, 'member', 'members')}.`,
-    why: 'A run fetches each one from the provider, about one vendor call per member-session, so a cold universe is slow.',
-    next: 'Capture each member’s sessions first, below.',
+    why: 'A run saves adjusted and raw stock bars, then the missing option listings and contract days, so a cold universe is slow.',
+    next: 'Capture each member’s stock sessions first, below; the study saves missing option inputs when it runs.',
   };
 }

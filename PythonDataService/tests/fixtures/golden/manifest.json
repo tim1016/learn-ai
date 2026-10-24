@@ -3163,6 +3163,57 @@
       "validated_by": [
         "tests/research/test_cross_sectional_options_lake_vs_provider.py"
       ]
+    },
+    {
+      "id": "lake-options-spy-price-rule-2025-06-10",
+      "name": "SPY option price rule: last regular-session close against the owner-approved vendor daily VWAP",
+      "category": "lake-studies",
+      "canonical_module": "PythonDataService/app/research/options/option_inputs.py",
+      "canonical_callable": "regular_session_close",
+      "reference": {
+        "kind": "hand_computed",
+        "oracle": "Literal regular-session closes and volume sums from the existing real minute recording, and exact Decimal differences from the approved vendor daily VWAP; independent of the canonical fold.",
+        "citation": "https://github.com/tim1016/learn-ai/issues/3524#issuecomment-6387331949; options-backtest-spy-2025-06-10/v1 minute recording and this fixture attribution."
+      },
+      "market_input": {
+        "source": "polygon",
+        "vendor": "Polygon (Massive) daily aggregates fetched 2026-10-24, recovered from the owner-approved issue comment; minute inputs recorded 2026-10-12.",
+        "generated_by": "tests/fixtures/golden/lake-studies/lake-options-spy-price-rule-2025-06-10/v1/regenerate.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 0.0,
+        "rtol": 0.0,
+        "note": "Exact Decimal equality for the recorded price, volume and regular-close-minus-daily-VWAP differences; a tolerance would hide the wrong minute or aggregation rule."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "recording.json",
+          "output": "expected.json",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "O_SPY250613C00600000_day_2025-06-10.json": "f720965b9407429b5c5184d774dd0262e2c71ec34f1599d4f61f271b4115264b",
+            "O_SPY250613P00600000_day_2025-06-10.json": "2fbbae43d3bf564768a8cca3c1703858af66c622c975e864fec144641297f0cd",
+            "attribution.md": "3b79975e92b25054b474cdf357f1875901fece88eb60468957390eae45a6f4f1",
+            "expected.json": "cc4e79fd4db773618cdbdee8e9553ff2d4011440e70d452fa4c6ea5dc897181e",
+            "recording.json": "d0dc2844db004c6242a14973ecbc74dc010dabe0d2302c66fadd14427e58b057",
+            "regenerate.py": "b74841dfc263a30ebd2291c25c97e418f2643547c13e581c4895f6a7a473eaca"
+          },
+          "file_sha256": {
+            "O_SPY250613C00600000_day_2025-06-10.json": "164ce61f68e50be092bda9805209d3b5236f7577992252c1992d6c880f070800",
+            "O_SPY250613P00600000_day_2025-06-10.json": "58254e607c1479216381c02e1db480566cfc05efee13a12ae3801c73902c3839",
+            "attribution.md": "3b79975e92b25054b474cdf357f1875901fece88eb60468957390eae45a6f4f1",
+            "expected.json": "1664aaf1536d2c57ddbb6e446321d463903096e720294a52b304052e486bc312",
+            "recording.json": "c6db90c95c9970614401c1cd2bde466d580a77d3042b3375fe7d239bafee11ca",
+            "regenerate.py": "b74841dfc263a30ebd2291c25c97e418f2643547c13e581c4895f6a7a473eaca"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/research/options/test_option_inputs_fold.py::test_the_vendors_real_spy_day_through_the_lake_prices_each_option_at_its_15_59_close"
+      ]
     }
   ]
 }

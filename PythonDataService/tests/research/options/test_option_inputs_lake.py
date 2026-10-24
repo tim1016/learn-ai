@@ -29,9 +29,11 @@ import pytest
 import respx
 
 from app.data_lake import option_lake as option_lake_module
+from app.data_lake.admission import LakeAdmissionError
+from app.data_lake.catalog_client import CatalogUnavailableError
 from app.data_lake.option_bars import encode_option_day, option_minute_trade_dch, read_option_day_bars
 from app.data_lake.option_lake import OptionFailureReason, vendor_request_gate
-from app.data_lake.option_listing import read_option_listing
+from app.data_lake.option_listing import OptionListingFileError, read_option_listing
 from app.data_lake.option_session_repack import publish_option_session, repack_option_session
 from app.data_lake.path_policy import OptionListingPath, OptionMinuteBarPath, OptionSessionPath
 from app.data_lake.polygon_option_bars import PolygonOptionBar
@@ -321,6 +323,33 @@ def test_an_unreadable_stored_listing_is_refused_not_captured_over(the_vendor, t
 
     assert vendor.requests == asked and refusal.code == "data_corrupt"
     assert refusal.issues[0].kind == "listing" and refusal.issues[0].trading_date == FIRST
+
+
+@pytest.mark.parametrize(
+    ("error_type", "code"),
+    [(CatalogUnavailableError, "lake_unavailable"), (LakeAdmissionError, "data_building"),
+     (OptionListingFileError, "data_corrupt")],
+)
+def test_a_listing_that_becomes_unreadable_before_contract_capture_refuses_the_member(the_vendor, monkeypatch, error_type, code):
+    """The compact listing cache evicts the first whole listing before contract-day capture reads its proof again."""
+    first_reads = 0
+
+    def fail_on_proof_reread(underlying: str, day: date):
+        nonlocal first_reads
+        if day == FIRST:
+            first_reads += 1
+            if first_reads == 3:  # absent, captured/read back, then proof read after other listings evict it
+                raise error_type("proof listing no longer readable")
+        return read_option_listing(underlying, day)
+
+    monkeypatch.setattr("app.research.options.option_inputs.read_option_listing", fail_on_proof_reread)
+    vendor = ChainVendor(chain())
+
+    refusal = refusal_of(the_vendor, vendor)
+
+    assert refusal.code == code and refusal.retryable is True
+    assert [(issue.kind, issue.subject, issue.trading_date) for issue in refusal.issues] == [("listing", "SPY", FIRST)]
+    assert vendor.bar_requests == [], "no contract capture starts with an unreadable proof listing"
 
 
 # ---------------------------------------------------------------------------
