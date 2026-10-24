@@ -209,6 +209,56 @@ async def test_a_page_is_cut_from_the_union_not_from_each_stores_first_page(
     assert [take for _, take in newer.asked] == [10]
 
 
+def study_stores() -> list[AStore]:
+    """The five study stores (#3520): hash-like ids, statuses of every ending, instants shared with the older stores."""
+    from app.research.study_records.models import STUDY_TYPES
+
+    endings: list[HistoryStatus] = ["completed", "failed", "cancelled", "partial"]
+    return [
+        AStore(
+            study,
+            [an_entry(study, f"{k + 1:032x}", 1_700_000_000_000 + 1_000 * (k // 2), status=endings[k % 4]) for k in range(8)],
+        )
+        for study in STUDY_TYPES
+    ]
+
+
+@pytest.mark.parametrize("page_size", [1, 6, 11, 100])
+async def test_the_study_stores_page_with_the_older_ones_in_one_shared_order_with_no_record_lost_or_repeated(
+    client: httpx.AsyncClient, stores: list[AStore], page_size: int
+) -> None:
+    stores.extend([*study_stores(), *colliding_stores()])
+
+    entries, first = await every_page(client, page_size)
+
+    assert [(e["type"], e["native_id"]) for e in entries] == expected_order(stores)
+    assert first["total"] == 5 * 8 + 36
+    assert len({(e["type"], e["native_id"]) for e in entries}) == first["total"]
+
+
+async def test_the_status_filter_counts_the_study_stores_endings_and_the_pages_agree_with_the_count(
+    client: httpx.AsyncClient, stores: list[AStore]
+) -> None:
+    stores.extend(study_stores())
+
+    for status_name in ("failed", "cancelled", "partial", "completed"):
+        entries, first = await every_page(client, 3, status=status_name)
+        assert first["total"] == len(entries) == 10, status_name
+        assert {e["status"] for e in entries} == {status_name}
+        assert {e["type"] for e in entries} == {s.type for s in stores}
+
+
+async def test_the_type_filter_asks_only_the_one_study_store(client: httpx.AsyncClient, stores: list[AStore]) -> None:
+    held = study_stores()
+    stores.extend(held)
+
+    body = (await client.get(URL, params={"type": "signal-study", "page_size": 100})).json()
+
+    assert {e["type"] for e in body["entries"]} == {"signal-study"} and body["total"] == 8
+    assert {s["type"]: s["state"] for s in body["sources"] if s["state"] == "read"} == {"signal-study": "read"}
+    assert [store.asked for store in held if store.type != "signal-study"] == [[]] * 4
+
+
 async def test_a_page_past_the_end_is_empty_and_still_states_the_true_count(
     client: httpx.AsyncClient, stores: list[AStore]
 ) -> None:

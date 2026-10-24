@@ -12132,6 +12132,18 @@
             "title": "Multiplier",
             "type": "integer"
           },
+          "rerunOf": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerunof"
+          },
           "session": {
             "default": "rth",
             "enum": [
@@ -17714,6 +17726,18 @@
             "minimum": 1.0,
             "title": "Multiplier",
             "type": "integer"
+          },
+          "rerunOf": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerunof"
           },
           "session": {
             "default": "rth",
@@ -33127,6 +33151,19 @@
             "minimum": 1.0,
             "title": "Multiplier",
             "type": "integer"
+          },
+          "rerun_of": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The saved run this one was prefilled from (the History's Rerun); lineage only, never an input.",
+            "title": "Rerun Of"
           },
           "session": {
             "default": "rth",
@@ -53391,6 +53428,19 @@
             "description": "Optional [{ts, iv30, health_score?, variance_contribution_synthetic?}] history. iv30 must be ACT/365 (the solver's native basis); the router converts to TRD/252 before VRP. When health_score and variance_contribution_synthetic are supplied, the response includes per-bar confidence and the VRP signal is gated by it (Step E of IV-ownership plan).",
             "title": "Iv Series"
           },
+          "rerun_of": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The saved run this one was prefilled from (the History's Rerun); lineage only, never an input.",
+            "title": "Rerun Of"
+          },
           "session": {
             "default": "ETH",
             "description": "Session for the HF RV estimator. ETH = 04:00-20:00 ET (default), RTH = 09:30-16:00 ET.",
@@ -55445,7 +55495,12 @@
               "monte-carlo",
               "baseline",
               "signal-report",
-              "feature-experiment"
+              "feature-experiment",
+              "feature-study",
+              "signal-study",
+              "cross-sectional-study",
+              "indicator-reliability",
+              "realized-vs-iv"
             ],
             "title": "Type",
             "type": "string"
@@ -55549,7 +55604,12 @@
               "monte-carlo",
               "baseline",
               "signal-report",
-              "feature-experiment"
+              "feature-experiment",
+              "feature-study",
+              "signal-study",
+              "cross-sectional-study",
+              "indicator-reliability",
+              "realized-vs-iv"
             ],
             "title": "Type",
             "type": "string"
@@ -55649,7 +55709,12 @@
               "monte-carlo",
               "baseline",
               "signal-report",
-              "feature-experiment"
+              "feature-experiment",
+              "feature-study",
+              "signal-study",
+              "cross-sectional-study",
+              "indicator-reliability",
+              "realized-vs-iv"
             ],
             "title": "Type",
             "type": "string"
@@ -59247,6 +59312,18 @@
             "title": "Regimegateenabled",
             "type": "boolean"
           },
+          "rerunOf": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerunof"
+          },
           "session": {
             "default": "rth",
             "enum": [
@@ -61854,6 +61931,175 @@
         "title": "StorageSummaryResponse",
         "type": "object"
       },
+      "StoredStudyRecord": {
+        "description": "A finished run, read back without running anything.",
+        "properties": {
+          "completed_at_ms": {
+            "description": "When it ended, whichever way it ended.",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Completed At Ms",
+            "type": "integer"
+          },
+          "created_at_ms": {
+            "description": "When the run started.",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "data_identity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A digest of the data the request carried (Realized vs IV); ``null`` for a study that reads its own data.",
+            "title": "Data Identity"
+          },
+          "data_source": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The result's own provenance block, when it carried one; ``null`` reads \"not recorded\".",
+            "title": "Data Source"
+          },
+          "inputs": {
+            "description": "What the run was asked, as its request validated it. The study's page prefills a rerun from this.",
+            "title": "Inputs",
+            "type": "object"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The job that produced it; ``null`` for a synchronous study.",
+            "title": "Job Id"
+          },
+          "question": {
+            "description": "What the run asked, in a sentence built from its inputs.",
+            "title": "Question",
+            "type": "string"
+          },
+          "record_id": {
+            "title": "Record Id",
+            "type": "string"
+          },
+          "rerun_of": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResearchHistoryRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The record this run was prefilled from, when it was a rerun."
+          },
+          "result": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The study's result as delivered; ``null`` when the run produced none (a failed or cancelled run).",
+            "title": "Result"
+          },
+          "schema_version": {
+            "description": "The version of the record's files, for a reader that must know it.",
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "completed",
+              "partial",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "status_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why it failed or stopped, or what part of it failed; ``null`` for a clean finish.",
+            "title": "Status Detail"
+          },
+          "study": {
+            "enum": [
+              "feature-study",
+              "signal-study",
+              "cross-sectional-study",
+              "indicator-reliability",
+              "realized-vs-iv"
+            ],
+            "title": "Study",
+            "type": "string"
+          },
+          "symbols": {
+            "description": "The instrument (one symbol) or the universe (several) it covered.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Symbols",
+            "type": "array"
+          },
+          "window": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResearchHistoryWindow"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The requested window; ``null`` when not recorded."
+          }
+        },
+        "required": [
+          "study",
+          "record_id",
+          "schema_version",
+          "status",
+          "status_detail",
+          "question",
+          "symbols",
+          "window",
+          "created_at_ms",
+          "completed_at_ms",
+          "inputs",
+          "data_source",
+          "data_identity",
+          "job_id",
+          "rerun_of",
+          "result"
+        ],
+        "title": "StoredStudyRecord",
+        "type": "object"
+      },
       "StrategyAnalyzeRequest": {
         "description": "Request to analyze an options strategy.",
         "properties": {
@@ -64340,6 +64586,37 @@
           "qualification_status"
         ],
         "title": "StudyDetail",
+        "type": "object"
+      },
+      "StudyRecordRefusal": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "StudyRecordRefusal",
+        "type": "object"
+      },
+      "StudyRecordRefusalBody": {
+        "description": "The 404 and 500 body: FastAPI wraps an ``HTTPException`` detail as ``{\"detail\": ...}``.",
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/StudyRecordRefusal"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "StudyRecordRefusalBody",
         "type": "object"
       },
       "StudySummary": {
@@ -93446,7 +93723,12 @@
                     "monte-carlo",
                     "baseline",
                     "signal-report",
-                    "feature-experiment"
+                    "feature-experiment",
+                    "feature-study",
+                    "signal-study",
+                    "cross-sectional-study",
+                    "indicator-reliability",
+                    "realized-vs-iv"
                   ],
                   "type": "string"
                 },
@@ -97529,6 +97811,87 @@
         "summary": "Get Run",
         "tags": [
           "research-runs"
+        ]
+      }
+    },
+    "/api/research/study-records/{study}/{record_id}": {
+      "get": {
+        "description": "One recorded run. A record that cannot be read is a 500 that says so, never a partial one.",
+        "operationId": "get_study_record_api_research_study_records__study___record_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "study",
+            "required": true,
+            "schema": {
+              "enum": [
+                "feature-study",
+                "signal-study",
+                "cross-sectional-study",
+                "indicator-reliability",
+                "realized-vs-iv"
+              ],
+              "title": "Study",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "record_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Record Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoredStudyRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudyRecordRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudyRecordRefusalBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Get Study Record",
+        "tags": [
+          "research-study-records"
         ]
       }
     },

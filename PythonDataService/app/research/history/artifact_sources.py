@@ -85,6 +85,8 @@ class _Own:
     window: tuple[int, int] | None
     settled: _Settled | None
     """Set when the config itself says how the record ended (a ledger); otherwise the result says."""
+    headline: str | None = None
+    """One line of the result, for a store whose config holds one."""
 
     def __post_init__(self) -> None:
         _instant(self.created_at_ms, name="created_at_ms")
@@ -367,7 +369,7 @@ class _ArtifactSource:
             created_at_ms=own.created_at_ms,
             completed_at_ms=settled.completed_at_ms,
             provenance=own.provenance,
-            headline=None,
+            headline=own.headline,
             parent=self._parent_of(own),
         )
 

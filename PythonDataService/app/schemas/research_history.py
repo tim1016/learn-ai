@@ -25,8 +25,16 @@ HistoryType = Literal[
     "baseline",
     "signal-report",
     "feature-experiment",
+    "feature-study",
+    "signal-study",
+    "cross-sectional-study",
+    "indicator-reliability",
+    "realized-vs-iv",
 ]
-"""One member per store the index reads. A new store adds a member and registers one source (``app.research.history``)."""
+"""One member per store the index reads. A new store adds a member and registers one source (``app.research.history``).
+
+``signal-report`` and ``feature-experiment`` are the rows the retired .NET backend wrote. The last five are the runs the
+studies record themselves now (#3520). They are different stores, so they are never one type."""
 
 HISTORY_TYPES: tuple[HistoryType, ...] = get_args(HistoryType)
 
