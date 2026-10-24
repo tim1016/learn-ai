@@ -1,125 +1,103 @@
 import { Routes } from '@angular/router';
 
+import { redirectToInstrument } from '../../markets/instrument-address';
 import { dataCheckRoute } from '../../operations/data-checks/data-checks';
 import { redirectKeepingState } from '../../shell/route-redirects';
 
+/**
+ * Old Research Lab addresses of the five studies, each straight to its study
+ * under `/research` (ADR 0084) in one redirect that keeps query and fragment.
+ * A relative `redirectTo` cannot chain through a second redirect, so the old
+ * `build/*` and `inspect/*` aliases name the final study too.
+ */
+const movedStudy = (path: string, ...study: [string, ...string[]]): Routes[number] => ({
+  path,
+  redirectTo: redirectKeepingState(['/research', ...study]),
+  pathMatch: 'full',
+});
+
+/**
+ * An old list address, straight to the Research History filtered to the kind it
+ * listed, in one redirect that keeps query and fragment. The older `inspect/*`
+ * and tab-id aliases name the final address too, as a relative redirect cannot
+ * chain through another.
+ */
+const movedList = (path: string, type: string): Routes[number] => ({
+  path,
+  redirectTo: redirectKeepingState(['/research', 'history'], { set: () => ({ type }) }),
+  pathMatch: 'full',
+});
+
+/**
+ * The old address of one spec-run record, straight to its native detail page
+ * under `/research/history` (ADR 0084) in one redirect that keeps query and
+ * fragment. A spec run and its Monte Carlo, baseline and walk-forward children
+ * are Research evidence: the redirect names the record's own kind and id and
+ * looks nothing up, so no run is ever re-homed under a strategy that merely
+ * resembles its name (PRD #3490 R27).
+ */
+const movedRecord = (path: string, kind: string, idParam: string): Routes[number] => ({
+  path,
+  redirectTo: redirectKeepingState((params) => ['/research', 'history', kind, String(params[idParam] ?? '')]),
+  pathMatch: 'full',
+});
+
 export const researchLabRoutes: Routes = [
-  // Detail routes retain focused content while inheriting the root application
-  // shell. Listed before the research-lab child shell so their more-specific
-  // patterns match first.
-  {
-    path: 'strategy-runs/:run_id',
-    loadComponent: () =>
-      import('./strategy-runs/run-detail-page/run-detail-page.component').then(
-        (m) => m.RunDetailPageComponent,
-      ),
-  },
-  {
-    path: 'walk-forward/:wf_id',
-    loadComponent: () =>
-      import(
-        './walk-forward/walk-forward-detail-page/walk-forward-detail-page.component'
-      ).then((m) => m.WalkForwardDetailPageComponent),
-  },
-  {
-    path: 'monte-carlo/:mc_id',
-    loadComponent: () =>
-      import(
-        './monte-carlo/monte-carlo-detail-page/monte-carlo-detail-page.component'
-      ).then((m) => m.MonteCarloDetailPageComponent),
-  },
-  {
-    path: 'baselines/:baseline_id',
-    loadComponent: () =>
-      import(
-        './baselines/baselines-detail-page/baselines-detail-page.component'
-      ).then((m) => m.BaselinesDetailPageComponent),
-  },
+  // The spec-run records moved to /research/history.
+  movedRecord('strategy-runs/:run_id', 'spec-run', 'run_id'),
+  movedRecord('walk-forward/:wf_id', 'walk-forward', 'wf_id'),
+  movedRecord('monte-carlo/:mc_id', 'monte-carlo', 'mc_id'),
+  movedRecord('baselines/:baseline_id', 'baseline', 'baseline_id'),
+
+  // A stored signal report is a History record: its detail is /research/history/signal-report/:id.
   {
     path: 'signal-report/:id',
-    loadComponent: () =>
-      import('./signal-report-page/signal-report-page.component').then(
-        (m) => m.SignalReportPageComponent,
-      ),
+    redirectTo: redirectKeepingState((params) => ['/research', 'history', 'signal-report', String(params['id'] ?? '')]),
+    pathMatch: 'full',
   },
 
-  // Shell with two-group sub-nav and lazy children.
+  // The saved lists moved into the Research History, each filtered to the kind it listed.
+  movedList('features/experiments', 'feature-experiment'),
+  movedList('inspect/experiments', 'feature-experiment'),
+  movedList('experiment-history', 'feature-experiment'),
+  movedList('signals/history', 'signal-report'),
+  movedList('inspect/signal-history', 'signal-report'),
+  movedList('backtests/strategy-runs', 'spec-run'),
+  movedList('inspect/strategy-runs', 'spec-run'),
+
+  // The five studies moved to /research.
+  movedStudy('features/validate', 'feature'),
+  movedStudy('features/cross-sectional', 'cross-sectional'),
+  movedStudy('signals/engine', 'signal'),
+  movedStudy('backtests/reliability', 'indicator-reliability'),
+  movedStudy('build/validate', 'feature'),
+  movedStudy('build/indicator-reliability', 'indicator-reliability'),
+  movedStudy('build/signal-engine', 'signal'),
+  movedStudy('inspect/cross-sectional', 'cross-sectional'),
+  movedStudy('feature-runner', 'feature'),
+  movedStudy('indicator-reliability', 'indicator-reliability'),
+  movedStudy('signal-engine', 'signal'),
+  movedStudy('cross-sectional', 'cross-sectional'),
+
+  // Sub-nav shell for the page Research Lab still hosts: the Recency Chart
+  // (the slice of the place it belongs to).
   {
     path: '',
     loadComponent: () =>
       import('./research-lab.component').then((m) => m.ResearchLabComponent),
     children: [
-      { path: '', redirectTo: 'features/validate', pathMatch: 'full' },
+      { path: '', redirectTo: redirectKeepingState(['/research']), pathMatch: 'full' },
 
-      // Features
-      {
-        path: 'features/validate',
-        loadComponent: () =>
-          import('./feature-runner/feature-runner.component').then(
-            (m) => m.FeatureRunnerComponent,
-          ),
-        data: { title: 'Feature Validation' },
-      },
-      {
-        path: 'features/cross-sectional',
-        loadComponent: () =>
-          import('./batch-runner/batch-runner.component').then(
-            (m) => m.BatchRunnerComponent,
-          ),
-        data: { title: 'Cross-Sectional Sweep' },
-      },
-      {
-        path: 'features/experiments',
-        loadComponent: () =>
-          import('./experiment-history/experiment-history.component').then(
-            (m) => m.ExperimentHistoryComponent,
-          ),
-        data: { title: 'Experiment History' },
-      },
-
-      // Signals
-      {
-        path: 'signals/engine',
-        loadComponent: () =>
-          import('./signal-runner/signal-runner.component').then(
-            (m) => m.SignalRunnerComponent,
-          ),
-        data: { title: 'Signal Engine' },
-      },
-      {
-        path: 'signals/history',
-        loadComponent: () =>
-          import('./signal-history/signal-history.component').then(
-            (m) => m.SignalHistoryComponent,
-          ),
-        data: { title: 'Signal History' },
-      },
-
-      // Market
+      // Market: headlines moved under the instrument (ADR 0084). The old
+      // address went straight to them with no symbol in it, so it leads to the
+      // instrument its query names, or to Markets when it names none.
       {
         path: 'market/news',
-        loadComponent: () =>
-          import('./news/news-page.component').then((m) => m.NewsPageComponent),
-        data: { title: 'Ticker News' },
+        pathMatch: 'full',
+        redirectTo: redirectToInstrument('chart', ['news']),
       },
 
       // Backtests
-      {
-        path: 'backtests/reliability',
-        loadComponent: () =>
-          import(
-            './indicator-reliability/indicator-reliability.component'
-          ).then((m) => m.IndicatorReliabilityComponent),
-        data: { title: 'Indicator Reliability' },
-      },
-      {
-        path: 'backtests/strategy-runs',
-        loadComponent: () =>
-          import('./strategy-runs/strategy-runs.component').then(
-            (m) => m.StrategyRunsComponent,
-          ),
-        data: { title: 'Backtest Runs' },
-      },
       {
         path: 'backtests/recency-chart',
         loadComponent: () =>
@@ -134,23 +112,9 @@ export const researchLabRoutes: Routes = [
       { path: 'inspect/data-divergence', redirectTo: redirectKeepingState(dataCheckRoute('divergence')), pathMatch: 'full' },
       { path: 'inspect/pre-flight', redirectTo: redirectKeepingState(dataCheckRoute('pre-flight')), pathMatch: 'full' },
 
-      // Legacy redirects — old build/* and inspect/* paths → new canonical paths
-      { path: 'build/validate', redirectTo: 'features/validate', pathMatch: 'full' },
-      { path: 'build/indicator-reliability', redirectTo: 'backtests/reliability', pathMatch: 'full' },
-      { path: 'build/signal-engine', redirectTo: 'signals/engine', pathMatch: 'full' },
-      { path: 'inspect/cross-sectional', redirectTo: 'features/cross-sectional', pathMatch: 'full' },
-      { path: 'inspect/strategy-runs', redirectTo: 'backtests/strategy-runs', pathMatch: 'full' },
-      { path: 'inspect/experiments', redirectTo: 'features/experiments', pathMatch: 'full' },
-      { path: 'inspect/signal-history', redirectTo: 'signals/history', pathMatch: 'full' },
-
       // Legacy single-page tab IDs (pre-router)
-      { path: 'feature-runner', redirectTo: 'features/validate', pathMatch: 'full' },
-      { path: 'indicator-reliability', redirectTo: 'backtests/reliability', pathMatch: 'full' },
-      { path: 'signal-engine', redirectTo: 'signals/engine', pathMatch: 'full' },
-      { path: 'cross-sectional', redirectTo: 'features/cross-sectional', pathMatch: 'full' },
       { path: 'data-divergence', redirectTo: redirectKeepingState(dataCheckRoute('divergence')), pathMatch: 'full' },
       { path: 'strategy-preflight', redirectTo: redirectKeepingState(dataCheckRoute('pre-flight')), pathMatch: 'full' },
-      { path: 'experiment-history', redirectTo: 'features/experiments', pathMatch: 'full' },
     ],
   },
 ];

@@ -1,0 +1,103 @@
+<app-workspace-header [title]="title()" [purpose]="record()?.question ?? null" [breadcrumb]="breadcrumb()" [primaryAction]="rerun()" />
+
+<section class="stored-study" aria-label="Saved run">
+  @if (stored.isLoading() && record() === null) {
+    <p class="stored-study__status" role="status">Reading the saved run…</p>
+  }
+
+  @if (unopened(); as state) {
+    <app-workspace-state-block [state]="state" (actionTriggered)="retry()" />
+  }
+
+  @if (record(); as saved) {
+    <dl class="stored-facts" data-testid="stored-facts">
+      <div>
+        <dt>Status</dt>
+        <dd>{{ statusWords() }}</dd>
+      </div>
+      <div>
+        <dt>Saved</dt>
+        <dd><app-timestamp-display [value]="saved.created_at_ms" mode="local" /></dd>
+      </div>
+      <div>
+        <dt>Finished</dt>
+        <dd><app-timestamp-display [value]="saved.completed_at_ms" mode="local" /></dd>
+      </div>
+      <div>
+        <dt>Window</dt>
+        <dd>
+          @if (saved.window; as window) {
+            <app-timestamp-display [value]="window.start_ms" mode="date-et" granularity="date" />
+            to
+            <app-timestamp-display [value]="window.end_ms" mode="date-et" granularity="date" />
+          } @else {
+            not recorded
+          }
+        </dd>
+      </div>
+      @for (fact of facts().list; track fact.label) {
+        <div>
+          <dt>{{ fact.label }}</dt>
+          <dd>{{ fact.value }}</dd>
+        </div>
+      }
+      @if (facts().unreadable) {
+        <div>
+          <dt>Inputs</dt>
+          <dd>could not be read</dd>
+        </div>
+      }
+      @if (parent(); as from) {
+        <div>
+          <dt>Rerun of</dt>
+          <dd><a [routerLink]="from.link">{{ from.label }}</a></dd>
+        </div>
+      }
+      <div>
+        <dt>Run ID</dt>
+        <dd><code>{{ saved.record_id }}</code></dd>
+      </div>
+    </dl>
+
+    @if (ending(); as state) {
+      <app-workspace-state-block [state]="state" />
+    }
+
+    @if (view(); as shown) {
+      @switch (shown.kind) {
+        @case ('feature') {
+          <app-feature-report [result]="shown.result" />
+        }
+        @case ('signal') {
+          <app-signal-report [result]="shown.result" />
+        }
+        @case ('cross-sectional') {
+          <app-cross-sectional-report [result]="shown.result" />
+        }
+        @case ('indicator-reliability') {
+          <app-indicator-reliability-report [result]="shown.result" />
+        }
+        @case ('realized-vs-iv') {
+          <app-realized-vs-iv-report [data]="shown.data" [barSize]="shown.barSize" />
+        }
+        @case ('unreadable') {
+          <app-workspace-state-block
+            [state]="{
+              kind: 'failed',
+              happened: 'The saved result could not be shown.',
+              why: shown.reason,
+              next: 'The run is still saved as it was written; this page cannot draw it.',
+            }"
+          />
+        }
+      }
+    }
+
+    <app-workspace-data-source [provenance]="provenance()" windowMode="date-et" />
+
+    <p class="stored-study__note">
+      This is what was saved when the run ended. Opening it does not run the study again.
+      <a [routerLink]="historyLink().route" [queryParams]="historyLink().queryParams">All saved {{ label() }} runs</a>
+    </p>
+  }
+</section>

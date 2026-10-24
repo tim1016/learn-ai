@@ -258,49 +258,6 @@ async def test_post_run_id_collision_returns_409(configured_app, tmp_path: Path,
 
 
 # ---------------------------------------------------------------------------
-# GET — listing.
-# ---------------------------------------------------------------------------
-async def test_list_empty_returns_empty_array(client):
-    response = await client.get("/api/research/strategy-runs")
-    assert response.status_code == 200
-    assert response.json() == {"runs": []}
-
-
-async def test_list_returns_recent_first(client):
-    # Fire two POSTs; the second one should sort first.
-    await client.post("/api/research/strategy-runs", json=_request_body())
-    await client.post("/api/research/strategy-runs", json=_request_body())
-
-    response = await client.get("/api/research/strategy-runs")
-    runs = response.json()["runs"]
-    assert len(runs) == 2
-    assert runs[0]["created_at_ms"] >= runs[1]["created_at_ms"]
-
-
-async def test_list_filter_by_parent_run_id(client):
-    parent = await client.post("/api/research/strategy-runs", json=_request_body())
-    parent_id = parent.json()["ledger"]["run_id"]
-
-    body = _request_body()
-    body["parent_run_id"] = parent_id
-    child = await client.post("/api/research/strategy-runs", json=body)
-
-    response = await client.get(
-        "/api/research/strategy-runs", params={"parent_run_id": parent_id}
-    )
-    children = response.json()["runs"]
-    assert [r["run_id"] for r in children] == [child.json()["ledger"]["run_id"]]
-
-
-async def test_list_limit_truncates(client):
-    for _ in range(3):
-        await client.post("/api/research/strategy-runs", json=_request_body())
-
-    response = await client.get("/api/research/strategy-runs", params={"limit": 2})
-    assert len(response.json()["runs"]) == 2
-
-
-# ---------------------------------------------------------------------------
 # RunLedger.window_summary — stamped on every persisted run.
 # ---------------------------------------------------------------------------
 async def test_post_ledger_carries_window_summary_and_it_round_trips_through_persist_load(client):

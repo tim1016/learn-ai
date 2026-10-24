@@ -26,6 +26,8 @@ interface EdgeComponentRow {
 export class EdgeScoreDrawerComponent {
   data = input.required<EdgeSampleData>();
   open = input(false);
+  /** Drawn in the page, not over it: the Edge score demonstration page. */
+  inline = input(false);
   idx = input<number | undefined>(undefined);
 
   closed = output();

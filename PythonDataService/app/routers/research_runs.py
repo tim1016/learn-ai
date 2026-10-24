@@ -1,13 +1,15 @@
 """Research-run HTTP boundary.
 
-Three endpoints under ``/api/research/strategy-runs``:
+Two endpoints under ``/api/research/strategy-runs``:
 
   * ``POST   /``                — kick off a strategy run, persist the
     ledger + result, return both. Synchronous: blocks until the engine
     finishes. For long runs, future work moves this to the existing
     job orchestration in ``app/routers/jobs.py``.
   * ``GET    /{run_id}``        — load a previously-persisted run.
-  * ``GET    /``                — list ledgers, with filters and limit.
+
+Saved runs are listed by the Research History
+(``/api/research/history``); this router has no list route of its own.
 
 There is no UI passthrough here yet: GraphQL is retired (ADR 0081), so
 Phase B (research workbench) will call these FastAPI endpoints directly when
@@ -27,7 +29,7 @@ research pipeline cares about discoverable failures across many runs.
 
 **Sync handlers, not async — deliberate**: the router uses ``def`` rather
 than ``async def`` because every operation here (engine run, file
-I/O via ``save_run`` / ``load_run`` / ``list_runs``) is fully blocking.
+I/O via ``save_run`` / ``load_run``) is fully blocking.
 FastAPI executes ``def`` handlers in a threadpool, which keeps the
 event loop responsive under concurrent requests. Converting to
 ``async def`` without wrapping each call in ``run_in_executor`` (or
@@ -45,7 +47,7 @@ from datetime import date as Date
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.engine.strategy.spec import StrategySpec
@@ -56,7 +58,6 @@ from app.research.runs import (
     RunLedger,
     RunNotFoundError,
     RunRequest,
-    list_runs,
     load_run,
     run_date_to_ms,
     run_strategy_spec,
@@ -64,7 +65,6 @@ from app.research.runs import (
 )
 from app.services.fill_mode_request import fill_mode_or_400
 from app.services.spec_run_data import SpecDataSourceFactory, materialize_spec_data_source
-from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -109,16 +109,6 @@ class StrategyRunResponse(BaseModel):
     result: BacktestRunResult
 
 
-class StrategyRunListResponse(BaseModel):
-    """Response payload for listing — ledgers only, no results.
-
-    Keeps the listing payload small. Clients fetch full results
-    on-demand via ``GET /{run_id}``.
-    """
-
-    runs: list[RunLedger]
-
-
 # ---------------------------------------------------------------------------
 # Dependencies.
 # ---------------------------------------------------------------------------
@@ -136,7 +126,7 @@ def get_artifacts_root() -> Path | None:
     """Return the artifacts root for persistence, or ``None`` to use
     the storage layer's default (env-or-package).
 
-    Returning ``None`` lets ``save_run`` / ``load_run`` / ``list_runs``
+    Returning ``None`` lets ``save_run`` / ``load_run``
     fall through to ``default_artifacts_root()``. Tests override this
     dependency to inject a ``tmp_path`` so each test runs in its own
     artifact tree without touching the real ``artifacts/`` directory.
@@ -271,34 +261,3 @@ def get_run(
             detail=f"run artifact is corrupt: {exc}",
         ) from exc
     return StrategyRunResponse(ledger=ledger, result=result)
-
-
-@router.get("", response_model=StrategyRunListResponse)
-def list_runs_endpoint(
-    spec_hash: str | None = Query(None, description="Filter by ``strategy_spec_hash``"),
-    symbol: str | None = Query(None, description="Filter by traded symbol"),
-    run_status: str | None = Query(
-        None,
-        alias="status",
-        description="Filter by lifecycle status: running | completed | failed",
-    ),
-    parent_run_id: str | None = Query(None, description="Filter by lineage — fold/MC/sweep parent"),
-    parent_spec_hash: str | None = Query(None, description="Filter by sensitivity-grid parent"),
-    since_ms: int | None = Query(
-        None, ge=0, le=MAX_TIMESTAMP_MS, description="Only return runs created at or after this ``int64 ms UTC``"
-    ),
-    limit: int | None = Query(None, ge=1, description="Cap result count after sorting newest-first"),
-    artifacts_root: Path | None = Depends(get_artifacts_root),
-) -> StrategyRunListResponse:
-    """List persisted runs, optionally filtered, newest first."""
-    runs = list_runs(
-        root=artifacts_root,
-        spec_hash=spec_hash,
-        symbol=symbol,
-        status=run_status,
-        parent_run_id=parent_run_id,
-        parent_spec_hash=parent_spec_hash,
-        since_ms=since_ms,
-        limit=limit,
-    )
-    return StrategyRunListResponse(runs=runs)

@@ -6,8 +6,8 @@ import {
 
 /* Pure request mappers: map DataLabWorkspaceStore state to
  * the existing wire payloads — the chart request body DataLabChartComponent
- * posts to `/api/chart/data` today, and the generate-zip payload shaped like
- * `_buildGenerateZipPayload` in data-lab.component.ts. Dates are derived from
+ * posts to `/api/chart/data`, and the generate-zip payload Build dataset
+ * posts. Dates are derived from
  * the committed numeric UTC window as YYYY-MM-DD (UTC) strings, with the
  * numeric `start_ms_utc` / `end_ms_utc` fields included additively so the
  * backend can migrate to numeric authority. All functions are pure. */
@@ -135,7 +135,7 @@ export interface GenerateZipMapperInput {
 }
 
 /** Map the committed workspace state to the generate-zip payload — the same
- *  shape `_buildGenerateZipPayload` produces today, plus additive numeric
+ *  shape Build dataset posts, plus additive numeric
  *  `start_ms_utc` / `end_ms_utc` and the dataset.csv column selection. Pure. */
 export function buildGenerateZipPayload(input: GenerateZipMapperInput): Record<string, unknown> {
   return {

@@ -1,0 +1,242 @@
+<section class="build-dataset__intro">
+  <h2 class="build-dataset__title">Build dataset</h2>
+  <a [routerLink]="dataTab()" queryParamsHandling="preserve">Back to the {{ store.committedTicker() }} Data tab</a>
+  <p class="build-dataset__muted">{{ scopeSummary() }} · {{ indicatorSummary() }}</p>
+</section>
+
+<!-- 1. Scope and bars -->
+<section class="build-dataset__section" aria-labelledby="export-scope-h">
+  <h2 id="export-scope-h">1. Scope and bars</h2>
+  <p class="build-dataset__muted">
+    Ticker, window, timeframe, and session are the ones committed for this instrument above; change
+    them there. The indicators are the Chart tab's recipe.
+  </p>
+  <dl class="build-dataset__kv">
+    <dt>Ticker</dt>
+    <dd>
+      @if (store.committedTicker()) {
+        <app-asset-identity [symbol]="store.committedTicker()" [size]="'sm'" />
+      } @else {
+        —
+      }
+    </dd>
+    <dt>Session</dt><dd>{{ store.draft().session }}</dd>
+    <dt>Forward fill</dt><dd>{{ store.draft().forwardFill ? 'on' : 'off' }}</dd>
+    <dt>Splits adjusted</dt><dd>{{ store.draft().adjusted ? 'yes' : 'no' }}</dd>
+    <dt>Dividend adjusted</dt>
+    <dd>
+      <label class="build-dataset__inline">
+        <input type="checkbox" name="export-adj-div" [checked]="adjustForDividends()" (change)="onAdjustDividendsToggle($event)" />
+        server-side dividend adjustment (requires the dividends companion)
+      </label>
+    </dd>
+    <dt>Warmup bars</dt>
+    <dd>
+      <label class="build-dataset__inline">
+        <input type="checkbox" name="export-warmup" [checked]="warmup()" (change)="onWarmupToggle($event)" />
+        include warmup
+      </label>
+    </dd>
+    <dt>Sort</dt>
+    <dd>
+      <select (change)="onSortChange($event)" aria-label="Sort order">
+        <option value="asc" [selected]="sort() === 'asc'">Ascending</option>
+        <option value="desc" [selected]="sort() === 'desc'">Descending</option>
+      </select>
+    </dd>
+    <dt>Bar limit</dt>
+    <dd><input type="number" name="export-limit" min="1" [value]="polygonLimit()" (change)="onLimitInput($event)" /></dd>
+  </dl>
+</section>
+
+<!-- 2. Indicators and columns -->
+<section class="build-dataset__section" aria-labelledby="export-cols-h">
+  <h2 id="export-cols-h">2. Indicators and columns</h2>
+  <p class="build-dataset__muted">
+    {{ indicatorSummary() }}
+  </p>
+  @if (planLoading()) {
+    <p class="build-dataset__muted" role="status">Updating the column list…</p>
+  }
+  @if (planError()) {
+    <p class="build-dataset__error" role="alert">{{ planError() }}</p>
+    <div class="build-dataset__plan-actions">
+      <button type="button" class="build-dataset__secondary" (click)="loadPlan()">Try again</button>
+    </div>
+  }
+  @if (planReceipt(); as receipt) {
+    <h3>Columns in dataset.csv</h3>
+    <app-export-column-picker
+      [columns]="receipt.output_columns ?? []"
+      [timeColumn]="receipt.time_column ?? null"
+      [selection]="store.exportColumns()"
+      (selectionChange)="store.setExportColumns($event)"
+      [timeZone]="store.exportTimeZone()"
+      (timeZoneChange)="store.setExportTimeZone($event)"
+    />
+    <div class="build-dataset__receipt" role="region" aria-label="Dataset plan receipt">
+      <h3>
+        Server plan
+        @if (planReceiptStale() && !planLoading()) {
+          <span class="build-dataset__stale" role="status">out of date — use Try again</span>
+        }
+      </h3>
+      <dl class="build-dataset__kv">
+        <dt>Session count</dt><dd>{{ receipt.session_count ?? '—' }}</dd>
+        <dt>Estimated bars</dt><dd>{{ receipt.estimated_bars ?? '—' }}</dd>
+        <dt>Output columns</dt><dd>{{ receipt.output_column_count ?? '—' }}</dd>
+        @if (receipt.exchange) { <dt>Exchange</dt><dd>{{ receipt.exchange }}</dd> }
+        @if (receipt.calendar_timezone) { <dt>Timezone</dt><dd>{{ receipt.calendar_timezone }}</dd> }
+        @if (receipt.calendar_version) { <dt>Calendar</dt><dd>{{ receipt.calendar_version }}</dd> }
+      </dl>
+      @if (receipt.exchange_sessions?.length) {
+        <h4>Sessions</h4>
+        <p class="build-dataset__cols">{{ sessionLabels(receipt).join(', ') }}</p>
+      }
+      @if (receipt.warnings?.length) {
+        <ul class="build-dataset__warnings">
+          @for (warning of receipt.warnings; track warning) {
+            <li role="alert">{{ warning }}</li>
+          }
+        </ul>
+      }
+      @if (receipt.allowed_timeframes?.length || receipt.recommended_timeframes?.length) {
+        <h4>Timeframe advice</h4>
+        @if (receipt.allowed_timeframes?.length) {
+          <p class="build-dataset__cols">Allowed: {{ receipt.allowed_timeframes.join(', ') }}</p>
+        }
+        @if (receipt.recommended_timeframes?.length) {
+          <p class="build-dataset__cols">Recommended: {{ receipt.recommended_timeframes.join(', ') }}</p>
+        }
+      }
+      @if (receipt.estimate_assumptions?.length) {
+        <h4>Estimate assumptions</h4>
+        <ul class="build-dataset__warnings">
+          @for (assumption of receipt.estimate_assumptions; track assumption) {
+            <li>{{ assumption }}</li>
+          }
+        </ul>
+      }
+      @if (receipt.estimate_provenance) {
+        <h4>Estimate provenance</h4>
+        <p class="build-dataset__cols">{{ receipt.estimate_provenance }}</p>
+      }
+      @if (receipt.companion_dependencies?.length) {
+        <h4>Companion dependencies</h4>
+        <p class="build-dataset__cols">{{ receipt.companion_dependencies.join(', ') }}</p>
+      }
+    </div>
+  }
+</section>
+
+<!-- 3. Companions and quality -->
+<section class="build-dataset__section" aria-labelledby="export-comp-h">
+  <h2 id="export-comp-h">3. Companions and quality</h2>
+  <details class="build-dataset__disclosure">
+    <summary>Options companion</summary>
+    <label class="build-dataset__inline">
+      <input
+        type="checkbox"
+        name="export-opt-enabled"
+        [checked]="store.companions().optionsCompanionEnabled"
+        (change)="onCompanionToggle('optionsCompanionEnabled', $event)"
+      />
+      include options companion
+    </label>
+    @if (store.companions().optionsCompanionEnabled) {
+      <div class="build-dataset__options-grid">
+        <label>Strikes each side
+          <input type="number" name="export-strikes" min="1" max="25" [value]="optionsStrikesEachSide()" (change)="onStrikesInput($event)" />
+        </label>
+        <label>DTE distance
+          <input type="number" name="export-dte" min="0" [value]="optionsDteDistance()" (change)="onDteInput($event)" />
+        </label>
+        <label>Risk-free rate
+          <input type="number" name="export-rfr" step="0.01" placeholder="default" [value]="optRiskFreeRate()" (change)="onRiskFreeRateInput($event)" />
+        </label>
+        <label>Dividend yield
+          <input type="number" name="export-dy" step="0.01" [value]="optDividendYield()" (change)="onDividendYieldInput($event)" />
+        </label>
+        @for (flag of optionsFlags; track flag.key) {
+          <label class="build-dataset__inline">
+            <input
+              type="checkbox"
+              [name]="'export-' + flag.key"
+              [checked]="flag.value()"
+              (change)="onOptionsFlagToggle(flag.key, $event)"
+            />
+            {{ flag.label }}
+          </label>
+        }
+      </div>
+      <p class="build-dataset__muted">
+        What the archive listed for {{ store.committedTicker() }} and what each contract traded at is read on its
+        <a [routerLink]="pastChain().commands" [queryParams]="pastChain().queryParams">Options tab, Past · Archive</a>.
+      </p>
+    }
+  </details>
+
+  <details class="build-dataset__disclosure">
+    <summary>Reference companions and news</summary>
+    @for (companion of companionFlags; track companion.key) {
+      <label class="build-dataset__inline">
+        <input
+          type="checkbox"
+          [name]="'export-' + companion.key"
+          [checked]="store.companions()[companion.key]"
+          (change)="onCompanionToggle(companion.key, $event)"
+        />
+        {{ companion.label }}
+      </label>
+    }
+  </details>
+
+  <details class="build-dataset__disclosure">
+    <summary>Quality settings</summary>
+    <label class="build-dataset__inline">
+      <input
+        type="checkbox"
+        name="export-quality"
+        [checked]="store.companions().includeQualityReport"
+        (change)="onCompanionToggle('includeQualityReport', $event)"
+      />
+      include quality report in ZIP
+    </label>
+    <p class="build-dataset__muted">
+      Quality evidence lives on the instrument's <a [routerLink]="dataTab()" queryParamsHandling="preserve">Data tab</a>.
+    </p>
+  </details>
+</section>
+
+<!-- 4. Review and generate -->
+<section class="build-dataset__section" aria-labelledby="export-review-h">
+  <h2 id="export-review-h">4. Review and generate</h2>
+  @if (planReceipt() && planReceiptStale() && !planLoading()) {
+    <p class="build-dataset__error" role="status">
+      The column list could not be updated for the current settings — the counts below are out
+      of date. Use Try again in section 2 before generating.
+    </p>
+  }
+  <dl class="build-dataset__kv">
+    <dt>Scope</dt><dd>{{ scopeSummary() }}</dd>
+    <dt>Indicators</dt><dd>{{ indicatorSummary() }}</dd>
+    <dt>Sessions (from plan)</dt><dd>{{ planReceipt()?.session_count ?? 'waiting for the plan' }}</dd>
+    <dt>Time columns</dt><dd>{{ timeColumnsSummary() }}</dd>
+    <dt>Data columns</dt><dd>{{ dataColumnsSummary() }}</dd>
+  </dl>
+  @if (generateError()) {
+    <p class="build-dataset__error" role="alert">{{ generateError() }}</p>
+  }
+  <button
+    type="button"
+    class="build-dataset__primary"
+    (click)="generate()"
+    [disabled]="generateBlocked()"
+  >
+    {{ generateLabel() }}
+  </button>
+  <p class="build-dataset__muted">
+    Generation runs as a durable job, and only this button starts it. Progress and cancellation
+    stay available in the run dock while you move between this instrument's tabs.
+  </p>
+</section>

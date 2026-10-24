@@ -44,7 +44,7 @@ describe('SpyEmaFixtureRunComponent', () => {
     post.flush({ ledger: { run_id: RUN_ID }, result: {} });
 
     const link = await screen.findByRole('link', { name: `${RUN_ID.slice(0, 12)}…` });
-    expect(link.getAttribute('href')).toBe(`/research-lab/strategy-runs/${RUN_ID}`);
+    expect(link.getAttribute('href')).toBe(`/research/history/spec-run/${RUN_ID}`);
     http.verify();
   });
 

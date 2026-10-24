@@ -1,0 +1,22 @@
+<div class="mode-switch" role="group" aria-label="Chain source">
+  @for (group of groups; track group.when) {
+    <div class="mode-group" role="group" [attr.aria-label]="group.when">
+      <span class="mode-group__label">{{ group.when }}</span>
+      @for (mode of group.modes; track mode.id) {
+        <button
+          type="button"
+          class="chip"
+          [class.active]="mode.id === active()"
+          [attr.aria-pressed]="mode.id === active()"
+          [attr.aria-label]="nameOf(mode.id)"
+          [attr.title]="mode.unavailable"
+          [disabled]="mode.unavailable !== null"
+          (click)="picked.emit(mode)"
+        >{{ mode.label }}</button>
+      }
+    </div>
+  }
+</div>
+@for (reason of reasons(); track reason) {
+  <p class="reason">{{ reason }}</p>
+}

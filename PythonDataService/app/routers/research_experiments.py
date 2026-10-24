@@ -1,7 +1,8 @@
-"""The Research Lab's experiment history over REST (``/api/research/experiments``, ``/api/research/signal-experiments``).
+"""A stored signal experiment's report over REST (``GET /api/research/signal-experiments/{id}/report``).
 
-Replaces the GraphQL ``getResearchExperiments`` / ``getSignalExperiments`` / ``getSignalExperimentReport`` queries of
-the retired .NET backend. Read-only: nothing writes these tables any more, and the rows are legacy history.
+Replaces the GraphQL ``getSignalExperimentReport`` query of the retired .NET backend. Read-only: nothing writes the
+table any more, and the rows are legacy history. The lists of these rows are the Research History's
+(``/api/research/history``); this is the detail a history entry of type ``signal-report`` opens.
 """
 
 from __future__ import annotations
@@ -9,16 +10,13 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Path, status
 
 from app.routers.research_store_unavailable import StoreUnreachableIsA503
 from app.schemas.research_experiments import (
     MAX_EXPERIMENT_ID,
-    TICKER_MAX_LENGTH,
     ResearchExperimentRefusalBody,
-    ResearchExperimentResponse,
     SignalExperimentReport,
-    SignalExperimentResponse,
 )
 from app.services.research_experiment_service import (
     PostgresResearchExperimentStore,
@@ -44,22 +42,7 @@ def get_experiment_store() -> ResearchExperimentStore:
 
 
 ExperimentStore = Annotated[ResearchExperimentStore, Depends(get_experiment_store)]
-TickerQuery = Annotated[
-    str, Query(min_length=1, max_length=TICKER_MAX_LENGTH, description="The ticker's symbol; case does not matter.")
-]
 ExperimentId = Annotated[int, Path(ge=1, le=MAX_EXPERIMENT_ID)]
-
-
-@router.get("/experiments", response_model=list[ResearchExperimentResponse])
-async def list_research_experiments(ticker: TickerQuery, store: ExperimentStore) -> list[ResearchExperimentResponse]:
-    """A ticker's stored feature-research experiments, newest first."""
-    return await store.research_experiments(ticker)
-
-
-@router.get("/signal-experiments", response_model=list[SignalExperimentResponse])
-async def list_signal_experiments(ticker: TickerQuery, store: ExperimentStore) -> list[SignalExperimentResponse]:
-    """A ticker's stored signal-engine experiments, newest first, each as its headline without the full report."""
-    return await store.signal_experiments(ticker)
 
 
 @router.get(

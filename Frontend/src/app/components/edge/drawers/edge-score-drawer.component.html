@@ -1,12 +1,16 @@
-@if (open()) {
-  <div class="esd-scrim" (click)="closed.emit()" aria-hidden="true"></div>
-  <aside class="esd" role="dialog" aria-label="Edge Score Inspector">
+@if (open() || inline()) {
+  @if (!inline()) {
+    <div class="esd-scrim" (click)="closed.emit()" aria-hidden="true"></div>
+  }
+  <aside class="esd" [class.esd--inline]="inline()" [attr.role]="inline() ? null : 'dialog'" aria-label="Edge Score Inspector">
     <header class="esd-header">
       <div>
         <h2 class="esd-eyebrow">EDGE SCORE INSPECTOR</h2>
         <div class="esd-title">{{ dateMs() | timestampDisplay:'date-et' }} · SPY · {{ action() }}</div>
       </div>
-      <button class="esd-close" (click)="closed.emit()" aria-label="Close inspector">✕</button>
+      @if (!inline()) {
+        <button class="esd-close" (click)="closed.emit()" aria-label="Close inspector">✕</button>
+      }
     </header>
 
     <div class="esd-body">

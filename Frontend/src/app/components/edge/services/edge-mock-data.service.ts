@@ -3,8 +3,8 @@ import type {
   Candle, EdgeComponents, EdgeSampleData, HeatmapStat, PerRegime, Trade,
 } from "./edge-data.model";
 
-/** Generated demonstration data for the Edge hub, Cross-asset, Regimes and
- *  the two drawers (replaces window.EDGE_DATA from the design prototype).
+/** Generated demonstration data for the Cross-asset, Regimes, Edge score and
+ *  Trade simulator demonstrations (replaces window.EDGE_DATA from the design prototype).
  *  Nothing here is measured: the dataset says `provenance: "sample"`, and every
  *  surface that renders it shows that. Real studies do not read from it. */
 @Injectable({ providedIn: "root" })
@@ -181,20 +181,11 @@ export class EdgeMockDataService {
       if (tradable) totTradable += net;
     }
 
-    const sparklines = {
-      vrp: vrpZ.filter((v) => !Number.isNaN(v)).slice(-30),
-      equity: equityCurves[0].slice(-30),
-      stability: stability.slice(-30),
-    };
-
     return {
       provenance: "sample",
       N, dates, candles,
       regimePath, transitionMatrix, regimeCentroids, edgeScore, edgeComponents,
-      headline: {
-        edgeComposite: 0.41, robustness: 0.62, dsrMean: 0.74, pbo: 0.31,
-        contributions: { vrp: 0.30, regime: 0.16, iv: -0.04, trend: -0.01 },
-      },
+      headline: { robustness: 0.62, dsrMean: 0.74, pbo: 0.31 },
       assets, periods, sharpeMatrix, heatmapStats, equityCurves,
       perRegime, stability,
       trades, equityFromTrades,
@@ -203,7 +194,6 @@ export class EdgeMockDataService {
         net: totGross + totSpread + totSlip + totComm,
         netTradable: totTradable,
       },
-      sparklines,
     };
   }
 }

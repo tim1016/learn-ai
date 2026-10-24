@@ -50,6 +50,7 @@ from app.research.indicator_reliability import (
     get_indicator_category,
 )
 from app.research.lake_study import refused_result
+from app.research.study_records.recorder import capture_request, keeps_route_record
 from app.services.dataset_service import (
     calculate_dynamic_indicators,
     get_indicator_configs,
@@ -172,6 +173,7 @@ def _build_verdict(
         },
     },
 )
+@keeps_route_record("indicator-reliability", capture_request, body="request")
 async def calculate_indicator_reliability(
     request: IndicatorReliabilityRequest,
 ) -> IndicatorReliabilityResponse | JSONResponse:

@@ -45,6 +45,8 @@ from app.research.batch_runner import (
 from app.research.lake_study import SESSION_POLICY_FOR_REQUEST
 from app.research.signal.config import SignalConfig
 from app.research.signal.engine import run_signal_engine
+from app.research.study_records.models import RecordId
+from app.research.study_records.recorder import keeps_job_record
 from app.schemas.engine_backtest import EngineBacktestRequest
 from app.schemas.ticker_request import (
     MultiTickerRequest,
@@ -197,6 +199,8 @@ class CrossSectionalJobRequest(_CamelCaseMultiTickerRequest):
     force: bool = False
     """Skip the result cache and always re-run. Default: serve from
     cache if a prior run with identical params is still warm."""
+    rerun_of: RecordId | None = None
+    """The saved run this one was prefilled from (the History's Rerun); lineage only, never an input."""
 
 
 class FeatureResearchJobRequest(_CamelCaseTickerRequest):
@@ -221,6 +225,8 @@ class FeatureResearchJobRequest(_CamelCaseTickerRequest):
     job_id: str = Field(..., min_length=1)
     feature_name: str = Field(..., min_length=1)
     force: bool = False
+    rerun_of: RecordId | None = None
+    """The saved run this one was prefilled from (the History's Rerun); lineage only, never an input."""
 
 
 class SignalEngineJobRequest(_CamelCaseTickerRequest):
@@ -240,6 +246,8 @@ class SignalEngineJobRequest(_CamelCaseTickerRequest):
     flip_sign: bool = True
     regime_gate_enabled: bool = True
     force: bool = False
+    rerun_of: RecordId | None = None
+    """The saved run this one was prefilled from (the History's Rerun); lineage only, never an input."""
 
 
 # ---------------------------------------------------------------------------
@@ -691,7 +699,7 @@ async def start_cross_sectional_job(req: CrossSectionalJobRequest) -> dict:
 
     run_in_thread(
         req.job_id,
-        work,
+        keeps_job_record("cross-sectional-study", req, work),
         thread_name=f"cross-sectional-{req.job_id[:8]}",
         # The cross-sectional loop calls cancel_check() once per ticker
         # (every ~30–90s), and the runner's no-op callbacks otherwise
@@ -763,7 +771,7 @@ async def start_feature_research_job(req: FeatureResearchJobRequest) -> dict:
 
     run_in_thread(
         req.job_id,
-        work,
+        keeps_job_record("feature-study", req, work),
         thread_name=f"feature-{req.job_id[:8]}",
         cancel_check_every_n=100,
     )
@@ -867,7 +875,7 @@ async def start_signal_engine_job(req: SignalEngineJobRequest) -> dict:
 
     run_in_thread(
         req.job_id,
-        work,
+        keeps_job_record("signal-study", req, work),
         thread_name=f"signal-{req.job_id[:8]}",
         cancel_check_every_n=50,
     )

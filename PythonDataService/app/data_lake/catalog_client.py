@@ -1875,6 +1875,8 @@ class ArtifactCoverageRow:
     file_path: str
     #: Null until the row reaches 'complete'.
     file_sha256: str | None
+    #: The reason a 'failed' row recorded (``LastError``); null for any other status.
+    last_error: str | None = None
 
 
 async def select_artifact_coverage(
@@ -1900,7 +1902,8 @@ async def select_artifact_coverage(
     root_id = _resolve_data_root_id(data_root_id)
     query = """
         SELECT "TradingDate" AS trading_date, "Status" AS status, "Id" AS artifact_id,
-               "Symbol" AS symbol, "FilePath" AS file_path, "FileSha256" AS file_sha256
+               "Symbol" AS symbol, "FilePath" AS file_path, "FileSha256" AS file_sha256,
+               "LastError" AS last_error
           FROM "DataLakeArtifacts"
          WHERE "ArtifactKind" = 'time_series_bars'
            AND "Resolution" = 'minute'

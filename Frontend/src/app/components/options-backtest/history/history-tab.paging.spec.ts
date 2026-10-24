@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { RunQuery } from '../options-backtest.service';
 import type { RunListItem } from '../options-backtest.types';
-import { deferred } from '../past-chain/testing/deferred';
+import { deferred } from '../testing/deferred';
 import { renderHistoryTab } from '../testing/render-history';
 import { press } from '../testing/page-actions';
 import { fakeService } from '../testing/render-page';

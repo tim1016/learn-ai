@@ -28,7 +28,9 @@ from app.data_lake import run_materialization
 from app.data_lake.catalog_client import CatalogUnavailableError
 from app.lean_sidecar.trading_calendar import expected_sessions, session_close_ms_utc, session_open_ms_utc
 from app.research import indicator_reliability as reliability_math
+from app.research.artifact.root import default_artifacts_root
 from app.research.study_inputs import lead_in_sessions
+from app.research.study_records.store import StudyRecordStore
 from app.routers import indicator_reliability as router
 from app.services import dataset_service, indicator_reliability_service
 from app.services.polygon_client import PolygonClientService
@@ -449,3 +451,89 @@ async def test_repairing_a_session_changes_the_snapshot_and_result_identity_but_
     assert a["snapshot_digest"] != b["snapshot_digest"] and a["result_identity_digest"] != b["result_identity_digest"]
     assert (r["snapshot_digest"], r["result_identity_digest"]) == (a["snapshot_digest"], a["result_identity_digest"])
     assert a["coverage"]["window"]["reused"] == len(WINDOW) and a["coverage"]["window"]["added"] == 0
+
+
+# ---------------------------------------------------------------------------
+# The History record: a lake run is kept with the data source it read, a refused run with its refusal
+# ---------------------------------------------------------------------------
+
+
+def saved_records() -> list[Any]:
+    """The runs the route kept, read from the temporary artifact root the test conftest points the default root at."""
+    store = StudyRecordStore("indicator-reliability", root=default_artifacts_root())
+    return [store.load(record_id) for record_id, _ in store.config_paths()]
+
+
+@pytest.mark.asyncio
+async def test_a_completed_lake_run_is_recorded_with_the_data_source_block_it_returned(api, world):
+    mock_vendor("SPY", tape(WINDOW))
+
+    response = await post(api, body())
+
+    assert response.status_code == 200, response.text
+    ((config, stored),) = saved_records()
+    assert config.status == "completed"
+    assert config.inputs["indicator_name"] == "rsi" and config.inputs["horizons"] == [1, 5]
+    assert config.inputs["session"] == "rth" and config.inputs["warmup_policy"] == "allow_shortened"
+    assert config.data_source == response.json()["data_source"], "the lake block is the record's provenance, field for field"
+    assert config.data_source["kind"] == "lake" and len(config.data_source["snapshot_digest"]) == 64
+    assert config.headline, "a completed run is listed under a headline made from its result"
+    assert stored.result is not None
+    assert stored.result["best_horizon"] == response.json()["best_horizon"]
+    assert [row["horizon"] for row in stored.result["results"]] == [1, 5]
+
+
+@pytest.mark.asyncio
+async def test_a_window_the_lake_refused_is_recorded_as_a_failed_run_with_its_refusal_and_counts(api, world):
+    vendor = tape(WINDOW)
+    del vendor[WINDOW[4]]
+    mock_vendor("SPY", vendor)
+
+    response = await post(api, body())
+
+    parked = response.json()
+    assert response.status_code == 409
+    ((config, stored),) = saved_records()
+    assert config.status == "failed" and config.status_detail == parked["error"]
+    assert config.headline is None
+    assert stored.result == parked, "the record holds the refusal the page reads, as the route answered it"
+    assert stored.result["refusal"]["code"] == "data_unavailable_from_provider"
+    assert config.data_source == parked["data_source"]
+    assert config.data_source["coverage"]["window"]["failed"] == 1 and config.data_source["snapshot_digest"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_lake_that_cannot_be_asked_is_recorded_as_a_failed_run_with_its_refusal(api, world, monkeypatch):
+    def catalog_down(spec, **_):
+        raise CatalogUnavailableError("down")
+
+    monkeypatch.setattr(run_materialization, "_materialize_run_data_sync", catalog_down)
+
+    response = await post(api, body())
+
+    assert response.status_code == 503
+    ((config, stored),) = saved_records()
+    assert config.status == "failed" and stored.result["refusal"]["code"] == "lake_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_finds_too_little_data_is_recorded_as_failed(api, world):
+    mock_vendor("SPY", tape(WINDOW[:1], regular_keep=0.2))
+
+    response = await post(api, body(to_date=WINDOW[0].isoformat(), horizons=[1]))
+
+    assert response.status_code == 400
+    ((config, stored),) = saved_records()
+    assert config.status == "failed" and (config.status_detail or "").startswith("Insufficient data after warmup trim")
+    assert stored.result is None, "the route raised; there is no refusal payload to keep"
+
+
+@pytest.mark.asyncio
+async def test_empty_horizons_are_recorded_as_the_defaults_the_run_used(api, world):
+    """The handler fills in the default horizons itself; the record says what ran, not what was posted."""
+    mock_vendor("SPY", tape(WINDOW[:1], regular_keep=0.2))
+
+    await post(api, body(to_date=WINDOW[0].isoformat(), horizons=[]))
+
+    ((config, _),) = saved_records()
+    assert config.inputs["horizons"] == [1, 5, 10, 15, 30]

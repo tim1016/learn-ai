@@ -98,11 +98,11 @@ export class WalkForwardSectionComponent {
   }
 
   open(wf: WalkForwardConfig): void {
-    void this.router.navigate(['/research-lab/walk-forward', wf.walk_forward_id]);
+    void this.router.navigate(['/research/history/walk-forward', wf.walk_forward_id]);
   }
 
   openById(wfId: string): void {
-    void this.router.navigate(['/research-lab/walk-forward', wfId]);
+    void this.router.navigate(['/research/history/walk-forward', wfId]);
   }
 
   splitSummary(policy: WalkForwardConfig['split_policy']): string {

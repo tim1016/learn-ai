@@ -22,6 +22,6 @@
 @if (lastRunId(); as runId) {
   <p-message severity="success">
     Fixture run completed:
-    <a [routerLink]="['/research-lab/strategy-runs', runId]">{{ shortId(runId) }}</a>
+    <a [routerLink]="['/research/history/spec-run', runId]">{{ shortId(runId) }}</a>
   </p-message>
 }

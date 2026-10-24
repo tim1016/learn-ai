@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from app.models.lake_study_models import LakeDataSource, LakeRefusedResult
+from app.research.study_records.models import RecordId
 from app.schemas.ticker_request import TickerRequest
 
 StrengthLabel = Literal["Noise", "Weak", "Moderate", "Strong"]
@@ -68,6 +69,10 @@ class IndicatorReliabilityRequest(TickerRequest):
     # The study has always computed on regular hours only and ignored this field. A value it cannot honour is refused
     # at validation instead of answered with a sample the caller did not ask for.
     session: Literal["rth"] = "rth"
+    rerun_of: RecordId | None = Field(
+        default=None,
+        description="The saved run this one was prefilled from (the History's Rerun); lineage only, never an input.",
+    )
 
 
 class HorizonICResult(BaseModel):
