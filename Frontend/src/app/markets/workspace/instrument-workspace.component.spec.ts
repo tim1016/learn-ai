@@ -200,7 +200,7 @@ describe('an instrument\'s place', () => {
       await chartRequests(opened.http, 1);
     });
 
-    it('declares Chart, Returns, Data and Options once; the three not routed yet stay in the strip, inert, and say why', async () => {
+    it('declares Chart, Returns, Data and Options once; the two not routed yet stay in the strip, inert, and say why', async () => {
       const opened = await open(`/markets/SPY/chart?${WINDOW_QUERY}`);
       await chartRequests(opened.http, 1);
 
@@ -212,7 +212,8 @@ describe('an instrument\'s place', () => {
         'Options',
       ]);
       expect(screen.getByRole('link', { name: 'Chart' }).getAttribute('href')).toBe(`/markets/SPY/chart?${WINDOW_QUERY}`);
-      for (const name of ['Returns', 'Data', 'Options']) {
+      expect(screen.getByRole('link', { name: 'Options' }).getAttribute('href')).toBe(`/markets/SPY/options?${WINDOW_QUERY}`);
+      for (const name of ['Returns', 'Data']) {
         expect(screen.queryByRole('link', { name }), `${name} is not a link`).toBeNull();
         expect(screen.getByText(new RegExp(`^${name}`)).getAttribute('title'), `${name} says why`).toContain('Not in this place yet');
       }

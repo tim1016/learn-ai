@@ -167,7 +167,10 @@
           </label>
         }
       </div>
-      <app-options-backtest-past-chain [startingUnderlying]="store.committedTicker()" [startingDate]="analysisDate()" />
+      <p class="export__muted">
+        What the archive listed for {{ store.committedTicker() }} and what each contract traded at is read on its
+        <a [routerLink]="pastChainCommands()" [queryParams]="pastChainQuery()">Options tab, Past · Archive</a>.
+      </p>
     }
   </details>
 

@@ -3,7 +3,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { SetupInvalidError } from './options-backtest.service';
 import type { SavedSetup, SetupRequest, SetupSummary } from './options-backtest.types';
-import { deferred } from './past-chain/testing/deferred';
+import { deferred } from './testing/deferred';
 import { EXAMPLE_ONE_REENTRY, exampleBody, readBackOf, servedExamples, servedSaved, summaryFor } from './testing/fixtures';
 import { lettingGo, press, typeInto } from './testing/page-actions';
 import { fakeService, renderPage, sentencesFor, type FakeDownload } from './testing/render-page';

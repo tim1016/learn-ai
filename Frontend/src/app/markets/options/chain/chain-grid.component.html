@@ -1,0 +1,91 @@
+@let t = table();
+@let detail = t.columns.detail;
+
+<ng-template #fieldBody let-field>
+  @if (field.kind === 'value') {
+    <span class="vol-text">{{ field.text }}</span>
+    @if (detail === 'full' && field.atMs !== null) {
+      <span class="when">in the minute ending <app-timestamp-display [value]="field.atMs" mode="et" granularity="minute" /></span>
+    }
+  } @else if (detail === 'full') {
+    <span class="absent-words">{{ wordsOf(field) }}</span>
+  } @else {
+    <span class="absent" [attr.title]="wordsOf(field)">—</span>
+  }
+</ng-template>
+
+<ng-template #addLeg let-side="side" let-strike="strike">
+  <td class="ls-cell" [class]="side + '-side'">
+    <button class="ls-btn long" type="button" disabled [attr.title]="addLegReason" [attr.aria-label]="'Add long ' + side + ' at ' + strike">L</button>
+    <button class="ls-btn short" type="button" disabled [attr.title]="addLegReason" [attr.aria-label]="'Add short ' + side + ' at ' + strike">S</button>
+  </td>
+</ng-template>
+
+<ng-template #sideCells let-cell let-side="side" let-columns="columns" let-strike="strike">
+  @if (cell.kind === 'gap') {
+    <td class="gap" [class]="side + '-side'" [attr.colspan]="columns.length + 1">{{ cell.words }}</td>
+  } @else {
+    @if (side === 'call') { <ng-container *ngTemplateOutlet="addLeg; context: { side, strike }" /> }
+    @for (column of columns; track column) {
+      <td class="num" [class]="side + '-side ' + column" [class.vol-cell]="column === 'volume'" [class.call-vol]="column === 'volume' && side === 'call'" [class.put-vol]="column === 'volume' && side === 'put'" [style.--bar-width.%]="column === 'volume' ? (cell.fields[column].bar ?? 0) : null">
+        <ng-container *ngTemplateOutlet="fieldBody; context: { $implicit: cell.fields[column] }" />
+        @if (detail === 'full' && column === columns[0]) {
+          @if (cell.standard === false) { <span class="nonstandard">Non-standard</span> }
+          <app-asset-identity class="symbol" [symbol]="cell.symbol" [optionUnderlying]="underlying()" size="xs" />
+        }
+      </td>
+    }
+    @if (side === 'put') { <ng-container *ngTemplateOutlet="addLeg; context: { side, strike }" /> }
+  }
+</ng-template>
+
+<div class="chain-grid-wrap" tabindex="0" role="region" aria-label="Scrollable chain table">
+  <table class="chain-grid" [attr.data-detail]="detail">
+    <caption class="sr-only">{{ t.caption }}</caption>
+    <thead>
+      <tr class="hdr-tier-1">
+        <th class="side-header calls" [attr.colspan]="callSpan()">Calls</th>
+        <th class="center-header" [attr.colspan]="t.centre ? 2 : 1">{{ t.centre ? 'Strike · IV' : 'Strike' }}</th>
+        <th class="side-header puts" [attr.colspan]="putSpan()">Puts</th>
+      </tr>
+      <tr class="hdr-tier-2">
+        <th class="num ls-col" aria-label="Add leg"></th>
+        @for (column of t.columns.calls; track column) { <th class="num">{{ labels[column] }}</th> }
+        <th class="num strike-col">Strike</th>
+        @if (t.centre) { <th class="num iv-col">IV</th> }
+        @for (column of t.columns.puts; track column) { <th class="num">{{ labels[column] }}</th> }
+        <th class="num ls-col" aria-label="Add leg"></th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (row of t.rows; track row.key) {
+        <tr class="data-row" [class.atm]="row.atm" [class.itm-call]="row.itm === 'call'" [class.itm-put]="row.itm === 'put'" [attr.data-atm]="row.atm ? 'true' : null">
+          <ng-container *ngTemplateOutlet="sideCells; context: { $implicit: row.call, side: 'call', columns: t.columns.calls, strike: row.strike }" />
+          <td class="num strike-cell">
+            {{ row.strike }}
+            @if (row.mark; as mark) { <span class="atm-badge">{{ mark }}</span> }
+          </td>
+          @if (t.centre && row.centre; as centre) {
+            <td class="num iv-cell"><ng-container *ngTemplateOutlet="fieldBody; context: { $implicit: centre }" /></td>
+          }
+          <ng-container *ngTemplateOutlet="sideCells; context: { $implicit: row.put, side: 'put', columns: t.columns.puts, strike: row.strike }" />
+        </tr>
+      }
+    </tbody>
+  </table>
+</div>
+
+@if (t.rows.length > 0) {
+  <div class="chain-legend" role="note" aria-label="Options chain color legend">
+    @if (hasItm()) {
+      <span class="legend-item"><span class="legend-swatch legend-swatch--call" aria-hidden="true"></span>ITM call</span>
+      <span class="legend-item"><span class="legend-swatch legend-swatch--put" aria-hidden="true"></span>ITM put</span>
+    }
+    @if (hasAtm()) {
+      <span class="legend-item"><span class="legend-swatch legend-swatch--atm" aria-hidden="true"></span>ATM row</span>
+    }
+    <span class="legend-note">{{ addLegReason }}</span>
+    <span class="legend-sep" aria-hidden="true"></span>
+    <span class="legend-hint">Strike prices rise top → bottom</span>
+  </div>
+}

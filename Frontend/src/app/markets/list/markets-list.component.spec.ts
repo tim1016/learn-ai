@@ -68,8 +68,14 @@ describe('MarketsListComponent', () => {
     expect(screen.getByText(/not a promise that every session between them is held/)).toBeTruthy();
   });
 
-  it('opens the tab it was asked to, and Chart when this place does not route that tab yet', async () => {
+  it('opens the tab it was asked to', async () => {
     await renderMarkets(undefined, { then: 'options' });
+
+    expect(screen.getAllByRole('row')[1].querySelector('a')?.getAttribute('href')).toBe('/markets/SPY/options');
+  });
+
+  it('opens Chart when it was asked for a tab this place does not route', async () => {
+    await renderMarkets(undefined, { then: 'nonsense' });
 
     expect(screen.getAllByRole('row')[1].querySelector('a')?.getAttribute('href')).toBe('/markets/SPY/chart');
   });

@@ -20,7 +20,6 @@ import { LaunchNoticeComponent } from './cards/launch-notice.component';
 import { SavedSetupsMenuComponent, type LibraryStatus } from './cards/saved-setups-menu.component';
 import { SummaryComponent } from './cards/summary.component';
 import { HistoryTabComponent } from './history/history-tab.component';
-import { PastChainTabComponent } from './past-chain/past-chain-tab.component';
 import { PositionPreviewComponent } from './position/position-preview.component';
 import { RunPanelComponent } from './run/run-panel.component';
 import { DataCheckFlow } from './data-check-flow';
@@ -40,7 +39,7 @@ import { generatedSetupName } from './setup-name';
 import { describeDetail, FIELD, NO_PROBLEMS, type FieldProblems } from './setup-problems';
 import { SetupSummaryChecker } from './setup-summary-checker';
 
-export type OptionsBacktestTab = 'backtest' | 'history' | 'chain';
+export type OptionsBacktestTab = 'backtest' | 'history';
 
 /** What an import said: it was loaded, or the reasons it was not. Nothing changes when it was not. */
 interface ImportNotice {
@@ -81,7 +80,6 @@ interface ImportNotice {
     SummaryComponent,
     RunPanelComponent,
     HistoryTabComponent,
-    PastChainTabComponent,
     BottomBarComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -205,13 +203,11 @@ export class OptionsBacktestPageComponent {
   protected readonly check = this.checkFlow.state;
   protected readonly pricesFromMs = this.checkFlow.pricesFromMs;
   protected readonly rangeProblem = computed(() => this.checkFlow.refusal() ?? this.launch.refusal());
-  /** How many downloads on the Past chain tab may have changed what is stored. */
-  private readonly chainDownloads = signal(0);
-  /** What a check would be asked with now, and a stamp to tell whether an answer still describes it: the setup, the dates, and how many backtests have started and chain downloads have come back since. */
+  /** What a check would be asked with now, and a stamp to tell whether an answer still describes it: the setup, the dates, and how many backtests have started since. */
   private readonly asking = computed(() => {
     const setup = this.readBack();
     const range = this.instants();
-    return setup === null || range === null ? null : { setup, range, stamp: JSON.stringify([setup, range, this.launch.runsStarted(), this.chainDownloads()]) };
+    return setup === null || range === null ? null : { setup, range, stamp: JSON.stringify([setup, range, this.launch.runsStarted()]) };
   });
   protected readonly checkIsStale = computed(() => {
     const state = this.check();
@@ -372,13 +368,8 @@ export class OptionsBacktestPageComponent {
     this.start();
   }
 
-  /** A download on the Past chain tab came back: what is stored for an underlying and a date may have changed, so an answer of Check data is stale. */
-  protected chainDownloaded(): void {
-    this.chainDownloads.update((count) => count + 1);
-  }
-
   protected setTab(tab: string | number | undefined): void {
-    if (tab === 'backtest' || tab === 'history' || tab === 'chain') this.activeTab.set(tab);
+    if (tab === 'backtest' || tab === 'history') this.activeTab.set(tab);
   }
 
   /** The owner chose Use this setup on a run in History: the form takes that setup, under no name, and the Backtest tab is shown. */

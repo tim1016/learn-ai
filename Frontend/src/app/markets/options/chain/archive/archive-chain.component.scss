@@ -1,0 +1,5 @@
+:host { display: grid; gap: var(--space-3); min-width: 0; }
+.listing { display: grid; gap: var(--space-1); }
+.left-out { margin: 0; padding-left: var(--space-5); }
+.refusal { display: grid; gap: var(--space-1); padding: var(--space-3); border: 1px solid var(--border-light); border-radius: var(--radius); background: var(--bg-surface); font-size: var(--fs-sm); }
+.refusal p { margin: 0; }

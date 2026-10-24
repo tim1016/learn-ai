@@ -1,5 +1,5 @@
 <app-workspace-header [title]="symbol()" [breadcrumb]="breadcrumb()">
-  <app-how-this-works workspaceHelp route="/data-lab-docs" />
+  <app-how-this-works workspaceHelp [route]="help().route" [anchor]="help().anchor" />
   <div workspaceFacts class="instrument-facts">
     @if (admitted().kind === 'ready') {
       <app-asset-identity [symbol]="symbol()" [name]="admittedName()" size="sm" />
@@ -10,7 +10,7 @@
 @if (stateContent(); as state) {
   <app-workspace-state-block [state]="state" (actionTriggered)="onAction($event)" />
 } @else {
-  <app-instrument-context-bar />
+  <app-instrument-context-bar [windowControls]="usesWindow()" />
   <app-workspace-tab-list label="Instrument sections" [tabs]="tabs()" [activeId]="activeTab()" />
   <div class="instrument-body">
     @if (contextState(); as state) {

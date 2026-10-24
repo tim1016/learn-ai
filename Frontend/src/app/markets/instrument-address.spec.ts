@@ -37,7 +37,8 @@ describe('openableTab', () => {
   it('opens the tab it was asked for when this place routes it, and Chart otherwise', () => {
     expect(openableTab('chart')).toBe('chart');
     // Returns, Data and Options are in the strip but not routed yet.
-    expect(openableTab('options')).toBe('chart');
+    expect(openableTab('options')).toBe('options');
+    expect(openableTab('returns')).toBe('chart');
     expect(openableTab('nonsense')).toBe('chart');
     expect(openableTab(undefined)).toBe('chart');
   });

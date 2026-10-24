@@ -3,6 +3,7 @@ import { RouterOutlet } from '@angular/router';
 
 import { DataLabWorkspaceStore, createDataLabWorkspaceStore, seedDefaultIndicators } from '../../components/data-lab/data-lab-workspace-store';
 import { AssetIdentityComponent } from '../../shared/asset-identity';
+import type { HelpDocumentRoute } from '../../shared/help/help-documents';
 import { HowThisWorksLinkComponent } from '../../shared/help/how-this-works-link.component';
 import { formatReceiptLabel } from '../../shared/pipes/receipt-label.pipe';
 import { WorkspaceHeaderComponent, type WorkspaceBreadcrumbItem } from '../../shared/workspace/workspace-header.component';
@@ -76,6 +77,13 @@ export class InstrumentWorkspaceComponent {
 
   protected readonly activeTab = computed(() => instrumentTabOf(this.url()));
 
+  /** The document that explains the tab open: the Options tab's chain is explained where its Past · Archive mode is. */
+  protected readonly help = computed<{ readonly route: HelpDocumentRoute; readonly anchor: string | undefined }>(() =>
+    this.activeTab() === 'options'
+      ? { route: '/docs/options-backtest-manual', anchor: 'past-chain' }
+      : { route: '/data-lab-docs', anchor: undefined },
+  );
+
   /** Every declared tab; one this place does not route yet stays in the strip, greyed, with its reason. */
   protected readonly tabs = computed<readonly WorkspaceTabItem[]>(() => {
     const symbol = this.symbol();
@@ -93,8 +101,12 @@ export class InstrumentWorkspaceComponent {
     admissionState(this.symbol(), this.admitted()),
   );
 
+  /** Whether the tab open reads the committed window. The Options tab has its own context (R09), so a window it cannot use stops nothing there. */
+  protected readonly usesWindow = computed(() => this.activeTab() !== 'options');
+
   /** The window the address names but cannot use, said before any tab is asked for data. */
   protected readonly contextState = computed<WorkspaceStateContent | null>(() => {
+    if (!this.usesWindow()) return null;
     const problems = this.contextProblems();
     if (problems.length > 0) {
       return {
