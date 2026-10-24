@@ -12,8 +12,10 @@ The price is the freshest source that answers, and the answer names which:
 1. ``live_quote``: the newest closed 1-minute bar of a live IBKR line this process already holds open. The read never
    opens a line, so asking for a list page costs no market-data subscription. The data plane may hold no Gateway
    session; then no line is open and the next source answers.
-2. ``delayed_snapshot``: the vendor's snapshot (15-minute delayed on this plan), read in one batch request for every
-   row that needs it, and only when it observed a trade after the last completed close.
+2. ``delayed_snapshot``: the vendor's snapshot (15-minute delayed on this plan), read in one paced batch request for
+   every row that needs it, within a deadline, and only when it observed a trade after the last completed close. Its
+   as-of time is the end of the minute the price belongs to; the snapshot's own update stamp is only the bound on it,
+   because a quote can move that stamp after the last trade.
 3. ``last_close``: the regular-hours close of the last completed session, read from the lake. The canonical calendar
    decides which session that is, so a half-day, a holiday and a weekend need no literal anywhere.
 

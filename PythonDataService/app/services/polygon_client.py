@@ -960,10 +960,11 @@ class PolygonClientService:
 
         The vendor answers only the tickers it holds a snapshot for, so a ticker may be
         missing from the result. One call however many tickers: a list page costs one
-        request, not one per row.
+        request, not one per row, and it is paced like every other vendor request.
         """
         try:
             logger.info(f"Fetching stock snapshots for {len(tickers)} tickers")
+            self._throttle.acquire(label=f"snapshots:{len(tickers)}")
             snapshots = self.client.get_snapshot_all("stocks", tickers=list(tickers))
             return [self._serialize_ticker_snapshot(snapshot) for snapshot in snapshots]
         except Exception as e:

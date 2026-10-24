@@ -8,6 +8,7 @@ why and raises nothing.
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
@@ -124,9 +125,49 @@ async def test_one_vendor_request_answers_every_symbol_and_reads_the_newest_minu
     readings = await PolygonSnapshotSource(polygon_service(vendor)).latest(["SPY", "QQQ", "XYZ"], NOW)
 
     assert vendor.calls == [("stocks", ["SPY", "QQQ", "XYZ"])]
-    assert readings["SPY"] == Observation(price=760.4, as_of_ms=NOW - 15 * 60_000)
+    # SPY's price is its minute bar's close, as of that minute's end (the bar began two minutes before the stamp).
+    assert readings["SPY"] == Observation(price=760.4, as_of_ms=NOW - 16 * 60_000)
+    # QQQ has no minute bar, so its day close carries the only time the vendor gives: the snapshot's update stamp.
     assert readings["QQQ"] == Observation(price=612.4, as_of_ms=NOW - 15 * 60_000)
     assert isinstance(readings["XYZ"], Miss)
+
+
+async def test_a_minute_close_is_as_of_the_end_of_its_own_minute_and_not_the_later_update_stamp() -> None:
+    minute_start = NOW - 20 * 60_000
+    # A quote moved the snapshot's stamp five minutes after the minute the last trade fell in.
+    updated = minute_start + 5 * 60_000
+    vendor = RecordingVendor(
+        [vendor_row("SPY", minute_close=760.4, day_close=760.1, updated_ns=updated * 1_000_000, minute_start_ms=minute_start)]
+    )
+
+    readings = await PolygonSnapshotSource(polygon_service(vendor)).latest(["SPY"], NOW)
+
+    assert readings["SPY"] == Observation(price=760.4, as_of_ms=minute_start + 60_000)
+
+
+async def test_a_minute_still_forming_is_never_stated_later_than_the_snapshots_own_stamp() -> None:
+    updated = NOW - 15 * 60_000
+    # The minute began 20 s before the vendor's stamp, so its end is still ahead of that stamp.
+    vendor = RecordingVendor(
+        [vendor_row("SPY", minute_close=760.4, day_close=760.1, updated_ns=updated * 1_000_000, minute_start_ms=updated - 20_000)]
+    )
+
+    readings = await PolygonSnapshotSource(polygon_service(vendor)).latest(["SPY"], NOW)
+
+    assert readings["SPY"] == Observation(price=760.4, as_of_ms=updated)
+
+
+@pytest.mark.parametrize("minute_start_ms", [1, 1_792_000_000], ids=["epoch start", "seconds, not ms"])
+async def test_a_minute_close_without_a_readable_time_is_a_miss_not_a_guessed_time(minute_start_ms: int) -> None:
+    vendor = RecordingVendor(
+        [vendor_row("SPY", minute_close=760.4, day_close=760.1, updated_ns=UPDATED_NS, minute_start_ms=minute_start_ms)]
+    )
+
+    readings = await PolygonSnapshotSource(polygon_service(vendor)).latest(["SPY"], NOW)
+
+    miss = readings["SPY"]
+    assert isinstance(miss, Miss)
+    assert "minute bar carries no readable time" in miss.reason
 
 
 async def test_a_snapshot_before_the_vendor_repopulates_it_is_a_miss_not_a_zero_price() -> None:
@@ -161,6 +202,61 @@ async def test_a_failed_vendor_request_is_one_logged_reason_for_every_symbol(cap
     assert {symbol: isinstance(reading, Miss) for symbol, reading in readings.items()} == {"SPY": True, "QQQ": True}
     assert all("ConnectionError" in reading.reason for reading in readings.values() if isinstance(reading, Miss))
     assert [record.action for record in caplog.records if hasattr(record, "action")] == ["instrument_facts_snapshot_failed"]
+
+
+class _OrderedThrottle:
+    """Records each request the client paces, against the vendor's own calls, in one order."""
+
+    def __init__(self, events: list[str]) -> None:
+        self._events = events
+
+    def acquire(self, label: str = "polygon", on_event: object | None = None) -> None:
+        self._events.append(f"acquire:{label}")
+
+
+async def test_the_one_snapshot_request_is_paced_before_it_is_sent_however_many_symbols_it_names() -> None:
+    events: list[str] = []
+    vendor = RecordingVendor([vendor_row("SPY", minute_close=760.4, day_close=760.1, updated_ns=UPDATED_NS)])
+    service = polygon_service(vendor)
+    service._throttle = _OrderedThrottle(events)  # type: ignore[assignment]
+    inner = vendor.get_snapshot_all
+
+    def _recording(market_type: str, tickers: list[str] | None = None) -> object:
+        events.append("request")
+        return inner(market_type, tickers)
+
+    vendor.get_snapshot_all = _recording  # type: ignore[method-assign]
+
+    await PolygonSnapshotSource(service).latest(["SPY", "QQQ", "IWM"], NOW)
+
+    assert events == ["acquire:snapshots:3", "request"]
+
+
+class _StuckVendor(RecordingVendor):
+    """A vendor that does not answer until the test lets it."""
+
+    def __init__(self) -> None:
+        super().__init__([])
+        self.release = threading.Event()
+
+    def get_snapshot_all(self, market_type: str, tickers: list[str] | None = None) -> list[object]:  # type: ignore[override]
+        self.release.wait(timeout=10)
+        return []
+
+
+async def test_a_vendor_that_does_not_answer_in_time_costs_the_rows_their_snapshot_not_the_page_its_answer(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    vendor = _StuckVendor()
+    try:
+        with caplog.at_level(logging.WARNING, logger="app.services.instrument_facts_sources"):
+            readings = await PolygonSnapshotSource(polygon_service(vendor), deadline_s=0.05).latest(["SPY", "QQQ"], NOW)
+    finally:
+        vendor.release.set()
+
+    assert {symbol: isinstance(reading, Miss) for symbol, reading in readings.items()} == {"SPY": True, "QQQ": True}
+    assert all("did not answer within 0.05 s" in reading.reason for reading in readings.values() if isinstance(reading, Miss))
+    assert [record.action for record in caplog.records if hasattr(record, "action")] == ["instrument_facts_snapshot_timeout"]
 
 
 async def test_no_symbols_make_no_vendor_request() -> None:

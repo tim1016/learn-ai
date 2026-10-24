@@ -49,11 +49,26 @@ def lake_source(root: Path) -> LakeCloseSource:
     return LakeCloseSource("polygon_split_adjusted", root_for=lambda _mode: root, admission=lambda path: path.read_bytes())
 
 
-def vendor_row(symbol: str, *, minute_close: float | None, day_close: float | None, updated_ns: int | None) -> dict[str, Any]:
-    """A row as the vendor's v2 snapshot answers it, parsed by the SDK's own model."""
+def vendor_row(
+    symbol: str,
+    *,
+    minute_close: float | None,
+    day_close: float | None,
+    updated_ns: int | None,
+    minute_start_ms: int | None = None,
+) -> dict[str, Any]:
+    """A row as the vendor's v2 snapshot answers it, parsed by the SDK's own model.
+
+    The minute bar starts two minutes before the snapshot's update stamp unless a test says when (``minute_start_ms``),
+    as a bar that closed a minute before the vendor last touched the snapshot.
+    """
     body: dict[str, Any] = {"ticker": symbol, "todaysChange": 0.0, "todaysChangePerc": 0.0}
     if minute_close is not None:
-        body["min"] = {"av": 1000, "o": 1.0, "h": 1.0, "l": 1.0, "c": minute_close, "v": 10, "vw": 1.0, "t": 1, "n": 1}
+        if minute_start_ms is None and updated_ns:
+            minute_start_ms = updated_ns // 1_000_000 - 120_000
+        body["min"] = {
+            "av": 1000, "o": 1.0, "h": 1.0, "l": 1.0, "c": minute_close, "v": 10, "vw": 1.0, "t": minute_start_ms or 1, "n": 1,
+        }
     if day_close is not None:
         body["day"] = {"o": 1.0, "h": 1.0, "l": 1.0, "c": day_close, "v": 10, "vw": 1.0}
     if updated_ns is not None:
