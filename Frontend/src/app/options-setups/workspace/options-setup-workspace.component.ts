@@ -1,10 +1,11 @@
-import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, inject, input, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, inject, input, signal, untracked } from '@angular/core';
 import { Router, RouterOutlet } from '@angular/router';
 
 import { AssetIdentityComponent } from '../../shared/asset-identity';
 import { HowThisWorksLinkComponent } from '../../shared/help/how-this-works-link.component';
 import { CurrentUrlService } from '../../shell/current-url.service';
 import type { BreadcrumbItem } from '../../shared/breadcrumb/breadcrumb-item';
+import type { WorkspaceAction } from '../../shared/workspace/workspace-action';
 import type { WorkspaceStateContent } from '../../shared/workspace/workspace-state';
 import { WorkspaceHeaderComponent } from '../../shared/workspace/workspace-header.component';
 import { WorkspaceStateBlockComponent } from '../../shared/workspace/workspace-state-block.component';
@@ -16,6 +17,7 @@ import {
   optionsSetupRoute,
   UNSAVED_DRAFT_SEGMENT,
 } from '../options-setups.address';
+import { OptionsSetupDeployComponent } from './deploy/options-setup-deploy.component';
 import { describeStanding } from './draft-standing';
 import { OptionsSetupExploreStore } from './explore/options-setup-explore-store';
 import { OptionsSetupWorkspaceStore } from './options-setup-store';
@@ -30,7 +32,7 @@ import { OptionsSetupWorkspaceStore } from './options-setup-store';
  */
 @Component({
   selector: 'app-options-setup-workspace',
-  imports: [RouterOutlet, WorkspaceHeaderComponent, WorkspaceTabListComponent, WorkspaceStateBlockComponent, HowThisWorksLinkComponent, AssetIdentityComponent],
+  imports: [RouterOutlet, WorkspaceHeaderComponent, WorkspaceTabListComponent, WorkspaceStateBlockComponent, HowThisWorksLinkComponent, AssetIdentityComponent, OptionsSetupDeployComponent],
   providers: [OptionsSetupWorkspaceStore, OptionsSetupExploreStore],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './options-setup-workspace.component.html',
@@ -62,6 +64,22 @@ export class OptionsSetupWorkspaceComponent {
     const trail: BreadcrumbItem[] = [{ label: 'Options setups', route: OPTIONS_SETUPS_ROOT }];
     return [...trail, { label: this.title() }];
   });
+
+  /** The setup whose "Deploy an options bot" choice is open, so another setup's address never shows it. */
+  private readonly deployOpenFor = signal<string | null>(null);
+  protected readonly deployOpen = computed(() => {
+    const name = this.savedName();
+    return name !== null && this.deployOpenFor() === name;
+  });
+
+  /**
+   * "Deploy an options bot", offered for a saved setup that opens (PRD #3490 R23): the choice of which approved
+   * version to take to the account list. It is secondary beside each tab's own task, and a draft with no saved
+   * name has no approved version to offer.
+   */
+  protected readonly actions = computed<readonly WorkspaceAction[]>(() =>
+    this.entry().kind === 'open' ? [{ id: 'deploy', label: 'Deploy an options bot' }] : [],
+  );
 
   protected readonly tabs = computed<readonly WorkspaceTabItem[]>(() => {
     const name = this.savedName();
@@ -120,5 +138,15 @@ export class OptionsSetupWorkspaceComponent {
 
   protected act(id: string): void {
     if (id === 'retry') this.store.retryLibrary();
+    else if (id === 'deploy') this.toggleDeploy();
+  }
+
+  protected closeDeploy(): void {
+    this.deployOpenFor.set(null);
+  }
+
+  private toggleDeploy(): void {
+    const name = this.savedName();
+    this.deployOpenFor.update((open) => (open === name ? null : name));
   }
 }

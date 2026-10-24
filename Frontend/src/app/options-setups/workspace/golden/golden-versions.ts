@@ -47,6 +47,21 @@ export function versionsOfSetup(index: OptionsSetupIndex, hash: string | null | 
   return { exact, throughStudy, studies };
 }
 
+/**
+ * Each version read by its own id, so none is lost to the newest-first limit of a list. A version that cannot be
+ * read is `null`: it says so, and nothing stands in its place.
+ */
+export async function readVersionDetails(
+  reader: { get(id: string): Promise<GoldenOptionSetup> },
+  ids: readonly string[],
+): Promise<Map<string, GoldenOptionSetup | null>> {
+  const settled = await Promise.allSettled(ids.map((id) => reader.get(id)));
+  return new Map(ids.map((id, at): [string, GoldenOptionSetup | null] => {
+    const outcome = settled[at];
+    return [id, outcome.status === 'fulfilled' ? outcome.value : null];
+  }));
+}
+
 /** The completed runs that froze exactly the saved content, newest first: the ones a review can start from. */
 export function reviewableRuns(index: OptionsSetupIndex, hash: string | null | undefined): readonly IndexedRun[] {
   if (hash === null || hash === undefined) return [];

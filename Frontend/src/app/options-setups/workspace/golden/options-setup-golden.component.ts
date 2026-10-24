@@ -16,7 +16,7 @@ import { optionsEvidenceRoute, optionsSetupRoute } from '../../options-setups.ad
 import { describeStanding } from '../draft-standing';
 import { OptionsSetupWorkspaceStore } from '../options-setup-store';
 import { OptionsGoldenVersionComponent } from './golden-version.component';
-import { reviewableRuns, reviewedRunId, versionsOfSetup } from './golden-versions';
+import { readVersionDetails, reviewableRuns, reviewedRunId, versionsOfSetup } from './golden-versions';
 
 /** How many of the setup's runs are offered for review before the rest are left to the Options setups list. */
 const RUNS_OFFERED = 8;
@@ -89,13 +89,7 @@ export class OptionsSetupGoldenComponent {
   /** Each version read by its own id, so none is lost to the newest-first limit of a list. A version that cannot be read says so. */
   private readonly detailsRead = resource({
     params: () => (this.versionIds().length === 0 ? undefined : { ids: this.versionIds() }),
-    loader: async ({ params }) => {
-      const settled = await Promise.allSettled(params.ids.map((id) => this.goldenService.get(id)));
-      return new Map<string, GoldenOptionSetup | null>(params.ids.map((id, at) => {
-        const outcome = settled[at];
-        return [id, outcome.status === 'fulfilled' ? outcome.value : null];
-      }));
-    },
+    loader: ({ params }) => readVersionDetails(this.goldenService, params.ids),
   });
   /** The detail of one version: `undefined` while it is read, `null` if it could not be. */
   protected readonly detailOf = (id: string): GoldenOptionSetup | null | undefined =>

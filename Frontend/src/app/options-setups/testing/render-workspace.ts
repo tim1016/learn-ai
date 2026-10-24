@@ -1,6 +1,6 @@
-import { ChangeDetectionStrategy, Component } from '@angular/core';
+import { ChangeDetectionStrategy, Component, type EnvironmentProviders, type Provider } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import { provideRouter, Router, RouterOutlet, withComponentInputBinding } from '@angular/router';
+import { provideRouter, Router, RouterOutlet, withComponentInputBinding, type Routes } from '@angular/router';
 import { render, screen } from '@testing-library/angular';
 import type { Mock } from 'vitest';
 
@@ -36,9 +36,9 @@ export function setupUrl(name: string | null, tab: OptionsSetupTab = 'define'): 
     .join('/');
 }
 
-/** A router with only the Options setups place in it, as the app mounts it. */
-export function provideOptionsSetupsPlace() {
-  return [provideRouter([{ path: 'options-setups', children: OPTIONS_SETUPS_ROUTES }], withComponentInputBinding())];
+/** A router with only the Options setups place in it, as the app mounts it, and the other places a spec walks to. */
+export function provideOptionsSetupsPlace(otherPlaces: Routes = []) {
+  return [provideRouter([{ path: 'options-setups', children: OPTIONS_SETUPS_ROUTES }, ...otherPlaces], withComponentInputBinding())];
 }
 
 /** The app's one outlet, so the place is drawn by the real router, in a fixture that testing-library's events refresh. */
@@ -72,6 +72,10 @@ interface RenderOptions {
   polling?: boolean;
   /** What the address says after the tab (`?run=7`). */
   query?: string;
+  /** Other places in the app a spec walks to from here (the account list, an account's Deploy), declared as the app does. */
+  places?: Routes;
+  /** What those places read, replaced the way the setup's own services are. */
+  providers?: (Provider | EnvironmentProviders)[];
 }
 
 /** A read a spec answers with a value, or with a function when it needs to answer late or to fail. */
@@ -82,7 +86,7 @@ function reading<T extends object>(answer: T | (() => Promise<T>)): () => Promis
 async function renderPlace(service: FakeService, url: string, download: FakeDownload | undefined, options: RenderOptions) {
   const view = await render(RouterHost, {
     providers: [
-      ...provideOptionsSetupsPlace(),
+      ...provideOptionsSetupsPlace(options.places),
       { provide: SETUP_DESCRIBE_DEBOUNCE_MS, useValue: 0 },
       { provide: PositionPreviewService, useValue: quietPositionPreview },
       ...fakePickerWorld().providers,
@@ -97,6 +101,7 @@ async function renderPlace(service: FakeService, url: string, download: FakeDown
       ...(options.index === undefined ? [] : [{ provide: OptionsSetupIndexService, useValue: { read: reading(options.index) } }]),
       ...(options.bots === undefined ? [] : [{ provide: OptionsSetupBotsService, useValue: { read: reading(options.bots) } }]),
       ...(download === undefined ? [] : [{ provide: FileDownloadService, useValue: download }]),
+      ...(options.providers ?? []),
     ],
   });
   await TestBed.inject(Router).navigateByUrl(url);
