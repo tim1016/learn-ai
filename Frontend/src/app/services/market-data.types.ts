@@ -78,6 +78,8 @@ export interface SnapshotContractResult {
   strikePrice: number | null;
   /** The expiry anchor instant: 16:00 New York time on the expiry date. */
   expirationMs: number | null;
+  /** Whether the data plane finds it a standard contract (American, 100 shares, a symbol that names it); null when the snapshot left out a fact its rule needs. */
+  standard: boolean | null;
   breakEvenPrice: number | null;
   impliedVolatility: number | null;
   openInterest: number | null;

@@ -1,0 +1,49 @@
+<app-workspace-header
+  [title]="symbol()"
+  [breadcrumb]="breadcrumb()"
+  [secondaryActions]="headerActions()"
+  (actionTriggered)="onHeaderAction($event)"
+>
+  <app-how-this-works workspaceHelp [route]="help().route" [anchor]="help().anchor" />
+  <div workspaceFacts class="instrument-facts">
+    @if (admittedRow(); as row) {
+      <app-instrument-facts-header
+        [symbol]="symbol()"
+        [name]="row.name"
+        [firstHeld]="row.firstHeld"
+        [lastHeld]="row.lastHeld"
+        [delisted]="row.delisted"
+      />
+    }
+  </div>
+</app-workspace-header>
+
+@if (stateContent(); as state) {
+  <app-workspace-state-block [state]="state" (actionTriggered)="onAction($event)" />
+} @else {
+  @if (healthInstrument(); as symbol) {
+    <app-health-notice [needs]="healthNeeds" [instrument]="symbol" />
+  }
+  @if (ignoredNotes().length > 0) {
+    <app-migration-notice heading="Migrated link." [notes]="ignoredNotes()" (dismissed)="dismissIgnored()" />
+  }
+  @if (setups.notes().length > 0) {
+    <app-migration-notice heading="Saved setup." [notes]="setups.notes()" (dismissed)="setups.clearNotes()" />
+  }
+  @if (setupsOpen()) {
+    <app-saved-setups (closed)="setupsOpen.set(false)" />
+  }
+  <app-instrument-context-bar [windowControls]="usesWindow()" />
+  <app-workspace-tab-list label="Instrument sections" [tabs]="tabs()" [activeId]="activeTab()" />
+  <div class="instrument-body">
+    @if (setups.pending()) {
+      <app-workspace-state-block [state]="openingState" />
+    } @else if (contextState(); as state) {
+      <app-workspace-state-block [state]="state" />
+    } @else {
+      <router-outlet />
+    }
+  </div>
+}
+
+<app-run-dock />

@@ -163,7 +163,7 @@ A strategy can be deployed only after an engineer (in practice, you and an AI ag
 - **Strategy Lab** runs a backtest as a long job: Python gives it an ID, tracks its progress in Redis and runs it, and saves every run to its research tables. For strategies with a LEAN twin, it launches the matching LEAN run automatically and records a **parity verdict** comparing the two.
 - **Grid Search** tries many parameter settings over one time window and scores each one. Its results are "in-sample" by construction: they tell you what fit the past best, not what will work.
 - **Walk-Forward** is the honest version: it splits history into folds, picks the best setting on each training slice, tests it on the next unseen slice, and freezes a verdict computed by fixed code.
-- **Research Lab** holds exploratory studies. Its "graduation ladder" grades an *idea*; it has nothing to do with graduating a *Live account*, and none of it feeds a deploy gate.
+- **Research** holds exploratory studies (Feature, Cross-sectional, Signal, Indicator reliability, Realized vs implied vol) and the Rule sandbox. Its "graduation ladder" grades an *idea*; it has nothing to do with graduating a *Live account*, and none of it feeds a deploy gate. The Edge demonstrations under it run on sample data and measure nothing.
 
 ### Stage 3: prove
 

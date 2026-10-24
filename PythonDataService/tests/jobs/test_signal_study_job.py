@@ -26,6 +26,9 @@ from app.jobs.progress import ProgressEmitter
 from app.jobs.runner import run_in_thread
 from app.lean_sidecar.trading_calendar import expected_sessions
 from app.research.lake_study import SESSION_POLICY_FOR_REQUEST
+from app.research.study_records.models import StudyRecordConfig, StudyRecordResult
+from app.research.study_records.recorder import keeps_job_record
+from app.research.study_records.store import StudyRecordStore
 from app.routers.jobs import SignalEngineJobRequest, start_signal_engine_job
 from app.services import signal_study_service
 from app.services.signal_study_service import CACHE_NAMESPACE, SignalStudyParams, run_signal_study
@@ -53,6 +56,22 @@ class _Harness:
             return run_signal_study(params, job_id=job_id, force=force, emit=emit, cancel=cancel, now_ms=now_ms)
 
         run_in_thread(job_id, work, thread_name=f"test-{job_id}").join(timeout=120)
+        return self.fake.hashes[f"job:{job_id}:state"]
+
+    def run_recorded(self, params: SignalStudyParams, *, job_id: str, root: Path, force: bool = False) -> dict[str, str]:
+        """One job as the route starts it: the study's work wrapped to keep a History record under ``root``."""
+        request = SignalEngineJobRequest(
+            job_id=job_id, symbol=params.symbol, from_date=params.from_date.isoformat(), to_date=params.to_date.isoformat(),
+            timespan=params.timespan, multiplier=params.multiplier, session="extended", feature_name=params.feature_name,
+            flip_sign=params.flip_sign, regime_gate_enabled=params.regime_gate_enabled, force=force,
+        )
+
+        def work(emit: ProgressEmitter, cancel: Any) -> dict | None:
+            return run_signal_study(params, job_id=job_id, force=force, emit=emit, cancel=cancel, now_ms=NOW_MS)
+
+        run_in_thread(job_id, keeps_job_record("signal-study", request, work, root=root), thread_name=f"test-{job_id}").join(
+            timeout=120
+        )
         return self.fake.hashes[f"job:{job_id}:state"]
 
     def result(self, job_id: str) -> dict:
@@ -305,6 +324,67 @@ def test_a_bar_size_the_sessions_of_the_policy_cannot_fill_is_refused_before_the
     _assert_refused_before_the_lake_is_touched(harness, state, "thin-sessions")
     assert f"under {session_policy}-hours sessions" in state["error_message"]
     assert "the longest session in this window holds at most" in state["error_message"]
+
+
+# ---------------------------------------------------------------------------
+# The History record: a lake run is kept with the data source it read, a refused run with its refusal
+# ---------------------------------------------------------------------------
+
+
+def saved_records(root: Path) -> list[tuple[StudyRecordConfig, StudyRecordResult]]:
+    store = StudyRecordStore("signal-study", root=root)
+    return [store.load(record_id) for record_id, _ in store.config_paths()]
+
+
+def test_a_completed_lake_run_is_recorded_with_the_data_source_block_and_the_options_it_was_given(harness, tmp_path):
+    state = harness.run_recorded(params(flip_sign=False, regime_gate_enabled=False), job_id="kept", root=tmp_path / "records")
+
+    result = harness.result("kept")
+    [(config, stored)] = saved_records(tmp_path / "records")
+    assert status_of(state) == "completed" and config.status == "completed"
+    assert config.data_source == result["data_source"], "the lake block is the record's provenance, field for field"
+    assert config.data_source["kind"] == "lake" and len(config.data_source["snapshot_digest"]) == 64
+    assert config.headline is not None and config.headline.endswith(f"{result['bars_used']:,} bars")
+    assert stored.result["feature_name"] == result["feature_name"] == "momentum_5m", "what is stored is what the job delivered"
+    assert stored.result["bars_used"] == result["bars_used"]
+    assert config.inputs["flip_sign"] is False and config.inputs["regime_gate_enabled"] is False
+    assert config.inputs["session"] == "extended" and config.inputs["multiplier"] == 5
+    assert config.job_id == "kept"
+
+
+def test_a_window_the_lake_refused_is_recorded_as_a_failed_run_with_its_refusal_and_counts(harness, tmp_path):
+    del harness.tape[WINDOW[4]]
+
+    state = harness.run_recorded(params(), job_id="refused-kept", root=tmp_path / "records")
+
+    parked = harness.result("refused-kept")
+    [(config, stored)] = saved_records(tmp_path / "records")
+    assert status_of(state) == "failed" and state["error_code"] == "data_unavailable_from_provider"
+    assert config.status == "failed" and config.status_detail == parked["error"]
+    assert config.headline is None
+    assert stored.result == parked, "the record holds the refusal the page reads, as the job parked it"
+    assert stored.result["refusal"]["code"] == "data_unavailable_from_provider"
+    assert config.data_source == parked["data_source"]
+    assert config.data_source["coverage"]["window"]["failed"] == 1 and config.data_source["snapshot_digest"] is None
+    assert harness.computed == 0
+
+
+def test_a_window_too_short_for_the_engine_is_recorded_as_a_failed_run_with_the_engines_reason(harness, tmp_path):
+    state = harness.run_recorded(params(to_date=WINDOW[1]), job_id="thin-kept", root=tmp_path / "records")
+
+    [(config, stored)] = saved_records(tmp_path / "records")
+    assert status_of(state) == "failed" and state["error_code"] == "ValueError"
+    assert config.status == "failed" and "Not enough bars" in (config.status_detail or "")
+    assert stored.result is None, "the engine raised; there is no refusal payload to keep"
+
+
+def test_a_repeat_served_from_the_cache_is_not_recorded_a_second_time(harness, tmp_path):
+    harness.run_recorded(params(), job_id="first-kept", root=tmp_path / "records")
+
+    state = harness.run_recorded(params(), job_id="repeat-kept", root=tmp_path / "records")
+
+    assert state["cached"] == "1"
+    assert [config.job_id for config, _ in saved_records(tmp_path / "records")] == ["first-kept"]
 
 
 # ---------------------------------------------------------------------------

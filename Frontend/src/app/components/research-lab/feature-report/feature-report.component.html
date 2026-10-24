@@ -1,58 +1,11 @@
 <div class="mt-4">
 
-  <!-- 1. Research Grade Card -->
-  <div class="grade-card">
-    @for (dim of researchGrade; track dim.label) {
-      <div class="grade-dimension" [pTooltip]="dim.tooltip" tooltipPosition="top">
-        <div class="grade-letter" [style.color]="gradeColor(dim.grade)">{{ dim.grade }}</div>
-        <div class="grade-label">{{ dim.label }}</div>
-      </div>
-    }
-  </div>
-
-  <!-- 2. Exploratory Override Banner -->
-  @if (isExploratoryOverride) {
-    <div class="exploratory-banner">
-      <i class="pi pi-exclamation-triangle"></i>
-      <div>
-        <div class="exploratory-title">Exploratory Result</div>
-        <div class="exploratory-text">
-          Sample: {{ icDaysCount }} IC days ({{ result().startDate }} to {{ result().endDate }}).
-          Multi-year validation required before deployment.
-        </div>
-      </div>
-    </div>
-  }
-
-  <!-- 3. Sample Size Credibility Badge -->
-  <div class="sample-badge" [class]="'severity-' + effectiveNSeverity">
-    <div class="badge-stats">
-      <span class="badge-stat">{{ result().effectiveN | number: '1.0-0' }}</span>
-      <span class="badge-label">Effective N</span>
-    </div>
-    <span class="badge-separator">|</span>
-    <div class="badge-stats">
-      <span class="badge-stat">{{ icDaysCount }}</span>
-      <span class="badge-label">IC Days</span>
-    </div>
-    <span class="badge-separator">|</span>
-    <div class="badge-stats">
-      <span class="badge-stat" [class]="'severity-text-' + coverageSeverity">{{ coverageRatio | percent: '1.0-0' }}</span>
-      <span class="badge-label">Coverage</span>
-    </div>
-    <span class="badge-separator">|</span>
-    <div class="badge-stats">
-      <span class="badge-stat">250+</span>
-      <span class="badge-label">Recommended</span>
-    </div>
-  </div>
-
-  <!-- 4. Multi-Screen Verdict Block (Stage 0/1/2/3 + four screens) -->
+  <!-- 1. The server's Stage verdict (Stage 0/1/2/3 + the screens) leads; everything computed in this page follows it. -->
   @if (verdict; as v) {
-    <div class="verdict-block" [class]="'stage-' + (stageInfo?.stage ?? 0)">
+    <div class="verdict-block" [class]="'stage-' + (stageInfo?.stage ?? 'none')">
       <div class="verdict-block-header">
         <p-tag [severity]="stageBadgeSeverity"
-               [value]="'Stage ' + (stageInfo?.stage ?? 0) + ' — ' + (stageInfo?.label ?? 'Rejected')" />
+               [value]="stageInfo ? 'Stage ' + stageInfo.stage + ' — ' + stageInfo.label : 'Stage not recorded'" />
         <h3 class="verdict-block-title">
           {{ result().featureName }} on <app-asset-identity [symbol]="result().ticker" size="sm" />
         </h3>
@@ -172,7 +125,71 @@
         </div>
       }
     </div>
+  } @else {
+    <div class="verdict-block stage-none" data-testid="stage-verdict-missing">
+      <div class="verdict-block-header">
+        <p-tag severity="secondary" value="Stage not recorded" />
+        <h3 class="verdict-block-title">
+          {{ result().featureName }} on <app-asset-identity [symbol]="result().ticker" size="sm" />
+        </h3>
+      </div>
+      <p class="verdict-stage-desc">Not recorded: this result carries no Stage verdict from the server.</p>
+    </div>
   }
+
+  <!-- 2. Research grades: computed in this page, below the server's verdict -->
+  <div class="grade-section" data-testid="page-computed-grades">
+    <p class="grade-note">
+      <strong>Computed in this page, not by the server.</strong>
+      These letter grades come from thresholds set in the page (for example |IC| of 0.10, 0.05 and 0.03, and |t| of
+      2.576, 1.96 and 1.645). The Stage verdict above is the server's assessment.
+    </p>
+    <div class="grade-card">
+      @for (dim of researchGrade; track dim.label) {
+        <div class="grade-dimension" [pTooltip]="dim.tooltip" tooltipPosition="top">
+          <div class="grade-letter" [style.color]="gradeColor(dim.grade)">{{ dim.grade }}</div>
+          <div class="grade-label">{{ dim.label }}</div>
+        </div>
+      }
+    </div>
+  </div>
+
+  <!-- 3. Exploratory Override Banner -->
+  @if (isExploratoryOverride) {
+    <div class="exploratory-banner">
+      <i class="pi pi-exclamation-triangle"></i>
+      <div>
+        <div class="exploratory-title">Exploratory Result</div>
+        <div class="exploratory-text">
+          Sample: {{ icDaysCount }} IC days ({{ result().startDate }} to {{ result().endDate }}).
+          Multi-year validation required before deployment.
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- 4. Sample Size Credibility Badge -->
+  <div class="sample-badge" [class]="'severity-' + effectiveNSeverity">
+    <div class="badge-stats">
+      <span class="badge-stat">{{ result().effectiveN | number: '1.0-0' }}</span>
+      <span class="badge-label">Effective N</span>
+    </div>
+    <span class="badge-separator">|</span>
+    <div class="badge-stats">
+      <span class="badge-stat">{{ icDaysCount }}</span>
+      <span class="badge-label">IC Days</span>
+    </div>
+    <span class="badge-separator">|</span>
+    <div class="badge-stats">
+      <span class="badge-stat" [class]="'severity-text-' + coverageSeverity">{{ coverageRatio | percent: '1.0-0' }}</span>
+      <span class="badge-label">Coverage</span>
+    </div>
+    <span class="badge-separator">|</span>
+    <div class="badge-stats">
+      <span class="badge-stat">250+</span>
+      <span class="badge-label">Recommended</span>
+    </div>
+  </div>
 
   <!-- 4b. Sample Coverage Tier + Legacy Verdict Banner -->
   <div class="verdict-banner" [class]="validationSeverity">

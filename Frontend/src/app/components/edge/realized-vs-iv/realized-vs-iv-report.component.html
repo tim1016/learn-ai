@@ -1,0 +1,197 @@
+@let d = data();
+<span class="source-tag real" data-testid="rviv-source-tag">real data · {{ d.symbol }}</span>
+<!-- Polygon Starter spread-synthesis caveat -->
+<div class="coverage-banner banner-data-source">
+  <i class="pi pi-info-circle"></i>
+  <div class="coverage-body">
+    <div class="coverage-title">Historical IV uses synthesized bid/ask</div>
+    <div class="coverage-meta">
+      Polygon Starter daily aggregates carry close prices only — no
+      historical bid/ask. Where IV is back-solved from past chains we
+      approximate mid as daily close and synthesize spread as
+      <code>max($0.05, 0.5%·close)</code>; contracts with close &lt; $0.05
+      are treated as zero-bid (matches the CBOE truncation rule).
+      <strong>Live</strong> chain data uses real bid/ask from the snapshot
+      endpoint, so realtime IV30 is unaffected. See
+      <code>tests/fixtures/golden/options-pricing/IV-005/v1/spy-2024-12-20-chain.meta.json</code>
+      for the policy.
+    </div>
+  </div>
+</div>
+
+<!-- Coverage banner -->
+@if (ivMissing()) {
+  <div class="coverage-banner banner-iv-missing">
+    <i class="pi pi-info-circle"></i>
+    <div class="coverage-body">
+      <div class="coverage-title">No IV30 at these bars — RV-only view</div>
+      <div class="coverage-meta">
+        No recorded IV30 falls on these bars' timestamps, so the IV30 line,
+        RV-vs-IV bands, VRP histogram and long/short-vol signal triangles
+        cannot be drawn. Realized vol ({{ rvLastValue() }} latest) renders
+        against the right axis labelled <code>RV YZ</code>.
+      </div>
+    </div>
+  </div>
+} @else {
+  <div class="coverage-banner">
+    <i class="pi pi-exclamation-triangle"></i>
+    <div class="coverage-body">
+      <div class="coverage-title">Forward RV unavailable for last {{ d.coverage.forwardBlindTail }} bars</div>
+      <div class="coverage-meta">
+        VRP signals after <code>{{ blindStartMs() | timestampDisplay:'date-et' }}</code> are blind to the future — rendered as a
+        hatched band on the chart. IV30 series begins
+        <code>{{ d.coverage.ivFirstTsMs | timestampDisplay:'date-et' }}</code>.
+      </div>
+    </div>
+  </div>
+}
+
+<!-- IV-source + confidence banner. Renders only when the response carried
+     provenance fields (iv_source). -->
+@let ivc = ivConfidence();
+@if (ivc) {
+  <div class="coverage-banner banner-iv-confidence"
+       [class.banner-iv-confidence-warn]="ivConfidenceTone() === 'warn'"
+       data-testid="iv-confidence-banner">
+    <i class="pi" [class.pi-shield]="ivConfidenceTone() === 'info'"
+                 [class.pi-exclamation-triangle]="ivConfidenceTone() === 'warn'"></i>
+    <div class="coverage-body">
+      <div class="coverage-title">
+        IV source: <code data-testid="iv-source">{{ ivSourceLabels[ivc.ivSource] }}</code>
+        @if (ivc.latestConfidence !== null) {
+          <span class="iv-conf-pill" data-testid="iv-confidence-value">
+            confidence {{ (ivc.latestConfidence * 100).toFixed(0) }}%
+          </span>
+        }
+        @if (ivc.floor !== null) {
+          <span class="iv-conf-floor">floor {{ (ivc.floor * 100).toFixed(0) }}%</span>
+        }
+        @if (ivc.healthImputed === true) {
+          <span class="iv-conf-imputed"
+                data-testid="iv-confidence-imputed"
+                title="Recorder row lacked an explicit health_score; the
+                       health factor is dropped and confidence collapses
+                       to (1 − vcs). The bar is flagged so you can see
+                       it is not backed by evidence-derived stability."
+                aria-label="health score imputed (drop-health-factor branch)">
+            imputed
+          </span>
+        }
+      </div>
+      <div class="coverage-meta">
+        @if (ivc.gatedNow === true) {
+          <strong data-testid="iv-gated-now">Latest bar gated</strong> — confidence below floor;
+          VRP signals forced to 0.
+        } @else if (ivc.gatedNow === false) {
+          Latest bar above floor — VRP signal active.
+        } @else {
+          Confidence not computed for this run (no
+          <code>variance_contribution_synthetic</code> in the IV series).
+        }
+        @if (ivc.nGated > 0) {
+          · <span data-testid="iv-n-gated">{{ ivc.nGated }} bar{{ ivc.nGated === 1 ? '' : 's' }}</span>
+          gated overall.
+        }
+      </div>
+    </div>
+  </div>
+}
+
+<!-- Main chart -->
+<div class="chart-card">
+  <div class="chart-toggles">
+    <span class="eyebrow">SIGNALS</span>
+    <button type="button" class="toggle"
+            [class.on]="showRealtime()"
+            (click)="showRealtime.set(!showRealtime())">
+      <span class="toggle-swatch realtime" [class.on]="showRealtime()"></span>
+      Realtime
+    </button>
+
+    <span class="divider"></span>
+    <span class="eyebrow">LAYERS</span>
+    <button type="button" class="toggle" [class.on]="rvBands()" (click)="rvBands.set(!rvBands())">
+      <span class="toggle-swatch generic" [class.on]="rvBands()"></span>
+      YZ RV 5 / 10 / 30-bar
+    </button>
+
+    <span class="legend-spacer"></span>
+    <span class="legend-row">
+      <span class="lg-line iv"></span><span>IV30</span>
+      <svg width="9" height="9"><polygon points="4.5,1 8,8 1,8" [attr.fill]="TOK.bull" /></svg>
+      <span>long-vol signal</span>
+      <svg width="9" height="9"><polygon points="4.5,8 8,1 1,1" [attr.fill]="TOK.bear" /></svg>
+      <span>short-vol signal</span>
+    </span>
+  </div>
+  <p class="unavailable-note" data-testid="rviv-unavailable-note">
+    Edge Score strip and Oracle (ex-post) signals: unavailable. This study does not compute them.
+  </p>
+  <app-edge-price-iv-chart
+    [width]="1340" [height]="420"
+    [data]="d"
+    [showRealtime]="showRealtime()"
+    [rvBands]="rvBands()"
+    [barSize]="barSize()"
+    [hoverIdx]="hoverIdx()"
+    (hover)="hoverIdx.set($event)" />
+</div>
+
+<!-- Histogram + readout -->
+<div class="bottom-grid">
+  <div class="bottom-card">
+    <div class="bottom-head">
+      <span class="eyebrow">VRP_FORWARD HISTOGRAM</span>
+      <span class="bottom-meta">
+        n={{ readoutHistogramN() }} ·
+        5–95% band shaded · current marker → today's vrp_forward
+      </span>
+    </div>
+    <app-edge-vrp-histogram
+      [width]="820" [height]="170"
+      [data]="d"
+      [currentIdx]="currentIdx()" />
+  </div>
+
+  <div class="bottom-card">
+    <div class="eyebrow">SIGNAL READOUT</div>
+    @let r = readout();
+    <div class="readout-action">
+      <span class="readout-action-text" [style.color]="r.color">{{ r.action }}</span>
+      <span class="readout-meta">
+        @ vrp_z={{ r.z !== r.z ? '—' : r.z.toFixed(2) }} · trigger ±1.0σ
+      </span>
+    </div>
+    <div class="readout-grid" data-testid="rviv-readout">
+      <span class="r-key" title="IV30 in solver-native ACT/365 basis. Display only.">iv30</span>
+      <span class="r-val">{{ fmtPct(r.iv30) }}</span>
+      <span class="r-key" title="IV30 converted to TRD/252 basis (NYSE calendar). Used for VRP.">iv30_trd252</span>
+      <span class="r-val">{{ fmtPct(r.iv30Trd252) }}</span>
+      <span class="r-key" title="Trailing 30-bar Yang-Zhang (the yz_30 series) on daily bars. NOT VRP-driving.">rv_yz_30_daily</span>
+      <span class="r-val">{{ fmtPct(r.rvYzDaily) }}</span>
+      <span class="r-key" title="HF two-component estimator over 21 trading days. Drives VRP. Session-aware.">rv_hf_21d</span>
+      @if (r.rvHf21d !== r.rvHf21d) {
+        <span class="r-val r-blind">blind · forward window</span>
+      } @else {
+        <span class="r-val">{{ fmtPct(r.rvHf21d) }}</span>
+      }
+      <span class="r-key">vrp_forward</span>
+      <span class="r-val">{{ fmtPct(r.vrpForward, 2) }}</span>
+      <span class="r-key">edge_score</span>
+      <span class="r-val r-unavailable" data-testid="rviv-edge-score-unavailable">unavailable</span>
+      @let live = liveIv30();
+      @if (live) {
+        <span class="r-key"
+              title="Live IV30 from /api/edge/iv30/{vix-style,parametric}, captured alongside the realized series. Marker is drawn on the chart at the rightmost x.">
+          live_iv30
+        </span>
+        <span class="r-val" data-testid="live-iv30-readout">
+          {{ fmtPct(live.iv30Act365) }}
+          <span class="r-meta" data-testid="live-iv30-method">· {{ live.method === 'vix_style' ? 'vix-style' : 'parametric' }}</span>
+          <span class="r-meta" data-testid="live-iv30-synth">· synth {{ (live.varianceContributionSynthetic * 100).toFixed(0) }}%</span>
+        </span>
+      }
+    </div>
+  </div>
+</div>

@@ -1,6 +1,6 @@
 <div class="wf-detail">
   <header class="wfd-header">
-    <a routerLink="/research-lab" class="wfd-back">← Research Lab</a>
+    <a [routerLink]="['/research/history']" [queryParams]="{ type: 'spec-run' }" class="wfd-back">← History</a>
     @if (walkForward(); as data) {
       <div class="wfd-title">
         <h1>Walk-forward</h1>
@@ -23,7 +23,7 @@
       @if (data.config.parent_run_id; as parentId) {
         <div class="wfd-parent">
           <strong>Parent run:</strong>
-          <a [routerLink]="['/research-lab/strategy-runs', parentId]">
+          <a [routerLink]="['/research/history/spec-run', parentId]">
             <code>{{ shortHash(parentId, 16) }}…</code>
           </a>
         </div>
@@ -201,7 +201,7 @@
             </td>
             <td class="wfd-hash-cell">
               @if (fold.status === 'completed' && fold.test_run_id !== null) {
-                <a [routerLink]="['/research-lab/strategy-runs', fold.test_run_id]">
+                <a [routerLink]="['/research/history/spec-run', fold.test_run_id]">
                   {{ shortHash(fold.test_run_id, 12) }}…
                 </a>
               } @else { — }

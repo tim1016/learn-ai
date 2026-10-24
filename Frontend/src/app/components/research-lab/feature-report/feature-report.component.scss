@@ -5,6 +5,14 @@
 }
 
 // ─── Research Grade Card ──────────────────────────────────
+// Computed in the page, not by the server: the note says so, above the card.
+.grade-note {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: $text-muted;
+}
+
 .grade-card {
   display: flex;
   gap: 1rem;
@@ -446,6 +454,7 @@
   &.stage-1 { border-left: 4px solid $warn; }
   &.stage-2 { border-left: 4px solid $accent; }
   &.stage-3 { border-left: 4px solid $bull; }
+  &.stage-none { border-left: 4px solid $border-light; }
 
   .verdict-block-header {
     display: flex;

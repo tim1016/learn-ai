@@ -1,0 +1,60 @@
+<section class="chart-tab__news" aria-label="Headlines">
+  <h2 class="chart-tab__news-head">
+    <button type="button" class="chart-tab__news-toggle" (click)="toggleNews()" [attr.aria-expanded]="newsExpanded()">
+      Headlines for {{ ticker() || '—' }}
+    </button>
+    @if (newsExpanded()) {
+      <button type="button" (click)="refreshNews()" [disabled]="!hasCommittedScope()">Refresh</button>
+    }
+  </h2>
+  @if (newsExpanded()) {
+    @switch (newsState()) {
+      @case ('loading') {
+        <p class="chart-tab__muted" role="status">Loading headlines…</p>
+      }
+      @case ('error') {
+        <p class="chart-tab__news-error" role="alert">Could not load headlines: {{ newsError() }}</p>
+      }
+      @case ('rate-limited') {
+        <p class="chart-tab__news-error" role="alert">{{ newsError() }}</p>
+      }
+      @case ('stale') {
+        <p class="chart-tab__muted" role="status">Headlines out of date — refresh to reload.</p>
+      }
+      @default {
+        @if (newsHeadlines().length === 0) {
+          <p class="chart-tab__muted">No headlines in this window.</p>
+        } @else {
+          <ul class="chart-tab__news-list">
+            @for (article of newsHeadlines(); track article.id ?? article.title) {
+              <li class="chart-tab__news-item">
+                @if (article.article_url) {
+                  <a [href]="article.article_url" target="_blank" rel="noopener">{{ article.title }}</a>
+                } @else {
+                  <span>{{ article.title }}</span>
+                }
+                <span class="chart-tab__muted">
+                  <app-timestamp-display [value]="article.published_utc_ms ?? null" mode="local" />
+                  @if (article.publisher?.name) {
+                    · {{ article.publisher.name }}
+                  }
+                  @for (insight of article.insights ?? []; track insight.ticker) {
+                    @if (insight.ticker === ticker() && insight.sentiment) {
+                      · vendor sentiment: {{ insight.sentiment }} (Polygon-asserted)
+                    }
+                  }
+                </span>
+              </li>
+            }
+          </ul>
+          @if (credit(); as source) {
+            <p class="chart-tab__muted">
+              {{ source.vendor ? (source.vendor | receiptLabel) + ' news' : 'The news source' }}, read <app-timestamp-display [value]="source.fetchedAtMs" mode="local" />. Headlines are not part of the bars above.
+            </p>
+          }
+        }
+      }
+    }
+    <a [routerLink]="allHeadlines()" queryParamsHandling="preserve">View all</a>
+  }
+</section>

@@ -8,6 +8,7 @@ import {
 } from '@angular/common/http/testing';
 import { computed, signal } from '@angular/core';
 import { vi } from 'vitest';
+import { provideRouter } from '@angular/router';
 
 import { environment } from '../../../../environments/environment';
 import {
@@ -20,6 +21,7 @@ import {
 } from '../../../shared/symbol-catalog/testing/fake-symbol-catalog';
 
 import { JobsService, type JobState } from '../../../services/jobs.service';
+import { RECORD_ID, storedRecord } from '../../../research/stored-study/testing/stored-study-fixtures';
 import { SignalRunnerComponent } from './signal-runner.component';
 
 /** A one-indicator `/api/dataset/available` catalog. */
@@ -39,9 +41,11 @@ const CATALOG = {
 describe('SignalRunnerComponent indicator catalog load', () => {
   const catalogUrl = `${environment.pythonServiceUrl}/api/dataset/available`;
   let fixture: ComponentFixture<SignalRunnerComponent>;
+  let startJob: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     const jobs = signal<JobState[]>([]);
+    startJob = vi.fn().mockResolvedValue('job-id-1');
     await TestBed.configureTestingModule({
       imports: [SignalRunnerComponent, HttpClientTestingModule],
       providers: [
@@ -50,12 +54,13 @@ describe('SignalRunnerComponent indicator catalog load', () => {
           useValue: {
             jobs,
             job: () => undefined,
-            startJob: vi.fn(),
+            startJob,
             cancelJob: vi.fn(),
             fetchResult: vi.fn(),
             dismiss: vi.fn(),
           },
         },
+        provideRouter([]),
         // The ticker card reads the lake catalog on init; without this the
         // real service fires a doomed XHR on every run.
         provideFakeTickerCatalog(
@@ -104,6 +109,76 @@ describe('SignalRunnerComponent indicator catalog load', () => {
     expect(picker?.textContent).not.toContain('Indicators could not be loaded.');
     expect(picker?.textContent).toContain('1 of 1');
   });
+
+  describe('rerun from a saved run', () => {
+    it('fills the inputs, flip sign and regime gate from the saved run, starts nothing, then names it when Run study is pressed', async () => {
+      const component = fixture.componentInstance;
+      fixture.componentRef.setInput('rerun', RECORD_ID);
+      fixture.detectChanges();
+      TestBed.inject(HttpTestingController)
+        .expectOne(`${environment.pythonServiceUrl}/api/research/study-records/signal-study/${RECORD_ID}`)
+        .flush(storedRecord('signal-study'));
+      await new Promise((resolve) => setTimeout(resolve)); // the read resolves in a later task than the flush
+      await fixture.whenStable();
+
+      expect(component.range()).toEqual({ symbol: 'SPY', from: '2024-01-02', to: '2024-03-28', resolution: 'minute', multiplier: 15 });
+      expect(component.selectedIndicator()).toBe('macd');
+      expect(component.selectedParams()).toEqual({ fast: 12, slow: 26, signal: 9 });
+      expect(component.flipSign()).toBe(false);
+      expect(component.regimeGateEnabled()).toBe(true);
+      expect(startJob).not.toHaveBeenCalled();
+
+      await component.runSignalEngine();
+
+      expect(startJob.mock.calls[0][1]).toMatchObject({
+        feature_name: 'macd_signal',
+        flip_sign: false,
+        rerun_of: RECORD_ID,
+        session: 'extended', // the bars it reads, not the "rth" the wire would fill in
+      });
+    });
+  });
+
+  describe('study layout', () => {
+    const root = () => fixture.nativeElement as HTMLElement;
+
+    it('offers only the bars the 15-bar target can use, and no session control', () => {
+      const resolutions = Array.from(root().querySelectorAll('.res-btn')).map((el) => el.textContent?.trim());
+      const multipliers = Array.from(
+        root().querySelectorAll('select[aria-label="Bar multiplier"] option'),
+      ).map((el) => el.textContent?.trim());
+
+      expect.soft(resolutions, 'hour and daily bars always fail').toEqual(['1m']);
+      expect.soft(multipliers, 'bars of 30 minutes or longer always fail').toEqual(['1×', '5×', '15×']);
+      expect.soft(root().querySelector('.session'), 'the session is not a control').toBeNull();
+      expect.soft(root().querySelector('[data-testid="study-constraints"]')?.textContent).toContain(
+        'extended hours included, fixed',
+      );
+      // The default window is long enough for the picker's hour-bars hint.
+      expect.soft(root().textContent, 'no hint to switch to bars that always fail').not.toContain('Switch to hour');
+    });
+
+    it('starts nothing when an input changes', () => {
+      const component = fixture.componentInstance;
+      component.range.update((r) => ({ ...r, symbol: 'MSFT' }));
+      component.flipSign.set(false);
+      component.regimeGateEnabled.set(false);
+      fixture.detectChanges();
+
+      expect(startJob).not.toHaveBeenCalled();
+    });
+
+    it('starts one job when Run study is pressed twice before the page re-renders', async () => {
+      const run = root().querySelector<HTMLButtonElement>('button.study-run');
+      if (run === null) throw new Error('no Run study button');
+
+      run.click();
+      run.click();
+      await fixture.whenStable();
+
+      expect(startJob).toHaveBeenCalledTimes(1);
+    });
+  });
 });
 
 describe('SignalRunnerComponent job wiring', () => {
@@ -143,6 +218,7 @@ describe('SignalRunnerComponent job wiring', () => {
           fakeTickerCatalog([{ symbol: 'SPY', name: 'SPDR S&P 500 ETF Trust', exchange: 'ARCA' }]),
         ),
         provideFakeVendorCatalog(fakeVendorCatalog([])),
+        provideRouter([]),
         ...provideFakeDateWorld(),
       ],
     }).compileComponents();
@@ -182,17 +258,6 @@ describe('SignalRunnerComponent job wiring', () => {
     });
   });
 
-  it('offers only the bars the backend accepts, and no session choice the study would ignore', () => {
-    const el = fixture.nativeElement as HTMLElement;
-
-    const multipliers = Array.from(el.querySelectorAll('select[aria-label="Bar multiplier"] option')).map((o) => o.textContent?.trim());
-    const resolutions = Array.from(el.querySelectorAll('[aria-label="Resolution"] button')).map((b) => b.textContent?.trim());
-
-    expect(multipliers).toEqual(['1×', '5×', '15×']);
-    expect(resolutions).toEqual(['1m']);
-    expect(el.querySelector('[aria-label="Session"]')).toBeNull();
-  });
-
   const dataSource = (coverage: unknown, over: Record<string, unknown> = {}) => ({
     kind: 'lake',
     provider: 'polygon',
@@ -215,6 +280,8 @@ describe('SignalRunnerComponent job wiring', () => {
     ...over,
   });
 
+  const lines = (el: HTMLElement) => el.querySelectorAll('app-workspace-data-source');
+
   async function settleJob(status: 'completed' | 'failed', extra: Partial<JobState> = {}): Promise<HTMLElement> {
     setJob(status, extra);
     fixture.detectChanges();
@@ -223,7 +290,14 @@ describe('SignalRunnerComponent job wiring', () => {
     return fixture.nativeElement as HTMLElement;
   }
 
-  it('shows the lake data-source line, with its added and reused counts, on a completed run', async () => {
+  it('names the lake before anything has run, not a provider fetch', () => {
+    const el = fixture.nativeElement as HTMLElement;
+
+    expect(lines(el)).toHaveLength(1);
+    expect(lines(el)[0].textContent).toContain('Data lake');
+  });
+
+  it('shows the lake data-source line, with its added and reused counts and its window as dates, on a completed run', async () => {
     jobsServiceMock.fetchResult.mockResolvedValueOnce({
       success: true,
       ticker: 'AAPL',
@@ -241,24 +315,14 @@ describe('SignalRunnerComponent job wiring', () => {
 
     const el = await settleJob('completed');
 
-    const line = el.querySelector('app-lake-study-source');
-    expect(line?.textContent).toContain('Data lake, Polygon');
-    expect(line?.textContent).toContain('15-minute bars, folded from 1-minute bars');
-    expect(line?.textContent).toContain('12 added · 70 reused · 0 missing');
-    expect(line?.textContent).not.toContain('No result');
+    expect(lines(el), 'one data-source line, the layout\'s').toHaveLength(1);
+    const line = lines(el)[0].textContent ?? '';
+    expect(line).toContain('Data lake, Polygon');
+    expect(line).toContain('15-minute bars, folded from 1-minute bars');
+    expect(line).toContain('12 added · 70 reused · 0 missing');
+    expect(line, 'a window of dates carries no time of day').not.toMatch(/\d{1,2}:\d{2}/);
+    expect(el.textContent).not.toContain('No result');
     expect(component.result()?.dataSource?.cache).toEqual({ hit: false, cachedAtMs: null });
-  });
-
-  it('says the source was not recorded on a stored report that has none, and does not claim the lake', async () => {
-    jobsServiceMock.fetchResult.mockResolvedValueOnce({
-      success: true, ticker: 'AAPL', feature_name: 'rsi_14', start_date: '2024-01-02', end_date: '2024-06-28',
-      bars_used: 8000, error: null,
-    });
-
-    const el = await settleJob('completed');
-
-    expect(component.result()?.dataSource).toBeNull();
-    expect(el.querySelector('app-lake-study-source')?.textContent).not.toContain('Data lake');
   });
 
   it('shows why the lake refused a run and the counts it reached, not one sentence', async () => {
@@ -290,9 +354,11 @@ describe('SignalRunnerComponent job wiring', () => {
     expect(text).toContain('provider_no_data');
     expect(text.split(reason).length - 1, 'the reason is said once, not as an error banner as well').toBe(1);
     expect(el.querySelector('p-message')).toBeNull();
+    expect(lines(el), 'the refused source is the layout\'s one line').toHaveLength(1);
+    expect(lines(el)[0].textContent).toContain('Data lake, Polygon');
   });
 
-  it('shows the reason of a refusal that came before anything was read, with no source line', async () => {
+  it('shows the reason of a refusal that came before anything was read, with no counts', async () => {
     const reason = '15-minute bars are too long for the 15-bar forward target under regular-hours sessions: the longest session in this window holds at most 26 of them.';
     jobsServiceMock.fetchResult.mockResolvedValueOnce({
       success: false, status: 'refused', ticker: 'AAPL', error: reason,
@@ -305,7 +371,7 @@ describe('SignalRunnerComponent job wiring', () => {
     const text = el.textContent ?? '';
     expect(text).toContain('No result');
     expect(text).toContain(reason);
-    expect(text).not.toContain('Data lake');
+    expect(text, 'nothing was admitted, so no counts are claimed').not.toContain('sessions ·');
     expect(el.querySelector('p-message')).toBeNull();
   });
 

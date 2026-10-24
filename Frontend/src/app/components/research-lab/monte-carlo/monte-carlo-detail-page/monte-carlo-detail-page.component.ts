@@ -47,7 +47,7 @@ const P95_COLOR = 'rgba(74, 222, 128, 0.8)'; // muted green — optimistic tail
 
 /**
  * Full-page detail view for a Monte Carlo analysis at
- * ``/research-lab/monte-carlo/:mc_id``. Loads ``(config, result)``
+ * ``/research/history/monte-carlo/:mc_id``. Loads ``(config, result)``
  * via ``MonteCarloService.getMonteCarlo`` and renders:
  *
  *   * Header: status, parent-run link, method, simulation count.

@@ -1,0 +1,9 @@
+:host { display: block; min-width: 0; }
+.mode-switch { display: flex; flex-wrap: wrap; gap: var(--space-3); }
+.mode-group { display: inline-flex; align-items: center; gap: var(--space-1); padding: 3px; border: 1px solid var(--border-light); border-radius: var(--radius-md); background: var(--bg-elevated); }
+.mode-group__label { margin: 0 var(--space-2) 0 var(--space-1); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-subtle); }
+.chip { padding: var(--space-1) var(--space-3); border: none; border-radius: var(--radius); background: transparent; color: var(--text-secondary); font: inherit; font-size: var(--fs-sm); cursor: pointer; }
+.chip:hover:not(:disabled):not(.active) { background: var(--bg-hover); color: var(--text-primary); }
+.chip.active { background: var(--accent-soft); color: var(--accent-text); }
+.chip:disabled { opacity: 0.5; cursor: not-allowed; }
+.reason { margin: var(--space-1) 0 0; color: var(--text-secondary); font-size: var(--fs-xs); }

@@ -1,70 +1,57 @@
-<div class="runner-page">
-  @if (formCollapsed()) {
-    <div class="run-summary">
-      <div class="run-summary-left">
-        <i class="pi pi-check-circle run-summary-icon" aria-hidden="true"></i>
-        <span class="run-summary-text">{{ runSummary }}</span>
-        @if (cached()) {
-          <span class="cache-chip">from cache</span>
-        }
-      </div>
-      <div class="run-summary-right">
-        <p-button label="Modify & Re-run" icon="pi pi-pencil" severity="secondary" [text]="true" size="small" (onClick)="toggleForm()" />
-        <p-button label="New Run" icon="pi pi-plus" severity="secondary" [text]="true" size="small" (onClick)="newRun()" />
-      </div>
-    </div>
-  }
+<app-study-page
+  study="signal"
+  [readySummary]="readySummary()"
+  [canRun]="canRun()"
+  [running]="starting() || loading()"
+  [blockedReason]="blockedReason()"
+  [hasOutput]="hasOutput()"
+  [hasResult]="result()?.success === true"
+  [previous]="inputs.isPrevious()"
+  [captured]="inputs.captured()"
+  [prefill]="prefillNotice()"
+  [dataSource]="dataSource()"
+  dataSourceWindows="date-et"
+  (run)="runSignalEngine()"
+>
+  <app-ticker-range-picker
+    studyInstrument
+    [(value)]="range"
+    dateBounds="provider"
+    presentation="embedded"
+    sessionMode="hidden"
+    [showAutoFetch]="false"
+    [availableResolutions]="availableResolutions"
+    [availableMultipliers]="availableMultipliers"
+  />
 
-  @if (!formCollapsed()) {
-    <div class="runner-cards">
-      <!-- Signal card — ticker + dates + sampling. The Options/toggles card stays below. -->
-      <app-ticker-range-picker
-        [(value)]="range"
-        dateBounds="provider"
-        [showAutoFetch]="false"
-        [availableResolutions]="availableResolutions"
-        [availableMultipliers]="availableMultipliers"
-        sessionMode="hidden"
-        title="Signal data"
-      />
-
-      <!-- Options card -->
-      <div class="runner-card">
-        <div class="card-head">
-          <span class="card-title">
-            <i class="pi pi-sliders-h" aria-hidden="true"></i>
-            Options
-          </span>
+  <div studyConfig class="study-config">
+    <div class="field-group">
+      <div class="field field--toggle">
+        <p-toggleswitch [ngModel]="flipSign()" (ngModelChange)="flipSign.set($event)" inputId="flip-sign" />
+        <div class="toggle-body">
+          <label class="toggle-label" for="flip-sign">Flip Sign</label>
+          <span class="toggle-hint">Mean-reversion mode (short the signal)</span>
         </div>
-        <div class="field-group">
-          <div class="field field--toggle">
-            <p-toggleswitch [ngModel]="flipSign()" (ngModelChange)="flipSign.set($event)" inputId="flip-sign" />
-            <div class="toggle-body">
-              <label class="toggle-label" for="flip-sign">Flip Sign</label>
-              <span class="toggle-hint">Mean-reversion mode (short the signal)</span>
-            </div>
-          </div>
-          <div class="field field--toggle">
-            <p-toggleswitch [ngModel]="regimeGateEnabled()" (ngModelChange)="regimeGateEnabled.set($event)" inputId="regime-gate" />
-            <div class="toggle-body">
-              <label class="toggle-label" for="regime-gate">Regime Gate</label>
-              <span class="toggle-hint">Filter entries by regime state</span>
-            </div>
-          </div>
-          <div class="field field--toggle">
-            <p-toggleswitch [ngModel]="forceRefresh()" (ngModelChange)="forceRefresh.set($event)" inputId="force-refresh" />
-            <div class="toggle-body">
-              <label class="toggle-label" for="force-refresh">Force Re-run</label>
-              <span class="toggle-hint">Bypass cache</span>
-            </div>
-          </div>
+      </div>
+      <div class="field field--toggle">
+        <p-toggleswitch [ngModel]="regimeGateEnabled()" (ngModelChange)="regimeGateEnabled.set($event)" inputId="regime-gate" />
+        <div class="toggle-body">
+          <label class="toggle-label" for="regime-gate">Regime Gate</label>
+          <span class="toggle-hint">Filter entries by regime state</span>
+        </div>
+      </div>
+      <div class="field field--toggle">
+        <p-toggleswitch [ngModel]="forceRefresh()" (ngModelChange)="forceRefresh.set($event)" inputId="force-refresh" />
+        <div class="toggle-body">
+          <label class="toggle-label" for="force-refresh">Force Re-run</label>
+          <span class="toggle-hint">Bypass cache</span>
         </div>
       </div>
     </div>
 
-    <!-- Feature workspace — design-ported picker on the left, active
-         indicator card on the right. The picker is multi-select natively;
-         this host treats each (add) as a single-select replace. -->
+    <!-- Design-ported picker on the left, active indicator card on the right.
+         The picker is multi-select natively; this host treats each (add) as a
+         single-select replace. -->
     <div class="indicator-workspace">
       <app-indicator-picker
         [categories]="catalogCategories()"
@@ -94,56 +81,48 @@
     @if (unsupportedReason(); as reason) {
       <p-message severity="info" class="w-full">{{ reason }}</p-message>
     }
+  </div>
 
-    <div class="run-bar">
-      <span class="run-hint">
-        Ready to run signal engine on
-        <strong>{{ selectedFeatureLabel }}</strong> ·
-        <app-asset-identity [symbol]="range().symbol" size="sm" />
-      </span>
-      <div class="run-bar-actions">
-        <button class="btn-run" [disabled]="!canRun() || loading()" (click)="runSignalEngine()">
-          <i [class]="loading() ? 'pi pi-spin pi-spinner' : 'pi pi-bolt'" aria-hidden="true"></i>
-          Run Signal Engine
-        </button>
-      </div>
-    </div>
-  }
-
-  @if (job(); as j) {
-    @if (!cached()) {
-      <app-run-progress-panel
-        class="block"
-        [job]="j"
-        [logs]="logEntries()"
-        [phases]="signalEngineRail"
-        title="Signal engine run"
-        (cancelRun)="cancelRun()"
-      />
+  <div studyProgress class="study-progress">
+    @if (job(); as j) {
+      @if (!cached()) {
+        <app-run-progress-panel
+          class="block"
+          [job]="j"
+          [logs]="logEntries()"
+          [phases]="signalEngineRail"
+          title="Signal engine run"
+          (cancelRun)="cancelRun()"
+        />
+      }
     }
-  }
 
-  @if (refusal(); as refused) {
-    <app-lake-study-source [source]="refused.dataSource" [refusal]="refused.refusal" />
-  } @else if (error(); as err) {
-    <p-message severity="error">{{ err }}</p-message>
-  }
-
-  @if (result(); as res) {
-    @if (res.success) {
-      <app-lake-study-source [source]="res.dataSource ?? null" />
-      <app-signal-report [result]="res" />
+    @if (refusal(); as refused) {
+      <app-lake-study-source [refusal]="refused.refusal" />
+    } @else if (error(); as err) {
+      <p-message severity="error">{{ err }}</p-message>
     }
-  }
+  </div>
 
-  <!-- Right-anchored config modal for the picked feature. -->
-  <app-indicator-config-modal
-    [(visible)]="configureModalOpen"
-    mode="configure"
-    [entry]="activeEntry()"
-    [paramConfigs]="activeParamConfigs()"
-    [showRelated]="false"
-    (paramChange)="onModalParamChange($event)"
-    (resetDefaults)="resetSelectedToDefaults()"
-    (resetParam)="resetSelectedParam($event)" />
-</div>
+  <div studyResult>
+    @if (cached()) {
+      <span class="cache-chip">from cache</span>
+    }
+    @if (result(); as res) {
+      @if (res.success) {
+        <app-signal-report [result]="res" />
+      }
+    }
+  </div>
+</app-study-page>
+
+<!-- Right-anchored config modal for the picked feature. -->
+<app-indicator-config-modal
+  [(visible)]="configureModalOpen"
+  mode="configure"
+  [entry]="activeEntry()"
+  [paramConfigs]="activeParamConfigs()"
+  [showRelated]="false"
+  (paramChange)="onModalParamChange($event)"
+  (resetDefaults)="resetSelectedToDefaults()"
+  (resetParam)="resetSelectedParam($event)" />

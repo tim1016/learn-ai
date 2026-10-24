@@ -162,7 +162,7 @@ describe('WalkForwardSectionComponent', () => {
   it('open(wf) navigates to the WF detail route', () => {
     component.open(makeWfConfig({ walk_forward_id: 'c'.repeat(32) }));
     expect(routerNavigate).toHaveBeenCalledWith([
-      '/research-lab/walk-forward',
+      '/research/history/walk-forward',
       'c'.repeat(32),
     ]);
   });

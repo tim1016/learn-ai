@@ -1,3 +1,10 @@
 :host {
   display: block;
 }
+
+.back-link {
+  display: inline-block;
+  margin-bottom: var(--space-3);
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+}
