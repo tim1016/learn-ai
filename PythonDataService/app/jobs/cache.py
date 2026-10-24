@@ -108,7 +108,8 @@ def serve_cached_result(job_id: str, job_type: str, cached: dict, *, announce_st
     without showing the live-progress panel.
 
     ``announce_start=False`` is for a worker that found its hit after its
-    thread had already emitted ``job.started``: only the completion is new.
+    thread had already emitted ``job.started``: only the completion is new, and
+    the ``started_at`` that start recorded (when the worker really began) stays.
     """
     from app.jobs.progress import active_set_key, result_key, state_key  # local to avoid cycles
 
@@ -117,19 +118,18 @@ def serve_cached_result(job_id: str, job_type: str, cached: dict, *, announce_st
     cached_at = cached.get("cached_at", int(time.time() * 1000))
     now_ms = str(int(time.time() * 1000))
 
+    state: dict[str, str] = {
+        "status": "completed",
+        "completed_at": now_ms,
+        "result_kind": "json",
+        "phase": "completed",
+        "cached": "1",
+    }
+    if announce_start:
+        state["started_at"] = now_ms
     pipe = r.pipeline()
     pipe.set(result_key(job_id), json.dumps(result, default=str), ex=JOB_TTL_SECONDS)
-    pipe.hset(
-        state_key(job_id),
-        mapping={
-            "status": "completed",
-            "started_at": now_ms,
-            "completed_at": now_ms,
-            "result_kind": "json",
-            "phase": "completed",
-            "cached": "1",
-        },
-    )
+    pipe.hset(state_key(job_id), mapping=state)
     pipe.expire(state_key(job_id), JOB_TTL_SECONDS)
     pipe.execute()
 
