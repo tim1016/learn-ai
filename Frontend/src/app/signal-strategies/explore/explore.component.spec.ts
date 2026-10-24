@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { JobState } from '../../services/jobs.service';
 import { harnessEntry, registryEntry } from '../testing/fixtures';
 import { emptyWorld } from '../testing/signal-strategy-world';
-import { EMA, savedRun, sweepableEma } from './testing/explore-fixtures';
+import { EMA, savedRun, savedSearch, sweepableEma } from './testing/explore-fixtures';
 import { provideExploreWorld, type ExploreCalls, type ExploreWorld } from './testing/explore-world';
 
 const RSI = 'rsi_mean_reversion';
@@ -126,6 +126,30 @@ describe('a strategy’s Explore', () => {
     await waitFor(() =>
       expect(within(strip).getByRole('link', { name: 'Backtest' }).getAttribute('href')).toBe(`/signal-strategies/${EMA}/explore/backtest?run=91`),
     );
+  });
+
+  it('walks a run into a sweep and a sweep into a walk-forward by their own links, filling each form and starting nothing (T12)', async () => {
+    const { harness, calls, router } = await open(`/signal-strategies/${EMA}/explore/backtest?run=91`, {
+      runs: { 91: savedRun() },
+      searches: { 'grid-search-0001': savedSearch() },
+    });
+
+    fireEvent.click(await screen.findByRole('link', { name: "Sweep this run's settings" }));
+    const fromRun = await screen.findByRole('region', { name: 'Started from' });
+    expect(router.url).toBe(`/signal-strategies/${EMA}/explore/sweep?run=91`);
+    expect(within(fromRun).getByRole('link', { name: 'backtest run #91' })).toBeTruthy();
+
+    // The sweep the owner launched from it is opened from History; its result leads on.
+    await harness.navigateByUrl(`/signal-strategies/${EMA}/explore/sweep?search=grid-search-0001`);
+    fireEvent.click(await screen.findByRole('link', { name: /Test this grid out of sample in Walk-forward/ }));
+    const fromSweep = await screen.findByRole('region', { name: 'Started from' });
+
+    expect(router.url).toBe(`/signal-strategies/${EMA}/explore/walk-forward?search=grid-search-0001`);
+    expect(within(fromSweep).getByRole('link', { name: /^sweep / }).getAttribute('href')).toBe(
+      `/signal-strategies/${EMA}/explore/sweep?search=grid-search-0001`,
+    );
+    expect(within(fromSweep).getByText('Training and test lengths')).toBeTruthy();
+    expect(calls.jobs.started).toEqual([]);
   });
 
   it('shows Define the values the workbench is trying out, as exploratory and against their defaults', async () => {
