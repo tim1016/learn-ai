@@ -281,6 +281,19 @@ describe("Strategy Lab Workbench", () => {
     http.verify();
   });
 
+  it("opens the Strategy Lab manual and the strategy reference in new tabs, so the configured run stays as it is", async () => {
+    const { fixture, http } = await createLab();
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    const links = ["How this works", "Strategy reference"].map((name) => within(root).getByRole("link", { name }));
+    expect(links.map((link) => link.getAttribute("href"))).toEqual(["/strategy-lab/docs", "/strategy-docs"]);
+    expect(links.map((link) => link.getAttribute("target"))).toEqual(["_blank", "_blank"]);
+    http.verify();
+  });
+
   it("keeps Run disabled and shows the run as in flight when a backtest is resumed after a reload", async () => {
     const { fixture, http, activeJobs } = await createLab();
     http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());

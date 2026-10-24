@@ -64,3 +64,16 @@ describe('BotPageHeaderComponent feed line (#3164)', () => {
     expect(line).toBe(`IBKR market data stale · updated ${clock(LAST_BAR_AT_MS - 600_000)}`);
   });
 });
+
+describe('BotPageHeaderComponent help', () => {
+  it('opens the Bot Business Logic manual in a new tab, so the bot page stays as it is', async () => {
+    await render(BotPageHeaderComponent, {
+      inputs: { panel: fakeBotPanelView(), backRoute: ['/'], backLabel: 'Home' },
+      providers: [provideRouter([])],
+    });
+
+    const link = screen.getByRole('link', { name: 'How this works' });
+    expect(link.getAttribute('href')).toBe('/docs/bot-business-manual');
+    expect(link.getAttribute('target')).toBe('_blank');
+  });
+});

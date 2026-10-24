@@ -14,8 +14,9 @@ import {
 } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { filter, map } from 'rxjs/operators';
+import { HowThisWorksLinkComponent } from '../../shared/help/how-this-works-link.component';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
-import { NavGroup, RESEARCH_LAB_NAV } from './research-lab-nav.config';
+import { NavGroup, RESEARCH_LAB_NAV, type StudyHelp } from './research-lab-nav.config';
 
 interface NavState {
   data: Record<string, unknown>;
@@ -30,6 +31,7 @@ interface NavState {
     RouterLink,
     RouterLinkActive,
     RouterOutlet,
+    HowThisWorksLinkComponent,
     PageHeaderComponent,
   ],
   templateUrl: './research-lab.component.html',
@@ -55,6 +57,11 @@ export class ResearchLabComponent {
   readonly title = computed<string>(
     () => (this.navState().data['title'] as string | undefined) ?? 'Research Lab',
   );
+  /** The document that explains the open study, if it has one. */
+  readonly help = computed<StudyHelp | null>(() => {
+    const path = this.navState().path;
+    return this.groups.flatMap((g) => g.items).find((item) => item.path === path)?.help ?? null;
+  });
   /** Group whose child is currently active. Falls back to the first group
    *  for the brief moment between landing on `/research-lab` and the
    *  redirect to `features/validate` resolving. */

@@ -1,6 +1,7 @@
 import type { MenuItem } from 'primeng/api';
 
 import { accountWorkspaceLocation, routePathOf } from '../fleet/account-workspace';
+import { HELP_DOCUMENTS, type HelpDocument } from '../shared/help/help-documents';
 
 export interface AppMenuItem {
   /** The single display name for every navigation projection. */
@@ -31,12 +32,17 @@ export const ACTIVE_GROUP_CLASS = 'app-menubar-group--active';
 /** Applied to the menu entry that is the current route. */
 export const ACTIVE_ITEM_CLASS = 'app-menubar-item--active';
 
+const [firstDocument, ...otherDocuments] = HELP_DOCUMENTS;
+
+const documentationItem = ({ title, route }: HelpDocument): AppMenuItem => ({ title, route });
+
 /**
  * Canonical application information architecture.
  *
  * Every shell navigation surface projects from this ordered menu. Retired
  * IBKR navigation remains redirect-only in the route table and is
- * intentionally absent here.
+ * intentionally absent here. The Documentation group is the served-document
+ * list (`HELP_DOCUMENTS`), the same one the top-bar help index shows.
  */
 export const APP_MENU: readonly AppMenuGroup[] = [
   {
@@ -102,18 +108,8 @@ export const APP_MENU: readonly AppMenuGroup[] = [
     title: 'Documentation',
     icon: 'pi pi-book',
     items: [
-      { title: 'Options Backtest Manual', route: '/docs/options-backtest-manual' },
-      { title: 'Broker Costs & Timing', route: '/docs/broker-manual' },
-      { title: 'Bot Business Logic Manual', route: '/docs/bot-business-manual' },
-      { title: 'Architecture Manual', route: '/docs/architecture-manual' },
-      { title: 'Strategy Docs', route: '/strategy-docs' },
-      { title: 'Indicator Reference', route: '/data-lab-docs' },
-      { title: 'Pipeline Docs', route: '/data-quality-docs' },
-      { title: 'Indicator Reliability', route: '/docs/indicator-reliability-methodology' },
-      { title: 'Signal Engine', route: '/docs/signal-engine-methodology' },
-      { title: 'Golden Search Manual', route: '/docs/golden-search-manual' },
-      { title: 'Golden Search Charts', route: '/docs/golden-search-guide' },
-      { title: 'Legal Notices', route: '/legal/notices' },
+      documentationItem(firstDocument),
+      ...otherDocuments.map(documentationItem),
     ],
   },
 ];

@@ -43,6 +43,9 @@ export type ShellAccountMode = 'paper' | 'live' | 'unknown';
         <div class="top-bar__connection" data-shell-slot="connection">
           <ng-content select="[shell-connection]" />
         </div>
+        <div class="top-bar__help" data-shell-slot="help">
+          <ng-content select="[shell-help]" />
+        </div>
       </div>
     </header>
   `,
