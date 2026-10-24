@@ -318,9 +318,10 @@ export const routes: Routes = [
       import("./research/research.routes").then((m) => m.RESEARCH_ROUTES),
   },
   {
-    // What Research Lab still hosts until slice 28 moves its run detail pages;
-    // its five studies moved to /research and its saved lists to the History,
-    // and redirect from here.
+    // The Research Lab shell still hosts the instrument headlines (#3501) and
+    // the Recency Chart (#3508). Its five studies moved to /research, and its
+    // saved lists and run records to the History; their old addresses redirect
+    // from here.
     path: "research-lab",
     loadChildren: () =>
       import("./components/research-lab/research-lab.routes").then(
