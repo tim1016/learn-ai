@@ -1,4 +1,4 @@
-import { Component, computed, signal } from '@angular/core';
+import { Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { render, screen } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
@@ -109,6 +109,59 @@ describe('previous-result marking', () => {
     await user.click(screen.getByRole('button', { name: 'Run' }));
     expect(screen.queryByText('Previous result')).toBeNull();
     expect(screen.getByText('Result for QQQ')).toBeTruthy();
+  });
+});
+
+/** Counts how many instances of a consumer of the result exist right now. */
+const consumers = { alive: 0 };
+
+@Component({ selector: 'app-result-consumer', template: '<button type="button">Approve</button>' })
+class ResultConsumer {
+  constructor() {
+    consumers.alive += 1;
+    inject(DestroyRef).onDestroy(() => (consumers.alive -= 1));
+  }
+}
+
+@Component({
+  imports: [PreviousResultComponent, ResultConsumer],
+  template: `
+    <button type="button" (click)="symbol.set('QQQ')">Edit symbol</button>
+    <button type="button" (click)="run()">Run</button>
+    <app-previous-result [previous]="tracker.isPrevious()" [captured]="tracker.captured()">
+      <p>A result</p>
+      <ng-template #resultActions><app-result-consumer /></ng-template>
+    </app-previous-result>
+  `,
+})
+class TemplateActionsHost {
+  readonly symbol = signal('SPY');
+  readonly tracker = createResultInputTracker(this.symbol, (value) => ({
+    key: value,
+    facts: [{ label: 'Symbol', value }],
+  }));
+
+  run(): void {
+    this.tracker.capture(this.symbol());
+  }
+}
+
+describe('previous-result actions given as a template', () => {
+  it('creates the consumer only while the result is current, and destroys it once it is previous', async () => {
+    consumers.alive = 0;
+    const user = userEvent.setup();
+    await render(TemplateActionsHost);
+
+    await user.click(screen.getByRole('button', { name: 'Run' }));
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeTruthy();
+    expect(consumers.alive).toBe(1);
+
+    await user.click(screen.getByRole('button', { name: 'Edit symbol' }));
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+    expect(consumers.alive, 'no consumer left running against the previous result').toBe(0);
+
+    await user.click(screen.getByRole('button', { name: 'Run' }));
+    expect(consumers.alive, 'a new run that answers the inputs brings it back').toBe(1);
   });
 });
 
