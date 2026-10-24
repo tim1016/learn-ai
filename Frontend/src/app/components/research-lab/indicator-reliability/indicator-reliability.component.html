@@ -26,6 +26,9 @@
       [availableResolutions]="['minute']"
     />
     <app-lake-holding-notice [holding]="holding" />
+    @if (spanNotice(); as notice) {
+      <app-workspace-state-block [state]="notice" />
+    }
   </div>
 
   <div studyConfig class="indicator-reliability study-config">

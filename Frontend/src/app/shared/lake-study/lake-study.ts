@@ -202,6 +202,15 @@ export interface LakeStudyRefused {
   dataSource: LakeStudyDataSource | null;
 }
 
+/**
+ * A refusal as a study's page holds it to show: the refusal, and the session it judged. That is the session its source
+ * records, or the one the run asked for when nothing was read.
+ */
+export interface LakeStudyRefusalShown {
+  readonly refused: LakeStudyRefused;
+  readonly session: LakeSessionPolicy | null;
+}
+
 // ---------------------------------------------------------------------------
 // Mapping
 // ---------------------------------------------------------------------------

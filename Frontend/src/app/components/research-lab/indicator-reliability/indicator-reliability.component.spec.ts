@@ -305,6 +305,22 @@ describe('IndicatorReliabilityComponent (Indicator reliability study)', () => {
       expect(warning(), 'the lake holds it all').toBeNull();
     });
 
+    it('asks about the window and bar size the run itself sends, from the same wire, and sends no session', () => {
+      for (const request of paramReads()) request.flush(SCHEMA);
+      fixture.detectChanges();
+      const [span] = spanReads();
+      runButton()?.click();
+      const [run] = runs();
+      const spanBody = span.request.body as Record<string, unknown>;
+      const runBody = run.request.body as Record<string, unknown>;
+
+      for (const key of ['symbol', 'from_date', 'to_date', 'timespan', 'multiplier', 'indicator_name', 'indicator_params']) {
+        expect(spanBody[key], key).toEqual(runBody[key]);
+      }
+      expect(Object.keys(spanBody)).not.toContain('session');
+      span.flush(SPAN);
+    });
+
     it('warns how many sessions the lake lacks over that span, with the action that captures them, and Run study stays on', async () => {
       instrumentData.mockResolvedValue({ kind: 'ok', value: heldReport({ sessions: 125, missing: 30 }) });
       answerParams();
@@ -330,6 +346,19 @@ describe('IndicatorReliabilityComponent (Indicator reliability study)', () => {
         symbol: 'AAPL', price_adjustment_mode: 'polygon_split_adjusted',
         start_trading_date_ms: fill?.start_trading_date_ms, end_trading_date_ms: fill?.end_trading_date_ms,
       });
+    });
+
+    it('says nothing of the lake, and offers no capture, while the server is still naming the span', () => {
+      for (const request of paramReads()) request.flush(SCHEMA);
+      fixture.detectChanges();
+
+      const unanswered = spanReads();
+      expect(unanswered, 'the span read is out and unanswered').toHaveLength(1);
+      expect(screen.queryByText(/Could not check which/), 'a span being read is not a span that failed').toBeNull();
+      expect(warning()).toBeNull();
+      expect(screen.queryByRole('button', { name: /^Capture/ })).toBeNull();
+      expect(instrumentData).not.toHaveBeenCalled();
+      unanswered[0].flush(SPAN);
     });
 
     it('says a span the server could not name could not be checked, and not that nothing is missing', async () => {

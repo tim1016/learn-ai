@@ -23,14 +23,15 @@ import { Checkbox } from 'primeng/checkbox';
 import { MultiSelect } from 'primeng/multiselect';
 import { TickerRangePickerComponent } from '../../../shared/ticker-range-picker/ticker-range-picker.component';
 import type { Session, TickerRange } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
-import { tickerRangeToWire } from '../../../utils/ticker-wire';
+import { tickerRangeToWire, type TickerRequestPayload } from '../../../utils/ticker-wire';
 import { StudyPageComponent } from '../../../research/study-page/study-page.component';
 import { createResultInputTracker } from '../../../shared/workspace/previous-result';
 import type { DataSourceProvenance } from '../../../shared/workspace/data-source-provenance';
 import { LakeStudySourceComponent } from '../../../shared/lake-study/lake-study-source.component';
 import { LakeHoldingNoticeComponent } from '../../../shared/lake-study/lake-holding-notice.component';
-import { createLakeHolding, type LakeHoldingControl } from '../../../shared/lake-study/create-lake-holding';
-import type { LakeHoldingReading } from '../../../shared/lake-study/lake-holding';
+import { createLakeHolding } from '../../../shared/lake-study/create-lake-holding';
+import { describeLakeHolding, type LakeHoldingReading } from '../../../shared/lake-study/lake-holding';
+import { WorkspaceStateBlockComponent } from '../../../shared/workspace/workspace-state-block.component';
 import type { InstrumentDataRequest } from '../../../shared/data-lake';
 import { etIsoDate } from '../../../shared/date/et-midnight';
 import {
@@ -41,8 +42,9 @@ import {
   sessionPolicyWords,
   toDataSourceProvenance,
   type LakeSessionPolicy,
-  type LakeStudyRefused,
+  type LakeStudyRefusalShown,
 } from '../../../shared/lake-study/lake-study';
+import { storedSession } from '../../../shared/lake-study/stored-session';
 import { createRerunPrefill } from '../../../research/stored-study/rerun';
 import { StoredInputsError, type StoredInputs } from '../../../research/stored-study/stored-inputs';
 import type { IndicatorReliabilityRun, ReliabilitySpan } from './indicator-reliability.models';
@@ -79,16 +81,14 @@ interface HorizonOption {
   value: number;
 }
 
-/** The request that asks the server which sessions a run needs: what sizes the lead-in, and nothing a session changes. */
-interface SpanRequest {
-  readonly symbol: string;
-  readonly from_date: string;
-  readonly to_date: string;
-  readonly timespan: 'minute';
-  readonly multiplier: 1;
+/**
+ * The request that asks the server which sessions a run needs: the run's own window and bar size, from the same wire,
+ * and the indicator that sizes the lead-in. Nothing a session changes, so it carries no session.
+ */
+type SpanRequest = Omit<TickerRequestPayload, 'session'> & {
   readonly indicator_name: string;
   readonly indicator_params: Record<string, number>;
-}
+};
 
 /** What the span read came to for one request. */
 type SpanRead =
@@ -107,16 +107,6 @@ function describeFailure(err: unknown): string {
     return err.status === 0 ? 'the data plane did not answer' : `the data plane answered ${err.status}`;
   }
   return err instanceof Error ? err.message : 'the reason is unknown';
-}
-
-/** The session a saved run computed on: the one it names, or regular hours, which is what the study computed on before it named one. */
-function storedSession(stored: StoredInputs): Session {
-  if (!stored.has('session')) return 'rth';
-  const session = stored.text('session');
-  if (session !== 'rth' && session !== 'extended') {
-    throw new StoredInputsError(`"${session}" is not a session this page offers`);
-  }
-  return session;
 }
 
 /** What a reliability request is made from: the inputs a shown result answers. */
@@ -150,6 +140,7 @@ interface ReliabilityStudyInputs {
     IndicatorReliabilityReportComponent,
     LakeStudySourceComponent,
     LakeHoldingNoticeComponent,
+    WorkspaceStateBlockComponent,
   ],
 })
 export class IndicatorReliabilityComponent {
@@ -211,7 +202,7 @@ export class IndicatorReliabilityComponent {
    * Why the lake could not supply the last run, and what admission reached, when it refused, with the session it
    * judged: the one its source records, or the one the run asked for when nothing was read.
    */
-  readonly refusal = signal<{ readonly refused: LakeStudyRefused; readonly session: LakeSessionPolicy | null } | null>(null);
+  readonly refusal = signal<LakeStudyRefusalShown | null>(null);
 
   /**
    * The data-source line for what is on screen: the shown result's lake source, or the source a refused run was
@@ -307,15 +298,11 @@ export class IndicatorReliabilityComponent {
       const indicator = this.indicatorName();
       if (!this.paramsReady() || indicator.trim().length === 0) return null;
       if (range.symbol.trim().length === 0 || range.from.trim().length === 0 || range.to.trim().length === 0) return null;
-      return {
+      const { symbol, from_date, to_date, timespan, multiplier } = tickerRangeToWire({
+        ...range,
         symbol: range.symbol.trim().toUpperCase(),
-        from_date: range.from,
-        to_date: range.to,
-        timespan: 'minute',
-        multiplier: 1,
-        indicator_name: indicator,
-        indicator_params: this.paramValues(),
-      };
+      });
+      return { symbol, from_date, to_date, timespan, multiplier, indicator_name: indicator, indicator_params: this.paramValues() };
     },
     { equal: sameSpanRequest },
   );
@@ -332,7 +319,12 @@ export class IndicatorReliabilityComponent {
       }
     },
   });
-  private readonly lake = createLakeHolding(
+  /**
+   * How many of the run's sessions the lake does not hold yet, lead-in included, and the capture of them. It warns and
+   * never holds up Run study. The window it counts is the span the server named, so it has no request while the span
+   * is unknown.
+   */
+  readonly holding = createLakeHolding(
     computed<InstrumentDataRequest | null>(() => {
       // `undefined` while a span is being read: a resource holds no value for a request it has not answered.
       const read = this.spanRead.value();
@@ -340,17 +332,23 @@ export class IndicatorReliabilityComponent {
       return { symbol: read.asked.symbol, from: etIsoDate(read.span.start_ms), to: etIsoDate(read.span.end_ms), tree: LAKE_STUDY_TREE };
     }),
   );
-  /**
-   * How many of the run's sessions the lake does not hold yet, lead-in included, and the capture of them. It warns and
-   * never holds up Run study. A span the server could not name is said, never read as nothing missing.
-   */
-  readonly holding: LakeHoldingControl = {
-    ...this.lake,
-    reading: computed<LakeHoldingReading>(() => {
-      const read = this.spanRead.value();
-      return read?.kind === 'unreadable' ? { kind: 'unreadable', message: read.message } : this.lake.reading();
-    }),
-  };
+  /** What the span read is at, in the readings the lake count has: being read, not readable (with why), or nothing to say. */
+  private readonly spanReading = computed<LakeHoldingReading>(() => {
+    switch (this.spanRead.status()) {
+      case 'loading':
+      case 'reloading':
+        return { kind: 'checking' };
+      case 'resolved':
+      case 'local': {
+        const read = this.spanRead.value();
+        return read?.kind === 'unreadable' ? { kind: 'unreadable', message: read.message } : { kind: 'idle' };
+      }
+      default:
+        return { kind: 'idle' };
+    }
+  });
+  /** A span the server could not name is said, never read as nothing missing; the count's own notice follows a span that was named. */
+  protected readonly spanNotice = computed(() => describeLakeHolding(this.spanReading(), { kind: 'idle' }, null));
 
   /** Why Run study cannot start, in words that point at the step to fix. */
   readonly blockedReason = computed<string | null>(() => {
@@ -474,7 +472,8 @@ export class IndicatorReliabilityComponent {
       from: stored.text('from_date'),
       to: stored.text('to_date'),
       resolution: 'minute',
-      session: storedSession(stored),
+      // A run saved before it named a session computed on regular hours.
+      session: storedSession(stored, 'rth'),
     });
     this.filled = { indicator, params };
     this.indicatorName.set(indicator);
