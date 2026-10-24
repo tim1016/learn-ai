@@ -24,7 +24,12 @@ import {
   BatchResearchResult,
   BinomialNullTest,
   CrossSectionalCriterion,
+  CrossSectionalDataSource,
   CrossSectionalStageInfo,
+  MemberExclusion,
+  ProviderInputSource,
+  StudyCoverageGroup,
+  StudyUniverse,
   TickerBatchResult,
   TickerValidity,
   ValiditySummary,
@@ -38,8 +43,9 @@ import {
 import { RunProgressPanelComponent } from '../shared/run-progress-panel/run-progress-panel.component';
 import { MultiTickerRangePickerComponent } from '../../../shared/multi-ticker-range-picker/multi-ticker-range-picker.component';
 import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
+import { DataSourceComponent } from '../../../shared/data-source/data-source.component';
+import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import type { MultiTickerRange } from '../../../shared/multi-ticker-range-picker/multi-ticker-range-picker.types';
-import type { Resolution } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
 import { multiTickerRangeToWire } from '../../../utils/ticker-wire';
 
 const DEFAULT_TICKERS = ['SPY', 'QQQ', 'AAPL'];
@@ -58,9 +64,73 @@ const TARGET_TYPES = [
   { label: 'Absolute Return', value: 'abs_return' },
 ];
 
+interface StudyCoverageGroupRaw {
+  expected_sessions: number;
+  reused: number;
+  added: number;
+  missing: number;
+  failed: number;
+  building: number;
+  corrupt: number;
+  unavailable_from_provider: number;
+}
+
+interface ProviderInputSourceRaw {
+  provider: string;
+  endpoint?: string;
+  attempted?: number;
+  failed?: number;
+  observation_digest?: string | null;
+  reproducible: boolean;
+}
+
+/** The ``data_source`` block (``cross_sectional_study_service.data_source_block``). */
+interface CrossSectionalDataSourceRaw {
+  kind: 'composite';
+  calculation_version: string;
+  stock_bars: {
+    kind: 'lake';
+    provider: string;
+    price_adjustment_mode: string;
+    session_policy: 'regular' | 'extended';
+    bar_resolution: 'day';
+    window_start_ms: number;
+    window_end_ms: number;
+    identity_digest: string;
+    universe_snapshot_digest: string | null;
+    coverage: {
+      window: StudyCoverageGroupRaw;
+      artifacts: { fetched: number; reused: number; refreshed: number };
+    };
+    members: { ticker: string; status: 'admitted' | 'excluded'; code?: string; reason?: string }[];
+  } | null;
+  option_inputs: {
+    inputs: Record<'option_expiries' | 'option_contracts' | 'option_bars', ProviderInputSourceRaw>;
+    risk_free_rate: { provider: string; days_from_fred: number; days_from_default: number; reproducible: boolean };
+    failures_total: number;
+  } | null;
+  cache: { hit: boolean; cached_at_ms: number | null };
+}
+
+interface StudyUniverseRaw {
+  requested: string[];
+  requested_count: number;
+  evaluated: string[];
+  evaluated_count: number;
+  excluded: MemberExclusion[];
+  excluded_count: number;
+  degraded: { ticker: string; failures_total: number }[];
+  denominator: number;
+  inclusion_policy: { name: string; description: string };
+  complete: boolean;
+}
+
 /** Snake-case shape returned by the cross-sectional jobs-internal worker. */
 interface CrossSectionalJobResultRaw {
   success: boolean;
+  status?: 'complete' | 'partial';
+  universe?: StudyUniverseRaw;
+  data_source?: CrossSectionalDataSourceRaw;
   feature_name: string;
   target_type?: string;
   tickers_tested: number;
@@ -133,6 +203,8 @@ interface CrossSectionalJobResultRaw {
     error: string | null;
     validity?: TickerValidity;
     low_confidence?: boolean;
+    exclusion?: MemberExclusion | null;
+    option_inputs?: { failures_total: number } | null;
   }[];
   summary: string;
 }
@@ -154,6 +226,8 @@ interface CrossSectionalJobResultRaw {
     RunProgressPanelComponent,
     MultiTickerRangePickerComponent,
     AssetIdentityComponent,
+    DataSourceComponent,
+    TimestampDisplayComponent,
   ],
   templateUrl: './batch-runner.component.html',
   styleUrl: './batch-runner.component.scss',
@@ -167,11 +241,9 @@ export class BatchRunnerComponent {
   targetType = signal('directional');
 
   // Single MultiTickerRange replaces (selectedTickers, fromDate, toDate).
-  // Cross-sectional research is daily-resolution by default; the picker
-  // exposes minute/hour/daily but the jobs route accepts MultiTickerRequest's
-  // base defaults (multiplier=1, timespan="minute") if the picker emits
-  // them. We initialize to daily / multiplier=1 to match the historical
-  // shape (cross-sectional studies don't typically use sub-daily bars).
+  // The study runs on daily bars only (its targets look one and five sessions
+  // ahead), so the picker's Sampling card is hidden and the range is fixed at
+  // daily / multiplier 1; the backend refuses any other resolution with a reason.
   range = signal<MultiTickerRange>({
     symbols: [...DEFAULT_TICKERS],
     from: '2025-09-02',
@@ -179,8 +251,6 @@ export class BatchRunnerComponent {
     resolution: 'daily',
     multiplier: 1,
   });
-  readonly availableMultipliers: readonly number[] = [1];
-  readonly availableResolutions: readonly Resolution[] = ['minute', 'hour', 'daily'];
 
   // Run state — survives tab switches because JobsService is providedIn:'root'.
   // We track the active job id locally; the JobsService holds the canonical
@@ -366,13 +436,53 @@ export class BatchRunnerComponent {
     return 'unknown';
   });
 
+  /** The members left out of the statistics, each with its reason (T18). */
+  readonly universe = computed<StudyUniverse | null>(() => this.result()?.universe ?? null);
+
+  readonly isPartial = computed<boolean>(() => this.result()?.status === 'partial');
+
+  readonly dataSource = computed<CrossSectionalDataSource | null>(() => this.result()?.dataSource ?? null);
+
+  /** True when the result on screen is a stored one rather than a fresh computation. */
+  readonly servedFromCache = computed<boolean>(() => this.dataSource()?.cache.hit ?? false);
+
+  readonly cachedAtMs = computed<number | null>(() => this.dataSource()?.cache.cachedAtMs ?? null);
+
+  /**
+   * One line naming each input and its source. The result as a whole is not "lake": the stock bars are, the option
+   * inputs are the provider's live answers.
+   */
+  readonly dataSourceLine = computed<string>(() => {
+    const source = this.dataSource();
+    if (!source) return '';
+    const parts: string[] = [];
+    const stock = source.stockBars;
+    if (stock) {
+      const w = stock.coverage.window;
+      parts.push(
+        `Stock bars: data lake, ${stock.priceAdjustmentMode.replace(/_/g, ' ')} daily, ${stock.sessionPolicy} session — ` +
+          `${w.expectedSessions} member-sessions: ${w.reused} reused, ${w.added} added, ${w.missing} missing, ${w.failed} failed`,
+      );
+    }
+    const options = source.optionInputs;
+    if (options) {
+      const provider = Object.values(options.inputs)[0]?.provider ?? 'provider';
+      parts.push(
+        `Option inputs: ${provider} live requests, not archived — ${options.failuresTotal} failed; ` +
+          `risk-free rate: ${options.riskFreeRate.provider.toUpperCase()}, ${options.riskFreeRate.daysFromDefault} days on the default`,
+      );
+    }
+    return parts.join(' · ');
+  });
+
   // Note: ticker selection (toggle / All / None) now lives inside
   // <app-multi-ticker-range-picker>. The component refuses to leave the
   // symbols array empty (keeps at least one selected); the explicit
   // empty-list guard below catches any edge case where consumers reach
   // runBatch with an empty universe.
 
-  async runBatch(): Promise<void> {
+  /** Start the study. ``force`` skips the stored result for these exact inputs and recomputes. */
+  async runBatch(force = false): Promise<void> {
     if (this.range().symbols.length === 0) {
       this.error.set('Select at least one ticker');
       return;
@@ -395,6 +505,7 @@ export class BatchRunnerComponent {
         ...wire,
         feature_name: this.featureName(),
         target_type: this.targetType(),
+        force,
       });
       this.jobId.set(id);
     } catch (err: unknown) {
@@ -488,8 +599,13 @@ export class BatchRunnerComponent {
         error: r.error ?? undefined,
         validity: r.validity,
         lowConfidence: r.low_confidence,
+        exclusion: r.exclusion ?? undefined,
+        optionRequestsFailed: r.option_inputs?.failures_total || undefined,
       })),
       summary: raw.summary,
+      status: raw.status,
+      universe: raw.universe ? this.toUniverse(raw.universe) : undefined,
+      dataSource: raw.data_source ? this.toDataSource(raw.data_source) : undefined,
       tickersTestedRaw: raw.tickers_tested_raw,
       tickersValid: raw.tickers_valid,
       validitySummary: raw.validity_summary
@@ -537,6 +653,80 @@ export class BatchRunnerComponent {
             advanceCriteria: raw.stage_info.advance_criteria.map(this.toCriterion),
           }
         : undefined,
+    };
+  }
+
+  private toUniverse(u: StudyUniverseRaw): StudyUniverse {
+    return {
+      requested: u.requested,
+      requestedCount: u.requested_count,
+      evaluated: u.evaluated,
+      evaluatedCount: u.evaluated_count,
+      excluded: u.excluded,
+      excludedCount: u.excluded_count,
+      degraded: u.degraded.map((d) => ({ ticker: d.ticker, failuresTotal: d.failures_total })),
+      denominator: u.denominator,
+      inclusionPolicy: u.inclusion_policy,
+      complete: u.complete,
+    };
+  }
+
+  private toDataSource(raw: CrossSectionalDataSourceRaw): CrossSectionalDataSource {
+    const group = (g: StudyCoverageGroupRaw): StudyCoverageGroup => ({
+      expectedSessions: g.expected_sessions,
+      reused: g.reused,
+      added: g.added,
+      missing: g.missing,
+      failed: g.failed,
+      building: g.building,
+      corrupt: g.corrupt,
+      unavailableFromProvider: g.unavailable_from_provider,
+    });
+    const provider = (p: ProviderInputSourceRaw): ProviderInputSource => ({
+      provider: p.provider,
+      endpoint: p.endpoint,
+      attempted: p.attempted,
+      failed: p.failed,
+      observationDigest: p.observation_digest,
+      reproducible: p.reproducible,
+    });
+    const stock = raw.stock_bars;
+    const options = raw.option_inputs;
+    return {
+      kind: raw.kind,
+      calculationVersion: raw.calculation_version,
+      stockBars: stock
+        ? {
+            kind: stock.kind,
+            provider: stock.provider,
+            priceAdjustmentMode: stock.price_adjustment_mode,
+            sessionPolicy: stock.session_policy,
+            barResolution: stock.bar_resolution,
+            windowStartMs: stock.window_start_ms,
+            windowEndMs: stock.window_end_ms,
+            identityDigest: stock.identity_digest,
+            universeSnapshotDigest: stock.universe_snapshot_digest,
+            coverage: { window: group(stock.coverage.window), artifacts: stock.coverage.artifacts },
+            members: stock.members,
+          }
+        : null,
+      optionInputs: options
+        ? {
+            inputs: {
+              option_expiries: provider(options.inputs.option_expiries),
+              option_contracts: provider(options.inputs.option_contracts),
+              option_bars: provider(options.inputs.option_bars),
+            },
+            riskFreeRate: {
+              provider: options.risk_free_rate.provider,
+              daysFromFred: options.risk_free_rate.days_from_fred,
+              daysFromDefault: options.risk_free_rate.days_from_default,
+              reproducible: options.risk_free_rate.reproducible,
+            },
+            failuresTotal: options.failures_total,
+          }
+        : null,
+      cache: { hit: raw.cache.hit, cachedAtMs: raw.cache.cached_at_ms },
     };
   }
 

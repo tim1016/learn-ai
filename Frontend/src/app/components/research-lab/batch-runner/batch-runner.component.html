@@ -23,12 +23,11 @@
     </div>
   </div>
 
-  <!-- Ticker universe + dates + sampling — owned by the multi-ticker picker. -->
+  <!-- Ticker universe + dates — owned by the multi-ticker picker. The study is daily-only, so no Sampling card. -->
   <app-multi-ticker-range-picker
     [(value)]="range"
     [showAutoFetch]="false"
-    [availableResolutions]="availableResolutions"
-    [availableMultipliers]="availableMultipliers"
+    [hideSampling]="true"
     title="Cross-sectional data"
   />
 
@@ -61,6 +60,16 @@
         (onClick)="newRun()"
       />
     }
+    @if (servedFromCache() && !loading()) {
+      <p-button
+        label="Run again, ignoring the stored result"
+        icon="pi pi-refresh"
+        severity="secondary"
+        [outlined]="true"
+        size="small"
+        (onClick)="runBatch(true)"
+      />
+    }
   </div>
 
   <!-- Shared live-progress panel — also used by feature-runner and signal-engine. -->
@@ -80,6 +89,41 @@
 
   <!-- Final aggregate result -->
   @if (result(); as res) {
+
+    <!-- Where every input came from, and whether this is a stored result. -->
+    @if (dataSource()) {
+      <app-data-source class="block mb-2" origin="Lake + Polygon" [method]="dataSourceLine()" />
+      @if (servedFromCache()) {
+        <p class="text-sm text-color-secondary mb-3" data-testid="cache-note">
+          Stored result, computed
+          <app-timestamp-display [value]="cachedAtMs()" />
+          from the same admitted data.
+        </p>
+      }
+    }
+
+    <!-- A universe that is not fully evaluated says so, member by member. -->
+    @if (universe(); as uni) {
+      @if (isPartial()) {
+        <div class="ci-unreliable-banner mb-4" data-testid="partial-universe">
+          <i class="pi pi-exclamation-triangle"></i>
+          <span>
+            <strong>Partial universe:</strong>
+            {{ uni.evaluatedCount }} of {{ uni.requestedCount }} requested members are in the statistics, so every
+            statistic divides by {{ uni.denominator }}. {{ uni.inclusionPolicy.description }}
+            @for (e of uni.excluded; track e.ticker) {
+              <span class="block"><app-asset-identity [symbol]="e.ticker" size="xs" /> — {{ e.reason }}</span>
+            }
+            @for (d of uni.degraded; track d.ticker) {
+              <span class="block">
+                <app-asset-identity [symbol]="d.ticker" size="xs" /> — in the statistics, but {{ d.failuresTotal }} option
+                request(s) went unanswered while its IV history was built.
+              </span>
+            }
+          </span>
+        </div>
+      }
+    }
 
     <!-- Verdict block — Stage 0/1/2/3 -->
     @if (stageInfo(); as stage) {
@@ -316,6 +360,12 @@
         @if (row.error) {
           <tr>
             <td colspan="8" class="text-red-500 text-sm">{{ row.error }}</td>
+          </tr>
+        } @else if (row.optionRequestsFailed) {
+          <tr>
+            <td colspan="8" class="text-sm text-color-secondary">
+              {{ row.optionRequestsFailed }} option request(s) went unanswered while this ticker's IV history was built.
+            </td>
           </tr>
         }
       </ng-template>

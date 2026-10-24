@@ -596,6 +596,10 @@ export interface TickerBatchResult {
    *  effective sample size is below the trust threshold (default 10).
    *  Surfaced in the UI as a "low confidence" annotation on the row. */
   lowConfidence?: boolean;
+  /** Set when the ticker is left out of the statistics: where, why, and whether asking again could answer differently. */
+  exclusion?: MemberExclusion;
+  /** Option requests the provider did not answer while this ticker's IV history was built. */
+  optionRequestsFailed?: number;
 }
 
 export interface ValiditySummary {
@@ -603,6 +607,80 @@ export interface ValiditySummary {
   invalidIv: number;
   invalidData: number;
   errored: number;
+}
+
+/** Where in the study a requested member was left out of the statistics. */
+export type MemberExclusionStage = 'stock_bars' | 'iv_inputs' | 'iv_diagnostics' | 'computation';
+
+/** A requested member that is not in the statistics: where, the typed code, the plain reason, and whether asking again could answer differently. */
+export interface MemberExclusion {
+  ticker: string;
+  stage: MemberExclusionStage;
+  code: string;
+  reason: string;
+  retryable: boolean;
+}
+
+/**
+ * Every requested member, accounted for (#3524): how many were asked for, how many are in the statistics (the
+ * denominator of every one of them), and why each of the rest is not.
+ */
+export interface StudyUniverse {
+  requested: string[];
+  requestedCount: number;
+  evaluated: string[];
+  evaluatedCount: number;
+  excluded: MemberExclusion[];
+  excludedCount: number;
+  /** In the statistics, but built their IV history while provider requests went unanswered. */
+  degraded: { ticker: string; failuresTotal: number }[];
+  denominator: number;
+  inclusionPolicy: { name: string; description: string };
+  /** True only when every requested member is evaluated and none is degraded. */
+  complete: boolean;
+}
+
+/** One provider-sourced option input: named, counted, and fingerprinted by what the provider answered. */
+export interface ProviderInputSource {
+  provider: string;
+  endpoint?: string;
+  attempted?: number;
+  failed?: number;
+  observationDigest?: string | null;
+  reproducible: boolean;
+}
+
+/**
+ * Where a cross-sectional study's inputs came from (#3524). The result as a whole is not "lake": the stock bars are
+ * the lake's, admitted per member; the option inputs are the provider's, live and not archived.
+ */
+export interface CrossSectionalDataSource {
+  kind: 'composite';
+  calculationVersion: string;
+  stockBars: {
+    kind: 'lake';
+    provider: string;
+    priceAdjustmentMode: string;
+    /** `regular` is the scheduled session; `extended` folds 04:00-20:00 ET. */
+    sessionPolicy: 'regular' | 'extended';
+    barResolution: 'day';
+    windowStartMs: number;
+    windowEndMs: number;
+    identityDigest: string;
+    universeSnapshotDigest: string | null;
+    /** Member-sessions: each expected unit is one member's one session. */
+    coverage: {
+      window: StudyCoverageGroup;
+      artifacts: { fetched: number; reused: number; refreshed: number };
+    };
+    members: { ticker: string; status: 'admitted' | 'excluded'; code?: string; reason?: string }[];
+  } | null;
+  optionInputs: {
+    inputs: Record<'option_expiries' | 'option_contracts' | 'option_bars', ProviderInputSource>;
+    riskFreeRate: { provider: string; daysFromFred: number; daysFromDefault: number; reproducible: boolean };
+    failuresTotal: number;
+  } | null;
+  cache: { hit: boolean; cachedAtMs: number | null };
 }
 
 export interface AggregateIcCi {
@@ -670,6 +748,10 @@ export interface BatchResearchResult {
    *  daily stock returns). Disclosed via tooltip. */
   nEffAssetsMethod?: 'ic' | 'returns';
   stageInfo?: CrossSectionalStageInfo;
+  /** `partial` when any requested member is not evaluated or was built on unanswered provider requests. */
+  status?: 'complete' | 'partial';
+  universe?: StudyUniverse;
+  dataSource?: CrossSectionalDataSource;
   error?: string;
 }
 
