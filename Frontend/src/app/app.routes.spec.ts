@@ -11,7 +11,6 @@ import { describe, expect, it } from 'vitest';
 
 import { appConfig } from './app.config';
 import { AlpacaAccountWorkspaceComponent } from './components/brokers/alpaca-workspace/alpaca-account-workspace.component';
-import { DataLakeObservatoryComponent } from './components/data-lake-observatory/data-lake-observatory.component';
 import { AlpacaSurfaceNotReadyTabComponent } from './components/brokers/alpaca-workspace/alpaca-surface-not-ready-tab.component';
 import { AlpacaSettingsPageComponent } from './components/brokers/alpaca-desk/configuration/alpaca-settings-page.component';
 import { AlpacaAccountListPageComponent } from './components/brokers/alpaca-desk/alpaca-account-list-page.component';
@@ -161,14 +160,6 @@ describe('routes', () => {
 
     expect(await route.loadComponent()).toBe(OptionsBacktestPageComponent);
     expect(route.data).toMatchObject({ stickyContent: true });
-  });
-
-  it('lazily loads the Data Lake Observatory and keeps it distinct from Data Lab', async () => {
-    const route = routes.find((candidate) => candidate.path === 'data-lake');
-    if (route?.loadComponent === undefined) throw new Error('Data Lake Observatory route is missing.');
-
-    expect(await route.loadComponent()).toBe(DataLakeObservatoryComponent);
-    expect(routes.find((candidate) => candidate.path === 'data-lab')?.loadChildren).toBeDefined();
   });
 
   it('serves the account list — and its ?deploy intent — from the one broker route', async () => {

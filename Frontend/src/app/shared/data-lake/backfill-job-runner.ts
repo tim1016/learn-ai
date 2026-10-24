@@ -81,7 +81,7 @@ function asNumber(value: unknown): number | null {
  * through `JobsService.startJob`, the `job.*` lifecycle fold over the
  * job's single Redis-backed SSE stream, terminal detection, and teardown.
  *
- * Consumers project their own domain state onto a run — the Observatory
+ * Consumers project their own domain state onto a run — the Lake tab's
  * panel folds `data_lake.backfill_day` for its receipt table, while both it
  * and the symbol picker consume this runner's typed lifecycle. There is one
  * submission path, one stream subscription per job, and one definition of

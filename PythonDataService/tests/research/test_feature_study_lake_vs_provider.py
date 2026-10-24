@@ -15,8 +15,11 @@ forward-target validity), and names the cause in the reconcile taxonomy (``times
 
 The lake's 1/10,000 price grid is ``data-quality``, never ``precision``: it changes the input data, and ``precision``
 is floating-point accumulation. A tolerance may loosen only for the latter, so each output this divergence moves is
-pinned at its *measured* magnitude (``test_prices_finer_than_the_lake_grid...``), with a stated margin, at three price
-levels, because the movement of an indicator such as RSI depends on the price it is computed at.
+pinned at its *recorded* magnitude (``test_prices_finer_than_the_lake_grid...``) at three price levels, because the
+movement of an indicator such as RSI depends on the price it is computed at. A recorded magnitude is an observation, and
+its own reproducibility on another CPU is a ``precision`` question with a derived answer, not a multiple of the
+magnitude: see "What float noise can move" below. The same applies to a rank statistic (the mean IC), which float noise
+moves by reordering values it cannot tell apart.
 
 Not provable offline: that Polygon's own N-minute aggregates equal a fold of its minute aggregates. Cases that fold use
 an independent reference for the vendor side (``vendor_fold``); the equivalence with the live API is an assumption of
@@ -30,8 +33,10 @@ from datetime import date
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 import respx
+from scipy import stats
 
 from app.data_lake.admission import read_committed_bytes
 from app.data_lake.capture_finality import CLAIM_LEASE_MS, VENDOR_DELAY_MS, capture_final_ms
@@ -42,6 +47,8 @@ from app.research.config import ResearchConfig
 from app.research.features.ta_features import TechnicalFeatures
 from app.research.runner import run_feature_research
 from app.research.study_inputs import StudyInputRefusal, admit_minute_inputs, bars_as_rows, fold_minute_bars
+from app.research.target import compute_forward_log_return
+from app.research.validation.ic import compute_information_coefficient
 from app.services.feature_study_service import FeatureStudyParams, feature_study_identity
 from tests._helpers.fake_lake_catalog import FakeCatalog, install_fake_catalog, mock_launcher, point_lake_writer_at_tmp
 from tests._helpers.lake_study import DENSE, commit_bars, corrected_day, lake_file, provider_rows
@@ -166,6 +173,88 @@ def compare(provider: list[dict], lake: list[dict], window: list[date], *, deriv
     return result
 
 
+# ---------------------------------------------------------------------------
+# What float noise can move
+# ---------------------------------------------------------------------------
+#
+# A number recorded from one run is reproducible on another CPU only to the float noise of the computation that made it.
+# Both kinds of recorded output below are class ``precision`` (floating-point accumulation), and neither tolerance is a
+# multiple of the recorded value, because the noise does not scale with it.
+
+#: A feature's largest movement between the paths, a *continuous* output. Each feature is a rolling or exponentially
+#: weighted reduction over N <= 9,130 bars, whose float64 error is at most N * eps * scale = 9,130 * 2.2e-16 * 150 = 3e-10
+#: at the largest scale here (MACD, in price units; RSI is on 0-100). The movement is a difference of two such
+#: evaluations: at most 6e-10 on any platform. Measured between two mathematically identical series (the split case
+#: below), 3.1e-12. This is the repo's strict-float default.
+FEATURE_ATOL = 1e-9
+
+#: A mean IC is a mean of daily rank correlations, and a rank is not continuous in the values it orders. Two feature
+#: values (or two forward returns) that the mathematics makes equal come out of float arithmetic a few ulps apart, in an
+#: order that can depend on the platform (instruction set, FMA contraction, vectorised reductions). Reordering such a
+#: pair moves a daily Spearman rho by 12 * |rank gap in the other variable| / (n * (n^2 - 1)), up to 1.5e-5 at n = 900.
+#: That is not N * eps: it is a count of near-ties times a rank gap, and it is what moved the split case's mean IC from
+#: 2.1e-7 (local) to 5.9e-7 (CI). ``tie_envelope`` bounds it from the data. "Equal" means within these noise floors,
+#: set well above the float error of the value (RSI, scale 100: 4e-10 worst case by the bound above, 3e-12 measured; a
+#: log return: 4 eps ~ 1e-15) and well below the gaps the data otherwise shows (on the split tape the RSI pairs fall in
+#: two clusters, 26 under 1e-9 and the rest over 1e-6; the returns, 6 under 1e-12 and the rest over 1e-9).
+FEATURE_TIE_NOISE = 1e-9
+TARGET_TIE_NOISE = 1e-12
+
+#: The envelope omits two second-order terms: a pair tied in both variables (+-1 on the sum of rank products, 1.6e-8 of
+#: rho at n = 900) and the rank variance that average ranks shrink (<= 1e-9). Each is orders below the 5e-6 envelope.
+RANK_SECOND_ORDER_ATOL = 1e-7
+
+
+@dataclass(frozen=True)
+class TieEnvelope:
+    """The range a window's mean IC spans when float noise reorders values it cannot tell apart."""
+
+    lo: float
+    hi: float
+
+    @property
+    def width(self) -> float:
+        return self.hi - self.lo
+
+
+def _ranks_with_ties_ordered_by(values: np.ndarray, tie_break: np.ndarray, noise: float) -> np.ndarray:
+    """0-based ranks of ``values``, where values within ``noise`` of their neighbour are ordered by ``tie_break``."""
+    order = np.argsort(values, kind="stable")
+    group = np.concatenate(([0], np.cumsum(np.diff(values[order]) > noise)))
+    ranks = np.empty(len(values))
+    ranks[order[np.lexsort((tie_break[order], group))]] = np.arange(len(values))
+    return ranks
+
+
+def tie_envelope(rows: list[dict]) -> TieEnvelope:
+    """The mean IC (the study's, on ``rows``) with every group of float-indistinguishable values ordered to agree with the
+    other variable's ranks (``hi``) and to disagree with them (``lo``).
+
+    Within a group, the sum of rank products is extremal at those two orders (the rearrangement inequality), so the daily
+    rho of any other order lies between. The feature's groups are ordered first, then the target's against the result.
+    """
+    config = ResearchConfig()
+    frame = pd.DataFrame(rows).sort_values("timestamp").reset_index(drop=True)
+    frame["feature"] = TechnicalFeatures.compute_feature("rsi_14", rows).to_numpy()
+    frame["target"] = compute_forward_log_return(bars=rows, horizon_minutes=config.horizon_minutes).values.to_numpy()
+    frame["date"] = pd.to_datetime(frame["timestamp"], unit="ms", utc=True).dt.date.astype(str)
+    counted = compute_information_coefficient(
+        frame["feature"], frame["target"], frame["timestamp"], correlation_method=config.ic_correlation_method
+    ).daily_ic_dates  # the days the study itself counts
+    lows, highs = [], []
+    for day in counted:
+        clean = frame.loc[frame["date"] == day, ["feature", "target"]].dropna()
+        x, y = clean["feature"].to_numpy(), clean["target"].to_numpy()
+        rho = []
+        for sign in (+1, -1):
+            rx = _ranks_with_ties_ordered_by(x, sign * stats.rankdata(y), FEATURE_TIE_NOISE)
+            ry = _ranks_with_ties_ordered_by(y, sign * rx, TARGET_TIE_NOISE)
+            rho.append(np.corrcoef(rx, ry)[0, 1])
+        lows.append(min(rho))
+        highs.append(max(rho))
+    return TieEnvelope(lo=float(np.mean(lows)), hi=float(np.mean(highs)))
+
+
 @dataclass
 class World:
     """The in-memory catalog and the temporary lake the lake path runs against."""
@@ -221,38 +310,39 @@ def test_coarser_bars_fold_to_the_same_bars_as_the_vendor_side_aggregate(world, 
     assert max(comparison.feature_max_diff.values()) <= 1e-9
 
 
-#: What the lake's price grid moves, measured on this pinned payload (seed 11, the DST window, 9,130 bars) at three
+#: What the lake's price grid moves, recorded from this pinned payload (seed 11, the DST window, 9,130 bars) at three
 #: price levels, as the largest absolute difference between the two paths' values at a shared bar, and the window's
 #: mean IC. Prices carry five or six decimals, finer than the grid. The movement of RSI and momentum grows as the price
 #: falls: a rounding of at most 5e-5 is a larger share of a bar-to-bar change on a $2 name than on a $150 one.
-#: Re-measure (print ``feature_max_diff`` and ``mean_ic`` per case) only when the pinned tape or the lake's encoding
-#: intentionally changes; never to make a failing test pass.
-QUANTIZATION_MEASURED = {
-    "price_150": (150.0, 5, {"mean_ic": 4.64e-6, "momentum_5m": 6.02e-7, "rsi_14": 1.109e-2, "realized_vol_30": 2.04e-7, "macd_signal": 8.52e-6}),
-    "price_12": (12.0, 5, {"mean_ic": 3.99e-4, "momentum_5m": 7.50e-6, "rsi_14": 1.118e-1, "realized_vol_30": 2.21e-6, "macd_signal": 8.49e-6}),
-    "price_2": (2.0, 6, {"mean_ic": 4.17e-4, "momentum_5m": 4.77e-5, "rsi_14": 6.354e-1, "realized_vol_30": 1.61e-5, "macd_signal": 8.98e-6}),
+#: Re-record (print ``feature_max_diff`` and ``abs(mean_ic[1] - mean_ic[0])`` per case) only when the pinned tape or the
+#: lake's encoding intentionally changes; never to make a failing test pass. Digits are kept to 1e-10 or finer, below
+#: ``FEATURE_ATOL``, so the recording adds no tolerance of its own.
+QUANTIZATION_RECORDED = {
+    "price_150": (150.0, 5, {"mean_ic": 4.640168e-6, "momentum_5m": 6.01537004e-7, "rsi_14": 1.108764307e-2, "realized_vol_30": 2.034791103e-7, "macd_signal": 8.521013899e-6}),
+    "price_12": (12.0, 5, {"mean_ic": 3.989265e-4, "momentum_5m": 7.499870746e-6, "rsi_14": 1.118103039e-1, "realized_vol_30": 2.211433761e-6, "macd_signal": 8.492849363e-6}),
+    "price_2": (2.0, 6, {"mean_ic": 4.171099e-4, "momentum_5m": 4.772232477e-5, "rsi_14": 6.354326903e-1, "realized_vol_30": 1.611649952e-5, "macd_signal": 8.984062728e-6}),
 }
-#: The headroom over a measured movement. The tape is seeded and the arithmetic deterministic, so this only absorbs
-#: platform differences in float summation order inside pandas and numpy; a real change in the lake's encoding, or in
-#: a feature's math, moves these by orders of magnitude more.
-MEASURED_MARGIN = 1.5
 
 
-@pytest.mark.parametrize(("start_price", "decimals", "measured"), QUANTIZATION_MEASURED.values(), ids=QUANTIZATION_MEASURED)
-def test_prices_finer_than_the_lake_grid_move_each_output_by_its_measured_amount_which_depends_on_the_price(
-    world, start_price, decimals, measured
+@pytest.mark.parametrize(("start_price", "decimals", "recorded"), QUANTIZATION_RECORDED.values(), ids=QUANTIZATION_RECORDED)
+def test_prices_finer_than_the_lake_grid_move_each_output_by_its_recorded_amount_which_depends_on_the_price(
+    world, start_price, decimals, recorded
 ):
     """Cause: ``data-quality`` (input quantization). The lake rounds half-up to 1/10,000 (``lean_writer.to_deci_cent``);
     the provider path does not. That changes the input data, so it is not ``precision`` and no float tolerance covers it.
 
-    Each recorded output is pinned at its measured movement times ``MEASURED_MARGIN``, so a lake encoding change that
-    moved the mean IC by 1e-3 would fail here. The table above is what D02 is decided on: RSI moves by about 0.01 point
-    on a $150 name, 0.1 on a $12 name and 0.6 on a $2 name; the mean IC by 5e-6, 4e-4 and 4e-4.
+    Each recorded output is pinned to the movement measured on the pinned tape, so a lake encoding change that moved the
+    mean IC by 1e-3 would fail here. The table above is what D02 is decided on: RSI moves by about 0.01 point on a $150
+    name, 0.1 on a $12 name and 0.6 on a $2 name; the mean IC by 5e-6, 4e-4 and 4e-4. The recording itself is read back
+    at the float noise of the computation (``precision``, derived under "What float noise can move"): a feature to
+    ``FEATURE_ATOL``, the mean IC to the reach of the near-ties in the two series it is taken from, which is nil when
+    the series hold none (the $150 tape) and widest on the $2 tape, where the lake's grid manufactures ties.
     """
     tape = tape_for(DST_WINDOW, start_price=start_price, decimals=decimals)
     mock_vendor("SPY", tape, adjusted=tape)
+    provider, lake = provider_rows(tape, DST_WINDOW), lake_rows(DST_WINDOW)
 
-    comparison = compare(provider_rows(tape, DST_WINDOW), lake_rows(DST_WINDOW), DST_WINDOW)
+    comparison = compare(provider, lake, DST_WINDOW)
 
     assert comparison.errors == (None, None)
     assert comparison.timestamps_changed == 0
@@ -261,11 +351,14 @@ def test_prices_finer_than_the_lake_grid_move_each_output_by_its_measured_amount
     assert comparison.feature_valid_moved == 0 and comparison.target_valid[0] == comparison.target_valid[1]
     assert comparison.feature_max_diff["volume_zscore"] == 0.0, "volume is not a price"
     for name in ("momentum_5m", "rsi_14", "realized_vol_30", "macd_signal"):
-        # atol is the measured movement with its margin; rtol is 0 because the quantity compared is itself a difference.
-        assert 0 < comparison.feature_max_diff[name] <= measured[name] * MEASURED_MARGIN, name
+        assert comparison.feature_max_diff[name] > 0, name
+        np.testing.assert_allclose(comparison.feature_max_diff[name], recorded[name], atol=FEATURE_ATOL, rtol=0, err_msg=name)
     ic_provider, ic_lake = comparison.mean_ic
-    np.testing.assert_allclose(ic_lake, ic_provider, atol=measured["mean_ic"] * MEASURED_MARGIN, rtol=0)
     assert abs(ic_lake - ic_provider) > 0, "the divergence is real: the IC does move"
+    # Each series' mean IC may sit anywhere in its own envelope on another platform, so the movement may differ from the
+    # recorded one by at most the two envelopes' widths.
+    reach = tie_envelope(provider).width + tie_envelope(lake).width
+    np.testing.assert_allclose(abs(ic_lake - ic_provider), recorded["mean_ic"], atol=reach + RANK_SECOND_ORDER_ATOL, rtol=0)
 
 
 def test_fractional_share_volume_is_kept_exactly_by_both_paths(world):
@@ -333,7 +426,8 @@ def test_a_split_announced_after_capture_is_not_in_a_held_window_until_the_lake_
     mock_vendor("SPY", raw, adjusted=adjusted, splits=[split], calls=calls)
     provider_after_split = provider_rows(raw, held, adjusted=adjusted)
 
-    stale = compare(provider_after_split, lake_rows(held), held)
+    stale_lake = lake_rows(held)
+    stale = compare(provider_after_split, stale_lake, held)
     lake_rows(later)  # any later capture of the symbol rebuilds its stale adjusted days
     refreshed = compare(provider_after_split, lake_rows(held), held)
 
@@ -345,9 +439,14 @@ def test_a_split_announced_after_capture_is_not_in_a_held_window_until_the_lake_
     for unit_free in ("momentum_5m", "rsi_14", "realized_vol_30", "volume_zscore"):
         assert stale.feature_max_diff[unit_free] <= 1e-9, unit_free
     assert stale.feature_max_diff["macd_signal"] > 1.0, "a price-level output moves by the split factor (measured 3.5 here)"
-    # The IC is scale-free too, but a rank correlation breaks ties on float noise: values equal to 1e-13 on the two
-    # bases can order differently. That is ``precision`` (float accumulation), measured at 2.1e-7 on this tape.
-    np.testing.assert_allclose(stale.mean_ic[1], stale.mean_ic[0], atol=2.1e-7 * MEASURED_MARGIN, rtol=0)
+    # The IC is scale-free too, but a rank correlation orders values that are equal to 1e-12 by float noise, and the two
+    # bases (0.1x prices, stored to 4 decimals, against the originals) round differently. That is ``precision``: the
+    # IC may differ by at most the reach of the near-ties, which ``tie_envelope`` derives from the data. It is a bound,
+    # not a measurement: the movement was 2.1e-7 locally and 5.9e-7 on CI, one platform's draw of the same ties.
+    provider_envelope, lake_envelope = tie_envelope(provider_after_split), tie_envelope(stale_lake)
+    reach = max(lake_envelope.hi - provider_envelope.lo, provider_envelope.hi - lake_envelope.lo)
+    assert reach < 1e-5, "the near-ties are few enough that this bound still distinguishes a real movement of the IC"
+    assert abs(stale.mean_ic[1] - stale.mean_ic[0]) <= reach + RANK_SECOND_ORDER_ATOL
     assert refreshed.prices_changed == 0 and refreshed.timestamps_changed == 0
     assert max(refreshed.feature_max_diff.values()) <= 1e-9
     assert calls.count > 0

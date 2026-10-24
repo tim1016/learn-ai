@@ -1,0 +1,93 @@
+<div class="lake__intro">
+  <p class="lake__lead">Which symbols a run can read today, what is missing, and a backfill to fix it.</p>
+  <div class="lake__views">
+    <app-lake-toggle label="Bars" [options]="barTypeOptions" [value]="bars()" (picked)="bars.set($event)" />
+    <app-lake-toggle
+      label="Price adjustment"
+      [options]="modeOptions"
+      [value]="mode()"
+      (picked)="mode.set($event)"
+    />
+  </div>
+</div>
+
+<!-- Twelve columns: full-width rows, then a main panel on eight beside its companion on four. -->
+<div class="lake-grid">
+  @if (totals().rebuildSymbolCount > 0) {
+    <app-readiness-banner
+      class="span-12"
+      [totals]="totals()"
+      [selected]="selectedRow()?.rebuild ?? null"
+      [busy]="backfillBusy()"
+      [progress]="queueProgress()"
+      (rebuildAll)="rebuildAll()"
+      (rebuildSelected)="rebuild([$event])"
+    />
+  }
+
+  @if (gapRows().length > 0) {
+    <app-gap-banner
+      class="span-12"
+      [rows]="gapRows()"
+      [busy]="backfillBusy()"
+      [progress]="fillProgress()"
+      (fill)="rebuild($event, 'fill')"
+    />
+  }
+
+  <app-session-needs class="span-12" [mode]="mode()" [missingSymbolCount]="totals().rebuildSymbolCount" />
+
+  <app-lake-panel
+    class="span-8"
+    heading="Symbols"
+    headingId="lake-symbols-heading"
+    [problem]="readinessProblem()"
+    [pending]="symbolsPending()"
+  >
+    <app-symbol-readiness-table
+      [rows]="rows()"
+      [selectedSymbol]="selectedSymbol()"
+      [busy]="backfillBusy()"
+      (symbolSelected)="selectedSymbol.set($event)"
+      (rebuild)="rebuild([$event])"
+    />
+  </app-lake-panel>
+
+  <app-lake-panel class="span-4" heading="Backfill" headingId="lake-backfill-heading">
+    <app-lake-backfill-panel
+      [defaults]="backfillDefaults()"
+      [seedStartTradingDate]="seedStart"
+      [seedEndTradingDate]="seedEnd"
+      [priceAdjustmentMode]="mode()"
+      (runFinished)="onRunFinished()"
+    />
+  </app-lake-panel>
+
+  <app-lake-panel
+    class="span-8"
+    heading="Sessions"
+    headingId="lake-sessions-heading"
+    [problem]="sessionsProblem()"
+    [pending]="sessionsPending()"
+  >
+    @if (selectedSymbol(); as symbol) {
+      <app-asset-identity slot="head" [symbol]="symbol" size="sm" />
+    }
+    <app-coverage-heatmap [board]="board()" [selected]="selection()" (cellSelected)="selectSession($event)" />
+  </app-lake-panel>
+
+  <app-lake-panel class="span-4" headingId="lake-session-heading">
+    <app-session-inspector
+      [selection]="selection()"
+      [mode]="mode()"
+      [rebuildRequest]="selectedRow()?.rebuild ?? null"
+      [busy]="backfillBusy()"
+      (rebuild)="rebuild([$event])"
+      (receiptOpened)="receipt.set($event)"
+    />
+  </app-lake-panel>
+
+  <app-lake-storage-fold class="span-12" [summary]="storageSummary()" [problem]="storageProblem()" />
+</div>
+
+<app-artifact-inspector-drawer [selection]="receipt()" (closed)="receipt.set(null)" />

@@ -3,8 +3,9 @@ import { alpacaSurfaceRedirectGuard } from "./fleet/alpaca-surface-redirect.guar
 import { homeRedirect } from "./fleet/home-redirect";
 import { RETIRED_LENS_QUERY_PARAM, dropRetiredLensGuard } from "./fleet/retired-lens.guard";
 import { EntryComponent } from "./components/entry/entry.component";
-import { redirectLegacyDataLab } from "./components/data-lab/data-lab-ingress";
 import { brokerClerkRedirectGuard } from "./fleet/broker-clerk-redirect.guard";
+import { dataCheckRoute } from "./operations/data-checks/data-checks";
+import { operationsTabRoute } from "./operations/operations-tabs";
 import { redirectKeepingState } from "./shell/route-redirects";
 
 const loadBrokerLaneUnavailable = () =>
@@ -160,7 +161,7 @@ export const routes: Routes = [
     pathMatch: "full",
   },
   {
-    // Data Lab shell (explore / export / validate child routes). The route
+    // Data Lab shell (explore / export / returns child routes). The route
     // config owns the component-scoped workspace store — see
     // components/data-lab/data-lab.routes.ts.
     path: "data-lab",
@@ -170,14 +171,17 @@ export const routes: Routes = [
       ),
   },
   {
-    // Data-lake catalog surface. This was flag-gated until #1893 retired
-    // DATA_LAKE_ENABLED; the routes are always mounted now, so the page has
-    // no "not enabled" state to render.
+    // The Data Lake Observatory became Operations → Lake. It read no query,
+    // but whatever a bookmark carries goes with it.
     path: "data-lake",
-    loadComponent: () =>
-      import(
-        "./components/data-lake-observatory/data-lake-observatory.component"
-      ).then((m) => m.DataLakeObservatoryComponent),
+    redirectTo: redirectKeepingState(["/operations", "lake"]),
+    pathMatch: "full",
+  },
+  {
+    // Operations: Lake, Option archive, Backups, Math checks and Data checks.
+    path: "operations",
+    loadChildren: () =>
+      import("./operations/operations.routes").then((m) => m.OPERATIONS_ROUTES),
   },
   {
     path: "data-lab-docs",
@@ -187,11 +191,11 @@ export const routes: Routes = [
       ).then((m) => m.DataLabDocsComponent),
   },
   {
-    // Legacy /data-quality bookmark → the Validate child route (or the child
-    // its `mode` names). Query and fragment go with it in the same
-    // navigation; the Data Lab shell applies that query after landing.
+    // The Data Quality page became Operations → Data checks → TradingView
+    // comparison. Its query (`ticker`, `from`, `to`) is the scope the
+    // comparison starts from, and the fragment goes with it.
     path: "data-quality",
-    redirectTo: redirectLegacyDataLab("/data-lab/validate"),
+    redirectTo: redirectKeepingState(dataCheckRoute("tradingview")),
     pathMatch: "full",
   },
   {
@@ -597,11 +601,10 @@ export const routes: Routes = [
     ],
   },
   {
+    // The Golden Fixtures catalog became Operations → Math checks.
     path: "golden-fixtures",
-    loadComponent: () =>
-      import(
-        "./components/golden-fixtures/golden-fixtures-catalog.component"
-      ).then((m) => m.GoldenFixturesCatalogComponent),
+    redirectTo: redirectKeepingState(operationsTabRoute("math-checks")),
+    pathMatch: "full",
   },
   {
     // Broker v2 panel — account-scoped bots list: the canonical roster route

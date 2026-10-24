@@ -1,0 +1,27 @@
+<section class="fixture-run" aria-labelledby="fixture-run-heading">
+  <div class="fixture-run__text">
+    <h2 id="fixture-run-heading">SPY EMA fixture run</h2>
+    <p>
+      Runs the canonical SPY EMA-crossover spec against the engine and keeps the run as a record.
+      It starts only when you press the button.
+    </p>
+  </div>
+  <p-button
+    icon="pi pi-play"
+    label="Run SPY EMA fixture"
+    [loading]="running()"
+    [disabled]="running()"
+    (onClick)="run()"
+  />
+</section>
+
+@if (error(); as message) {
+  <p-message severity="error">{{ message }}</p-message>
+}
+
+@if (lastRunId(); as runId) {
+  <p-message severity="success">
+    Fixture run completed:
+    <a [routerLink]="['/research-lab/strategy-runs', runId]">{{ shortId(runId) }}</a>
+  </p-message>
+}

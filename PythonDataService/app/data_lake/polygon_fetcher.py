@@ -17,8 +17,10 @@ from decimal import Decimal
 
 import httpx
 
+from app.data_lake.types import trading_date_at_ms
 from app.data_lake.work_progress import completed_provider_response
 from app.utils.session_anchors import shift_calendar_years
+from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +71,11 @@ def polygon_history_floor(today: date) -> date:
     the provider will actually serve.
     """
     return shift_calendar_years(today, -POLYGON_HISTORY_YEARS) + timedelta(days=_HISTORY_FLOOR_MARGIN_DAYS)
+
+
+def current_polygon_history_floor() -> date:
+    """``polygon_history_floor`` as of today in ET: the one reading of "now" every caller of the floor shares."""
+    return polygon_history_floor(trading_date_at_ms(now_ms_utc()))
 
 
 class PolygonFetchError(RuntimeError):
