@@ -64,7 +64,8 @@ ESTIMATOR_FNS = {
     "yz": yang_zhang,
 }
 
-#: Bars a year, per supported bar size. The 15-minute figure counts the 26 regular-session bars a day.
+#: Bars a year, per supported bar size. The 15-minute figure counts the 26 regular-session bars a day, though the default
+#: 15-minute session is extended (64 a day): a mismatch that predates #3525 and is an open owner decision there.
 BARS_PER_YEAR: dict[str, int] = {"1d": DAILY_BARS_PER_YEAR, "15m": DAILY_BARS_PER_YEAR * 26}
 
 

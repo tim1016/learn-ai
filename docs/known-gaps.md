@@ -102,8 +102,17 @@ previously tracked items (issues #1655, #1671, #1672, #1674, #1677, #1664,
     page reads "No IV30 at these bars", honestly. Recorded rows carry no tenor (the recorder defaults to 30 days), so
     the Tenor control converts a recorded 30-day IV as if it were the tenor chosen.
   - *The intraday window barely holds a forward value (P3, unchanged).* One month is about 21 sessions and the HF
-    forward RV looks 21 sessions ahead, so nearly every 15-minute bar is in the blind tail. The 15-minute
-    Yang-Zhang lines are annualized at 26 bars a day over extended-hours bars (64 a day).
+    forward RV looks 21 sessions ahead, so nearly every 15-minute bar is in the blind tail.
+  - *The 15-minute annualization does not match its bars (P2, owner decision).* The 15-minute Yang-Zhang lines are
+    annualized at 26 bars a day (`BARS_PER_YEAR`), the regular session, over bars that default to the extended session,
+    64 a day. If every one of the 64 bars carries the same variance, each line understates by about 0.64 times
+    (the square root of 26/64) against a day's variance. If only the 26 regular bars carry the day, the quiet pre-market
+    and after-hours bars dilute any window that touches them, and the line at the window's last bar (about 19:45 ET) is
+    half after-hours. The HF estimator in the same response already counts an extended day as 64 bars, and an early
+    close (14 regular bars) is mis-scaled either way. It predates #3525, which kept `extended` as it was. To decide:
+    fold the trailing lines from the regular session, which is what the annualization assumes, while the HF estimator
+    keeps extended bars; or derive the bars per session from the calendar for the chosen session. Either changes the
+    numbers, so it is the owner's call under D02 and not part of this change.
   - *Unverified assumptions:* Polygon's own 15-minute and day aggregates equal a fold of its minute aggregates, and a
     day bar is the regular session. Both are asserted against an independent stand-in, not live data.
 - **Temporal wire/storage contracts outside Alpaca V2 remain non-numeric
