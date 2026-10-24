@@ -7,7 +7,6 @@ derives state that is not artifact- or registry-backed.
 
 from __future__ import annotations
 
-import re
 from typing import Any, Literal
 
 from pydantic import (
@@ -39,6 +38,7 @@ from app.schemas.traded_asset_acknowledgement import (
     substantive_reason,
 )
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
+from app.utils.symbols import normalized_symbol
 
 
 def _validated_strategy_instance_id(value: str) -> str:
@@ -65,13 +65,6 @@ def _validated_catalog_strategy_key(value: str) -> str:
     return value
 
 
-#: Canonical equity/ETF symbol shape, shared by every schema that accepts a
-#: raw ticker at a wire boundary (do not
-#: write a second regex). ``app.schemas.fleet_history_batch`` reuses this
-#: exact pattern rather than defining its own.
-SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.-]{0,11}$")
-
-
 class BotProcessFact(BaseModel):
     """Process-registry observation for one strategy run.
 
@@ -87,19 +80,6 @@ class BotProcessFact(BaseModel):
     state: Literal["RUNNING", "STOPPING", "EXITED", "UNKNOWN"]
     registry_generation: str
     observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
-
-
-def normalized_symbol(value: str) -> str:
-    """Canonicalize a raw ticker under the shared symbol shape.
-
-    Canonical implementation: this module. Reused by
-    ``app.schemas.fleet_history_batch`` so the two boundaries cannot drift
-    onto different acceptance rules for the same wire concept.
-    """
-    normalized = value.strip().upper()
-    if SYMBOL_RE.fullmatch(normalized) is None:
-        raise ValueError("symbol must start with a letter and contain only letters, numbers, periods, or hyphens")
-    return normalized
 
 
 class AlpacaPaperSizingSelection(BaseModel):

@@ -9,6 +9,8 @@ from uuid import UUID
 from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.utils.symbols import parse_symbol_list
+
 # Compose's own service-name shape: lowercase alphanumerics plus `_`, `.` and
 # `-`, starting with an alphanumeric. Anything else is a deployment mistake,
 # not a service this repo could restart.
@@ -443,6 +445,14 @@ class Settings(BaseSettings):
     # the close (#3525). Comma-separated; empty turns the schedule off. The
     # default is the option archive's underlyings.
     IV_RECORDER_SYMBOLS: str = "SPY,QQQ,IWM"
+
+    @field_validator("IV_RECORDER_SYMBOLS")
+    @classmethod
+    def _iv_recorder_symbols_are_tickers(cls, value: str) -> str:
+        # A bad symbol fails here, when settings load, and not in the lifespan after the research authority was claimed
+        # (that claim must be the last startup step, #3042). The schedule reads the list again with the same rule.
+        parse_symbol_list(value, setting="IV_RECORDER_SYMBOLS")
+        return value
 
 settings = Settings(_env_file=None) if os.environ.get("RESEARCH_WORKER") == "1" else Settings()
 fleet_settings = FleetSettings(_env_file=None) if os.environ.get("RESEARCH_WORKER") == "1" else FleetSettings()
