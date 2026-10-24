@@ -16,9 +16,10 @@ decision (D02) and is listed in the PR.
 
 The lake's 1/10,000 price grid is ``data-quality``, never ``precision``: it changes the input data, and ``precision``
 is floating-point accumulation. A tolerance may loosen only for the latter, so each output this divergence moves is
-pinned at its *measured* magnitude (``test_prices_finer_than_the_lake_grid...``), with a stated margin, at three price
-levels, because how far a Sharpe, the active share or the chosen threshold move depends on the price the signal is
-computed at.
+pinned at its *measured* magnitude (``test_prices_finer_than_the_lake_grid...``) at three price levels, because how far a
+Sharpe, the active share or the chosen threshold move depends on the price the signal is computed at. The pin is
+two-sided, at the measured value to full precision, and its tolerance is the floating-point accumulation error of the
+statistic (``accumulation_atol``), the only thing that can differ between two platforms running the same arithmetic.
 
 Not provable offline: that Polygon's own N-minute aggregates equal a fold of its minute aggregates. Cases that fold use
 an independent reference for the vendor side (``vendor_fold``); the equivalence with the live API is an assumption of
@@ -84,10 +85,30 @@ def outputs(report: SignalEngineReport) -> dict[str, float]:
     }
 
 
+def winner_margin(report: SignalEngineReport) -> float:
+    """How far the best cell's net Sharpe sits above the runner-up's. The sweep's choice can flip on float noise only if this is near zero."""
+    ranked = sorted((r.net_sharpe for r in report.backtest_grid), reverse=True)
+    return ranked[0] - ranked[1] if len(ranked) > 1 else float("inf")
+
+
 #: The lake writer rounds half-up to 1/10,000 (``lean_writer.to_deci_cent``): a price moves by at most half of it.
 HALF_GRID = 5e-5
 #: Shares of volume: two paths that trade the same minutes agree on the total to float noise.
 VOLUME_ATOL = 1e-6
+EPS = float(np.finfo(np.float64).eps)
+
+
+def accumulation_atol(n_terms: int, scale: float) -> float:
+    """The floating-point accumulation error of a statistic that two paths each compute once; class ``precision``.
+
+    A sum or recursion over ``n_terms`` terms carries a relative error of at most about ``n_terms * eps`` (recursive
+    summation's bound, with unit roundoff ``eps / 2`` doubled), plus a few single roundings (a square root, a division)
+    that the ``+ 8`` covers. The movement pinned below is the difference of two such values, hence the ``2 *``, and the
+    error is relative to the statistic's own size (``scale``), not to the movement. Measured here by re-rounding the same
+    tape (every price times 16 factors that are not powers of two, both paths alike, so no mathematical result changes):
+    the pinned movements stayed within 7e-13 absolute, at least 80 times below this bound for every output that moved.
+    """
+    return 2 * (n_terms + 8) * EPS * scale
 
 
 @dataclass
@@ -105,6 +126,8 @@ class Comparison:
     lake_out: dict[str, float] = field(default_factory=dict)
     grades: tuple[str | None, str | None] = (None, None)
     errors: tuple[str | None, str | None] = (None, None)
+    #: Per path, how far the best (threshold, cost) cell's net Sharpe sits above the runner-up's.
+    winner_margin: tuple[float, float] = (float("inf"), float("inf"))
 
     @property
     def timestamps_changed(self) -> int:
@@ -116,6 +139,13 @@ class Comparison:
         return {
             name: 0.0 if np.isnan(self.provider_out[name]) and np.isnan(self.lake_out[name]) else abs(self.provider_out[name] - self.lake_out[name])
             for name in self.provider_out
+        }
+
+    @property
+    def output_scales(self) -> dict[str, float]:
+        """Each headline number's size on the two paths: what its float accumulation error is relative to."""
+        return {
+            name: float(np.nanmax(np.abs([self.provider_out[name], self.lake_out[name]]), initial=0.0)) for name in self.provider_out
         }
 
     @property
@@ -176,6 +206,7 @@ def compare(provider: list[dict], lake: list[dict], params: SignalStudyParams) -
     reports = engine_report(provider, params), engine_report(lake, params)
     result.errors = (reports[0].error, reports[1].error)
     result.provider_out, result.lake_out = outputs(reports[0]), outputs(reports[1])
+    result.winner_margin = (winner_margin(reports[0]), winner_margin(reports[1]))
     result.grades = tuple(r.graduation.overall_grade if r.graduation else None for r in reports)  # type: ignore[assignment]
     return result
 
@@ -249,33 +280,31 @@ def test_a_bar_length_off_the_hour_regroups_the_same_minutes_into_other_buckets_
 
 #: What the lake's price grid moves, measured on this pinned payload (seed 11, the four-month window, 5,352
 #: fifteen-minute bars, the page's default RSI(14) run) at three price levels: the largest absolute difference between
-#: the two paths' value of each output. Prices carry five or six decimals, finer than the grid. A rounding of at most
-#: 5e-5 is a larger share of a bar-to-bar change on a $2 name than on a $150 one, so the outputs move more as the
-#: price falls. ``continuous`` outputs are pinned at measured times ``MEASURED_MARGIN``; ``discrete`` outputs (the
-#: chosen threshold and cost, counts) are pinned exactly, because a margin on a choice means nothing. Re-measure (print
+#: the two paths' value of each output, to full precision. Prices carry five or six decimals, finer than the grid. A
+#: rounding of at most 5e-5 is a larger share of a bar-to-bar change on a $2 name than on a $150 one, so the outputs move
+#: more as the price falls. ``continuous`` outputs are pinned two-sided at the measured value, within the statistic's
+#: float accumulation error (``accumulation_atol``); ``discrete`` outputs (the chosen threshold and cost, counts) are
+#: pinned exactly, because a tolerance on a choice means nothing: the choice is stable because the sweep's winner leads
+#: its runner-up by far more than that error (asserted below; measured 0.047 at the least). Re-measure (print
 #: ``output_diffs`` per case) only when the pinned tape or the lake's encoding intentionally changes; never to make a
 #: failing test pass.
 QUANTIZATION_MEASURED = {
     "price_150": (
         150.0, 5,
-        {"best_net_sharpe": 3.549e-05, "pct_time_active": 0.0, "effective_n": 7.708e-04, "mean_oos_sharpe": 0.0},
+        {"best_net_sharpe": 3.549102143018956e-05, "pct_time_active": 0.0, "effective_n": 7.707874244147206e-04, "mean_oos_sharpe": 0.0},
         {"bars_used": 0.0, "best_threshold": 0.0, "best_cost_bps": 0.0, "oos_windows": 0.0},
     ),
     "price_12": (
         12.0, 5,
-        {"best_net_sharpe": 0.1723, "pct_time_active": 1.869e-04, "effective_n": 5.895e-03, "mean_oos_sharpe": 0.0},
+        {"best_net_sharpe": 0.17226736646039598, "pct_time_active": 1.868809568305041e-04, "effective_n": 5.894916677220863e-03, "mean_oos_sharpe": 0.0},
         {"bars_used": 0.0, "best_threshold": 1.5, "best_cost_bps": 0.0, "oos_windows": 0.0},
     ),
     "price_2": (
         2.0, 6,
-        {"best_net_sharpe": 0.4935, "pct_time_active": 5.606e-04, "effective_n": 1.836e-02, "mean_oos_sharpe": 0.0},
+        {"best_net_sharpe": 0.49348158966829914, "pct_time_active": 5.606428704914984e-04, "effective_n": 1.8355161329623115e-02, "mean_oos_sharpe": 0.0},
         {"bars_used": 0.0, "best_threshold": 1.5, "best_cost_bps": 0.0, "oos_windows": 0.0},
     ),
 }
-#: The headroom over a measured movement. The tape is seeded and the arithmetic deterministic, so this only absorbs
-#: platform differences in float summation order inside pandas and numpy; a real change in the lake's encoding, or in
-#: the engine's math, moves these by orders of magnitude more.
-MEASURED_MARGIN = 1.5
 
 
 @pytest.mark.parametrize(
@@ -285,7 +314,8 @@ def test_prices_finer_than_the_lake_grid_move_each_output_by_its_measured_amount
     world, start_price, decimals, continuous, discrete
 ):
     """Cause: ``data-quality`` (input quantization). The lake rounds half-up to 1/10,000 (``lean_writer.to_deci_cent``);
-    the provider path does not. That changes the input data, so it is not ``precision`` and no float tolerance covers it.
+    the provider path does not. That changes the input data, so it is not ``precision``: the movement is a fact about the
+    data and is pinned at its measured value. What ``precision`` (float accumulation) adds on top of it is the tolerance.
 
     The owner's D02 reads this table. On a $150 name nothing the reader acts on moves. On a $12 name the best net
     Sharpe moves by 0.17 and the sweep picks another threshold (2.0 on the provider path, 0.5 on the lake); on a $2 name
@@ -303,13 +333,15 @@ def test_prices_finer_than_the_lake_grid_move_each_output_by_its_measured_amount
     assert comparison.quantization_only, "every price that moved moved by at most half a ten-thousandth"
     assert comparison.causes == ["data-quality"]
     assert comparison.grades[0] == comparison.grades[1]
-    diffs = comparison.output_diffs
+    diffs, scales = comparison.output_diffs, comparison.output_scales
+    n_terms = int(comparison.provider_out["bars_used"])
     for name, measured in continuous.items():
-        # atol is the measured movement with its margin; rtol is 0 because the quantity compared is itself a difference.
-        np.testing.assert_allclose(diffs[name], 0.0, atol=measured * MEASURED_MARGIN, rtol=0, err_msg=name)
+        np.testing.assert_allclose(diffs[name], measured, atol=accumulation_atol(n_terms, scales[name]), rtol=0, err_msg=name)
         assert bool(diffs[name] > 0) == (measured > 0), f"{name}: the divergence is real where it was measured"
     for name, measured in discrete.items():
         assert diffs[name] == measured, name
+    # A choice is exact only if float noise cannot flip it: its runner-up is far behind on both paths.
+    assert min(comparison.winner_margin) > 1_000 * accumulation_atol(n_terms, scales["best_net_sharpe"])
 
 
 def test_fractional_share_volume_is_kept_exactly_by_both_paths(world):
