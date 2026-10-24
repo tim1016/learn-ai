@@ -649,4 +649,13 @@ PRD #3490 and the re-capture path below).
 - **Unverified assumptions:** that Polygon's own N-minute aggregate equals a fold of its minute aggregates, and that a
   date-string window is ET-anchored on the live API. Both are asserted by the comparison tests against an
   independent stand-in, not against live data.
+- **Owner decision, P2: the Cross-sectional study's daily bar is the lake's regular-session fold, and nothing shows it
+  equals Polygon's own daily bar (#3524).** No real Polygon daily payload is held, so the comparison models the vendor's
+  daily from the same minutes. The one real capture, a week of SPY minutes (2025-01-13 to 17), measures what the fold
+  leaves out: the minute stamped 16:00 (16:00:00 to 16:00:59). That minute is not the closing-auction print. It holds
+  whatever printed in those sixty seconds, and the capture cannot tell the closing cross from the first after-hours
+  trades. Against the fold's close its open, the nearest proxy for the print, is 0.01 to 0.04 away (under one basis
+  point); its close, after-hours included, is 0.03 to 0.41 away (up to seven basis points). To decide: one real daily
+  payload for that week, compared to the pinned fold; `extended` (04:00 to 20:00 ET) is the other policy and moves every
+  day's IV spot on the pinned synthetic window. Both are in `tests/research/test_cross_sectional_lake_vs_provider.py`.
 

@@ -21,13 +21,19 @@ by construction. The cases that use it prove the plumbing (the admitted lake pat
 anchor, grid, gap, early-close and DST behaviour) and what the policy choice moves. They do not show that Polygon's own
 daily aggregate equals the regular fold. **That is unmeasured: no real Polygon daily payload is held in this repository.**
 The one real thing the repo holds is a week of Polygon one-minute SPY bars (2025-01-13..17), and
-``test_the_regular_fold_of_a_real_spy_week_...`` below measures on it what the regular fold leaves out: the 16:00
-closing-auction minute. If Polygon's daily close is the closing print, the regular fold's close is the wrong one on every
-session of that week, by the amounts pinned there; if it is the 15:59 close, it is the same. Closing the question takes
-ONE real daily payload for that week (``/v2/aggs/ticker/SPY/range/1/day/2025-01-13/2025-01-17``, ``adjusted=false``),
-pinned beside the minute capture with an attribution file and compared to the pinned fold. It is not fetched here:
-a vendor call is the owner's to authorise. Until then the choice between a regular fold and one that keeps the 16:00
-print is D02 on measured minutes and an unmeasured daily.
+``test_the_regular_fold_of_a_real_spy_week_...`` below measures on it what the regular fold leaves out: the minute
+stamped 16:00 (16:00:00 to 16:00:59). That minute is not the closing-auction print. It holds whatever printed in its
+sixty seconds, which can include the closing cross and the first after-hours trades, and this capture cannot tell them
+apart; whether the cross is in it at all, or filtered out of Polygon's minute bars by trade condition, is not
+established. Two numbers per session are pinned, each named for what it is: the minute's OPEN against the fold's close
+(a proxy for the auction print, the first trade the minute holds: 0.01 to 0.04 away, under one basis point) and the
+minute's CLOSE against it (the minute's last trade, after-hours included: 0.03 to 0.41 away, up to seven basis points,
+so not a proxy for the auction). If Polygon's daily close is the closing print, the regular fold's close differs from
+it by about the open's amounts; if it is the 15:59 close, it is the same. Closing the question takes ONE real daily
+payload for that week (``/v2/aggs/ticker/SPY/range/1/day/2025-01-13/2025-01-17``, ``adjusted=false``), pinned beside
+the minute capture with an attribution file and compared to the pinned fold. It is not fetched here: a vendor call is the
+owner's to authorise. Until then the choice between a regular fold and one that keeps the minute stamped 16:00 is D02 on
+measured minutes and an unmeasured daily.
 
 The IV and contract-pick comparison runs on the first fortnight of March 2024, the span over which the monthly expiry
 bracket still holds 30 days (see ``tests/research/options/test_iv_builder_provider_inputs.py``). The study's IC itself
@@ -398,8 +404,10 @@ SPY_REGULAR_FOLD = {
     date(2025, 1, 16): (594.175, 594.35, 590.93, 591.7, 30959922.0),
     date(2025, 1, 17): (596.96, 599.36, 595.61, 597.57, 46714655.0),
 }
-#: The minute the regular fold drops, the one stamped 16:00 ET (it holds the closing-auction print and the first
-#: after-hours trades), as (open, high, low, close, volume), read from the same capture.
+#: The minute the regular fold drops, the one stamped 16:00 ET (16:00:00 to 16:00:59), as (open, high, low, close,
+#: volume), read from the same capture. It holds whatever printed in those sixty seconds: the closing cross, if it is
+#: in Polygon's minute bars, and the first after-hours trades, which this capture does not separate. Its open is the
+#: first trade it holds; its close is the last, and is mostly after-hours.
 SPY_CLOSING_MINUTE = {
     date(2025, 1, 13): (581.52, 581.55, 581.17, 581.5, 124967.0),
     date(2025, 1, 14): (582.16, 582.61, 581.93, 582.6, 270425.0),
@@ -420,14 +428,22 @@ def spy_capture_tape() -> dict[date, list[VendorBar]]:
     return tape
 
 
-def test_the_regular_fold_of_a_real_spy_week_stops_at_the_15_59_minute_and_leaves_out_the_16_00_closing_minute(world):
+def test_the_regular_fold_of_a_real_spy_week_stops_at_the_15_59_minute_and_leaves_out_the_minute_stamped_16_00(world):
     """Cause, if Polygon's daily bar keeps the closing print: ``data-quality`` (session boundary). Polygon's daily bar for
     this week is NOT held, so whether it does is unmeasured; this measures what the regular fold drops, on real minutes.
 
-    The lake reads ``[open, close)``, so a session's last minute is 15:59. The 16:00 minute holds the closing-auction
-    print: on this week its close sits from 0.03 to 0.41 away from the fold's close (SPY at about $580-$600), and it
-    carries 0.3 to 1.2 percent of the session's regular volume. SPY had no split in 2025, so the split-adjusted tape the lake
-    reads is the raw one. A close that moves by $0.41 on 2025-01-14 sets a different IV spot and ATM strike for that day.
+    The lake reads ``[open, close)``, so a session's last minute is 15:59. The minute stamped 16:00 is not the auction
+    print; it is the sixty seconds from 16:00:00, with whatever printed in them (the closing cross, if Polygon's minute
+    bars keep it, and the first after-hours trades). Against the fold's close, at SPY about $580-$600:
+
+    * its OPEN, the first trade it holds and the nearest proxy for the auction print this capture offers, sits 0.01 to
+      0.04 away, under one basis point;
+    * its CLOSE, the last trade it holds, sits 0.03 to 0.41 away (0.41 on 2025-01-14, when its open was 0.03 away), up to
+      seven basis points. That is the minute's after-hours drift and not a price the auction paid;
+    * its volume is 0.3 to 1.2 percent of the session's regular volume. This is the minute's volume, not the auction's.
+
+    SPY had no split in 2025, so the split-adjusted tape the lake reads is the raw one. The stock close sets the IV spot
+    and the ATM strike, so a daily close taken from the minute's close would be a different spot on 2025-01-14, by $0.41.
     """
     tape = spy_capture_tape()
     mock_vendor("SPY", tape, adjusted=tape)
@@ -448,18 +464,22 @@ def test_the_regular_fold_of_a_real_spy_week_stops_at_the_15_59_minute_and_leave
             (row["open"], row["high"], row["low"], row["close"], row["volume"]), SPY_REGULAR_FOLD[day], atol=1e-9, rtol=0, err_msg=f"{day} lake"
         )
         assert inside[-1]["t"] == close_ms - 60_000, "the last regular minute is 15:59"
-        closing = by_stamp[close_ms]
+        minute = by_stamp[close_ms]
         np.testing.assert_allclose(
-            (closing["o"], closing["h"], closing["l"], closing["c"], closing["v"]), SPY_CLOSING_MINUTE[day], atol=1e-9, rtol=0, err_msg=f"{day} 16:00 minute"
+            (minute["o"], minute["h"], minute["l"], minute["c"], minute["v"]), SPY_CLOSING_MINUTE[day], atol=1e-9, rtol=0, err_msg=f"{day} minute stamped 16:00"
         )
-        assert row["close"] != closing["c"], "the lake's close is not the 16:00 minute's"
-        assert extended[day]["volume"] > row["volume"] + closing["v"], "and the extended fold holds it and the rest of the after-hours tape"
-    # The distance the choice makes, per session: the 16:00 minute's close against the fold's close, and its share of volume.
+        assert row["close"] != minute["c"], "the lake's close is not the minute stamped 16:00's close"
+        assert extended[day]["volume"] > row["volume"] + minute["v"], "and the extended fold holds it and the rest of the after-hours tape"
+    # Per session: the minute's open and close against the fold's close, and the minute's share of the regular volume.
+    open_moves = [SPY_CLOSING_MINUTE[day][0] - SPY_REGULAR_FOLD[day][3] for day in SPY_WEEK]
     close_moves = [SPY_CLOSING_MINUTE[day][3] - SPY_REGULAR_FOLD[day][3] for day in SPY_WEEK]
     volume_share = [SPY_CLOSING_MINUTE[day][4] / SPY_REGULAR_FOLD[day][4] for day in SPY_WEEK]
     np.testing.assert_allclose(close_moves, [-0.04, 0.41, 0.03, -0.06, -0.06], atol=1e-9, rtol=0)
     assert min(volume_share) > 0.003 and max(volume_share) < 0.012
+    np.testing.assert_allclose(open_moves, [-0.02, -0.03, -0.04, 0.01, -0.04], atol=1e-9, rtol=0)
 
+    assert max(abs(move) / SPY_REGULAR_FOLD[day][3] for move, day in zip(open_moves, SPY_WEEK, strict=True)) < 1e-4, "the open is under one basis point away"
+    assert max(abs(move) / SPY_REGULAR_FOLD[day][3] for move, day in zip(close_moves, SPY_WEEK, strict=True)) < 7.1e-4, "the close up to seven"
 
 #: What the lake's price grid moves, measured on this pinned payload (seed 11, the DST window, 11 sessions) at three
 #: price levels: the largest absolute difference between the two paths' values at a shared session. Prices carry five or
