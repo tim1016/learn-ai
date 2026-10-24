@@ -1,22 +1,43 @@
-"""Lake-file helpers for research-study tests: find a session's file, and repair or corrupt it with a committed receipt."""
+"""Helpers the lake-sourced research studies' tests share.
+
+* **Lake files.** Find a session's file, and repair or corrupt it with a committed receipt.
+* **The two paths.** What the provider path would have handed a study for a pinned vendor tape
+  (``vendor_rows``, ``provider_rows``), the strict-float comparison of two reports, and the key a
+  study caches under.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import json
 import time
+from collections.abc import Mapping
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
+from typing import Any
 from zoneinfo import ZoneInfo
+
+import numpy as np
+from polygon.rest.models import Agg
 
 from app.data_lake.adjustment_versions import adjustment_companion, companion_path
 from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes
 from app.data_lake.path_policy import LeanMinuteBarPath, lake_subpath
+from app.research.lake_study import LakeStudy, cache_key
+from app.services.polygon_client import PolygonClientService
 from tests._helpers.fake_lake_catalog import FakeCatalog
 from tests._helpers.pinned_vendor import VendorBar
 
 ET = ZoneInfo("America/New_York")
+
+#: The repo's strict-float default for indicators and closed-form calculations.
+ATOL = 1e-9
+RTOL = 0.0
+
+#: Dense enough that the 15-minute target clears the studies' 70% validity gate; the gate is not under test where
+#: these are used.
+DENSE = {"regular_keep": 0.995, "extended_keep": 0.92}
 
 
 def lake_file(lake: Path, mode: str, day: date, symbol: str = "SPY") -> Path:
@@ -88,3 +109,90 @@ def leave_publication_in_flight(catalog: FakeCatalog, lake: Path, day: date, *, 
     stray = build_minute_trade_zip_bytes("SPY", day.strftime("%Y%m%d"), [minute_bar(day, 10, 0)])
     lake_file(lake, mode, day).write_bytes(stray)
     return stray
+
+
+# ---------------------------------------------------------------------------
+# The provider path, on the same pinned tape
+# ---------------------------------------------------------------------------
+
+
+def vendor_fold(minutes: list[VendorBar], bar_minutes: int) -> list[VendorBar]:
+    """An independent stand-in for the vendor's own N-minute aggregate: first/high/low/last/sum per UTC-epoch bucket.
+
+    It floors UTC milliseconds, which is the exchange wall clock only for a bar length that divides the hour; the
+    studies refuse every other length, and ``test_signal_study.py`` shows what the two grids do for one that does not.
+    """
+    bucket_ms = bar_minutes * 60_000
+    out: dict[int, VendorBar] = {}
+    for m in minutes:
+        key = m["t"] // bucket_ms * bucket_ms
+        if key not in out:
+            out[key] = {**m, "t": key}
+        else:
+            bar = out[key]
+            bar["h"], bar["l"], bar["c"], bar["v"] = max(bar["h"], m["h"]), min(bar["l"], m["l"]), m["c"], bar["v"] + m["v"]
+    return [out[k] for k in sorted(out)]
+
+
+def vendor_rows(tape: Mapping[date, list[VendorBar]], *, bar_minutes: int = 1) -> list[dict]:
+    """What the provider path would hand the runner for the same tape: the vendor's own floats."""
+    minutes = [b for day in sorted(tape) for b in tape[day]]
+    return [
+        {"timestamp": b["t"], "open": b["o"], "high": b["h"], "low": b["l"], "close": b["c"], "volume": float(b["v"])}
+        for b in (minutes if bar_minutes == 1 else vendor_fold(minutes, bar_minutes))
+    ]
+
+
+class _SdkTape:
+    """The SDK's ``RESTClient.list_aggs`` over a pinned tape: it pages ``Agg`` objects exactly as the SDK would."""
+
+    def __init__(self, raw: Mapping[date, list[VendorBar]], adjusted: Mapping[date, list[VendorBar]] | None) -> None:
+        self.raw, self.adjusted = raw, adjusted
+
+    def list_aggs(self, *, ticker, multiplier, timespan, from_, to, limit, adjusted, sort):
+        tape = self.adjusted if (adjusted and self.adjusted is not None) else self.raw
+        start, end = date.fromisoformat(from_), date.fromisoformat(to)
+        minutes = [b for day, bars in sorted(tape.items()) if start <= day <= end for b in bars]
+        for bar in minutes if multiplier == 1 else vendor_fold(minutes, multiplier):
+            yield Agg.from_dict(bar)
+
+
+def provider_rows(
+    raw: Mapping[date, list[VendorBar]],
+    window: list[date],
+    *,
+    bar_minutes: int = 1,
+    adjusted: Mapping[date, list[VendorBar]] | None = None,
+) -> list[dict]:
+    """What a study read before it read the lake: ``fetch_aggregates`` for the window, adjusted, every session of the day."""
+    service = PolygonClientService()
+    service.client = _SdkTape(raw, adjusted)  # type: ignore[assignment]
+    return service.fetch_aggregates(
+        ticker="SPY", multiplier=bar_minutes, timespan="minute", from_date=window[0].isoformat(), to_date=window[-1].isoformat()
+    )
+
+
+# ---------------------------------------------------------------------------
+# Comparing and keying
+# ---------------------------------------------------------------------------
+
+
+def assert_same(a: Any, b: Any, where: str = "report") -> None:
+    """Deep equality, floats at the strict-float tolerance (NaN equals NaN: a warmup region is part of the answer)."""
+    if isinstance(a, dict):
+        assert isinstance(b, dict) and a.keys() == b.keys(), where
+        for key in a:
+            assert_same(a[key], b[key], f"{where}.{key}")
+    elif isinstance(a, list | tuple):
+        assert isinstance(b, list | tuple) and len(a) == len(b), f"{where}: length {len(a)} != {len(b)}"
+        for i, (x, y) in enumerate(zip(a, b, strict=True)):
+            assert_same(x, y, f"{where}[{i}]")
+    elif isinstance(a, float) or isinstance(b, float):
+        assert np.isclose(a, b, atol=ATOL, rtol=RTOL, equal_nan=True), f"{where}: {a!r} != {b!r}"
+    else:
+        assert a == b, f"{where}: {a!r} != {b!r}"
+
+
+def cache_key_of(study: LakeStudy, identity: Any, admitted: Any) -> dict[str, Any]:
+    """The key the study's result is cached under, as the shared run builds it."""
+    return cache_key(identity, admitted, calculation_version=study.calculation_version, extra=study.cache_extra)

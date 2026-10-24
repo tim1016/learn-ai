@@ -18,7 +18,9 @@ Formula: a session's data is final once ``close + tail + delay`` has passed.
   delayed, so a capture at the close misses the day's last quarter hour.
 
 Canonical implementation: this file. The calendar owns ``close``; the tail and
-the delay are the vendor's, named here once. The test helper
+the delay are the vendor's, named here once, and so is the pre-market head that
+bounds the extended tape from the other side (finality does not need it; a
+reader sizing the tape does). The test helper
 ``tests/_helpers/pinned_vendor.py`` serves an after-hours tape of the same
 length.
 Validated against: tests/unit/data_lake/test_capture_finality.py
@@ -39,6 +41,9 @@ VENDOR_DELAY_MS = 15 * 60_000
 
 #: How long the vendor's after-hours tape runs past the scheduled close.
 AFTER_HOURS_TAIL_MS = 4 * 3_600_000
+
+#: How long before the scheduled open the vendor's pre-market tape begins (04:00 ET for a 09:30 open).
+PRE_MARKET_HEAD_MS = 330 * 60_000
 
 
 def capture_final_ms(day: date, session: CaptureSession) -> int:

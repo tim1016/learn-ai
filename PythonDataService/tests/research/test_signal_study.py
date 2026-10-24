@@ -11,9 +11,9 @@ Two claims, kept apart as PRD #3490 R14 requires.
    walk-forward folds, and crosses the fall-back DST change, two early closes
    and two holidays.
 2. *What the source change itself moves* (precision, adjustment, session, the
-   forward-label tail) is pinned case by case, with the cause named in the
-   reconcile taxonomy. The whole-payload provider-versus-lake comparison lives
-   in ``test_signal_study_lake_vs_provider.py``.
+   forward-label tail, the bar lengths the study now refuses) is pinned case by
+   case, with the cause named in the reconcile taxonomy. The whole-payload
+   provider-versus-lake comparison lives in ``test_signal_study_lake_vs_provider.py``.
 """
 
 from __future__ import annotations
@@ -26,37 +26,36 @@ import numpy as np
 import pytest
 import respx
 
-from app.lean_sidecar.trading_calendar import expected_sessions, session_close_ms_utc, session_open_ms_utc
+from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_open_ms_utc
 from app.research.features.ta_features import TechnicalFeatures
 from app.research.signal.config import SignalConfig
-from app.research.signal.engine import run_signal_engine
-from app.research.study_inputs import StudyInputRefusal, admit_minute_inputs, bars_as_rows, fold_minute_bars
+from app.research.study_inputs import StudyInputRefusal
 from app.research.target import compute_15min_forward_return, compute_forward_log_return
 from app.services.signal_study_service import (
-    MAX_BAR_MINUTES,
+    HOUR_ALIGNED_BAR_MINUTES,
     SignalStudyParams,
-    cache_params,
+    bar_minutes_that_reach_the_gate,
+    bars_in_span,
     max_target_share,
     serialize_signal_report,
+    session_minute_spans,
+    signal_study,
     signal_study_identity,
 )
 from app.utils.session_anchors import et_midnight_ms
 from tests._helpers.fake_lake_catalog import install_fake_catalog, mock_launcher, point_lake_writer_at_tmp
+from tests._helpers.lake_study import ATOL, DENSE, RTOL, assert_same, cache_key_of, vendor_rows
 from tests._helpers.pinned_vendor import VendorBar, mock_vendor, vendor_history
-from tests.research.test_feature_study import ATOL, RTOL, assert_same, vendor_rows
+from tests._helpers.signal_study import EARLY_CLOSES, LONG, SHORT, engine_report, lake_rows, study, ungated_rows
 
 ET = ZoneInfo("America/New_York")
-#: 2025-02-03: after every window below, so each session is complete and inside the provider's history.
-NOW_MS = 1_738_540_800_000
-#: Four months, Sep 3 to Dec 31 2024: DST ends Nov 3, Nov 28 and Dec 25 are holidays, Nov 29 and Dec 24 close at 13:00.
-LONG = expected_sessions(date(2024, 9, 3), date(2024, 12, 31))
-#: Ten sessions across the spring-forward Sunday (Mar 10).
-SHORT = expected_sessions(date(2024, 3, 4), date(2024, 3, 15))
-EARLY_CLOSES = [date(2024, 11, 29), date(2024, 12, 24)]
+HORIZON = SignalConfig().horizon
 
-#: Dense enough that the target clears the engine's 70% validity gate at 15-minute bars; the gate is not under test
-#: where these are used (and is measured on its own below).
-DENSE = {"regular_keep": 0.995, "extended_keep": 0.92}
+#: The vendor's tape and the exchange's session, as New York minutes past midnight: 04:00-19:59 and 09:30-15:59.
+EXTENDED_SPAN = (240, 1199)
+REGULAR_SPAN = (570, 959)
+#: 13:00 close.
+EARLY_CLOSE_SPAN = (570, 779)
 
 
 def _serve(monkeypatch: pytest.MonkeyPatch, tmp_path: Any, window: list[date], **options: Any) -> dict[date, list[VendorBar]]:
@@ -81,23 +80,8 @@ def long_tape(monkeypatch: pytest.MonkeyPatch, tmp_path):
         yield _serve(monkeypatch, tmp_path, LONG)
 
 
-def study(window: list[date], *, multiplier: int = 15, session: str = "extended", **over: Any) -> SignalStudyParams:
-    return SignalStudyParams(
-        "SPY", over.pop("feature_name", "momentum_5m"), window[0], window[-1], "minute", multiplier,
-        session_policy=session, **over,  # type: ignore[arg-type]
-    )
-
-
-def lake_rows(params: SignalStudyParams) -> tuple[list[dict], Any]:
-    identity = signal_study_identity(params)
-    admitted = admit_minute_inputs(identity.inputs, requester="test", now_ms=NOW_MS)
-    return bars_as_rows(fold_minute_bars(admitted.window_bars, identity.bar_minutes)), admitted
-
-
-def engine_report(rows: list[dict], params: SignalStudyParams):
-    return run_signal_engine(
-        "SPY", params.feature_name, rows, params.from_date.isoformat(), params.to_date.isoformat(), params.config()
-    )
+def _extended_lengths() -> tuple[int, ...]:
+    return bar_minutes_that_reach_the_gate(session_minute_spans("extended", SHORT[0], SHORT[-1]), HORIZON)
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +89,7 @@ def engine_report(rows: list[dict], params: SignalStudyParams):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("multiplier", [1, 3, 5, 15, 20])
+@pytest.mark.parametrize("multiplier", _extended_lengths())
 def test_lake_bars_equal_the_vendors_own_bars_for_a_price_grid_the_lake_holds(short_tape, multiplier):
     rows, _ = lake_rows(study(SHORT, multiplier=multiplier))
 
@@ -207,7 +191,7 @@ def test_the_first_valid_value_sits_where_the_indicator_windows_say_and_nothing_
 def test_no_bar_is_read_past_the_requested_end_so_the_last_fifteen_bars_have_no_target(short_tape, multiplier):
     rows, admitted = lake_rows(study(SHORT, multiplier=multiplier))
 
-    returns = compute_15min_forward_return(rows, SignalConfig().horizon)
+    returns = compute_15min_forward_return(rows, HORIZON)
     target = compute_forward_log_return(rows, horizon_minutes=15 * multiplier, bar_minutes=multiplier)
 
     assert returns.iloc[-15:].isna().all(), "the horizon is 15 bars, whatever the bar length"
@@ -226,46 +210,61 @@ def test_no_bar_is_read_past_the_requested_end_so_the_last_fifteen_bars_have_no_
 
 
 def _share_valid(rows: list[dict]) -> float:
-    returns = compute_15min_forward_return(rows, SignalConfig().horizon)
-    return float(returns.notna().mean())
+    return float(compute_15min_forward_return(rows, HORIZON).notna().mean())
 
 
-@pytest.mark.parametrize(
-    ("session", "multiplier", "share", "clears_the_gate"),
-    [
-        # Extended hours: 16 hours of bars a day, so a 15-bar target is valid for most of them at every size.
-        ("extended", 1, 0.98, True),
-        ("extended", 5, 0.92, True),
-        ("extended", 15, 0.766, True),
-        # Regular hours: 390 minutes. 15-minute bars leave 26 a day and 15 of them look past the close.
-        ("regular", 1, 0.96, True),
-        ("regular", 5, 0.81, True),
-        ("regular", 15, 11 / 26, False),
-    ],
-)
-def test_regular_hours_cut_the_valid_targets_and_at_15_minutes_below_the_gate(
-    monkeypatch, tmp_path, session, multiplier, share, clears_the_gate
-):
-    """Cause: ``data-quality`` (session scope), measured on the pinned tape. The choice between the two is the owner's (D02).
-
-    The shares are of bars with a valid 15-bar target; the engine refuses a series under 70% (``validate_return_series``).
-    """
+def _measured_against_the_refusal(session: str, cases: list[tuple[int, float, bool]], monkeypatch, tmp_path) -> None:
+    """Fold one pinned tape to each length and hold the study's gate against what the bars and the engine say."""
     window = LONG[:45]  # long enough that even 26 regular 15-minute bars a day clear the engine's 500-bar minimum
     with respx.mock:
         mock_launcher()
         _serve(monkeypatch, tmp_path, window)
-        params = study(window, multiplier=multiplier, session=session)
-        rows, _ = lake_rows(params)
+        for multiplier, share, accepted in cases:
+            params = study(window, multiplier=multiplier, session=session)
+            rows = ungated_rows(params, multiplier)
+            measured = _share_valid(rows)
+            spans = session_minute_spans(session, window[0], window[-1])
 
-        measured = _share_valid(rows)
-        report = engine_report(rows, params)
+            # Measured on the seeded tape: every bar of a gap-free bucket is present, so all but the 1-minute share sit
+            # on the ceiling. The bound is the measured value to four places; it moves only if the tape or the fold does.
+            assert measured == pytest.approx(share, abs=1e-4, rel=0), f"{session} {multiplier}-minute share"
+            assert measured <= max(max_target_share(multiplier, HORIZON, *span) for span in spans) + 1e-12, (
+                "no data beats the ceiling"
+            )
+            report = engine_report(rows, params)
+            if accepted:
+                signal_study_identity(params)
+                assert (measured >= 0.70) and report.error is None, f"{session} {multiplier}: accepted, so it runs"
+            else:
+                with pytest.raises(StudyInputRefusal) as raised:
+                    signal_study_identity(params)
+                assert raised.value.code == "resolution_unsupported"
+                assert measured < 0.70, f"{session} {multiplier}: refused only what the engine would stop"
+                assert report.error == "Forward return series failed validation", "the run the refusal saves"
 
-    assert measured == pytest.approx(share, abs=0.012)
-    assert (measured >= 0.70) is clears_the_gate
-    if clears_the_gate:
-        assert report.error is None
-    else:
-        assert report.error == "Forward return series failed validation", "the default run would stop producing results"
+
+def test_extended_hours_clear_the_gate_to_15_minutes_and_not_at_20(monkeypatch, tmp_path):
+    """Cause: ``data-quality`` (session scope), measured on the pinned tape. The choice between the two is the owner's (D02).
+
+    The shares are of bars with a valid 15-bar target; the engine refuses a series under 70% (``validate_return_series``).
+    """
+    _measured_against_the_refusal(
+        "extended",
+        [(1, 0.9824, True), (5, 0.9219, True), (15, 0.7656, True), (20, 0.6875, False)],
+        monkeypatch,
+        tmp_path,
+    )
+
+
+def test_regular_hours_cut_the_valid_targets_and_at_15_minutes_below_the_gate(monkeypatch, tmp_path):
+    """Cause: ``data-quality`` (session scope). Regular hours leave 26 fifteen-minute bars a day and 15 of them look
+    past the close: the default run would stop producing results, so it is refused up front instead (D02)."""
+    _measured_against_the_refusal(
+        "regular",
+        [(1, 0.9613, True), (5, 0.8077, True), (6, 0.7692, True), (10, 0.6154, False), (15, 0.4231, False)],
+        monkeypatch,
+        tmp_path,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -273,46 +272,141 @@ def test_regular_hours_cut_the_valid_targets_and_at_15_minutes_below_the_gate(
 # ---------------------------------------------------------------------------
 
 
-def _continuous_days(bar_minutes: int, days: int = 3) -> list[dict]:
-    """Gap-free bars across whole New York dates: the most targets a bar size can ever have."""
+def _continuous_days(bar_minutes: int, first: int, last: int, days: int = 3) -> list[dict]:
+    """Gap-free bars on the grid of a span of the day, repeated for whole dates: the most targets a bar size can have."""
     start = et_midnight_ms(date(2024, 3, 4))
     rows = []
     for day in range(days):
         midnight = start + day * 86_400_000
-        for index in range(-(-1440 // bar_minutes)):
-            rows.append({"timestamp": midnight + index * bar_minutes * 60_000, "close": 100.0 + 0.01 * index + day})
+        for index, minute in enumerate(range(first // bar_minutes * bar_minutes, last + 1, bar_minutes)):
+            rows.append({"timestamp": midnight + minute * 60_000, "close": 100.0 + 0.01 * index + day})
     return rows
 
 
-@pytest.mark.parametrize("bar_minutes", [1, 5, 15, 20, 29, 30, 60, 240])
-def test_the_ceiling_on_valid_targets_is_what_the_target_function_gives_on_gap_free_bars(bar_minutes):
-    ceiling = max_target_share(bar_minutes, SignalConfig().horizon)
+@pytest.mark.parametrize(
+    ("bar_minutes", "span"),
+    [
+        *[(minutes, (0, 1439)) for minutes in (1, 5, 15, 20, 29, 30, 60, 240)],
+        *[(minutes, REGULAR_SPAN) for minutes in (1, 5, 6, 10, 15, 20)],
+        *[(minutes, EARLY_CLOSE_SPAN) for minutes in (4, 5)],
+        *[(minutes, EXTENDED_SPAN) for minutes in (15, 20)],
+    ],
+)
+def test_the_ceiling_on_valid_targets_is_what_the_target_function_gives_on_gap_free_bars(bar_minutes, span):
+    ceiling = max_target_share(bar_minutes, HORIZON, *span)
 
-    measured = _share_valid(_continuous_days(bar_minutes))
+    measured = _share_valid(_continuous_days(bar_minutes, *span))
 
     assert measured <= ceiling + 1e-12, "no data can beat the ceiling"
     if 1440 % bar_minutes == 0:
-        assert measured == pytest.approx(ceiling, abs=1e-12, rel=0), "and gap-free whole-day bars reach it exactly"
+        assert measured == pytest.approx(ceiling, abs=1e-12, rel=0), "and gap-free bars on the grid reach it exactly"
 
 
-def test_the_longest_bar_that_can_reach_the_gate_is_derived_not_chosen():
-    assert MAX_BAR_MINUTES == 29
-    assert max_target_share(MAX_BAR_MINUTES, 15) >= 0.70 > max_target_share(MAX_BAR_MINUTES + 1, 15)
-    assert [max_target_share(m, 15) for m in (60, 240)] == [0.375, 0.0]
+def test_the_bars_of_a_span_are_counted_on_the_grid_that_starts_at_midnight():
+    assert bars_in_span(15, *REGULAR_SPAN) == 26
+    assert bars_in_span(20, *REGULAR_SPAN) == 20, "the 09:30 minute sits in the 09:20 bar"
+    assert bars_in_span(4, *REGULAR_SPAN) == 98
+    assert bars_in_span(7, 0, 1439) == 206 == -(-1440 // 7), "the whole day is ceil(1440 / m) for any length"
+
+
+def test_the_spans_come_from_the_calendar_and_do_not_move_with_the_clock_change():
+    assert session_minute_spans("regular", SHORT[0], SHORT[-1]) == {REGULAR_SPAN}, "across the spring-forward Sunday"
+    assert session_minute_spans("regular", LONG[0], LONG[-1]) == {REGULAR_SPAN, EARLY_CLOSE_SPAN}, "across fall back"
+    assert session_minute_spans("extended", SHORT[0], SHORT[-1]) == {EXTENDED_SPAN}
+    assert session_minute_spans("extended", LONG[0], LONG[-1]) == {EXTENDED_SPAN, (240, 1019)}, "17:00 on an early close"
+    assert session_minute_spans("regular", date(2024, 3, 9), date(2024, 3, 10)) == frozenset(), "a weekend holds no session"
+
+
+@pytest.mark.parametrize(
+    ("session", "window", "reach"),
+    [
+        pytest.param("extended", SHORT, (1, 2, 3, 4, 5, 6, 10, 12, 15), id="extended_hours"),
+        pytest.param("regular", SHORT, (1, 2, 3, 4, 5, 6), id="regular_hours"),
+        pytest.param("regular", LONG, (1, 2, 3, 4, 5, 6), id="regular_hours_with_early_closes_among_full_days"),
+        pytest.param("regular", [EARLY_CLOSES[0]], (1, 2, 3, 4), id="regular_hours_on_an_early_close_alone"),
+    ],
+)
+def test_the_bar_lengths_that_reach_the_gate_are_derived_from_the_sessions_the_window_holds(session, window, reach):
+    spans = session_minute_spans(session, window[0], window[-1])
+
+    assert bar_minutes_that_reach_the_gate(spans, HORIZON) == reach
+    assert set(reach) <= set(HOUR_ALIGNED_BAR_MINUTES)
+    for minutes in HOUR_ALIGNED_BAR_MINUTES:
+        best = max(max_target_share(minutes, HORIZON, *span) for span in spans)
+        assert (best >= 0.70) is (minutes in reach), minutes
 
 
 @pytest.mark.parametrize(
     ("timespan", "multiplier", "per_day"),
-    [("hour", 1, 24), ("day", 1, 1), ("minute", 30, 48), ("minute", 60, 24), ("minute", 240, 6)],
+    [("hour", 1, 24), ("day", 1, 1), ("minute", 30, 48), ("minute", 45, 32), ("minute", 60, 24), ("minute", 240, 6)],
 )
-def test_bar_sizes_that_can_never_reach_the_gate_refuse_with_a_reason_that_names_the_numbers(timespan, multiplier, per_day):
+def test_bar_sizes_no_session_can_use_refuse_with_a_reason_that_names_the_numbers(timespan, multiplier, per_day):
     with pytest.raises(StudyInputRefusal) as raised:
         signal_study_identity(SignalStudyParams("SPY", "momentum_5m", SHORT[0], SHORT[-1], timespan, multiplier))
 
     assert raised.value.code == "resolution_unsupported"
     assert f"a day holds at most {per_day} of them" in raised.value.reason
-    assert "needs 70%" in raised.value.reason and f"up to {MAX_BAR_MINUTES} minutes" in raised.value.reason
+    assert "needs 70%" in raised.value.reason
+    assert "Use minute bars of 1, 2, 3, 4, 5, 6, 10, 12, 15 minutes." in raised.value.reason
     assert raised.value.coverage is None
+
+
+NOT_ON_THE_HOUR = [minutes for minutes in range(1, 30) if 60 % minutes]
+
+
+def test_there_are_nineteen_minute_lengths_up_to_29_that_do_not_divide_the_hour():
+    assert NOT_ON_THE_HOUR == [7, 8, 9, 11, 13, 14, 16, 17, 18, 19, 21, 22, 23, 24, 25, 26, 27, 28, 29]
+
+
+@pytest.mark.parametrize("multiplier", NOT_ON_THE_HOUR)
+def test_a_bar_length_that_does_not_divide_the_hour_is_refused_before_the_lake_is_touched(multiplier):
+    with pytest.raises(StudyInputRefusal) as raised:
+        signal_study_identity(SignalStudyParams("SPY", "momentum_5m", SHORT[0], SHORT[-1], "minute", multiplier))
+
+    assert raised.value.code == "resolution_unsupported"
+    assert f"{multiplier}-minute bars do not divide the hour" in raised.value.reason
+    assert "Use minute bars of 1, 2, 3, 4, 5, 6, 10, 12, 15 minutes." in raised.value.reason
+    assert raised.value.coverage is None
+
+
+@pytest.mark.parametrize(
+    ("session", "multiplier", "longest", "share"),
+    [
+        ("regular", 15, 26, "42.3"),
+        ("regular", 10, 39, "61.5"),
+        ("regular", 20, 20, "25.0"),
+        ("extended", 20, 48, "68.8"),
+    ],
+)
+def test_a_length_the_sessions_of_the_policy_cannot_fill_is_refused_naming_the_session(
+    session, multiplier, longest, share
+):
+    with pytest.raises(StudyInputRefusal) as raised:
+        signal_study_identity(study(SHORT, multiplier=multiplier, session=session))
+
+    reason = raised.value.reason
+    assert raised.value.code == "resolution_unsupported"
+    assert f"under {'regular' if session == 'regular' else 'extended'}-hours sessions" in reason
+    assert f"the longest session in this window holds at most {longest} of them" in reason
+    assert f"at most {share}% of bars can have a target" in reason and "needs 70%" in reason
+    assert raised.value.coverage is None
+
+
+def test_a_session_gate_that_depends_on_the_window_follows_the_calendars_early_close():
+    early = [EARLY_CLOSES[0]]
+
+    with pytest.raises(StudyInputRefusal) as raised:
+        signal_study_identity(study(early, multiplier=5, session="regular"))
+    assert "holds at most 42 of them" in raised.value.reason, "a 13:00 close leaves 42 five-minute bars"
+    assert signal_study_identity(study(SHORT, multiplier=5, session="regular")).bar_minutes == 5
+
+
+def test_a_window_with_no_session_leaves_the_refusal_to_admission():
+    weekend = [date(2024, 3, 9), date(2024, 3, 10)]
+
+    identity = signal_study_identity(study(weekend, multiplier=15, session="regular"))
+
+    assert identity.bar_minutes == 15, "no session to measure: admission refuses it as no_sessions_in_window"
 
 
 def test_a_bar_unit_the_study_does_not_read_refuses_with_a_reason():
@@ -322,14 +416,43 @@ def test_a_bar_unit_the_study_does_not_read_refuses_with_a_reason():
     assert raised.value.code == "resolution_unsupported" and "'week'" in raised.value.reason
 
 
-@pytest.mark.parametrize("multiplier", [1, 3, 5, 15, 20, 29])
-def test_every_minute_bar_that_can_reach_the_gate_is_accepted(multiplier):
+@pytest.mark.parametrize("multiplier", _extended_lengths())
+def test_every_hour_aligned_minute_bar_that_can_reach_the_gate_is_accepted(multiplier):
     identity = signal_study_identity(SignalStudyParams("SPY", "momentum_5m", SHORT[0], SHORT[-1], "minute", multiplier))
 
     assert identity.bar_minutes == multiplier
     assert identity.look_forward_bars == 15
     assert identity.as_dict()["warmup_sessions"] == 0, "the study fetches no warmup"
     assert identity.as_dict()["look_forward_extends_window"] is False
+
+
+def test_the_look_forward_in_the_identity_is_what_the_engine_is_configured_with():
+    params = study(SHORT)
+
+    assert signal_study_identity(params).look_forward_bars == params.config().horizon
+
+
+def _first_bucket_minutes(rows: list[dict]) -> dict[date, int]:
+    """For each session, the minute of the New York day its first folded bar starts at."""
+    first: dict[date, int] = {}
+    for row in rows:
+        local = datetime.fromtimestamp(row["timestamp"] / 1000, ET)
+        first.setdefault(local.date(), local.hour * 60 + local.minute)
+    return first
+
+
+def test_a_bar_length_off_the_hour_starts_its_bars_at_a_different_minute_each_session_which_is_why_it_is_refused(short_tape):
+    """Cause: ``timestamp`` (bar alignment). The fold floors the exchange clock in whole bars counted from 1970."""
+    params = study(SHORT)
+
+    drift = {minutes: _first_bucket_minutes(ungated_rows(params, minutes)) for minutes in (7, 29)}
+    steady = {minutes: _first_bucket_minutes(ungated_rows(params, minutes)) for minutes in _extended_lengths()}
+
+    for minutes, firsts in drift.items():
+        assert len(set(firsts.values())) > 1, f"{minutes}-minute bars start at {sorted(set(firsts.values()))} minutes past midnight"
+    assert len(set(drift[7].values())) >= 3, "7-minute bars open at three different minutes across the ten sessions"
+    for minutes, firsts in steady.items():
+        assert set(firsts.values()) == {EXTENDED_SPAN[0] // minutes * minutes}, f"{minutes}-minute bars start on the same minute"
 
 
 # ---------------------------------------------------------------------------
@@ -341,11 +464,12 @@ def test_regular_hours_is_a_different_sample_and_a_different_cache_identity(shor
     extended_rows, extended = lake_rows(study(SHORT, multiplier=5, session="extended"))
     regular_rows, regular = lake_rows(study(SHORT, multiplier=5, session="regular"))
 
-    extended_identity = signal_study_identity(study(SHORT, session="extended"))
-    regular_identity = signal_study_identity(study(SHORT, session="regular"))
+    extended_identity = signal_study_identity(study(SHORT, multiplier=5, session="extended"))
+    regular_identity = signal_study_identity(study(SHORT, multiplier=5, session="regular"))
 
     assert len(regular_rows) < len(extended_rows), "extended hours add pre-market and after-hours bars"
     assert extended_identity.digest() != regular_identity.digest()
-    config = study(SHORT).config()
-    assert cache_params(extended_identity, extended, config) != cache_params(regular_identity, regular, config)
+    assert cache_key_of(signal_study(study(SHORT, multiplier=5)), extended_identity, extended) != cache_key_of(
+        signal_study(study(SHORT, multiplier=5)), regular_identity, regular
+    )
     assert extended_identity.inputs.session_policy == "extended", "the default is the session the study has always computed on"

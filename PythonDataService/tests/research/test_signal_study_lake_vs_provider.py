@@ -8,15 +8,24 @@ module is the receipt for what that move changes, case by case. Both paths read 
 * the **lake path** is the real admission — vendor HTTP, ``ensure_data``, the lake writer, committed-byte admission,
   the reader — and the study's fold, whose rows go into the same engine.
 
-Each case records changed timestamps, prices, precision, counts and derived outputs (best threshold and cost, the best
-net Sharpe, how often the signal is active, the effective sample, the walk-forward OOS Sharpe, the graduation grade), and
-names the cause in the reconcile taxonomy (``timestamp``, ``warmup``, ``precision``, ``off-by-one``, ``data-quality``).
-A case that moves nothing says so by asserting zero. Unexplained drift fails here; an *intentional* divergence is the
-owner's decision (D02) and is listed in the PR.
+Each case records changed timestamps, prices, counts and derived outputs (best threshold and cost, the best net Sharpe,
+how often the signal is active, the effective sample, the walk-forward OOS Sharpe, the graduation grade), and names the
+cause in the reconcile taxonomy (``timestamp``, ``warmup``, ``precision``, ``off-by-one``, ``data-quality``). A case
+that moves nothing says so by asserting zero. Unexplained drift fails here; an *intentional* divergence is the owner's
+decision (D02) and is listed in the PR.
+
+The lake's 1/10,000 price grid is ``data-quality``, never ``precision``: it changes the input data, and ``precision``
+is floating-point accumulation. A tolerance may loosen only for the latter, so each output this divergence moves is
+pinned at its *measured* magnitude (``test_prices_finer_than_the_lake_grid...``), with a stated margin, at three price
+levels, because how far a Sharpe, the active share or the chosen threshold move depends on the price the signal is
+computed at.
 
 Not provable offline: that Polygon's own N-minute aggregates equal a fold of its minute aggregates. Cases that fold use
 an independent reference for the vendor side (``vendor_fold``); the equivalence with the live API is an assumption of
-the lake path (the same trades build both) and is unverified against live data.
+the lake path (the same trades build both) and is unverified against live data. A minute that trades without moving a
+price may produce no minute bar while still adding to Polygon's 15-minute volume; the fold would then miss it and
+``volume_zscore`` would move. Settling it takes a captured day of Polygon's minute and 15-minute aggregates side by
+side (a fixture beside ``tests/fixtures/polygon_capture``); until then it stays listed as an unverified assumption.
 """
 
 from __future__ import annotations
@@ -34,16 +43,15 @@ from app.research.signal.engine import SignalEngineReport
 from app.research.study_inputs import StudyInputRefusal, admit_minute_inputs
 from app.services.signal_study_service import SignalStudyParams, serialize_signal_report, signal_study_identity
 from tests._helpers.fake_lake_catalog import install_fake_catalog, mock_launcher, point_lake_writer_at_tmp
+from tests._helpers.lake_study import ATOL, DENSE, RTOL, assert_same, provider_rows
 from tests._helpers.pinned_vendor import VendorBar, mock_vendor, scaled, vendor_history
-from tests.research.test_feature_study import ATOL, RTOL, assert_same
-from tests.research.test_feature_study_lake_vs_provider import DENSE, provider_rows
-from tests.research.test_signal_study import LONG, NOW_MS, SHORT, engine_report, lake_rows, study
+from tests._helpers.signal_study import LONG, NOW_MS, SHORT, engine_report, lake_rows, study, ungated_rows
 
 ET = ZoneInfo("America/New_York")
 
 
-def tape_for(window: list[date], **options: Any) -> dict[date, list[VendorBar]]:
-    return vendor_history(window, seed=11, start_price=150.0, **{**DENSE, **options})
+def tape_for(window: list[date], *, start_price: float = 150.0, **options: Any) -> dict[date, list[VendorBar]]:
+    return vendor_history(window, seed=11, start_price=start_price, **{**DENSE, **options})
 
 
 @pytest.fixture
@@ -76,6 +84,12 @@ def outputs(report: SignalEngineReport) -> dict[str, float]:
     }
 
 
+#: The lake writer rounds half-up to 1/10,000 (``lean_writer.to_deci_cent``): a price moves by at most half of it.
+HALF_GRID = 5e-5
+#: Shares of volume: two paths that trade the same minutes agree on the total to float noise.
+VOLUME_ATOL = 1e-6
+
+
 @dataclass
 class Comparison:
     provider_bars: int
@@ -86,6 +100,7 @@ class Comparison:
     max_price_diff: float = 0.0
     volume_changed: int = 0
     max_volume_diff: float = 0.0
+    volume_totals: tuple[float, float] = (0.0, 0.0)
     provider_out: dict[str, float] = field(default_factory=dict)
     lake_out: dict[str, float] = field(default_factory=dict)
     grades: tuple[str | None, str | None] = (None, None)
@@ -96,29 +111,49 @@ class Comparison:
         return self.only_provider + self.only_lake
 
     @property
+    def output_diffs(self) -> dict[str, float]:
+        """Each headline number's absolute difference between the two paths (NaN against NaN is no difference)."""
+        return {
+            name: 0.0 if np.isnan(self.provider_out[name]) and np.isnan(self.lake_out[name]) else abs(self.provider_out[name] - self.lake_out[name])
+            for name in self.provider_out
+        }
+
+    @property
     def max_output_diff(self) -> float:
-        """The largest absolute difference between the two paths' headline numbers (NaN against NaN is no difference)."""
-        diffs = [
-            abs(self.provider_out[k] - self.lake_out[k])
-            for k in self.provider_out
-            if not (np.isnan(self.provider_out[k]) and np.isnan(self.lake_out[k]))
-        ]
-        return float(max(diffs)) if diffs else 0.0
+        return max(self.output_diffs.values(), default=0.0)
+
+    @property
+    def regrouped_minutes(self) -> bool:
+        """Bars sit on both sides only and the same volume trades in both: the same minutes in other buckets.
+
+        That is a moved bar grid, not a different tape.
+        """
+        return self.only_provider > 0 and self.only_lake > 0 and bool(
+            np.isclose(*self.volume_totals, atol=VOLUME_ATOL, rtol=0)
+        )
+
+    @property
+    def quantization_only(self) -> bool:
+        """Every price that moved moved by at most half of the lake's 1/10,000 grid: input quantization, not a new tape."""
+        return self.prices_changed > 0 and self.max_price_diff <= HALF_GRID + 1e-9
 
     @property
     def causes(self) -> list[str]:
-        """The reconcile taxonomy's reading of what moved. Rules, not judgement: a count or a magnitude decides."""
+        """The reconcile taxonomy's reading of what moved. Rules, not judgement: a count or a magnitude decides.
+
+        A bar on one side only is ``timestamp`` when the other side holds the same minutes in different buckets (the
+        grid moved) and ``data-quality`` when the minutes themselves differ. A price that differs is ``data-quality``:
+        the lake's 1/10,000 grid changes the input data, and ``precision`` is floating-point accumulation, which no
+        price goes through. A volume that differs is ``precision`` only when the sums agree to float noise (a decimal-
+        exact fold against a float sum of the same minutes).
+        """
         found: list[str] = []
         if self.timestamps_changed:
-            found.append("data-quality")  # bars present on one side only: the input itself differs
-        if self.prices_changed and self.max_price_diff <= 5e-5 + 1e-9:
-            found.append("precision")  # at most half of the lake's 1/10,000 grid
-        elif self.prices_changed:
+            found.append("timestamp" if self.regrouped_minutes else "data-quality")
+        if self.prices_changed:
             found.append("data-quality")
-        if self.volume_changed and self.max_volume_diff <= 1e-9:
-            found.append("precision")  # a decimal-exact sum against a float sum: the last bits of the same total
-        elif self.volume_changed:
-            found.append("data-quality")
+        if self.volume_changed:
+            found.append("precision" if self.max_volume_diff <= 1e-9 else "data-quality")
         return list(dict.fromkeys(found))
 
 
@@ -128,6 +163,7 @@ def compare(provider: list[dict], lake: list[dict], params: SignalStudyParams) -
     result = Comparison(provider_bars=len(provider), lake_bars=len(lake))
     result.only_provider = len(by_provider.keys() - by_lake.keys())
     result.only_lake = len(by_lake.keys() - by_provider.keys())
+    result.volume_totals = (sum(r["volume"] for r in provider), sum(r["volume"] for r in lake))
     for ts in sorted(by_provider.keys() & by_lake.keys()):
         p, q = by_provider[ts], by_lake[ts]
         price_diff = max(abs(p[c] - q[c]) for c in ("open", "high", "low", "close"))
@@ -188,30 +224,92 @@ def test_folded_bars_give_the_same_bars_and_the_same_signal_as_the_vendor_side_a
     assert comparison.max_output_diff <= ATOL
 
 
-def test_prices_finer_than_the_lake_grid_move_by_at_most_half_a_ten_thousandth(world):
-    """Cause: ``precision``. The lake rounds half-up to 1/10,000 (``lean_writer.to_deci_cent``); the provider path does not.
+def test_a_bar_length_off_the_hour_regroups_the_same_minutes_into_other_buckets_which_is_why_the_study_refuses_it(world):
+    """Cause: ``timestamp`` (bar alignment). The provider's grid and the lake fold's agree only for a length that divides the hour.
 
-    The bound below is measured on this tape, not assumed: it is the size of the divergence the owner is shown. No
-    tolerance is loosened to hide it — the strict-float comparison above still holds for on-grid prices.
+    The vendor-side stand-in floors UTC milliseconds; the fold floors the New York wall clock counted from 1970. For a
+    7-minute bar the two sit on different minutes on most sessions, so almost every bar is on one side only while the
+    same minutes trade on both. That is a moved grid and not a different tape, and the headline numbers move with it.
+    The study refuses these lengths (``test_signal_study.py``) rather than ship numbers no clock can check.
     """
-    tape = tape_for(LONG, decimals=5)
+    tape = tape_for(SHORT)
     mock_vendor("SPY", tape, adjusted=tape)
-    params = study(LONG)
+    params = study(SHORT, multiplier=7)
+
+    comparison = compare(provider_rows(tape, SHORT, bar_minutes=7), ungated_rows(params, 7), params)
+
+    assert comparison.errors == (None, None)
+    assert comparison.causes == ["timestamp"]
+    assert comparison.regrouped_minutes
+    assert comparison.volume_totals[0] == pytest.approx(comparison.volume_totals[1], abs=VOLUME_ATOL, rel=0)
+    assert comparison.timestamps_changed > 0.5 * (comparison.provider_bars + comparison.lake_bars) / 2
+    assert comparison.prices_changed == 0 and comparison.volume_changed == 0, "a bar both sides hold is the same bar"
+    assert comparison.max_output_diff > ATOL, "so the signal the study reports moves with the grid"
+
+
+#: What the lake's price grid moves, measured on this pinned payload (seed 11, the four-month window, 5,352
+#: fifteen-minute bars, the page's default RSI(14) run) at three price levels: the largest absolute difference between
+#: the two paths' value of each output. Prices carry five or six decimals, finer than the grid. A rounding of at most
+#: 5e-5 is a larger share of a bar-to-bar change on a $2 name than on a $150 one, so the outputs move more as the
+#: price falls. ``continuous`` outputs are pinned at measured times ``MEASURED_MARGIN``; ``discrete`` outputs (the
+#: chosen threshold and cost, counts) are pinned exactly, because a margin on a choice means nothing. Re-measure (print
+#: ``output_diffs`` per case) only when the pinned tape or the lake's encoding intentionally changes; never to make a
+#: failing test pass.
+QUANTIZATION_MEASURED = {
+    "price_150": (
+        150.0, 5,
+        {"best_net_sharpe": 3.549e-05, "pct_time_active": 0.0, "effective_n": 7.708e-04, "mean_oos_sharpe": 0.0},
+        {"bars_used": 0.0, "best_threshold": 0.0, "best_cost_bps": 0.0, "oos_windows": 0.0},
+    ),
+    "price_12": (
+        12.0, 5,
+        {"best_net_sharpe": 0.1723, "pct_time_active": 1.869e-04, "effective_n": 5.895e-03, "mean_oos_sharpe": 0.0},
+        {"bars_used": 0.0, "best_threshold": 1.5, "best_cost_bps": 0.0, "oos_windows": 0.0},
+    ),
+    "price_2": (
+        2.0, 6,
+        {"best_net_sharpe": 0.4935, "pct_time_active": 5.606e-04, "effective_n": 1.836e-02, "mean_oos_sharpe": 0.0},
+        {"bars_used": 0.0, "best_threshold": 1.5, "best_cost_bps": 0.0, "oos_windows": 0.0},
+    ),
+}
+#: The headroom over a measured movement. The tape is seeded and the arithmetic deterministic, so this only absorbs
+#: platform differences in float summation order inside pandas and numpy; a real change in the lake's encoding, or in
+#: the engine's math, moves these by orders of magnitude more.
+MEASURED_MARGIN = 1.5
+
+
+@pytest.mark.parametrize(
+    ("start_price", "decimals", "continuous", "discrete"), QUANTIZATION_MEASURED.values(), ids=QUANTIZATION_MEASURED
+)
+def test_prices_finer_than_the_lake_grid_move_each_output_by_its_measured_amount_which_depends_on_the_price(
+    world, start_price, decimals, continuous, discrete
+):
+    """Cause: ``data-quality`` (input quantization). The lake rounds half-up to 1/10,000 (``lean_writer.to_deci_cent``);
+    the provider path does not. That changes the input data, so it is not ``precision`` and no float tolerance covers it.
+
+    The owner's D02 reads this table. On a $150 name nothing the reader acts on moves. On a $12 name the best net
+    Sharpe moves by 0.17 and the sweep picks another threshold (2.0 on the provider path, 0.5 on the lake); on a $2 name
+    the Sharpe moves by 0.49. The graduation grade does not change at any level.
+    """
+    tape = tape_for(LONG, start_price=start_price, decimals=decimals)
+    mock_vendor("SPY", tape, adjusted=tape)
+    params = study(LONG, feature_name="rsi_14")
 
     provider, lake = paths(tape, LONG, params)
     comparison = compare(provider, lake, params)
 
     assert comparison.errors == (None, None)
     assert comparison.timestamps_changed == 0
-    assert comparison.prices_changed > 0
-    assert comparison.max_price_diff <= 5e-5 + 1e-9
-    assert comparison.causes == ["precision"]
-    for count in ("bars_used", "oos_windows", "best_threshold", "best_cost_bps"):
-        assert comparison.provider_out[count] == comparison.lake_out[count], f"{count} does not move with the rounding"
+    assert comparison.quantization_only, "every price that moved moved by at most half a ten-thousandth"
+    assert comparison.causes == ["data-quality"]
     assert comparison.grades[0] == comparison.grades[1]
-    # Measured on this tape: the largest headline difference is the effective sample size (about 8e-4 of 300); the
-    # best net Sharpe moves by about 5e-5.
-    assert comparison.max_output_diff < 2e-3, f"measured headline drift {comparison.max_output_diff:.4g}"
+    diffs = comparison.output_diffs
+    for name, measured in continuous.items():
+        # atol is the measured movement with its margin; rtol is 0 because the quantity compared is itself a difference.
+        np.testing.assert_allclose(diffs[name], 0.0, atol=measured * MEASURED_MARGIN, rtol=0, err_msg=name)
+        assert bool(diffs[name] > 0) == (measured > 0), f"{name}: the divergence is real where it was measured"
+    for name, measured in discrete.items():
+        assert diffs[name] == measured, name
 
 
 def test_fractional_share_volume_is_kept_exactly_by_both_paths(world):

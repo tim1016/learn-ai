@@ -25,6 +25,7 @@ from app.jobs import cache as result_cache
 from app.jobs.progress import ProgressEmitter
 from app.jobs.runner import run_in_thread
 from app.lean_sidecar.trading_calendar import expected_sessions
+from app.research.lake_study import SESSION_POLICY_FOR_REQUEST
 from app.routers.jobs import SignalEngineJobRequest, start_signal_engine_job
 from app.services import signal_study_service
 from app.services.signal_study_service import CACHE_NAMESPACE, SignalStudyParams, run_signal_study
@@ -56,9 +57,6 @@ class _Harness:
 
     def result(self, job_id: str) -> dict:
         return json.loads(self.fake.strings[f"job:{job_id}:result"])
-
-    def result_text(self, job_id: str) -> str:
-        return self.fake.strings[f"job:{job_id}:result"]
 
     def cache_keys(self) -> list[str]:
         return [key for key in self.fake.strings if key.startswith("result:")]
@@ -141,6 +139,8 @@ def test_a_completed_study_carries_a_lake_data_source_with_its_coverage_counts(h
     assert source["bars_used"] == result["bars_used"]
     assert source["cache"] == {"hit": False, "cached_at_ms": None}
     assert source["window_start_ms"] < source["window_end_ms"]
+    assert source["aggregation"] == "minute_fold_et_wall_clock_no_fill"
+    assert source["effective_window"] == {"start_ms": source["window_start_ms"], "end_ms": source["window_end_ms"]}
     assert harness.phases("done")[:2] == ["admitting_data", "loading_bars"], "the lake check is the first thing it does"
 
 
@@ -263,6 +263,17 @@ def test_a_window_ending_on_a_session_that_has_not_finished_refuses_instead_of_c
 # ---------------------------------------------------------------------------
 
 
+def _assert_refused_before_the_lake_is_touched(harness, state: dict[str, str], job_id: str) -> dict:
+    refusal = harness.result(job_id)
+    assert status_of(state) == "failed" and state["error_code"] == "resolution_unsupported"
+    assert refusal["refusal"]["coverage"] is None
+    assert refusal["data_source"] is None, "nothing was read, so there is no source to name"
+    assert harness.catalog.rows == {}, "a request that can never run costs the lake nothing"
+    assert harness.calls.count == 0, "and the vendor nothing"
+    assert harness.computed == 0
+    return refusal
+
+
 @pytest.mark.parametrize(
     ("timespan", "multiplier"), [("hour", 1), ("day", 1), ("minute", 30), ("minute", 60), ("minute", 240)]
 )
@@ -271,13 +282,29 @@ def test_a_bar_size_that_can_never_reach_the_validity_gate_is_refused_before_the
 ):
     state = harness.run(params(timespan=timespan, multiplier=multiplier), job_id="bad-resolution")
 
-    refusal = harness.result("bad-resolution")
-    assert status_of(state) == "failed" and state["error_code"] == "resolution_unsupported"
+    _assert_refused_before_the_lake_is_touched(harness, state, "bad-resolution")
     assert "15-bar forward target" in state["error_message"] and "needs 70%" in state["error_message"]
-    assert refusal["refusal"]["coverage"] is None
-    assert harness.catalog.rows == {}, "a request that can never run costs the lake nothing"
-    assert harness.calls.count == 0, "and the vendor nothing"
-    assert harness.computed == 0
+
+
+@pytest.mark.parametrize("multiplier", [7, 29])
+def test_a_bar_size_that_does_not_divide_the_hour_is_refused_before_the_lake_is_touched(harness, multiplier):
+    state = harness.run(params(multiplier=multiplier), job_id="off-the-hour")
+
+    _assert_refused_before_the_lake_is_touched(harness, state, "off-the-hour")
+    assert f"{multiplier}-minute bars do not divide the hour" in state["error_message"]
+
+
+@pytest.mark.parametrize(("session_policy", "multiplier"), [("regular", 15), ("extended", 20)])
+def test_a_bar_size_the_sessions_of_the_policy_cannot_fill_is_refused_before_the_lake_is_touched(
+    harness, session_policy, multiplier
+):
+    """The default 15-minute run on regular hours (26 bars a day, 42% with a target) used to be fetched, written to the
+    lake and then stopped by the engine with an untyped error."""
+    state = harness.run(params(multiplier=multiplier, session_policy=session_policy), job_id="thin-sessions")
+
+    _assert_refused_before_the_lake_is_touched(harness, state, "thin-sessions")
+    assert f"under {session_policy}-hours sessions" in state["error_message"]
+    assert "the longest session in this window holds at most" in state["error_message"]
 
 
 # ---------------------------------------------------------------------------
@@ -378,20 +405,23 @@ def test_repaired_lake_data_under_the_same_request_is_a_new_identity(harness):
 
 
 # ---------------------------------------------------------------------------
-# T07: a saved result reads the same after the lake is repaired
+# T07: this study has no saved or locked result of its own
 # ---------------------------------------------------------------------------
+#
+# A job's result key is written once by the worker that computed it and nothing rewrites it, so "a saved result is
+# unchanged after the lake is repaired" is true of any job and no test of it can fail. The Signal study has no saved
+# or locked-study surface (its history rows are legacy and read-only). What can change is the result cache: a repaired
+# lake must add a new entry and leave the old one exactly as it was.
 
 
-def test_a_saved_result_is_byte_for_byte_unchanged_after_the_lake_is_repaired(harness):
+def test_a_repaired_lake_adds_a_cache_entry_and_leaves_the_earlier_one_byte_for_byte(harness):
     harness.run(params(), job_id="saved")
-    saved = harness.result_text("saved")
     saved_source = harness.result("saved")["data_source"]
     cached_before = {key: harness.fake.strings[key] for key in harness.cache_keys()}
 
     repair_day(harness)
     harness.run(params(), job_id="rerun")
 
-    assert harness.result_text("saved") == saved, "a stored result is never rewritten from mutable lake data"
     assert harness.result("rerun")["data_source"]["snapshot_digest"] != saved_source["snapshot_digest"]
     # The old identity keeps its entry, byte for byte, beside the new one: nothing was relabelled or replaced.
     assert {key: harness.fake.strings[key] for key in cached_before} == cached_before
@@ -404,36 +434,48 @@ def test_a_saved_result_is_byte_for_byte_unchanged_after_the_lake_is_repaired(ha
 # ---------------------------------------------------------------------------
 
 
-def test_the_legacy_session_label_stays_inert_and_the_policy_defaults_to_extended_hours():
-    # Exactly the body the browser sends (tickerRangeToWire plus the job fields): `session` is always "rth".
+def test_the_one_session_field_is_honoured_and_defaults_to_the_session_the_study_has_always_read():
+    # The body the browser sends (tickerRangeToWire plus the job fields), with the session it now names explicitly.
     browser = {
         "job_id": "j", "symbol": "SPY", "from_date": "2024-03-04", "to_date": "2024-03-15",
-        "timespan": "minute", "multiplier": 15, "session": "rth", "feature_name": "momentum_5m",
+        "timespan": "minute", "multiplier": 15, "session": "extended", "feature_name": "momentum_5m",
         "flip_sign": True, "regime_gate_enabled": True, "force": False,
     }
 
-    request = SignalEngineJobRequest.model_validate(browser)
+    asked_for_extended = SignalEngineJobRequest.model_validate(browser)
+    omitted = SignalEngineJobRequest.model_validate({k: v for k, v in browser.items() if k != "session"})
+    asked_for_rth = SignalEngineJobRequest.model_validate({**browser, "session": "rth"})
 
-    assert request.session == "rth"
-    assert request.session_policy == "extended", "the browser's 'rth' must not silently change the sample (D02)"
-    camel = {"jobId": "j", "symbol": "SPY", "featureName": "momentum_5m", "fromDate": "2024-03-04", "toDate": "2024-03-15"}
-    assert SignalEngineJobRequest.model_validate({**camel, "sessionPolicy": "regular"}).session_policy == "regular"
+    assert asked_for_extended.session == "extended"
+    assert omitted.session == "extended", "a caller that omits it keeps the sample the study has always computed on (D02)"
+    assert asked_for_rth.session == "rth"
+    assert [SESSION_POLICY_FOR_REQUEST[r.session] for r in (asked_for_extended, omitted, asked_for_rth)] == [
+        "extended", "extended", "regular",
+    ]
+    with pytest.raises(ValueError, match=r"session"):
+        SignalEngineJobRequest.model_validate({**browser, "session": "regular"})
+    # The second field is gone: the model refuses an unknown one rather than ignoring it.
     with pytest.raises(ValueError, match=r"session_policy"):
-        SignalEngineJobRequest.model_validate({**browser, "session_policy": "rth"})
+        SignalEngineJobRequest.model_validate({**browser, "session_policy": "regular"})
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("multiplier", [60, 240])
+@pytest.mark.parametrize(("multiplier", "session", "said"), [
+    (60, "rth", "15-bar forward target"),
+    (240, "extended", "15-bar forward target"),
+    (7, "extended", "do not divide the hour"),
+    (15, "rth", "under regular-hours sessions"),
+])
 async def test_the_route_refuses_a_bar_size_the_study_can_never_run_on_without_asking_the_provider(
-    fake: _FakeRedis, monkeypatch: pytest.MonkeyPatch, multiplier: int
+    fake: _FakeRedis, monkeypatch: pytest.MonkeyPatch, multiplier: int, session: str, said: str
 ):
-    """#3527 at the seam the browser uses: before, 60- and 240-minute runs fetched from Polygon and failed in the engine."""
+    """#3527 at the seam the browser uses: before, these runs fetched from Polygon and failed in the engine."""
     fetch = MagicMock(return_value=[])
     monkeypatch.setattr("app.routers.jobs.polygon_client.fetch_aggregates", fetch)
-    job_id = f"route-{multiplier}m-0001"
+    job_id = f"route-{multiplier}m-{session}-0001"
     request = SignalEngineJobRequest.model_validate(
         {"job_id": job_id, "symbol": "SPY", "from_date": "2024-03-04", "to_date": "2024-03-15", "timespan": "minute",
-         "multiplier": multiplier, "session": "rth", "feature_name": "momentum_5m"}
+         "multiplier": multiplier, "session": session, "feature_name": "momentum_5m"}
     )
 
     assert await start_signal_engine_job(request) == {"job_id": job_id, "status": "queued"}
@@ -442,7 +484,7 @@ async def test_the_route_refuses_a_bar_size_the_study_can_never_run_on_without_a
 
     state = fake.hashes[f"job:{job_id}:state"]
     assert state["status"] == "failed" and state["error_code"] == "resolution_unsupported"
-    assert "15-bar forward target" in state["error_message"]
+    assert said in state["error_message"]
     fetch.assert_not_called()
 
 
@@ -473,3 +515,11 @@ async def test_the_route_hands_the_worker_the_study_it_was_asked_for(monkeypatch
         price_adjustment_mode="polygon_split_adjusted",
     )
     assert captured["kwargs"]["force"] is True and captured["kwargs"]["job_id"] == "j1"
+
+    regular = SignalEngineJobRequest.model_validate(
+        {"jobId": "j2", "symbol": "SPY", "featureName": "momentum_5m", "fromDate": "2024-03-04", "toDate": "2024-03-15",
+         "session": "rth"}
+    )
+    await start_signal_engine_job(regular)
+    captured["work"]("emit", "cancel")
+    assert captured["params"].session_policy == "regular", "rth is the scheduled session, honoured, not ignored"

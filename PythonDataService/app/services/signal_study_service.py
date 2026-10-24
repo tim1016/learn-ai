@@ -9,30 +9,43 @@ and what it reads now, field by field:
   materializer and committed-byte admission; the UI is never a writer), then
   folded to the requested size by ``fold_minute_bars`` — never the chart's
   resampler, which fills missing minutes forward.
-* **Resolution.** Minute bars; 15 minutes by default (the route and the browser
-  both pin it). The target looks ``SignalConfig.horizon`` = 15 *bars* ahead (the
-  legacy ``compute_15min_forward_return`` wrapper), so 15 x the bar length in
-  minutes: 225 minutes at the default. It is valid only when the forward bar
-  falls on the same New York date, and the engine refuses a series with fewer
-  than 70% valid targets. A day holds at most ``ceil(1440 / m)`` bars of ``m``
-  minutes, so at most ``1 - 15 / that`` of them can have a target: bars longer
-  than ``MAX_BAR_MINUTES`` minutes, hour bars and daily bars can never reach the
-  gate. They failed the run every time and are now refused up front with a
-  reason (#3527).
+* **Resolution.** Minute bars whose length divides the hour *and* can reach the
+  engine's validity gate for the session the request reads. Anything else is
+  refused up front with a reason, before the lake is touched (#3527).
+
+  *The hour.* The fold floors the New York wall clock in whole bar lengths
+  counted from 1970, so a length that does not divide the hour starts its
+  buckets at a different minute on different sessions: 7-minute bars opened at
+  04:00, 03:59 and 03:54 on three consecutive sessions, 29-minute bars at 03:56,
+  03:57 and 03:38. Such bars answer to no clock a reader can check, and the
+  provider path (which got the vendor's own aggregates) is no reference for
+  them. The 19 such lengths up to 29 minutes are refused rather than measured.
+
+  *The gate.* The target looks ``SignalConfig.horizon`` = 15 *bars* ahead, valid
+  only when the forward bar falls on the same New York date, and the engine
+  refuses a series with fewer than 70% valid targets. A session holds at most
+  ``n`` bars and its last 15 have no forward bar in it, so at most ``1 - 15 / n``
+  of them can have a target. ``n`` is the longest session the window holds under
+  the policy: the calendar's own open and close for ``regular`` (an early close
+  holds fewer), the vendor's whole tape for ``extended`` (``PRE_MARKET_HEAD_MS``
+  before the open to ``AFTER_HOURS_TAIL_MS`` after the close). A length that
+  cannot reach 70% there failed the run every time; hour bars, daily bars and
+  minute bars past 29 can never reach it in any session.
 * **Adjustment.** Before: Polygon ``adjusted=True`` (split-only), never set
   explicitly. Now: the lake's ``polygon_split_adjusted`` mode, named in the
-  identity. Prices sit on the lake's 1/10,000 grid (rounded half-up).
+  identity. Prices sit on the lake's 1/10,000 grid (rounded half-up): a change
+  to the input data, not float rounding, measured at three price levels in
+  ``tests/research/test_signal_study_lake_vs_provider.py``.
 * **Session.** Before and now: **extended hours** — every bar the provider
-  served, 04:00 to 20:00 ET. The browser sends ``session: "rth"`` and the
-  backend never read it; that label stays inert so this migration does not
-  silently change the sample. The session is now an explicit identity field
-  (``session_policy``, default ``extended``); asking for ``regular`` is opt-in.
-  Which session the study *should* use is an owner decision (D02), and it is
-  not neutral: on regular-hours 15-minute bars (26 per session) a 15-bar target
-  is valid for at most 11 of them (42%), under the engine's 70% gate, so the
-  default 15-minute run would stop producing results. 5-minute regular bars
-  (81%) and 1-minute regular bars (96%) clear it. The comparison is measured in
-  ``tests/research/test_signal_study.py``.
+  served, 04:00 to 20:00 ET. The request's ``session`` is the one control and
+  defaults to ``extended``, so no caller's sample moves (the old route never
+  read the field the browser sent); ``rth`` is the scheduled session, named
+  ``regular`` in the identity (``session_policy``). Which session the study
+  *should* use is an owner decision (D02), and it is not neutral: on regular
+  hours a session holds 26 fifteen-minute bars, a 15-bar target is valid for at
+  most 11 of them (42%), under the engine's 70% gate, so the default 15-minute
+  run is refused up front; 6-minute bars (77%) and shorter clear it. The
+  comparison is measured in ``tests/research/test_signal_study.py``.
 * **Warmup.** None. Features run inside the window (the same one continuous
   series, straight across overnight gaps; their first values are NaN) and the
   engine needs at least ``SignalConfig.min_bars_for_signal`` bars.
@@ -51,38 +64,30 @@ and what it reads now, field by field:
   lake yields a new key, and an entry written when the provider was the source
   can never be found. Nothing is relabelled.
 
+The run itself (admit, fold, cache, compute, store, say where the data came
+from, refuse with the counts) is the shared one,
+:func:`app.research.lake_study.run_lake_study`. This module supplies the
+identity, the math and the serializer.
+
 Differences a run can show against the provider path are documented and
 measured in ``tests/research/test_signal_study_lake_vs_provider.py``.
 """
 
 from __future__ import annotations
 
-import logging
 from dataclasses import asdict, dataclass
 from datetime import date
 from typing import Any
 
-from app.jobs import cache as result_cache
-from app.jobs.phases import friendly as friendly_phase
+from app.data_lake.capture_finality import AFTER_HOURS_TAIL_MS, PRE_MARKET_HEAD_MS
 from app.jobs.progress import CancellationCheck, ProgressEmitter
-from app.research.runs.hashing import hash_payload
+from app.lean_sidecar.trading_calendar import session_windows_ms_utc
+from app.research.lake_study import FoldedStudyIdentity, LakeStudy, StudyRun, run_lake_study
 from app.research.signal.config import SignalConfig
 from app.research.signal.engine import run_signal_engine
-from app.research.study_inputs import (
-    FOLD_RULE,
-    AdjustmentMode,
-    AdmittedMinuteInputs,
-    MinuteWindowIdentity,
-    SessionPolicy,
-    StudyCoverage,
-    StudyInputRefusal,
-    admit_minute_inputs,
-    bars_as_rows,
-    fold_minute_bars,
-)
+from app.research.study_inputs import AdjustmentMode, MinuteWindowIdentity, SessionPolicy, StudyInputRefusal
 from app.research.target import DEFAULT_NON_NAN_RATIO_THRESHOLD
-
-logger = logging.getLogger(__name__)
+from app.utils.timestamps import ny_datetime
 
 #: Bump when the signal, backtest, walk-forward, diagnostics or graduation math changes: a cached result is the
 #: product of the code that made it, and the cache key is the only thing that tells a new run apart from an old one.
@@ -97,30 +102,81 @@ _REQUESTER = "signal-study"
 _MINUTES_PER_DAY = 24 * 60
 _TIMESPAN_MINUTES = {"minute": 1, "hour": 60, "day": _MINUTES_PER_DAY}
 
+#: Bar lengths, in minutes, whose buckets start at the same minute of every hour on every session: the divisors of 60.
+HOUR_ALIGNED_BAR_MINUTES: tuple[int, ...] = tuple(minutes for minutes in range(1, 61) if 60 % minutes == 0)
 
-def max_target_share(bar_minutes: int, horizon_bars: int) -> float:
-    """The most bars of one New York date that can have a ``horizon_bars``-ahead target, as a share of that date's bars.
+#: The first and last minute of the New York day (minutes past midnight) in which a bar of one session can start.
+MinuteSpan = tuple[int, int]
 
-    A target is valid only when the forward bar sits on the same date. A date holds at most ``n = ceil(1440 /
-    bar_minutes)`` bars, and the last ``horizon_bars`` of them have no forward bar, so the share is ``(n - h) / n``
-    at best. It is a ceiling for any data: gaps and a shorter session only lower it.
+_POLICY_WORDS = {"regular": "regular-hours", "extended": "extended-hours"}
 
-    Formula: share_max(m, h) = max(n - h, 0) / n, with n = ceil(1440 / m) bars of m minutes in a day
+
+def bars_in_span(bar_minutes: int, first_minute: int, last_minute: int) -> int:
+    """How many ``bar_minutes``-minute bars start in ``[first_minute, last_minute]`` when the grid starts at midnight.
+
+    Exact for a bar length that divides the hour (every session's grid is the same). For the whole day it is also an
+    upper bound for any length, because a date holds at most ``ceil(1440 / m)`` multiples of ``m``.
+    """
+    return last_minute // bar_minutes - first_minute // bar_minutes + 1
+
+
+def _share(per_session: int, horizon_bars: int) -> float:
+    return max(per_session - horizon_bars, 0) / per_session
+
+
+def max_target_share(
+    bar_minutes: int, horizon_bars: int, first_minute: int = 0, last_minute: int = _MINUTES_PER_DAY - 1
+) -> float:
+    """The most bars of one session that can have a ``horizon_bars``-ahead target, as a share of that session's bars.
+
+    A target is valid only when the forward bar sits on the same New York date. A session whose bars start in
+    ``[first_minute, last_minute]`` holds ``n = bars_in_span(...)`` of them, and the last ``horizon_bars`` have no
+    forward bar in it, so the share is ``(n - h) / n`` at best. It is a ceiling for any data: gaps and a shorter
+    session only lower it. With the default span (the whole day) it is a ceiling for any bar length.
+
+    Formula: share_max(m, h) = max(n - h, 0) / n, with n = floor(last / m) - floor(first / m) + 1 bars of m minutes
+      starting in the span; the whole day gives n = ceil(1440 / m)
     Reference: Internal — the same-New-York-date rule of ``app/research/target.py::compute_forward_log_return``; no
       external source.
     Canonical implementation: this file.
     Validated against: tests/research/test_signal_study.py::test_the_ceiling_on_valid_targets_is_what_the_target_function_gives_on_gap_free_bars
     """
-    per_day = -(-_MINUTES_PER_DAY // bar_minutes)
-    return max(per_day - horizon_bars, 0) / per_day
+    return _share(bars_in_span(bar_minutes, first_minute, last_minute), horizon_bars)
 
 
-#: The longest minute bar that can still reach the engine's validity gate (see :func:`max_target_share`).
-MAX_BAR_MINUTES: int = max(
-    minutes
-    for minutes in range(1, _MINUTES_PER_DAY + 1)
-    if max_target_share(minutes, SignalConfig().horizon) >= DEFAULT_NON_NAN_RATIO_THRESHOLD
-)
+def _minute_of_day(instant_ms: int) -> int:
+    local = ny_datetime(instant_ms)
+    return local.hour * 60 + local.minute
+
+
+def session_minute_spans(session_policy: SessionPolicy, window_start: date, window_end: date) -> frozenset[MinuteSpan]:
+    """The distinct spans of New York minutes in which a bar can start, over the scheduled sessions of a window.
+
+    ``regular`` is the calendar's own open and close, so an early close is a shorter span. ``extended`` is the
+    vendor's whole tape around them (``PRE_MARKET_HEAD_MS`` before the open to ``AFTER_HOURS_TAIL_MS`` after the
+    close). Empty when the window holds no session; admission refuses that with its own reason.
+    """
+    head, tail = (PRE_MARKET_HEAD_MS, AFTER_HOURS_TAIL_MS) if session_policy == "extended" else (0, 0)
+    return frozenset(
+        (_minute_of_day(window.open_ms_utc - head), _minute_of_day(window.close_ms_utc + tail) - 1)
+        for window in session_windows_ms_utc(window_start, window_end)
+    )
+
+
+def longest_session_bars(bar_minutes: int, spans: frozenset[MinuteSpan]) -> int:
+    """The most bars of this length any one session of the window can hold."""
+    return max(bars_in_span(bar_minutes, first, last) for first, last in spans)
+
+
+def bar_minutes_that_reach_the_gate(spans: frozenset[MinuteSpan], horizon_bars: int) -> tuple[int, ...]:
+    """The hour-aligned bar lengths whose longest session can hold the engine's share of valid targets."""
+    if not spans:
+        return ()
+    return tuple(
+        minutes
+        for minutes in HOUR_ALIGNED_BAR_MINUTES
+        if _share(longest_session_bars(minutes, spans), horizon_bars) >= DEFAULT_NON_NAN_RATIO_THRESHOLD
+    )
 
 
 @dataclass(frozen=True)
@@ -145,91 +201,66 @@ class SignalStudyParams:
 
 
 @dataclass(frozen=True)
-class SignalStudyIdentity:
-    """Every input that decides this study's data: the lake input plus how the study shapes it."""
+class SignalStudyIdentity(FoldedStudyIdentity):
+    """Every input that decides this study's data: the lake input, the bar length and the forward target."""
 
-    inputs: MinuteWindowIdentity
-    bar_minutes: int
     look_forward_bars: int
 
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            **self.inputs.as_dict(),
-            "bar_minutes": self.bar_minutes,
-            "aggregation": FOLD_RULE,
-            "look_forward_bars": self.look_forward_bars,
-            "look_forward_extends_window": False,
-        }
+    def study_fields(self) -> dict[str, Any]:
+        return {"look_forward_bars": self.look_forward_bars, "look_forward_extends_window": False}
 
-    def digest(self) -> str:
-        return hash_payload(self.as_dict())
+
+def _use_instead(lengths: tuple[int, ...]) -> str:
+    return f" Use minute bars of {', '.join(str(minutes) for minutes in lengths)} minutes." if lengths else ""
 
 
 def signal_study_identity(params: SignalStudyParams) -> SignalStudyIdentity:
     """The study's input identity, or a typed refusal for a resolution it can never run on."""
-    horizon = SignalConfig().horizon
+    horizon = params.config().horizon
+    threshold = DEFAULT_NON_NAN_RATIO_THRESHOLD
     unit = _TIMESPAN_MINUTES.get(params.timespan)
     if unit is None:
         raise StudyInputRefusal("resolution_unsupported", f"{params.timespan!r} is not a bar size this study reads.")
     bar_minutes = params.multiplier * unit
-    ceiling = max_target_share(bar_minutes, horizon)
-    if ceiling < DEFAULT_NON_NAN_RATIO_THRESHOLD:
-        per_day = -(-_MINUTES_PER_DAY // bar_minutes)
+    label = f"{params.multiplier}-{params.timespan}"
+    inputs = MinuteWindowIdentity(
+        symbol=params.symbol,
+        price_adjustment_mode=params.price_adjustment_mode,
+        session_policy=params.session_policy,
+        window_start=params.from_date,
+        window_end=params.to_date,
+        warmup_sessions=0,
+    )
+    spans = session_minute_spans(inputs.session_policy, inputs.window_start, inputs.window_end)
+    use_instead = _use_instead(bar_minutes_that_reach_the_gate(spans, horizon))
+
+    # The refusals are one cause each and checked widest first, so the reason named is the one that holds for the
+    # most requests: too long for any session, then off the hour, then too long for this window's sessions.
+    per_day = bars_in_span(bar_minutes, 0, _MINUTES_PER_DAY - 1)
+    if _share(per_day, horizon) < threshold:
         raise StudyInputRefusal(
             "resolution_unsupported",
-            f"{params.multiplier}-{params.timespan} bars are too long for the {horizon}-bar forward target: a day holds "
-            f"at most {per_day} of them, so at most {ceiling * 100:.1f}% of bars can have a target inside the same "
-            f"session, and the study needs {DEFAULT_NON_NAN_RATIO_THRESHOLD * 100:.0f}%. "
-            f"Minute bars of up to {MAX_BAR_MINUTES} minutes can reach that share.",
+            f"{label} bars are too long for the {horizon}-bar forward target: a day holds at most {per_day} of them, so "
+            f"at most {_share(per_day, horizon) * 100:.1f}% of bars can have a target inside the same session, and the "
+            f"study needs {threshold * 100:.0f}%.{use_instead}",
         )
-    return SignalStudyIdentity(
-        inputs=MinuteWindowIdentity(
-            symbol=params.symbol,
-            price_adjustment_mode=params.price_adjustment_mode,
-            session_policy=params.session_policy,
-            window_start=params.from_date,
-            window_end=params.to_date,
-            warmup_sessions=0,
-        ),
-        bar_minutes=bar_minutes,
-        look_forward_bars=horizon,
-    )
-
-
-def cache_params(identity: SignalStudyIdentity, admitted: AdmittedMinuteInputs, config: SignalConfig) -> dict[str, Any]:
-    """The cache identity: data policy, the admitted bytes, the scientific inputs and the code that computes them."""
-    return {
-        "identity": identity.as_dict(),
-        "data_root_id": str(admitted.data_root_id),
-        "snapshot_digest": admitted.snapshot_digest,
-        "signal_config": asdict(config),
-        "calculation_version": SIGNAL_STUDY_CALCULATION_VERSION,
-    }
-
-
-def data_source_block(
-    identity: SignalStudyIdentity | None,
-    *,
-    coverage: StudyCoverage | None,
-    admitted: AdmittedMinuteInputs | None = None,
-    bars_used: int | None = None,
-    cache_hit: bool = False,
-    cached_at_ms: int | None = None,
-) -> dict[str, Any]:
-    """The provenance a data-source line shows: the identity read, the admitted bytes, and the coverage counts."""
-    block: dict[str, Any] = {"kind": "lake", **(identity.as_dict() if identity is not None else {})}
-    block.update(
-        identity_digest=identity.digest() if identity is not None else None,
-        calculation_version=SIGNAL_STUDY_CALCULATION_VERSION,
-        data_root_id=str(admitted.data_root_id) if admitted is not None else None,
-        snapshot_digest=admitted.snapshot_digest if admitted is not None else None,
-        corporate_action_versions=dict(admitted.snapshot.corporate_action_versions) if admitted is not None else {},
-        coverage=coverage.as_dict() if coverage is not None else None,
-        minute_bars_read=len(admitted.window_bars) if admitted is not None else None,
-        bars_used=bars_used,
-        cache={"hit": cache_hit, "cached_at_ms": cached_at_ms},
-    )
-    return block
+    if bar_minutes not in HOUR_ALIGNED_BAR_MINUTES:
+        raise StudyInputRefusal(
+            "resolution_unsupported",
+            f"{label} bars do not divide the hour, so the exchange-clock fold would start them at a different minute on "
+            f"different sessions and they would line up with no clock.{use_instead}",
+        )
+    if spans:
+        per_session = longest_session_bars(bar_minutes, spans)
+        if _share(per_session, horizon) < threshold:
+            raise StudyInputRefusal(
+                "resolution_unsupported",
+                f"{label} bars are too long for the {horizon}-bar forward target under "
+                f"{_POLICY_WORDS[inputs.session_policy]} sessions: the longest session in this window holds at most "
+                f"{per_session} of them, so at most {_share(per_session, horizon) * 100:.1f}% of bars can have a target "
+                f"inside the same session, and the study needs {threshold * 100:.0f}%.{use_instead}",
+            )
+    return SignalStudyIdentity(inputs=inputs, bar_minutes=bar_minutes, look_forward_bars=horizon)
 
 
 def serialize_signal_report(report: Any) -> dict:
@@ -263,19 +294,43 @@ def serialize_signal_report(report: Any) -> dict:
     }
 
 
-def _phase(emit: ProgressEmitter, cancel: CancellationCheck, phase_id: str, message: str | None = None) -> None:
-    cancel.raise_if_cancelled()
-    emit.phase(phase_id)
-    emit.log(message if message is not None else friendly_phase("signal_engine", phase_id))
+def signal_study(params: SignalStudyParams) -> LakeStudy:
+    """The Signal study as the shared lake run takes it: its names, its cache inputs, and its math."""
+    config = params.config()
 
+    def compute(run: StudyRun) -> dict[str, Any]:
+        report = run_signal_engine(
+            ticker=params.symbol,
+            feature_name=params.feature_name,
+            bars=run.rows,
+            start_date=params.from_date.isoformat(),
+            end_date=params.to_date.isoformat(),
+            config=config,
+            on_phase=run.hooks.on_phase,
+            on_log=run.hooks.on_log,
+            on_progress=run.hooks.on_progress,
+            cancel_check=run.hooks.cancel_check,
+        )
+        if report.error:
+            # Surface the failure as an exception so run_in_thread emits job.failed (the engine caught the exception
+            # internally to populate report.error; re-raising gives the SSE consumer a clean terminal event instead of
+            # "completed but error_field=…").
+            raise ValueError(report.error)
+        return serialize_signal_report(report)
 
-def _coverage_line(coverage: StudyCoverage) -> str:
-    window = coverage.window
-    return (
-        f"Lake coverage: {window.expected} sessions, {window.reused} reused, {window.added} added, "
-        f"{window.missing} missing, {window.failed} failed "
-        f"(warmup: {coverage.warmup.expected} sessions; artifacts fetched {coverage.artifacts_fetched}, "
-        f"reused {coverage.artifacts_reused})"
+    return LakeStudy(
+        job_type="signal_engine",
+        cache_namespace=CACHE_NAMESPACE,
+        calculation_version=SIGNAL_STUDY_CALCULATION_VERSION,
+        requester=_REQUESTER,
+        subject={"ticker": params.symbol, "feature_name": params.feature_name},
+        admit_message=(
+            f"Checking the lake for {params.symbol} {params.multiplier}-minute bars from "
+            f"{params.from_date.isoformat()} to {params.to_date.isoformat()}"
+        ),
+        load_message=f"Loading {params.symbol} {params.multiplier}-minute bars from the lake",
+        compute=compute,
+        cache_extra={"signal_config": asdict(config)},
     )
 
 
@@ -290,129 +345,14 @@ def run_signal_study(
 ) -> dict | None:
     """Admit the study's lake inputs, compute, and return the result — or answer a refusal or cache hit itself.
 
-    Returns the result dict for the job runner to complete. Returns ``None``
-    when the job's terminal event is already emitted here: a refusal fails
-    the job (typed code, plain reason) and parks the refusal payload with its
-    counts as the job's result; a cache hit completes it flagged ``cached``.
-    Blocking: runs on the job's worker thread.
+    The run is the shared one (:func:`app.research.lake_study.run_lake_study`); this supplies the identity and the math.
     """
-    identity: SignalStudyIdentity | None = None
-    try:
-        identity = signal_study_identity(params)
-        return _run(params, identity, job_id=job_id, force=force, emit=emit, cancel=cancel, now_ms=now_ms)
-    except StudyInputRefusal as refusal:
-        logger.warning(
-            "signal study refused",
-            extra={"action": "signal_study_refused", "code": refusal.code, "symbol": params.symbol},
-        )
-        emit.log(refusal.reason, level="warn")
-        emit.failed(
-            refusal.code,
-            refusal.reason,
-            result={
-                "success": False,
-                "status": "refused",
-                "ticker": params.symbol,
-                "feature_name": params.feature_name,
-                "error": refusal.reason,
-                "refusal": refusal.as_dict(),
-                "data_source": data_source_block(identity, coverage=refusal.coverage),
-            },
-        )
-        return None
-
-
-def _run(
-    params: SignalStudyParams,
-    identity: SignalStudyIdentity,
-    *,
-    job_id: str,
-    force: bool,
-    emit: ProgressEmitter,
-    cancel: CancellationCheck,
-    now_ms: int | None,
-) -> dict | None:
-    symbol = params.symbol
-    config = params.config()
-    _phase(
-        emit,
-        cancel,
-        "admitting_data",
-        f"Checking the lake for {symbol} {params.multiplier}-minute bars from "
-        f"{params.from_date.isoformat()} to {params.to_date.isoformat()}",
+    return run_lake_study(
+        signal_study(params),
+        lambda: signal_study_identity(params),
+        job_id=job_id,
+        force=force,
+        emit=emit,
+        cancel=cancel,
+        now_ms=now_ms,
     )
-    admitted = admit_minute_inputs(
-        identity.inputs, requester=_REQUESTER, now_ms=now_ms, check_cancelled=cancel.raise_if_cancelled
-    )
-    emit.log(_coverage_line(admitted.coverage))
-
-    _phase(emit, cancel, "loading_bars", f"Loading {symbol} {params.multiplier}-minute bars from the lake")
-    bars = bars_as_rows(fold_minute_bars(admitted.window_bars, identity.bar_minutes))
-    emit.log(f"Loaded {len(bars):,} bars from {len(admitted.window_bars):,} minute bars")
-
-    key = cache_params(identity, admitted, config)
-    if not force:
-        hit = result_cache.lookup(CACHE_NAMESPACE, key)
-        if hit is not None:
-            _, cached = hit
-            cached_at = int(cached.get("cached_at", 0))
-            result = {
-                **cached["result"],
-                "data_source": data_source_block(
-                    identity,
-                    coverage=admitted.coverage,
-                    admitted=admitted,
-                    bars_used=len(bars),
-                    cache_hit=True,
-                    cached_at_ms=cached_at,
-                ),
-            }
-            result_cache.serve_cached_result(
-                job_id, "signal_engine", {"result": result, "cached_at": cached_at}, announce_start=False
-            )
-            return None
-
-    def on_phase(phase: str) -> None:
-        cancel.raise_if_cancelled()
-        emit.phase(phase)
-
-    def on_log(message: str, level: str = "info") -> None:
-        emit.log(message, level=level)
-
-    def on_progress(current: int, total: int, unit: str = "configs", message: str | None = None) -> None:
-        emit.progress(current=current, total=total, unit=unit, message=message)
-
-    def cancel_check() -> bool:
-        # Raises JobCancelled when set; otherwise returns False so call sites can use it either as a poll or as a
-        # sync barrier.
-        cancel.raise_if_cancelled()
-        return False
-
-    report = run_signal_engine(
-        ticker=symbol,
-        feature_name=params.feature_name,
-        bars=bars,
-        start_date=params.from_date.isoformat(),
-        end_date=params.to_date.isoformat(),
-        config=config,
-        on_phase=on_phase,
-        on_log=on_log,
-        on_progress=on_progress,
-        cancel_check=cancel_check,
-    )
-    if report.error:
-        # Surface the failure as an exception so run_in_thread emits job.failed (the engine caught the exception
-        # internally to populate report.error; re-raising gives the SSE consumer a clean terminal event instead of
-        # "completed but error_field=…").
-        raise ValueError(report.error)
-
-    cancel.raise_if_cancelled()
-    _phase(emit, cancel, "completed")
-    scientific = serialize_signal_report(report)
-    result_cache.store(CACHE_NAMESPACE, key, scientific)
-    return {
-        **scientific,
-        "data_source": data_source_block(
-            identity, coverage=admitted.coverage, admitted=admitted, bars_used=len(bars)
-        ),
-    }

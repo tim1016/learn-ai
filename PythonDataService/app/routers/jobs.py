@@ -26,7 +26,7 @@ import asyncio
 import logging
 from dataclasses import asdict
 from datetime import date
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
 from fastapi.encoders import jsonable_encoder
@@ -231,25 +231,27 @@ class SignalEngineJobRequest(_CamelCaseTickerRequest):
 
     The worker reads the study's bars from the data lake itself, materializing
     what the lake lacks (``app.services.signal_study_service``). Only minute
-    bars short enough to reach the study's validity gate are accepted; longer
-    bars are refused with a reason.
+    bars that divide the hour and are short enough to reach the study's
+    validity gate for the session are accepted; other sizes are refused with a
+    reason before the lake is touched.
 
-    ``session`` is the base request's legacy label (the browser sends
-    ``"rth"``) and has never been read; it stays inert so no caller's sample
-    changes silently. ``session_policy`` is the real control and defaults to
-    the session the study has always computed on: ``extended``, 04:00-20:00
-    ET. ``regular`` is opt-in.
+    **Default override**: ``session="extended"``. ``session`` is the one
+    control for which bars the study computes on: ``extended`` is every bar the
+    provider served, 04:00-20:00 ET, which is what the study has always read;
+    ``rth`` is the scheduled session. The base default (``rth``) would have
+    silently moved every caller that omits it onto a different sample (D02).
     """
 
     # Override base default — preserves pre-migration multiplier=15.
     multiplier: int = Field(15, ge=1)
+    # Override base default — preserves the session the study has always computed on.
+    session: Session = "extended"
 
     job_id: str = Field(..., min_length=1)
     feature_name: str = Field(..., min_length=1)
     flip_sign: bool = True
     regime_gate_enabled: bool = True
     force: bool = False
-    session_policy: Literal["extended", "regular"] = "extended"
 
 
 # ---------------------------------------------------------------------------
@@ -788,7 +790,7 @@ async def start_signal_engine_job(req: SignalEngineJobRequest) -> dict:
         multiplier=req.multiplier,
         flip_sign=req.flip_sign,
         regime_gate_enabled=req.regime_gate_enabled,
-        session_policy=req.session_policy,
+        session_policy=SESSION_POLICY_FOR_REQUEST[req.session],
     )
 
     def work(emit: ProgressEmitter, cancel) -> dict | None:

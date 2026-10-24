@@ -25,7 +25,6 @@ the lake path (the same trades build both) and is unverified against live data.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -33,7 +32,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 import respx
-from polygon.rest.models import Agg
 
 from app.data_lake.admission import read_committed_bytes
 from app.data_lake.capture_finality import VENDOR_DELAY_MS, capture_final_ms
@@ -45,9 +43,8 @@ from app.research.features.ta_features import TechnicalFeatures
 from app.research.runner import run_feature_research
 from app.research.study_inputs import StudyInputRefusal, admit_minute_inputs, bars_as_rows, fold_minute_bars
 from app.services.feature_study_service import FeatureStudyParams, feature_study_identity
-from app.services.polygon_client import PolygonClientService
 from tests._helpers.fake_lake_catalog import FakeCatalog, install_fake_catalog, mock_launcher, point_lake_writer_at_tmp
-from tests._helpers.lake_study import commit_bars, corrected_day, lake_file
+from tests._helpers.lake_study import DENSE, commit_bars, corrected_day, lake_file, provider_rows
 from tests._helpers.pinned_vendor import VendorBar, VendorCalls, mock_vendor, scaled, vendor_history
 
 FEATURES = ["momentum_5m", "rsi_14", "realized_vol_30", "volume_zscore", "macd_signal"]
@@ -61,9 +58,6 @@ DST_WINDOW = expected_sessions(date(2024, 3, 4), date(2024, 3, 15))
 #: 2024-07-03 is an early close (13:00 ET) and 2024-07-04 a holiday.
 HALF_DAY_WINDOW = expected_sessions(date(2024, 7, 1), date(2024, 7, 12))
 
-#: Dense enough that the 15-minute target clears the study's 70% validity gate; the gate is not under test here.
-DENSE = {"regular_keep": 0.995, "extended_keep": 0.92}
-
 
 def tape_for(window: list[date], *, start_price: float = 150.0, **options: object) -> dict[date, list[VendorBar]]:
     return vendor_history(window, seed=11, start_price=start_price, **{**DENSE, **options})  # type: ignore[arg-type]
@@ -72,49 +66,6 @@ def tape_for(window: list[date], *, start_price: float = 150.0, **options: objec
 # ---------------------------------------------------------------------------
 # The two paths
 # ---------------------------------------------------------------------------
-
-
-def vendor_fold(minutes: list[VendorBar], bar_minutes: int) -> list[VendorBar]:
-    """An independent stand-in for the vendor's own N-minute aggregate: first/high/low/last/sum per wall-clock bucket."""
-    bucket_ms = bar_minutes * 60_000
-    out: dict[int, VendorBar] = {}
-    for m in minutes:
-        key = m["t"] // bucket_ms * bucket_ms
-        if key not in out:
-            out[key] = {**m, "t": key}
-        else:
-            bar = out[key]
-            bar["h"], bar["l"], bar["c"], bar["v"] = max(bar["h"], m["h"]), min(bar["l"], m["l"]), m["c"], bar["v"] + m["v"]
-    return [out[k] for k in sorted(out)]
-
-
-class _SdkTape:
-    """The SDK's ``RESTClient.list_aggs`` over a pinned tape: it pages ``Agg`` objects exactly as the SDK would."""
-
-    def __init__(self, raw: Mapping[date, list[VendorBar]], adjusted: Mapping[date, list[VendorBar]] | None) -> None:
-        self.raw, self.adjusted = raw, adjusted
-
-    def list_aggs(self, *, ticker, multiplier, timespan, from_, to, limit, adjusted, sort):
-        tape = self.adjusted if (adjusted and self.adjusted is not None) else self.raw
-        start, end = date.fromisoformat(from_), date.fromisoformat(to)
-        minutes = [b for day, bars in sorted(tape.items()) if start <= day <= end for b in bars]
-        for bar in minutes if multiplier == 1 else vendor_fold(minutes, multiplier):
-            yield Agg.from_dict(bar)
-
-
-def provider_rows(
-    raw: Mapping[date, list[VendorBar]],
-    window: list[date],
-    *,
-    bar_minutes: int = 1,
-    adjusted: Mapping[date, list[VendorBar]] | None = None,
-) -> list[dict]:
-    """What the study read before #3521: ``fetch_aggregates`` for the window, adjusted, every session of the day."""
-    service = PolygonClientService()
-    service.client = _SdkTape(raw, adjusted)  # type: ignore[assignment]
-    return service.fetch_aggregates(
-        ticker="SPY", multiplier=bar_minutes, timespan="minute", from_date=window[0].isoformat(), to_date=window[-1].isoformat()
-    )
 
 
 def lake_rows(window: list[date], *, bar_minutes: int = 1, session: str = "extended") -> list[dict]:
