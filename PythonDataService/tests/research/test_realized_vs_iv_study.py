@@ -11,10 +11,11 @@ Two claims, kept apart as PRD #3490 R14 requires.
 2. *What the source change itself moves* (precision, the sanitizer, the session, the window end) is pinned case by
    case in ``test_realized_vs_iv_lake_vs_provider.py``, with the cause named in the reconcile taxonomy.
 
-Not provable offline: that Polygon's own 15-minute and day aggregates equal a fold of its minute aggregates. The
-vendor side here is an independent stand-in (``tests/_helpers/realized_vs_iv.py``) for both, and a day bar is taken
-to be the regular session, as the census could not confirm. Both are assumptions of the lake path, unverified
-against live data.
+The vendor side here is an independent stand-in (``tests/_helpers/realized_vs_iv.py``), not a vendor measurement.
+The owner-approved SPY capture for 2025-01-13..17 (#3522, #3524) separately found exact 15-minute OHLCV agreement and
+exact daily open/high/low agreement for the regular-session fold excluding the 16:00 minute. The vendor's official
+daily close differed by up to $0.15 and its volume was larger. Those are accepted input differences under #3525,
+not a claim that a minute fold reproduces every vendor daily field or that one SPY week proves every symbol.
 """
 
 from __future__ import annotations

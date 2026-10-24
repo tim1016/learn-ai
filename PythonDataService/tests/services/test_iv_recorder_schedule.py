@@ -18,7 +18,7 @@ from app.config import settings
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.option_archive.planner import UNDERLYINGS
 from app.services import iv_recorder_schedule
-from app.services.iv_recorder import OPTIONS_SNAPSHOT_DELAY_MS, InMemoryIvSnapshotStore, RecordedIvSnapshot
+from app.services.iv_recorder import OPTIONS_SNAPSHOT_DELAY_MS, InMemoryIvSnapshotStore, IvSeriesRow, RecordedIvSnapshot
 from app.services.iv_recorder_schedule import (
     GRACE_MS,
     SLOT_BEFORE_CLOSE_MS,
@@ -211,6 +211,60 @@ async def test_a_process_that_starts_after_the_grace_skips_the_day_and_says_so(c
     assert actions(caplog) == [("iv_recorder_snapshot_skipped_late", "SPY"), ("iv_recorder_snapshot_skipped_late", "QQQ")], "once per symbol"
     (logged, _) = [r for r in caplog.records if getattr(r, "action", "") == "iv_recorder_snapshot_skipped_late"]
     assert logged.day == MONDAY.isoformat() and logged.late_by_ms == GRACE_MS and logged.levelno == logging.WARNING
+
+
+@pytest.mark.parametrize("elapsed_ms", [60_000, GRACE_MS])
+async def test_a_slow_symbol_leaves_the_next_symbol_its_actual_asking_time_or_skips_it(
+    elapsed_ms: int, caplog: pytest.LogCaptureFixture,
+) -> None:
+    clock = Clock(snapshot_due_ms(MONDAY))
+    store = InMemoryIvSnapshotStore()
+    recorder = Recorder(store)
+
+    def slow_first(ticker: str, asof: datetime) -> RecordedIvSnapshot:
+        recorded = recorder(ticker, asof)
+        if ticker == "SPY":
+            clock.now += elapsed_ms
+        return recorded
+
+    schedule = IvRecorderSchedule(symbols=("SPY", "QQQ"), store=store, record=slow_first, clock=clock)
+
+    with caplog.at_level(logging.INFO, logger=iv_recorder_schedule.logger.name):
+        await schedule.tick()
+
+    expected = [("SPY", snapshot_due_ms(MONDAY))]
+    if elapsed_ms < GRACE_MS:
+        expected.append(("QQQ", clock.now))
+        assert store.read_series("QQQ")[0].asked_at_ms == clock.now
+    else:
+        assert ("iv_recorder_snapshot_skipped_late", "QQQ") in actions(caplog)
+    assert recorder.calls == expected
+
+
+@pytest.mark.parametrize("elapsed_ms", [60_000, GRACE_MS])
+async def test_a_slow_series_read_leaves_the_recorder_its_actual_asking_time_or_skips_it(
+    elapsed_ms: int, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    clock = Clock(snapshot_due_ms(MONDAY))
+    store = InMemoryIvSnapshotStore()
+    original_read = store.read_series
+
+    def slow_read(ticker: str, *, start_ms: int | None = None, end_ms: int | None = None) -> list[IvSeriesRow]:
+        clock.now += elapsed_ms
+        return original_read(ticker, start_ms=start_ms, end_ms=end_ms)
+
+    monkeypatch.setattr(store, "read_series", slow_read)
+    schedule, recorder = schedule_for(("SPY",), clock, store)
+
+    with caplog.at_level(logging.INFO, logger=iv_recorder_schedule.logger.name):
+        await schedule.tick()
+
+    if elapsed_ms < GRACE_MS:
+        assert recorder.calls == [("SPY", clock.now)]
+        assert original_read("SPY")[0].asked_at_ms == clock.now
+    else:
+        assert recorder.calls == []
+        assert actions(caplog) == [("iv_recorder_snapshot_skipped_late", "SPY")]
 
 
 async def test_a_restart_after_the_grace_logs_no_skip_for_a_day_the_store_already_holds():

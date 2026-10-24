@@ -146,40 +146,49 @@ class IvRecorderSchedule:
         due = snapshot_due_ms(day)
         if now < due:
             return
-        late = now >= due + GRACE_MS
         for symbol in self.symbols:
             if (symbol, day) in self._settled:
                 continue
             # Settled before the vendor is asked, so a slow or failing attempt is never begun again today.
             self._settled.add((symbol, day))
             try:
-                if await asyncio.to_thread(_has_snapshot_row, self.store, symbol, day):
-                    continue
-                if late:
-                    logger.warning(
-                        "IV recorder is past the grace for the day's snapshot and takes none; the next trading day tries again",
-                        extra={"action": "iv_recorder_snapshot_skipped_late", "symbol": symbol, "day": day.isoformat(),
-                               "late_by_ms": now - due},
-                    )
-                    continue
-                row = await asyncio.to_thread(self._record, symbol, datetime.fromtimestamp(now / 1000, tz=UTC))
+                await asyncio.to_thread(self._record_symbol, symbol, day)
             except Exception:
                 logger.exception(
                     "IV recorder could not take its snapshot; the next trading day tries again",
                     extra={"action": "iv_recorder_snapshot_failed", "symbol": symbol, "day": day.isoformat()},
                 )
                 continue
-            if row.error is not None:
-                logger.warning(
-                    "IV recorder filed an error row for its snapshot",
-                    extra={"action": "iv_recorder_snapshot_error_row", "symbol": symbol, "day": day.isoformat(), "error": row.error},
-                )
-            else:
-                logger.info(
-                    "IV recorder recorded its snapshot",
-                    extra={"action": "iv_recorder_snapshot_recorded", "symbol": symbol, "day": day.isoformat(),
-                           "snapshot_ts_ms": row.snapshot_ts_ms},
-                )
+
+    def _record_symbol(self, symbol: str, day: date) -> None:
+        """Read the store and check the clock immediately before recording, on the same worker thread.
+
+        A previous symbol, a queued worker or the series read may consume the remaining grace. The asking time must
+        come after those waits, not from the tick that scheduled them (#3525).
+        """
+        if _has_snapshot_row(self.store, symbol, day):
+            return
+        now = self.clock()
+        due = snapshot_due_ms(day)
+        if now >= due + GRACE_MS:
+            logger.warning(
+                "IV recorder is past the grace for the day's snapshot and takes none; the next trading day tries again",
+                extra={"action": "iv_recorder_snapshot_skipped_late", "symbol": symbol, "day": day.isoformat(),
+                       "late_by_ms": now - due},
+            )
+            return
+        row = self._record(symbol, datetime.fromtimestamp(now / 1000, tz=UTC))
+        if row.error is not None:
+            logger.warning(
+                "IV recorder filed an error row for its snapshot",
+                extra={"action": "iv_recorder_snapshot_error_row", "symbol": symbol, "day": day.isoformat(), "error": row.error},
+            )
+        else:
+            logger.info(
+                "IV recorder recorded its snapshot",
+                extra={"action": "iv_recorder_snapshot_recorded", "symbol": symbol, "day": day.isoformat(),
+                       "snapshot_ts_ms": row.snapshot_ts_ms},
+            )
 
     async def _run(self) -> None:
         while True:

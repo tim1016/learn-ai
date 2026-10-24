@@ -96,4 +96,5 @@ superseded and one is reworded.
 - **Not backed up.** `artifacts/iv_recorder` is not in the nightly backup. The history cannot be bought back, and the
   option archive's backup copies the lake roots and the catalog as one checked pair and restores them into empty roots;
   a directory outside the lake roots has no place in its manifest, its verification or its restore. A lost artifacts
-  volume loses the history until a copy of this directory is made alongside it.
+  volume loses the history until a copy of this directory is made alongside it. Backup and verified restore for this
+  history are tracked in [#3550](https://github.com/tim1016/learn-ai/issues/3550).

@@ -93,11 +93,9 @@ previously tracked items (issues #1655, #1671, #1672, #1674, #1677, #1664,
     recorder files one snapshot a day at its quote time (before the 16:00 close: the 15:45 bar of the regular and the
     extended session alike), so a 15-minute run holds IV on one bar a day and only daily bars can show a z-score (after
     252 recorded days). The page says why from the window's counts.
-  - *The recorded IV history is not in the nightly backup (P2).* `artifacts/iv_recorder` cannot be bought back, and
+  - *The recorded IV history is not in the nightly backup (P2, [#3550](https://github.com/tim1016/learn-ai/issues/3550)).* `artifacts/iv_recorder` cannot be bought back, and
     the option archive's backup copies only the lake roots and the catalog as one checked pair, so a lost artifacts volume
     loses it. It needs its own copy; ADR 0071's 2026-10-24 amendment says why the lake backup cannot take it as it is.
-  - *Unverified assumptions:* Polygon's own 15-minute and day aggregates equal a fold of its minute aggregates, and a
-    day bar is the regular session. Both are asserted against an independent stand-in, not live data.
 - **Temporal wire/storage contracts outside Alpaca V2 remain non-numeric
   (medium).** The 2026-08-18 census confirmed 4 Pydantic, 29 C# (since removed
   with the C# backend, ADR 0081), and 22 real

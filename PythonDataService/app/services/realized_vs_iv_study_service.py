@@ -28,9 +28,9 @@ and what it reads now, field by field:
   grid (``data-quality``: an input change, not float rounding).
 * **Session.** Before, 15m: every bar Polygon served (04:00 to 20:00 ET), with the HF
   estimator's own ``hf_session`` (ETH, the default, or RTH) filtering inside it. Daily:
-  Polygon's day bar, which the census could not prove is regular-session (unverified).
-  Now: the identity names the session the *bars* are folded from. The defaults keep each
-  size on what it read: ``extended`` for 15m and ``regular`` for 1d (a day folded from
+  Polygon's day bar. The owner-approved SPY measurement (#3524) found a regular-session fold matches its open/high/low,
+  but the official daily close and volume can differ. Now: the identity names the session the *bars* are folded from.
+  The defaults are ``extended`` for 15m and ``regular`` for 1d (a day folded from
   extended minutes would open at the first pre-market print). ``session`` overrides it. The
   owner ruled (#3525) that this is the choice: a 15m run is extended or regular hours, extended
   by default, and daily bars are regular hours only. The server holds those rules

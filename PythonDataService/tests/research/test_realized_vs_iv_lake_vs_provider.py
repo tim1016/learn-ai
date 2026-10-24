@@ -26,10 +26,12 @@ The two that matter most are in the first half:
   error of the estimator (``float_atol``), the only thing that can differ between two platforms running the same
   arithmetic: it comes from each log return's rounding, not from a sum's length.
 
-Not provable offline: that Polygon's own 15-minute and day aggregates equal a fold of its minute aggregates, and that
-a day bar is the regular session with the first and last minute for the official open and close. The vendor side is an
-independent stand-in (``tests/_helpers/realized_vs_iv.py``), and ``test_a_day_bar_whose_official_open_and_close_differ``
-measures how much the second assumption could matter. All of it is unverified against live data.
+The vendor aggregate side here is an independent stand-in (``tests/_helpers/realized_vs_iv.py``). The separate
+owner-approved SPY capture for 2025-01-13..17 (#3522, #3524) found exact 15-minute OHLCV agreement, and a regular-session
+fold excluding the 16:00 minute matched daily open/high/low. Its last regular minute close differed from the vendor's
+official daily close by up to $0.15 and its volume was smaller. The owner accepted those input differences (#3525).
+``test_a_day_bar_whose_official_open_and_close_differ`` remains a synthetic sensitivity, not a measurement of that
+capture; the captured SPY week does not establish equivalence for every symbol and date.
 """
 
 from __future__ import annotations
@@ -505,10 +507,10 @@ def test_the_daily_session_is_regular_by_default_and_folding_it_from_extended_ho
 
 
 def test_a_day_bar_whose_official_open_and_close_differ_from_the_first_and_last_minute_moves_the_series_by_a_measured_sensitivity(world):
-    """Cause: ``data-quality`` (the day bar's definition), as a *sensitivity*, not a finding. A real day bar opens and
-    closes at the official auction prints; the lake folds the first and last regular minute. Neither side of that
-    difference is on this payload, so each day's open and close are moved by 3 bps in alternating directions and the
-    series is read again. Measured on this payload; it says how much the unverified assumption could matter."""
+    """Cause: ``data-quality`` (the day bar's definition), as a *sensitivity*, not a vendor measurement. The lake folds
+    the first and last regular minute; the vendor's official close can differ (#3524). That difference is not on this
+    synthetic payload, so each day's open and close are moved by 3 bps in alternating directions and the series is
+    read again. This measures estimator sensitivity, not the differences observed on the captured SPY week."""
     window = window_of("1d")
     tape = tape_for(window)
     mock_vendor("SPY", tape, adjusted=tape)
