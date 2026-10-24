@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { formatTimestampDisplay } from '../timestamp/timestamp-display';
 import { HealthChipsComponent } from './health-chips.component';
+import { SCOPED_HEALTH_REFRESH_MS } from './scoped-health.service';
 import { allHealthy, fakeScopedHealth, healthItem, OBSERVED_MS, projection } from './testing/scoped-health-fixtures';
 
 async function renderChips(answer: Parameters<typeof fakeScopedHealth>[0]) {
@@ -119,7 +120,7 @@ describe('the Operations health chips', () => {
     expect(fake.read).toHaveBeenCalledTimes(1);
 
     failing = true;
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(SCOPED_HEALTH_REFRESH_MS);
 
     await screen.findByText('Unknown');
     expect(fake.read).toHaveBeenCalledTimes(2);

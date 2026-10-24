@@ -1,14 +1,11 @@
 import { NgTemplateOutlet } from '@angular/common';
-import { ChangeDetectionStrategy, Component, computed, DestroyRef, inject, resource } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
 import { operationsTabRoute } from '../../operations/operations-tabs';
 import { formatTimestampDisplay } from '../timestamp/timestamp-display';
 import { HEALTH_SOURCES, SEVERITY_WORD, SOURCE_LABEL, type HealthSeverity } from './scoped-health';
-import { ScopedHealthService } from './scoped-health.service';
-
-/** How often the chips read the projection again while they are on screen. */
-const REFRESH_MS = 30_000;
+import { watchScopedHealth } from './scoped-health.service';
 
 interface Chip {
   readonly source: string;
@@ -37,9 +34,7 @@ interface Chip {
   styleUrl: './health-chips.component.scss',
 })
 export class HealthChipsComponent {
-  private readonly health = inject(ScopedHealthService);
-
-  private readonly projection = resource({ loader: () => this.health.read() });
+  private readonly projection = watchScopedHealth();
 
   protected readonly chips = computed<readonly Chip[]>(() => {
     if (this.projection.error() !== undefined) return [unknownChip('Health', 'Health status could not be read.')];
@@ -66,11 +61,6 @@ export class HealthChipsComponent {
       };
     });
   });
-
-  constructor() {
-    const timer = setInterval(() => this.projection.reload(), REFRESH_MS);
-    inject(DestroyRef).onDestroy(() => clearInterval(timer));
-  }
 }
 
 function unknownChip(label: string, detail: string): Chip {

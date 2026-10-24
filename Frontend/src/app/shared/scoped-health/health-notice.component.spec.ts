@@ -1,8 +1,9 @@
 import { provideRouter } from '@angular/router';
 import { render, screen, waitFor } from '@testing-library/angular';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { HealthNoticeComponent } from './health-notice.component';
+import { SCOPED_HEALTH_REFRESH_MS } from './scoped-health.service';
 import { allHealthy, fakeScopedHealth, healthItem, projection } from './testing/scoped-health-fixtures';
 
 async function renderNotice(
@@ -16,6 +17,8 @@ async function renderNotice(
   });
   return { ...view, ...fake };
 }
+
+afterEach(() => vi.useRealTimers());
 
 describe('the health notice', () => {
   it('asks the data plane about what the page does, and for its one symbol when it reads one', async () => {
@@ -161,5 +164,49 @@ describe('the health notice', () => {
     await screen.findByText(/MSFT has gaps/);
     expect(screen.queryByText(/SPY has gaps/)).toBeNull();
     expect(fake.read).toHaveBeenLastCalledWith({ operations: ['stock_history'], instrument: 'MSFT' });
+  });
+
+  it('reads again on the chips\' cadence, so a finding that has cleared stops being shown and one that has appeared is', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    let feedDown = true;
+    const fake = fakeScopedHealth(() =>
+      feedDown
+        ? projection(healthItem({ kind: 'ibkr_market_data', severity: 'critical', explanation: 'The IBKR session is down.' }))
+        : allHealthy(),
+    );
+    await render(HealthNoticeComponent, {
+      inputs: { needs: ['live_chain'], instrument: null, note: null },
+      providers: [provideRouter([]), fake.provider],
+    });
+    await screen.findByText(/The IBKR session is down/);
+
+    feedDown = false;
+    await vi.advanceTimersByTimeAsync(SCOPED_HEALTH_REFRESH_MS);
+    await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
+
+    feedDown = true;
+    await vi.advanceTimersByTimeAsync(SCOPED_HEALTH_REFRESH_MS);
+    await screen.findByText(/The IBKR session is down/);
+    expect(fake.read).toHaveBeenCalledTimes(3);
+  });
+
+  it('turns its last finding unknown when a refresh fails, rather than leaving it standing', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    let failing = false;
+    const fake = fakeScopedHealth(() => {
+      if (failing) throw new Error('network down');
+      return projection(healthItem({ kind: 'lake_backup', severity: 'critical', explanation: 'Backup failed.' }));
+    });
+    await render(HealthNoticeComponent, {
+      inputs: { needs: ['recovery'], instrument: null, note: null },
+      providers: [provideRouter([]), fake.provider],
+    });
+    await screen.findByText(/Backup failed/);
+
+    failing = true;
+    await vi.advanceTimersByTimeAsync(SCOPED_HEALTH_REFRESH_MS);
+
+    await screen.findByText(/cannot be confirmed healthy/);
+    expect(screen.queryByText(/Backup failed/)).toBeNull();
   });
 });
