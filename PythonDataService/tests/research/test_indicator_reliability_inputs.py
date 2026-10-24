@@ -285,7 +285,7 @@ def test_a_window_that_opens_on_the_symbols_first_session_runs_with_no_lead_in_a
 
 @respx.mock
 def test_require_full_refuses_a_symbol_listed_inside_the_lead_in_with_warmup_shortened(world):
-    """#3523 review m2: the field's own description promises this code; it used to be a data outage."""
+    """The request field's own description promises this code (#3523); a late listing used to refuse as a data outage."""
     window = MARCH[4:]
     lead = lead_in_sessions(window[0], 3)
     tape = tape_for([*lead, *window], regular_keep=1.0)
@@ -320,7 +320,7 @@ def test_require_full_over_sparse_sessions_does_not_tell_the_caller_to_start_lat
 @pytest.mark.parametrize("policy", ["allow_shortened", "require_full"])
 @respx.mock
 def test_a_tape_the_lake_rejects_on_the_oldest_lead_in_session_refuses_and_is_not_a_symbol_that_lists_late(world, policy, fault):
-    """#3523 review M1: a vendor failure is not 'the symbol's history starts here', and it stays in the counts.
+    """A vendor failure is not 'the symbol's history starts here' (#3523), and it stays in the counts.
 
     The oldest lead-in session's tape has a duplicate (or out-of-order) timestamp, so the lake's publication gate
     refuses it. Only a session the vendor answered with no bars may be dropped from the lead-in.

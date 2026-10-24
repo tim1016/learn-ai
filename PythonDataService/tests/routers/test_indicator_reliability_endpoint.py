@@ -130,7 +130,7 @@ async def test_a_completed_study_carries_a_lake_data_source_with_coverage_warmup
 
 @pytest.mark.asyncio
 async def test_a_session_the_study_cannot_compute_on_is_refused_not_answered_with_regular_hours(api, world):
-    """#3523 review m11: the study has only ever computed on regular hours; ``extended`` used to be accepted and ignored."""
+    """The study has only ever computed on regular hours (#3523); ``extended`` used to be accepted and ignored."""
     mock_vendor("SPY", tape(WINDOW))
 
     regular = await post(api, body(session="rth"))
@@ -326,7 +326,7 @@ async def test_an_unknown_warmup_policy_is_a_validation_error(api, world):
 
 @pytest.mark.asyncio
 async def test_a_refusal_never_shares_a_status_or_a_body_shape_with_fastapis_validation_error(api, world):
-    """#3523 review m6. A request that fails validation is 422 with ``detail`` a list; a refusal is 409 or 503 with none."""
+    """A request that fails validation is 422 with ``detail`` a list; a refusal is 409 or 503 with none (#3523)."""
     mock_vendor("SPY", tape(WINDOW))
 
     refusal = await post(api, body(timespan="day"))
@@ -346,7 +346,7 @@ def test_the_refusals_are_documented_with_their_body_and_422_stays_fastapis(api)
 
 
 # ---------------------------------------------------------------------------
-# #3523 review M1 through the route: an empty vendor answer shortens the lead-in, a vendor failure refuses
+# The lead-in through the route (#3523): an empty vendor answer shortens it, a vendor failure refuses
 # ---------------------------------------------------------------------------
 
 EMA_200 = {"indicator_name": "ema", "indicator_params": {"length": 200}, "horizons": [1]}  # three lead-in sessions

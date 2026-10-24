@@ -748,7 +748,7 @@ def test_raw_and_split_adjusted_windows_are_different_identities_with_different_
 
 
 # ---------------------------------------------------------------------------
-# Lead-in: only an empty vendor answer lets it start late (#3523 review M1)
+# Lead-in: only an empty vendor answer lets it start late (#3523)
 # ---------------------------------------------------------------------------
 
 TRIM = {"lead_in": "trim_unsupplied_prefix"}

@@ -231,11 +231,15 @@ def test_prices_on_the_grid_across_a_dst_change_an_early_close_and_a_holiday_mov
     assert comparison.lead_in_bars[0] == comparison.lead_in_bars[1] > 0, "the same warmup lead-in, bar for bar"
 
 
-#: The supported minute lengths whose buckets start on a wall-clock boundary that the 09:30 open also sits on (they
-#: divide 30), so no bucket straddles the open: the lake's fold and the vendor's aggregate hold the same minutes.
-OPEN_ALIGNED_MINUTES = [m for m in SUPPORTED_MINUTE_MULTIPLIERS if m != 1 and 30 % m == 0]
-#: The other supported lengths below an hour. Their bucket that holds 09:30 starts before it, at 09:28, 09:24 or 09:20.
-OPEN_STRADDLING_MINUTES = [m for m in SUPPORTED_MINUTE_MULTIPLIERS if m < 60 and 30 % m != 0]
+#: How many minutes past the hour the canonical calendar opens the regular session (the same on every session; the ET
+#: offset is a whole number of hours).
+OPEN_MINUTE_OF_HOUR = (session_open_ms_utc(DST_WINDOW[0]) // 60_000) % 60
+#: The supported minute lengths whose buckets start on a wall-clock boundary that the open also sits on (they divide
+#: the open's minute of the hour), so no bucket straddles the open: the lake's fold and the vendor's aggregate hold the
+#: same minutes.
+OPEN_ALIGNED_MINUTES = [m for m in SUPPORTED_MINUTE_MULTIPLIERS if m != 1 and OPEN_MINUTE_OF_HOUR % m == 0]
+#: The other supported lengths below an hour. The bucket that holds the open starts before it.
+OPEN_STRADDLING_MINUTES = [m for m in SUPPORTED_MINUTE_MULTIPLIERS if m < 60 and OPEN_MINUTE_OF_HOUR % m != 0]
 
 
 @pytest.mark.parametrize("bar_minutes", OPEN_ALIGNED_MINUTES)
@@ -286,12 +290,12 @@ def test_the_bar_that_holds_the_open_is_the_one_difference_in_hourly_bars(world)
 def test_a_minute_length_that_straddles_the_open_differs_from_the_vendor_in_the_one_bar_that_holds_it(world, bar_minutes):
     """Cause: ``data-quality`` (session scope of a bar that straddles the open), as for the hourly bar below.
 
-    A 4-, 12- or 20-minute bucket holding 09:30 starts at 09:28, 09:24 or 09:20, so the vendor's aggregate holds
-    pre-open trades the lake's, which applies the session before the fold, does not. Every other bar is the same. The
+    A 4-, 12- or 20-minute bucket holding the open starts before it, so the vendor's aggregate holds pre-open trades
+    the lake's, which applies the session before the fold, does not. Every other bar is the same. The
     old call dropped that bar altogether (``filter_session`` without the bar length).
     """
     window = DST_WINDOW
-    assert bar_minutes in (4, 12, 20), "the supported lengths that do not divide the 30 minutes before the half hour"
+    assert bar_minutes in (4, 12, 20), "the supported lengths below an hour that the open's minute of the hour is not a multiple of"
     tape = tape_for(window, lead=12, extended_keep=1.0)
     mock_vendor("SPY", tape, adjusted=tape)
     sessions = len(window)
