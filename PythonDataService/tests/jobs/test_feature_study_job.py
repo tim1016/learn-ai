@@ -19,6 +19,7 @@ from app.jobs import cache as result_cache
 from app.jobs.progress import ProgressEmitter
 from app.jobs.runner import run_in_thread
 from app.lean_sidecar.trading_calendar import expected_sessions
+from app.research.lake_study import SESSION_POLICY_FOR_REQUEST
 from app.routers.jobs import FeatureResearchJobRequest, start_feature_research_job
 from app.services import feature_study_service
 from app.services.feature_study_service import CACHE_NAMESPACE, FeatureStudyParams, run_feature_study
@@ -46,9 +47,6 @@ class _Harness:
 
     def result(self, job_id: str) -> dict:
         return json.loads(self.fake.strings[f"job:{job_id}:result"])
-
-    def result_text(self, job_id: str) -> str:
-        return self.fake.strings[f"job:{job_id}:result"]
 
     def cache_keys(self) -> list[str]:
         return [key for key in self.fake.strings if key.startswith("result:")]
@@ -255,20 +253,23 @@ def test_repaired_lake_data_under_the_same_request_is_a_new_identity(harness):
 
 
 # ---------------------------------------------------------------------------
-# T07: a saved result reads the same after the lake is repaired
+# T07: this study has no saved or locked result of its own
 # ---------------------------------------------------------------------------
+#
+# A job's result key is written once by the worker that computed it and nothing rewrites it, so "a saved result is
+# unchanged after the lake is repaired" is true of any job and no test of it can fail. The Feature study has no saved
+# or locked-study surface (``research_experiments`` is legacy and read-only). What can change is the result cache: a
+# repaired lake must add a new entry and leave the old one exactly as it was.
 
 
-def test_a_saved_result_is_byte_for_byte_unchanged_after_the_lake_is_repaired(harness):
+def test_a_repaired_lake_adds_a_cache_entry_and_leaves_the_earlier_one_byte_for_byte(harness):
     harness.run(params(), job_id="saved")
-    saved = harness.result_text("saved")
     saved_source = harness.result("saved")["data_source"]
     cached_before = {key: harness.fake.strings[key] for key in harness.cache_keys()}
 
     repair_day(harness)
     harness.run(params(), job_id="rerun")
 
-    assert harness.result_text("saved") == saved, "a stored result is never rewritten from mutable lake data"
     assert harness.result("rerun")["data_source"]["snapshot_digest"] != saved_source["snapshot_digest"]
     # The old identity keeps its entry, byte for byte, beside the new one: nothing was relabelled or replaced.
     assert {key: harness.fake.strings[key] for key in cached_before} == cached_before
@@ -281,21 +282,27 @@ def test_a_saved_result_is_byte_for_byte_unchanged_after_the_lake_is_repaired(ha
 # ---------------------------------------------------------------------------
 
 
-def test_the_legacy_session_label_stays_inert_and_the_policy_defaults_to_extended_hours():
-    # Exactly the body the browser sends (tickerRangeToWire plus the job fields): `session` is always "rth".
+def test_the_one_session_field_is_honoured_and_defaults_to_the_session_the_study_has_always_read():
+    # The body the browser sends (tickerRangeToWire plus the job fields), with the session it now names explicitly.
     browser = {
         "job_id": "j", "symbol": "SPY", "from_date": "2024-03-04", "to_date": "2024-03-15",
-        "timespan": "minute", "multiplier": 5, "session": "rth", "feature_name": "rsi_14", "force": False,
+        "timespan": "minute", "multiplier": 5, "session": "extended", "feature_name": "rsi_14", "force": False,
     }
 
-    request = FeatureResearchJobRequest.model_validate(browser)
+    asked_for_extended = FeatureResearchJobRequest.model_validate(browser)
+    omitted = FeatureResearchJobRequest.model_validate({k: v for k, v in browser.items() if k != "session"})
+    asked_for_rth = FeatureResearchJobRequest.model_validate({**browser, "session": "rth"})
 
-    assert request.session == "rth"
-    assert request.session_policy == "extended", "the browser's 'rth' must not silently change the sample (D02)"
-    camel = {"jobId": "j", "symbol": "SPY", "featureName": "rsi_14", "fromDate": "2024-03-04", "toDate": "2024-03-15"}
-    assert FeatureResearchJobRequest.model_validate({**camel, "sessionPolicy": "regular"}).session_policy == "regular"
+    assert asked_for_extended.session == "extended"
+    assert omitted.session == "extended", "a caller that omits it keeps the sample the study has always computed on (D02)"
+    assert asked_for_rth.session == "rth"
+    assert [SESSION_POLICY_FOR_REQUEST[r.session] for r in (asked_for_extended, omitted, asked_for_rth)] == [
+        "extended", "extended", "regular",
+    ]
+    with pytest.raises(ValueError, match=r"session"):
+        FeatureResearchJobRequest.model_validate({**browser, "session": "regular"})
     with pytest.raises(ValueError, match=r"session_policy"):
-        FeatureResearchJobRequest.model_validate({**browser, "session_policy": "rth"})
+        FeatureResearchJobRequest.model_validate({**browser, "session_policy": "regular"}), "the second field is gone"
 
 
 @pytest.mark.asyncio
@@ -323,3 +330,11 @@ async def test_the_route_hands_the_worker_the_study_it_was_asked_for(monkeypatch
         "SPY", "rsi_14", date(2024, 3, 4), date(2024, 3, 15), "minute", 15, "extended", "polygon_split_adjusted"
     )
     assert captured["kwargs"]["force"] is True and captured["kwargs"]["job_id"] == "j1"
+
+    regular = FeatureResearchJobRequest.model_validate(
+        {"jobId": "j2", "symbol": "SPY", "featureName": "rsi_14", "fromDate": "2024-03-04", "toDate": "2024-03-15",
+         "session": "rth"}
+    )
+    await start_feature_research_job(regular)
+    captured["work"]("emit", "cancel")
+    assert captured["params"].session_policy == "regular", "rth is the scheduled session, honoured, not ignored"

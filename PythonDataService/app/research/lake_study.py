@@ -61,6 +61,7 @@ from app.research.study_inputs import (
     FOLD_RULE,
     AdmittedMinuteInputs,
     MinuteWindowIdentity,
+    SessionPolicy,
     StudyCoverage,
     StudyInputRefusal,
     admit_minute_inputs,
@@ -70,6 +71,10 @@ from app.research.study_inputs import (
 from app.utils.session_anchors import et_midnight_ms
 
 logger = logging.getLogger(__name__)
+
+
+#: What a request's ``session`` ("rth" or "extended", as every ticker request spells it) asks the lake reader for.
+SESSION_POLICY_FOR_REQUEST: Mapping[str, SessionPolicy] = {"rth": "regular", "extended": "extended"}
 
 
 class StudyIdentity(Protocol):
