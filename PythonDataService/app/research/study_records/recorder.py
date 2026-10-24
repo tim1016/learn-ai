@@ -68,18 +68,13 @@ class RunCapture:
 Capture = Callable[[Any], RunCapture]
 
 
-def capture_job_request(request: BaseModel) -> RunCapture:
-    """The capture of a job request: every field but the ones that only say how it was started."""
+def capture_request(request: BaseModel) -> RunCapture:
+    """The capture of a request model: every field but the ones that only say how the run was started."""
     return RunCapture(
         inputs=request.model_dump(mode="json", exclude=set(_NOT_AN_INPUT)),
         job_id=getattr(request, "job_id", None),
         rerun_of=getattr(request, "rerun_of", None),
     )
-
-
-def capture_route_request(request: BaseModel) -> RunCapture:
-    """The capture of a synchronous request: every field but the lineage."""
-    return RunCapture(inputs=request.model_dump(mode="json", exclude=set(_NOT_AN_INPUT)), rerun_of=getattr(request, "rerun_of", None))
 
 
 def to_wire_json(value: Any) -> Any:
@@ -241,7 +236,7 @@ def keeps_job_record(study: StudyType, request: BaseModel, work: JobWork, *, roo
     """``work``, which also records the run when it ends, however it ends. Pass the result to ``run_in_thread`` as ``work``."""
 
     def recorded(emit: ProgressEmitter, cancel: CancellationCheck) -> Any:
-        run = RunRecorder(study, request, capture_job_request, root=root)
+        run = RunRecorder(study, request, capture_request, root=root)
         try:
             result = work(_WatchedEmitter(emit, run), cancel)  # type: ignore[arg-type]
         except JobCancelled as exc:
