@@ -200,6 +200,10 @@ async def test_a_held_window_reads_ready_and_offers_nothing_to_fill(lake: Path) 
     assert report["daily_rollup"] == {"state": "current", "reason": None}
 
 
+def _is_polygon(host: str) -> bool:
+    return host == "polygon.io" or host.endswith(".polygon.io")
+
+
 @respx.mock
 async def test_opening_the_report_fetches_nothing(lake: Path, fake_catalog: FakeCatalog) -> None:
     _serve()
@@ -208,7 +212,7 @@ async def test_opening_the_report_fetches_nothing(lake: Path, fake_catalog: Fake
 
     assert _states(report) == ["missing"] * 5
     assert fake_catalog.rows == {}, "reading a cold window leaves the catalog as it found it"
-    assert not any(request for request in respx.calls if "polygon.io" in str(request.request.url))
+    assert not any(_is_polygon(request.request.url.host) for request in respx.calls)
     assert not list((lake / "lake").rglob("*.zip"))
 
 
