@@ -92,6 +92,32 @@ async def test_snapshot_returns_contracts(client):
 
 
 @pytest.mark.anyio
+async def test_snapshot_tells_a_standard_contract_from_an_adjusted_one_at_the_same_strike(client):
+    """A chain can list both at one strike and right; the grid keeps them apart by what the wire says."""
+    expiry_ms = option_expiry_anchor_ms(date(2025, 2, 21))
+    standard = {
+        "ticker": "O:AAPL250221C00185000",
+        "contract_type": "call",
+        "strike_price": 185.0,
+        "expiration_ms": expiry_ms,
+        "exercise_style": "american",
+        "shares_per_contract": 100,
+    }
+    adjusted = {**standard, "ticker": "O:AAPL1250221C00185000", "shares_per_contract": 150}
+    undescribed = {**standard, "ticker": "O:AAPL250221C00190000", "strike_price": 190.0, "exercise_style": None}
+    mock_result = {
+        "underlying": {"ticker": "AAPL", "price": 185.5, "change": 0, "change_percent": 0},
+        "contracts": [standard, adjusted, undescribed],
+    }
+
+    with patch("app.routers.snapshot.polygon_client.list_snapshot_options_chain", return_value=mock_result):
+        response = await client.post("/api/snapshot/options-chain", json={"underlying_ticker": "aapl"})
+
+    assert response.status_code == 200
+    assert [contract["standard"] for contract in response.json()["contracts"]] == [True, False, None]
+
+
+@pytest.mark.anyio
 async def test_snapshot_empty_ticker_returns_422(client):
     """Empty ticker should fail validation"""
     response = await client.post(

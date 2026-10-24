@@ -7,7 +7,7 @@ import type {
   BarSources,
   ChartBar,
   QualityReport,
-} from '../components/data-lab/data-lab-chart/data-lab-chart.component';
+} from '../markets/chart/data-lab-chart/data-lab-chart.component';
 import type { ChartIndicatorResult } from '../shared/trading-chart';
 import { failureAsError, isPythonRefusal } from './python-http-failure';
 

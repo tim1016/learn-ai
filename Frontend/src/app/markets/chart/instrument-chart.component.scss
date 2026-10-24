@@ -1,0 +1,71 @@
+// The instrument's Chart tab — document scroll, no fixed rails.
+// Drawer, indicator-control, and headline styles live with their extracted
+// components (emulated encapsulation keeps them scoped).
+@use '../../styles/tokens' as *;
+
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.chart-tab__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  margin-bottom: 0.75rem;
+
+  button {
+    min-height: 44px;
+    padding: 0.35rem 0.9rem;
+    border: 1px solid $border-light;
+    border-radius: 6px;
+    background: $bg-surface;
+    color: $text-primary;
+    cursor: pointer;
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  }
+}
+
+.chart-tab__muted {
+  color: $text-secondary;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+// ── Chart canvas ──────────────────────────────────────────
+.chart-tab__chart {
+  min-width: 0;
+  margin-bottom: 0.75rem;
+}
+
+// ── Quality status row ────────────────────────────────────
+.chart-tab__quality {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+  margin-bottom: 0.75rem;
+
+  p {
+    margin: 0;
+    min-width: 0;
+    flex: 1 1 16rem;
+  }
+
+  button {
+    min-height: 44px;
+    padding: 0 0.9rem;
+    border: 1px solid $border-light;
+    border-radius: 6px;
+    background: $bg-surface;
+    color: $text-primary;
+    cursor: pointer;
+  }
+}

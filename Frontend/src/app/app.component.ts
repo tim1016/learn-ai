@@ -15,6 +15,7 @@ import { AppMenubarComponent } from './shell/app-menubar.component';
 import { TopBarComponent, type ShellAccountMode } from './shell/top-bar.component';
 import { PageBodyComponent } from './shell/page-body.component';
 import { NOT_FOUND_TITLE, windowTitleFor } from './shell/app-menu';
+import { instrumentWindowTitle } from './markets/instrument-address';
 import { CurrentUrlService, routeTreeHasData } from './shell/current-url.service';
 import { WorkspaceTitleContextService } from './shell/workspace-title-context.service';
 import {
@@ -193,11 +194,15 @@ export class AppComponent {
   });
 
   /** Outside a workspace the window reads `Page · Group` from the same menu
-   * node the menubar highlights (PRD #3490 R01); an address no page answers
-   * says so rather than borrowing the title of the page it starts with. */
+   * node the menubar highlights (PRD #3490 R01); an instrument's place reads
+   * `SPY · Chart · Markets`, the entity first (ADR 0084). An address no page
+   * answers says so rather than borrowing the title of the page it starts
+   * with. */
   protected readonly pageTitle = computed(() => {
     const url = this.pageUrl();
-    return url === null ? NOT_FOUND_TITLE : (this.workspaceTitle() ?? this.strategyTitle() ?? windowTitleFor(url));
+    return url === null
+      ? NOT_FOUND_TITLE
+      : (this.workspaceTitle() ?? this.strategyTitle() ?? instrumentWindowTitle(url) ?? windowTitleFor(url));
   });
   protected readonly alpacaLanes = computed(() => this.fleetDirectory.lanesOf('alpaca'));
   /** The header's solid worst-case tint (owner decision 2026-10-03,

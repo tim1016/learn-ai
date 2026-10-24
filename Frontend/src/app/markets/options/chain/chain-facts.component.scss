@@ -1,0 +1,9 @@
+:host { display: block; min-width: 0; }
+.facts { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); margin: 0; font-size: var(--fs-sm); }
+.fact { display: grid; gap: 2px; min-width: 0; }
+dt { color: var(--text-subtle); font-size: var(--fs-xs); }
+dd { margin: 0; color: var(--text-primary); overflow-wrap: anywhere; }
+.fact[data-tone='warn'] dd { color: var(--warn); }
+.fact[data-tone='bad'] dd { color: var(--bear-text); }
+.when { color: var(--text-secondary); font-size: var(--fs-xs); margin-inline-start: var(--space-1); }
+.note { margin: var(--space-2) 0 0; color: var(--text-secondary); font-size: var(--fs-xs); }

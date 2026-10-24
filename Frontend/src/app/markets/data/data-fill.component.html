@@ -1,0 +1,29 @@
+<section class="data-fill" aria-label="Check and fill">
+  <div class="data-fill__actions">
+    <button type="button" class="data-fill__check" [disabled]="filling()" (click)="check()">Check again</button>
+    <button
+      type="button"
+      class="data-fill__fill"
+      [disabled]="filling() || fetchable() === 0"
+      (click)="startFill()"
+    >
+      {{ fetchable() === 0 ? 'Nothing to fill' : 'Fill ' + fetchable() + (fetchable() === 1 ? ' session' : ' sessions') }}
+    </button>
+  </div>
+
+  @if (window(); as span) {
+    <p class="data-fill__note">
+      A Fill asks for the span {{ span.start_trading_date_ms | timestampDisplay: 'date-et' : 'date' }}
+      to {{ span.end_trading_date_ms | timestampDisplay: 'date-et' : 'date' }}.
+      Sessions it already holds in between are reused, not fetched again. A session in between that failed, or that
+      drew no bars from the provider, is asked for again, so a Fill can ask for more than the sessions counted above.
+    </p>
+  } @else {
+    <p class="data-fill__note">There is no session here a Fill could fetch.</p>
+  }
+
+  @if (state(); as content) {
+    <p class="data-fill__scope">Fill for {{ scope() }}</p>
+    <app-workspace-state-block [state]="content" (actionTriggered)="onAction($event)" />
+  }
+</section>

@@ -1,0 +1,34 @@
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.context-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+  padding: var(--space-2) var(--space-4);
+}
+
+.context-bar__field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-1);
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+
+  &--instrument { flex: 0 1 18rem; }
+
+  // The dates: two fields, their calendar and the quick ranges need room.
+  &--dates { flex: 1 1 22rem; }
+}
+
+.context-bar__note {
+  flex: 1 1 100%;
+  margin: 0;
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+}

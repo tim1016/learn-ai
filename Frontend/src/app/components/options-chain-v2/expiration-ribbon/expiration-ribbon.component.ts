@@ -20,6 +20,8 @@ export class ExpirationRibbonComponent {
   expirations = input.required<number[]>();
   selectedExpiration = input<number | null>(null);
   loading = input(false);
+  /** A hover note for an expiry (what its listing says about it), by anchor. Absent: the button has none. */
+  titles = input<Readonly<Partial<Record<number, string>>>>({});
 
   expirationSelected = output<number>();
 

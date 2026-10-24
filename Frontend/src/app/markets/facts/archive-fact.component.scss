@@ -1,0 +1,17 @@
+:host {
+  display: inline-block;
+  min-width: 0;
+}
+
+.archive-fact {
+  display: inline-block;
+  padding: 0.05rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-sunken);
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+
+  &[data-kind='complete'] { border-color: var(--bull); color: var(--text-primary); }
+  &[data-kind='some_days'] { border-color: var(--warn); color: var(--text-primary); }
+}

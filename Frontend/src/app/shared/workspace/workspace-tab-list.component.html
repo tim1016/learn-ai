@@ -9,7 +9,7 @@
         [queryParams]="tab.queryParams"
       >{{ tab.label }}@if (tab.badge; as badge) { <span class="workspace-tab__badge">{{ badge }}</span> }</a>
     } @else {
-      <span class="workspace-tab workspace-tab--unavailable" aria-disabled="true">
+      <span class="workspace-tab workspace-tab--unavailable" aria-disabled="true" [attr.title]="tab.unavailableReason ?? null">
         {{ tab.label }}
         @if (tab.unavailableReason; as reason) {
           <span class="workspace-tab__reason"> — {{ reason }}</span>

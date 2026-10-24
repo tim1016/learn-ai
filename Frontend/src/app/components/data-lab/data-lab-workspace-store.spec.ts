@@ -153,27 +153,29 @@ describe('DataLabWorkspaceStore recipe', () => {
   });
 });
 
-describe('DataLabWorkspaceStore serialization', () => {
-  it('serializes to a v2 envelope and restores it losslessly', () => {
-    const store = committedStore();
-    const emaId = store.addIndicator('ema', { length: 10 });
-    expect(store.setColorToken(emaId, 'series-violet')).toBe(true);
-    store.patchCompanions({ includeNews: true, optionsCompanionEnabled: true });
-    store.setSavedSession({ id: 'sess-1', schemaVersion: 2 });
+describe('DataLabWorkspaceStore restore', () => {
+  it('restores a v2 envelope whole: scope, recipe, colours, companions and the saved-setup reference', () => {
+    const store = createDataLabWorkspaceStore();
+    const result = store.restore({
+      schemaVersion: DATA_LAB_WORKSPACE_SCHEMA_VERSION,
+      ticker: 'aapl',
+      windowMsUtc: WINDOW,
+      scope: { timeframe: 'hour', timespan: 'hour', multiplier: 2, session: 'extended', forwardFill: false, adjusted: true },
+      indicators: [{ canonicalKey: 'ema', params: { length: 10 } }],
+      colorTokenOverrides: { 'ema|length=10': 'series-violet' },
+      companions: { includeNews: true, optionsCompanionEnabled: true },
+      savedSession: { id: 'sess-1', schemaVersion: DATA_LAB_WORKSPACE_SCHEMA_VERSION },
+    });
 
-    const snapshot = store.serialize();
-    expect(snapshot.schemaVersion).toBe(DATA_LAB_WORKSPACE_SCHEMA_VERSION);
-    expect(snapshot.ticker).toBe('AAPL');
-    expect(snapshot.windowMsUtc).toEqual(WINDOW);
-    expect(snapshot.indicators).toEqual([{ id: 'ema|length=10', canonicalKey: 'ema', params: { length: 10 } }]);
-    expect(snapshot.colorTokenOverrides['ema|length=10']).toBe('series-violet');
-    expect(snapshot.companions.includeNews).toBe(true);
-    expect(snapshot.savedSession).toEqual({ id: 'sess-1', schemaVersion: 2 });
-
-    const restored = createDataLabWorkspaceStore();
-    const result = restored.restore(snapshot);
     expect(result.warnings).toEqual([]);
-    expect(restored.serialize()).toEqual(snapshot);
+    expect(store.committedTicker()).toBe('AAPL');
+    expect(store.committedWindow()).toEqual(WINDOW);
+    expect(store.committedScope()).toMatchObject({ timespan: 'hour', multiplier: 2, session: 'extended', forwardFill: false });
+    expect(store.indicators()).toEqual([{ id: 'ema|length=10', canonicalKey: 'ema', params: { length: 10 } }]);
+    expect(store.colorTokenOverrides()['ema|length=10']).toBe('series-violet');
+    expect(store.companions()).toMatchObject({ includeNews: true, optionsCompanionEnabled: true });
+    expect(store.savedSession()).toEqual({ id: 'sess-1', schemaVersion: DATA_LAB_WORKSPACE_SCHEMA_VERSION });
+    expect(store.chartStale()).toBe(false);
   });
 
   it('drops unknown keys and invalid entries with warnings', () => {
@@ -213,10 +215,12 @@ describe('DataLabWorkspaceStore serialization', () => {
 
   it('refuses a foreign schemaVersion without touching state', () => {
     const store = committedStore();
-    const before = store.serialize();
+    store.addIndicator('ema', { length: 10 });
     const result = store.restore({ schemaVersion: 1, ticker: 'zzz' });
     expect(result.warnings[0]).toContain('schemaVersion');
-    expect(store.serialize()).toEqual(before);
+    expect(store.committedTicker()).toBe('AAPL');
+    expect(store.draft().ticker).toBe('AAPL');
+    expect(store.indicators().map((indicator) => indicator.id)).toEqual(['ema|length=10']);
   });
 
   it('refuses an inverted window with a warning', () => {
