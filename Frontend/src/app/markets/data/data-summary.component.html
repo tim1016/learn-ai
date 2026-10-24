@@ -1,0 +1,61 @@
+@let s = summary();
+<section class="data-summary" aria-label="What the lake holds for this window">
+  <p class="data-summary__verdict" [attr.data-readable]="s.run_readable">
+    @if (s.run_readable) {
+      A run can read every finished session in this window.
+    } @else if (finished() === 0) {
+      No session in this window has finished, so there is nothing for a run to read yet.
+    } @else {
+      A run cannot read {{ unreadable() }} of the {{ finished() }} finished sessions in this window.
+    }
+  </p>
+
+  <dl class="data-summary__tiles">
+    <div class="data-summary__tile">
+      <dt>Sessions</dt>
+      <dd>{{ s.session_count }}</dd>
+      <span>of {{ s.calendar_day_count }} calendar days. Weekends and holidays are not sessions; an early close is one.</span>
+    </div>
+    @for (tile of tiles(); track tile.label) {
+      <div class="data-summary__tile">
+        <dt>{{ tile.label }}</dt>
+        <dd>{{ tile.value }}</dd>
+        @if (tile.hint) {
+          <span>{{ tile.hint }}</span>
+        }
+      </div>
+    }
+  </dl>
+
+  @if (s.fetchable > 0 || s.before_provider_history > 0 || s.provider_no_data > 0) {
+    <p class="data-summary__line">
+      A Fill can fetch {{ s.fetchable }}.
+      @if (s.before_provider_history > 0) {
+        {{ s.before_provider_history }} are older than the provider serves and can no longer be fetched.
+      }
+      @if (s.provider_no_data > 0) {
+        {{ s.provider_no_data }} drew no bars from the provider.
+      }
+    </p>
+  }
+
+  <p class="data-summary__line">
+    The provider serves history back to {{ report().provider_history_start_ms | timestampDisplay: 'date-et' : 'date' }}.
+    Sessions the lake holds from before then stay readable; one it lacks from before then cannot be fetched.
+  </p>
+
+  <p class="data-summary__line" [attr.data-rollup]="rollup().state">
+    @switch (rollup().state) {
+      @case ('current') {
+        Daily file: current. A daily-resolution run reads it; a minute run never opens it.
+      }
+      @case ('stale') {
+        Daily file: stale, {{ rollup().reason === 'sources_changed' ? 'built from other sessions than the lake holds now' : 'its adjustment record no longer holds' }}.
+        A daily-resolution run rebuilds it when it starts; minute runs are not affected.
+      }
+      @case ('not_built') {
+        Daily file: not built. A Fill or a daily-resolution run builds it; minute runs never need it.
+      }
+    }
+  </p>
+</section>

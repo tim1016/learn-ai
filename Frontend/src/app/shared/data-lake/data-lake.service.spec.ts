@@ -53,6 +53,37 @@ describe('DataLakeService', () => {
     http.verify();
   });
 
+  it('reads one instrument\'s data for the window in int64 ms UTC and the tree named, and never POSTs', async () => {
+    const pending = service.instrumentData({
+      symbol: 'SPY',
+      startTradingDate: '2026-05-18',
+      endTradingDate: '2026-05-20',
+      priceAdjustmentMode: 'raw',
+    });
+
+    const request = http.expectOne((candidate) => candidate.url === `${BASE}/instrument-data`);
+    expect(request.request.method).toBe('GET');
+    expect(request.request.params.get('symbol')).toBe('SPY');
+    expect(request.request.params.get('start_trading_date_ms')).toBe(String(tradingDateToMs('2026-05-18')));
+    expect(request.request.params.get('end_trading_date_ms')).toBe(String(tradingDateToMs('2026-05-20')));
+    expect(request.request.params.get('price_adjustment_mode')).toBe('raw');
+    request.flush({ symbol: 'SPY', sessions: [] });
+    await expect(pending).resolves.toMatchObject({ kind: 'ok' });
+    http.verify();
+  });
+
+  it('refuses an instrument-data window with a date that is not one, without sending it', async () => {
+    const read = await service.instrumentData({
+      symbol: 'SPY',
+      startTradingDate: '2026-05-18',
+      endTradingDate: '',
+      priceAdjustmentMode: 'polygon_split_adjusted',
+    });
+
+    expect(read).toMatchObject({ kind: 'rejected', reason: 'invalid_trading_date' });
+    http.expectNone(`${BASE}/instrument-data`);
+  });
+
   it('asks for run readiness in the view the caller names, for trade bars unless told otherwise', async () => {
     const pending = service.runReadiness('polygon_split_adjusted');
 

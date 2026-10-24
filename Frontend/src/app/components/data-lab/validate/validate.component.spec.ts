@@ -67,36 +67,4 @@ describe('ValidateComponent', () => {
     expect(await screen.findByRole('alert')).toBeTruthy();
     http.verify();
   });
-
-  it('runs quality analysis from the committed numeric window and renders server numbers', async () => {
-    const { http } = await renderValidate();
-    await userEvent.click(screen.getByText("Quality evidence"));
-    await userEvent.click(screen.getByRole("button", { name: "Run quality analysis" }));
-    const req = await waitFor(() =>
-      http.expectOne(`${environment.pythonServiceUrl}/api/data-quality/analyze`),
-    );
-    expect(req.request.body['from_date']).toBe('2026-04-15');
-    expect(req.request.body['to_date']).toBe('2026-05-15');
-    req.flush({
-      success: true,
-      ticker: 'SPY',
-      from_date: '2026-04-15',
-      to_date: '2026-05-15',
-      raw_summary: {
-        total_bars: 100, trading_days: 20, zero_volume_bars: 2, flat_bars_ohlc_equal: 0,
-        fractional_volume_bars: 0, vwap_above_high: 0, vwap_below_low: 0, ohlc_violations: 0,
-        duplicate_timestamps: 1, weekend_bars: 0, intraday_gaps: 3,
-      },
-      clean_summary: {
-        total_bars: 99, trading_days: 20, zero_volume_bars: 0, flat_bars_ohlc_equal: 0,
-        fractional_volume_bars: 0, vwap_above_high: 0, vwap_below_low: 0, ohlc_violations: 0,
-        duplicate_timestamps: 0, weekend_bars: 0, intraday_gaps: 0,
-      },
-      steps: [],
-    });
-
-    expect(await screen.findByText('Total bars')).toBeTruthy();
-    expect(await screen.findByText('99')).toBeTruthy();
-    http.verify();
-  });
 });

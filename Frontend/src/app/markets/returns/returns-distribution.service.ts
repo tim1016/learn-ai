@@ -2,9 +2,9 @@ import { HttpClient } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
 import { map, type Observable } from 'rxjs';
 
-import { components } from '../../../api/broker.types';
-import { StockAggregate } from '../../../services/market-data.types';
-import { environment } from '../../../../environments/environment';
+import { components } from '../../api/broker.types';
+import { StockAggregate } from '../../services/market-data.types';
+import { environment } from '../../../environments/environment';
 
 type ReturnDistributionResponseDto = components['schemas']['ReturnDistributionResponse'];
 type ReturnDistributionRequestDto = components['schemas']['ReturnDistributionRequest'];

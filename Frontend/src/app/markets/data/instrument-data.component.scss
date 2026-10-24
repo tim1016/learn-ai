@@ -1,0 +1,39 @@
+@use '../../styles/tokens' as *;
+
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.data-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.data-tab__lead,
+.data-tab__note,
+.data-tab__asof {
+  margin: 0;
+  color: $text-secondary;
+  font-size: 0.875rem;
+}
+
+.data-tab__tree {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-width: 28rem;
+  color: $text-secondary;
+  font-size: 0.8125rem;
+
+  select {
+    min-height: 44px;
+    padding: 0 0.5rem;
+    border: 1px solid $border-light;
+    border-radius: $radius-md;
+    background: $bg-surface;
+    color: $text-primary;
+  }
+}

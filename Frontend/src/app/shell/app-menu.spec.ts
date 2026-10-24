@@ -88,7 +88,7 @@ describe('app menu projections', () => {
     expect(menuItemsFor('/unlisted-page').every((group) => group.styleClass === undefined)).toBe(true);
   });
 
-  it('places the Data Lake Observatory in Operations and the Return Distribution study in Markets', () => {
+  it('places the Data Lake Observatory in Operations', () => {
     const lakeEntry = menuItemsFor('/data-lake')
       .find((group) => group.label === 'Operations')
       ?.items?.find((item) => item.label === 'Data Lake Observatory');
@@ -96,17 +96,6 @@ describe('app menu projections', () => {
     expect.soft(lakeEntry?.routerLink, 'links the Data Lake Observatory entry to /data-lake').toBe('/data-lake');
     expect.soft(lakeEntry?.styleClass, 'marks the Data Lake Observatory entry active').toBe(ACTIVE_ITEM_CLASS);
     expect.soft(windowTitleFor('/data-lake'), 'titles the window for the Data Lake Observatory').toBe('Data Lake Observatory · Operations');
-
-    // The study route is not under the Markets entry's address, so it must
-    // resolve to its own item — the page highlights its own item.
-    const returnsEntry = menuItemsFor('/data-lab/returns')
-      .find((group) => group.label === 'Markets')
-      ?.items?.find((item) => item.label === 'Return Distribution');
-
-    expect.soft(returnsEntry?.routerLink, 'links the Return Distribution entry to /data-lab/returns').toBe('/data-lab/returns');
-    expect.soft(returnsEntry?.styleClass, 'marks the Return Distribution entry active').toBe(ACTIVE_ITEM_CLASS);
-    expect.soft(activeMenuNodeFor('/data-lab/returns')?.item.route, 'resolves /data-lab/returns to its own menu node').toBe('/data-lab/returns');
-    expect.soft(windowTitleFor('/data-lab/returns'), 'titles the window for Return Distribution').toBe('Return Distribution · Markets');
   });
 
   it('titles the window Page · Group, and an account page by its group alone', () => {

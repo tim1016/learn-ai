@@ -22,8 +22,7 @@ import { legacyInstrumentTarget } from '../../markets/instrument-address';
 
 export type DataLabRoute =
   | '/data-lab/export'
-  | '/data-lab/validate'
-  | '/data-lab/returns';
+  | '/data-lab/validate';
 
 /** Where a legacy address ends: a Data Lab child, or the instrument place that now holds the chart. */
 export type LegacyDataLabTarget = DataLabRoute | 'instrument';

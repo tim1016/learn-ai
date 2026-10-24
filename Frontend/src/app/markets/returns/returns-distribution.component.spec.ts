@@ -1,17 +1,14 @@
-import { signal } from '@angular/core';
+import { Component, signal } from '@angular/core';
 import { render, screen, waitFor } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { of } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { DataLabWorkspaceStore } from '../data-lab-workspace-store';
-import {
-  DayReturns,
-  KindDistribution,
-  ReturnDistributionStudy,
-  ReturnsDistributionService,
-} from './returns-distribution.service';
+import { DataLabWorkspaceStore } from '../../components/data-lab/data-lab-workspace-store';
+import { ReturnsDistributionService, type ReturnDistributionStudy } from './returns-distribution.service';
+import { DAY_MS, STUDY } from '../testing/returns-study';
 import { ReturnsDistributionComponent } from './returns-distribution.component';
+import { ReturnsStudyHold } from './returns-study-hold';
 
 /** chart.js is module-mocked: the page spec drives bin selection through the
  * same options.onClick the real library invokes on canvas clicks. */
@@ -38,78 +35,6 @@ vi.mock('chart.js', () => {
     registerables: [],
   };
 });
-
-const DAY_MS = (july: number) => Date.UTC(2024, 6, july, 13, 30);
-
-function kindFixture(kind: KindDistribution['kind'], nDays: number): KindDistribution {
-  return {
-    kind,
-    bins: [
-      { lowerPct: 0, upperPct: 0.5, count: nDays, isEdge: false },
-      { lowerPct: 0.5, upperPct: 1, count: 0, isEdge: false },
-    ],
-    normalExpectedCounts: [nDays * 0.6, nDays * 0.1],
-    stats: {
-      nDays,
-      meanPct: 0.05,
-      stdPct: 0.9,
-      annualizedVolPct: 14.3,
-      skewness: -0.2,
-      excessKurtosis: 1.5,
-      var95Pct: -1.4,
-      cvar95Pct: -2.0,
-      bestDay: { sessionOpenMsUtc: DAY_MS(2), valuePct: 2.5 },
-      worstDay: { sessionOpenMsUtc: DAY_MS(3), valuePct: -1.8 },
-    },
-  };
-}
-
-const DAYS: DayReturns[] = [
-  {
-    sessionOpenMsUtc: DAY_MS(2),
-    closeToClosePct: 0.25,
-    sessionPct: 0.31,
-    overnightPct: -0.06,
-    preMarketPct: 0.02,
-    morningPct: 0.19,
-    afternoonPct: 0.12,
-    afterHoursPct: null,
-    volume: 4_500_000,
-    binIndices: { close_to_close: 0, session: 0, overnight: 1 },
-  },
-  {
-    sessionOpenMsUtc: DAY_MS(3),
-    closeToClosePct: 0.4,
-    sessionPct: 0.2,
-    overnightPct: 0.2,
-    preMarketPct: null,
-    morningPct: 0.0,
-    afternoonPct: 0.2,
-    afterHoursPct: 0.01,
-    volume: 3_000_000,
-    binIndices: { close_to_close: 0, session: 0, overnight: 1 },
-  },
-];
-
-const STUDY: ReturnDistributionStudy = {
-  adjustment: 'split_and_dividend',
-  warnings: [],
-  capture: {
-    status: 'complete',
-    fetchedArtifactCount: 480,
-    detail: null,
-  },
-  coverage: {
-    requestedSessions: 2,
-    returnedSessions: 2,
-    missingSessions: 0,
-    excludedSessions: 0,
-    firstSessionOpenMsUtc: DAY_MS(2),
-    lastSessionOpenMsUtc: DAY_MS(3),
-  },
-  kinds: [kindFixture('close_to_close', 2), kindFixture('session', 2), kindFixture('overnight', 2)],
-  days: DAYS,
-};
 
 function fakeStore() {
   return {
@@ -139,15 +64,38 @@ function fakeService() {
   } as unknown as ReturnsDistributionService;
 }
 
+/** The study mounted under a switch, as the router mounts it, so a tab change can unmount and mount it again. */
+@Component({
+  selector: 'app-remount-host',
+  imports: [ReturnsDistributionComponent],
+  template: '@if (mounted()) { <app-returns-distribution /> }',
+})
+class RemountHostComponent {
+  readonly mounted = signal(true);
+}
+
+async function renderRemountable(service: ReturnsDistributionService, hold: ReturnsStudyHold) {
+  const result = await render(RemountHostComponent, {
+    providers: [
+      { provide: DataLabWorkspaceStore, useValue: fakeStore() },
+      { provide: ReturnsDistributionService, useValue: service },
+      { provide: ReturnsStudyHold, useValue: hold },
+    ],
+  });
+  return { ...result, host: result.fixture.componentInstance };
+}
+
 beforeEach(() => {
   harness.instances.length = 0;
 });
 
 describe('ReturnsDistributionComponent', () => {
   it('renders the study for the committed scope: stats, histogram, kind toggle', async () => {
-    await render(ReturnsDistributionComponent, {      providers: [
+    await render(ReturnsDistributionComponent, {
+      providers: [
         { provide: DataLabWorkspaceStore, useValue: fakeStore() },
         { provide: ReturnsDistributionService, useValue: fakeService() },
+        ReturnsStudyHold,
       ],
     });
 
@@ -175,6 +123,7 @@ describe('ReturnsDistributionComponent', () => {
       providers: [
         { provide: DataLabWorkspaceStore, useValue: fakeStore() },
         { provide: ReturnsDistributionService, useValue: service },
+        ReturnsStudyHold,
       ],
     });
 
@@ -191,6 +140,7 @@ describe('ReturnsDistributionComponent', () => {
       providers: [
         { provide: DataLabWorkspaceStore, useValue: fakeStore() },
         { provide: ReturnsDistributionService, useValue: service },
+        ReturnsStudyHold,
       ],
     });
 
@@ -210,6 +160,7 @@ describe('ReturnsDistributionComponent', () => {
       providers: [
         { provide: DataLabWorkspaceStore, useValue: fakeStore() },
         { provide: ReturnsDistributionService, useValue: service },
+        ReturnsStudyHold,
       ],
     });
 
@@ -225,6 +176,38 @@ describe('ReturnsDistributionComponent', () => {
     expect(service.minuteCandles).toHaveBeenCalledWith('SPY', DAY_MS(2));
   });
 
+  it('shows the study the place already holds when it is mounted again with the request unchanged, and asks Python nothing', async () => {
+    const service = fakeService();
+    const { host, fixture } = await renderRemountable(service, new ReturnsStudyHold());
+    await screen.findByText('Days studied');
+    expect(service.distribution).toHaveBeenCalledTimes(1);
+
+    host.mounted.set(false);
+    fixture.detectChanges();
+    expect(screen.queryByText('Days studied'), 'the study was unmounted').toBeNull();
+    host.mounted.set(true);
+    fixture.detectChanges();
+
+    expect(await screen.findByText('Days studied')).toBeTruthy();
+    expect(service.distribution, 'a remount alone is no reason to ask again').toHaveBeenCalledTimes(1);
+  });
+
+  it('asks again once the place drops the instrument\'s studies, since the lake changed under them', async () => {
+    const service = fakeService();
+    const hold = new ReturnsStudyHold();
+    const { host, fixture } = await renderRemountable(service, hold);
+    await screen.findByText('Days studied');
+
+    host.mounted.set(false);
+    fixture.detectChanges();
+    hold.invalidate('SPY');
+    host.mounted.set(true);
+    fixture.detectChanges();
+
+    expect(await screen.findByText('Days studied')).toBeTruthy();
+    expect(service.distribution).toHaveBeenCalledTimes(2);
+  });
+
   it('asks for scope before anything else when the store has no committed window', async () => {
     const service = fakeService();
     await render(ReturnsDistributionComponent, {
@@ -234,10 +217,11 @@ describe('ReturnsDistributionComponent', () => {
           useValue: { committedTicker: signal(''), committedWindow: signal(null) } as unknown as DataLabWorkspaceStore,
         },
         { provide: ReturnsDistributionService, useValue: service },
+        ReturnsStudyHold,
       ],
     });
 
-    expect(screen.getByText(/Pick a ticker and date range/)).toBeTruthy();
+    expect(screen.getByText(/Pick an instrument and a window above/)).toBeTruthy();
     expect(service.distribution).not.toHaveBeenCalled();
   });
 });

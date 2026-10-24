@@ -13,6 +13,8 @@ import { CurrentUrlService } from '../../shell/current-url.service';
 import { menuLabelFor } from '../../shell/app-menu';
 import { MARKETS_ROUTE, instrumentCommands, instrumentTabOf } from '../instrument-address';
 import { InstrumentAdmissionService, type InstrumentAdmission } from '../instrument-admission.service';
+import { InstrumentDataStore } from '../data/instrument-data.store';
+import { ReturnsStudyHold } from '../returns/returns-study-hold';
 import { InstrumentContextService } from '../instrument-context.service';
 import { INSTRUMENT_TABS, UNAVAILABLE_INSTRUMENT_TABS } from '../instrument-tabs';
 import { InstrumentContextBarComponent } from './instrument-context-bar.component';
@@ -25,9 +27,10 @@ const BACK_TO_MARKETS = { id: 'markets', label: 'Back to Markets', route: [MARKE
  * It owns what the tabs share and nothing they compute: the shared header, the
  * tab strip declared once, the pickers that commit the context, the workspace
  * store the tabs read and the one coverage gate that decides whether the
- * instrument opens. It is provided its own store, context and admission, so
- * they live as long as the place does: a tab change keeps them, and so does a
- * move to another instrument.
+ * instrument opens. It is provided its own store, context and admission, and
+ * the answers the Returns and Data tabs hold, so they live as long as the
+ * place does: a tab change keeps them, and so does a move to another
+ * instrument.
  *
  * An address that names no instrument the lake can hold fails in place, with
  * the way back to Markets. Nothing opens in its place.
@@ -48,6 +51,9 @@ const BACK_TO_MARKETS = { id: 'markets', label: 'Back to Markets', route: [MARKE
     { provide: DataLabWorkspaceStore, useFactory: createDataLabWorkspaceStore },
     InstrumentContextService,
     InstrumentAdmissionService,
+    // What the Returns and Data tabs hold, so a tab change asks for nothing it already has.
+    ReturnsStudyHold,
+    InstrumentDataStore,
   ],
   templateUrl: './instrument-workspace.component.html',
   styleUrl: './instrument-workspace.component.scss',

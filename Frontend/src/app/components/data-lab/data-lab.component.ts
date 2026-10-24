@@ -58,7 +58,7 @@ import {
  * Data Lab route shell.
  *
  * Owns the compact scope bar (with the calendar-resolved quick-range chips),
- * the route tabs (Build dataset, Validate, Returns study), the saved-setups
+ * the route tabs (Build dataset, Validate), the saved-setups
  * drawer, and one RunDockComponent. All workspace state lives in the
  * route-provided {@link DataLabWorkspaceStore}; child routes inject the same
  * instance. The chart left for the instrument place (`/markets/:symbol/chart`);
@@ -95,7 +95,7 @@ export class DataLabComponent {
   readonly store = inject(DataLabWorkspaceStore);
 
   /** The page is titled by the menu entry that leads to it (PRD #3490 R01):
-   *  Build dataset, Return Distribution or Validate. */
+   *  Build dataset or Validate. */
   private readonly menuNode = inject(CurrentUrlService).menuNode;
   protected readonly pageTitle = computed(() => this.menuNode()?.item.title ?? 'Data Lab');
 

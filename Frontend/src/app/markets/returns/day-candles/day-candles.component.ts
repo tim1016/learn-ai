@@ -1,8 +1,8 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
 import { rxResource } from '@angular/core/rxjs-interop';
 
-import { etIsoDate } from '../../../../shared/date/et-midnight';
-import { CandlestickChartComponent } from '../../../../shared/charts/candlestick-chart/candlestick-chart.component';
+import { etIsoDate } from '../../../shared/date/et-midnight';
+import { CandlestickChartComponent } from '../../../shared/charts/candlestick-chart/candlestick-chart.component';
 import { ReturnsDistributionService } from '../returns-distribution.service';
 
 /**

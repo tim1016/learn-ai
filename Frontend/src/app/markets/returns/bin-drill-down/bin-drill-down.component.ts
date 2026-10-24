@@ -7,7 +7,7 @@ import {
 } from '@angular/core';
 import { DecimalPipe } from '@angular/common';
 
-import { etIsoDate } from '../../../../shared/date/et-midnight';
+import { etIsoDate } from '../../../shared/date/et-midnight';
 import { DayReturns, HistogramBin, ReturnKind } from '../returns-distribution.service';
 
 /** The five session segments, in chronological order. */

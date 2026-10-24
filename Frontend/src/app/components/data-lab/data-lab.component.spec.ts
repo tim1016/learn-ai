@@ -24,9 +24,6 @@ class ExportStubComponent {}
 @Component({ selector: 'app-validate-stub', template: 'validate-stub' })
 class ValidateStubComponent {}
 
-@Component({ selector: 'app-returns-stub', template: 'returns-stub' })
-class ReturnsStubComponent {}
-
 /** Host with a router outlet so the shell really routes in tests. */
 @Component({ selector: 'app-shell-host', imports: [RouterOutlet], template: '<router-outlet />' })
 class ShellHostComponent {}
@@ -94,7 +91,6 @@ function shellRoutes(): Routes {
         { path: '', pathMatch: 'full', redirectTo: 'export' },
         { path: 'export', component: ExportStubComponent },
         { path: 'validate', component: ValidateStubComponent },
-        { path: 'returns', component: ReturnsStubComponent },
       ],
     },
   ];
@@ -190,14 +186,14 @@ async function renderDirectShell(url: string) {
 }
 
 describe('DataLabComponent (shell)', () => {
-  it('renders the shell on first load: three route tabs and the way to the chart, the default recipe, the quick-range chips', async () => {
+  it('renders the shell on first load: two route tabs and the way to the chart, the default recipe, the quick-range chips', async () => {
     const { router, store } = await renderRoutedShell();
     expect.soft(router.url, 'opens on the first child').toBe('/export');
     expect.soft(screen.getByRole('link', { name: 'Chart' }).getAttribute('href'), 'leads to Markets while no instrument is committed').toBe('/markets');
     expect.soft(screen.queryByRole('link', { name: 'Explore' }), 'has no Explore tab: the chart moved to the instrument place').toBeNull();
     expect.soft(screen.getByRole('link', { name: 'Build dataset' }), 'renders the Build dataset tab').toBeTruthy();
     expect.soft(screen.getByRole('link', { name: 'Validate' }), 'renders the Validate tab').toBeTruthy();
-    expect.soft(screen.getByRole('link', { name: 'Returns study' }), 'renders the Returns study tab').toBeTruthy();
+    expect.soft(screen.queryByRole('link', { name: 'Returns study' }), 'has no Returns tab: the study moved to the instrument place').toBeNull();
     expect.soft(screen.getByText('export-stub'), 'renders the first child').toBeTruthy();
     expect.soft(store.indicators().length, 'seeds the thirteen-indicator default recipe into a fresh workspace').toBe(13);
 
@@ -211,10 +207,6 @@ describe('DataLabComponent (shell)', () => {
     await userEvent.click(screen.getByRole('link', { name: 'Validate' }));
     await waitFor(() => expect(router.url).toBe('/validate'));
     expect(screen.getByText('validate-stub')).toBeTruthy();
-
-    await userEvent.click(screen.getByRole('link', { name: 'Returns study' }));
-    await waitFor(() => expect(router.url).toBe('/returns'));
-    expect(screen.getByText('returns-stub')).toBeTruthy();
 
     await userEvent.click(screen.getByRole('link', { name: 'Build dataset' }));
     await waitFor(() => expect(router.url).toBe('/export'));
@@ -239,14 +231,6 @@ describe('DataLabComponent (shell)', () => {
     expect(fixture.componentInstance.store.committedWindow()?.endMsUtc).toBe(
       Date.UTC(2026, 4, 15) + 86_400_000 - 1,
     );
-  });
-
-  it('keeps the Returns study when a legacy scope arrives on it, instead of moving it to the chart', async () => {
-    const { navSpy, fixture } = await renderDirectShell('/data-lab/returns?ticker=SPY&from=2026-04-15&to=2026-05-15');
-    fixture.componentInstance.runLegacyIngress();
-
-    expect(navSpy).not.toHaveBeenCalled();
-    expect(fixture.componentInstance.store.committedTicker()).toBe('SPY');
   });
 
   it('leaves a canonical child whose legacy mode names another where it is, and says the mode is ignored', async () => {

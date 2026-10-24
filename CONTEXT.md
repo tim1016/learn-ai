@@ -1577,7 +1577,7 @@ Decision record: ADR 0062.
 
 ## Session-segmented returns (resolved 2026-09-14)
 
-**Lineage: live.** Vocabulary for the Return Distribution study (`/data-lab/returns`, `POST /api/research/return-distribution`); method note in `docs/references/return-distribution.md`.
+**Lineage: live.** Vocabulary for the Return Distribution study (`/markets/:symbol/returns`, `POST /api/research/return-distribution`); method note in `docs/references/return-distribution.md`.
 
 - **Return kinds** — the three answers to "what did the day do": *close-to-close* (previous scheduled RTH close → this RTH close; the headline number), *session* (RTH open → RTH close), and *overnight gap* (previous RTH close → RTH open). Close-to-close decomposes as overnight + session exactly in log space.
 - **Session segments** — the full-24h drill-down of one day's move: overnight gap, pre-market, morning (open → 12:00 ET), afternoon (12:00 ET → scheduled close), after-hours. Half-days segment against their scheduled close, never a 16:00 literal. A segment with no traded bars reports "no data", never zero.

@@ -2,8 +2,7 @@
   @if (ticker(); as t) {
     @if (windowStartMs() === null || windowEndMs() === null) {
       <p class="rd__empty">
-        Pick a ticker and date range in the Data Lab scope bar above, then come back —
-        the study follows the committed scope.
+        Pick a window above — the study follows the committed window.
       </p>
     } @else if (study.isLoading()) {
       <p class="rd__empty rd__loading">
@@ -92,8 +91,7 @@
     }
   } @else {
     <p class="rd__empty">
-      Pick a ticker and date range in the Data Lab scope bar above, then come back —
-      the study follows the committed scope.
+      Pick an instrument and a window above — the study follows the committed scope.
     </p>
   }
 </section>

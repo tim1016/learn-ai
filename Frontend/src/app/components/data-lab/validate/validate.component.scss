@@ -17,8 +17,7 @@
   background: $bg-surface;
 }
 
-.validate__section h2,
-.validate__quality h3 {
+.validate__section h2 {
   margin: 0 0 0.5rem;
   font-size: 1rem;
 }
@@ -110,40 +109,5 @@
     align-items: center;
     cursor: pointer;
     font-weight: 600;
-  }
-}
-
-// Wide tables scroll inside a focusable, labeled region.
-.validate__table-wrap {
-  min-width: 0;
-  overflow-x: auto;
-  border: 1px solid $border-light;
-  border-radius: 6px;
-}
-
-.validate__table {
-  border-collapse: collapse;
-  min-width: min(100%, 28rem);
-
-  th,
-  td {
-    padding: 0.3rem 0.6rem;
-    text-align: end;
-    border-bottom: 1px solid $border-light;
-  }
-
-  th[scope='col'],
-  th[scope='row'] {
-    text-align: start;
-  }
-}
-
-.validate__steps {
-  min-width: 0;
-  padding-left: 1.25rem;
-
-  li {
-    margin-bottom: 0.35rem;
-    overflow-wrap: anywhere;
   }
 }

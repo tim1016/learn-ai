@@ -200,7 +200,7 @@ describe('an instrument\'s place', () => {
       await chartRequests(opened.http, 1);
     });
 
-    it('declares Chart, Returns, Data and Options once; the three not routed yet stay in the strip, inert, and say why', async () => {
+    it('declares Chart, Returns, Data and Options once; only Options is not routed yet, so it stays in the strip, inert, and says why', async () => {
       const opened = await open(`/markets/SPY/chart?${WINDOW_QUERY}`);
       await chartRequests(opened.http, 1);
 
@@ -211,11 +211,12 @@ describe('an instrument\'s place', () => {
         'Data',
         'Options',
       ]);
-      expect(screen.getByRole('link', { name: 'Chart' }).getAttribute('href')).toBe(`/markets/SPY/chart?${WINDOW_QUERY}`);
-      for (const name of ['Returns', 'Data', 'Options']) {
-        expect(screen.queryByRole('link', { name }), `${name} is not a link`).toBeNull();
-        expect(screen.getByText(new RegExp(`^${name}`)).getAttribute('title'), `${name} says why`).toContain('Not in this place yet');
+      for (const name of ['Chart', 'Returns', 'Data']) {
+        const tab = name.toLowerCase();
+        expect(screen.getByRole('link', { name }).getAttribute('href'), `${name} keeps the window`).toBe(`/markets/SPY/${tab}?${WINDOW_QUERY}`);
       }
+      expect(screen.queryByRole('link', { name: 'Options' }), 'Options is not a link').toBeNull();
+      expect(screen.getByText(/^Options/).getAttribute('title'), 'Options says why').toContain('Not in this place yet');
     });
   });
 

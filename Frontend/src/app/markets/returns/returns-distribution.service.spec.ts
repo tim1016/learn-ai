@@ -4,7 +4,7 @@ import { TestBed } from '@angular/core/testing';
 import { firstValueFrom } from 'rxjs';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { environment } from '../../../../environments/environment';
+import { environment } from '../../../environments/environment';
 import { ReturnsDistributionService } from './returns-distribution.service';
 
 const BASE = `${environment.pythonServiceUrl}/api/research/return-distribution`;

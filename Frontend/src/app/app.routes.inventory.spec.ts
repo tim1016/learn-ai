@@ -63,11 +63,13 @@ const ROWS: Readonly<Record<string, Row>> = {
   'markets/:symbol': { group: MARKETS, lands: '/markets/SPY/chart' },
   'markets/:symbol/chart': { group: MARKETS },
   'markets/:symbol/chart/news': { group: MARKETS },
-  // The chart moved under the instrument; with no instrument named, an old address leads to the list.
+  'markets/:symbol/returns': { group: MARKETS },
+  'markets/:symbol/data': { group: MARKETS },
+  // The chart and the Returns study moved under the instrument; with no instrument named, an old address leads to the list.
   'data-lab': { group: MARKETS, lands: '/markets' },
   'data-lab/explore': { group: MARKETS, lands: '/markets' },
   'data-lab/export': { group: MARKETS },
-  'data-lab/returns': { group: MARKETS },
+  'data-lab/returns': { group: MARKETS, lands: '/markets' },
   'options-lab': { group: MARKETS, lands: '/options-lab/chain' },
   'options-lab/chain': { group: MARKETS },
   'options-lab/strategy-finder': { group: MARKETS },
@@ -412,12 +414,6 @@ describe('the route inventory (T01)', () => {
       expect(activeMenuNodeFor(router.url)?.group.title).toBe('Markets');
     });
 
-    it('keeps the Returns study on a legacy-scope link instead of moving to Explore', async () => {
-      const { router } = await load('/data-lab/returns?ticker=SPY&from=2026-01-02');
-
-      expect(router.url).toBe('/data-lab/returns?ticker=SPY&from=2026-01-02');
-    });
-
     it.each([
       ['/data-lab?mode=build&ticker=SPY#option-archive-SPY', '/data-lab/export?ticker=SPY#option-archive-SPY'],
       ['/data-lab?mode=validate', '/data-lab/validate'],
@@ -430,6 +426,9 @@ describe('the route inventory (T01)', () => {
       ['/research-lab/market/news', '/markets'],
       // A symbol this app cannot hold is carried to the instrument's address, where it fails in place; it is never swapped for another.
       ['/data-lab/explore?ticker=%24%24%24', '/markets/$$$/chart'],
+      // The Returns study moved under the instrument too: its window and session go with it, and the ticker becomes the path.
+      ['/data-lab/returns?ticker=spy&from=2026-01-02&to=2026-02-27&trading-session=extended#top', '/markets/SPY/returns?from=2026-01-02&to=2026-02-27&session=extended#top'],
+      ['/data-lab/returns', '/markets'],
       ['/data-quality?ticker=SPY&from=2026-01-02&foo=1', '/data-lab/validate?ticker=SPY&from=2026-01-02&foo=1'],
       ['/data-quality?mode=build&ticker=SPY', '/data-lab/export?ticker=SPY'],
     ])('lands the legacy Data Lab address %s on %s in one navigation', async (url, landsOn) => {

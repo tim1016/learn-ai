@@ -1,5 +1,6 @@
 import { Routes } from '@angular/router';
 
+import { redirectToInstrument } from '../../markets/instrument-address';
 import { redirectLegacyDataLab } from './data-lab-ingress';
 import {
   createDataLabWorkspaceStore,
@@ -8,12 +9,13 @@ import {
 
 /* /data-lab route family.
  *
- * One shell component with lazy child routes (export / validate / returns).
+ * One shell component with lazy child routes (export / validate).
  * The workspace store is provided on the parent route's injector so the shell
  * and every child share one instance — state survives child route navigation
- * and dies with the shell. The chart is no longer one of them: it moved to the
- * instrument place (`/markets/:symbol/chart`), and `/data-lab` and
- * `/data-lab/explore` redirect straight to the instrument their query names,
+ * and dies with the shell. The chart and the Returns study are no longer among
+ * them: they moved to the instrument place (`/markets/:symbol/chart` and
+ * `/markets/:symbol/returns`), and `/data-lab`, `/data-lab/explore` and
+ * `/data-lab/returns` redirect straight to the instrument their query names,
  * or to Markets when it names none. `/data-lab?mode=` still names the child
  * it always did, with its query and fragment intact; the shell then applies
  * that query to the workspace. */
@@ -41,13 +43,8 @@ export const DATA_LAB_ROUTES: Routes = [
         loadComponent: () =>
           import('./validate/validate.component').then((m) => m.ValidateComponent),
       },
-      {
-        path: 'returns',
-        loadComponent: () =>
-          import('./returns-distribution/returns-distribution.component').then(
-            (m) => m.ReturnsDistributionComponent,
-          ),
-      },
+      // The Returns study moved under the instrument; the address's window and session go with it.
+      { path: 'returns', pathMatch: 'full', redirectTo: redirectToInstrument('returns') },
     ],
   },
 ];

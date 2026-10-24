@@ -1,4 +1,3 @@
-import { DecimalPipe } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -7,11 +6,11 @@ import {
   signal,
 } from '@angular/core';
 import { rxResource } from '@angular/core/rxjs-interop';
-import { EMPTY } from 'rxjs';
+import { EMPTY, of, tap } from 'rxjs';
 
-import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
-import { etIsoDate } from '../../../shared/date/et-midnight';
-import { DataLabWorkspaceStore } from '../data-lab-workspace-store';
+import { AssetIdentityComponent } from '../../shared/asset-identity/asset-identity.component';
+import { etIsoDate } from '../../shared/date/et-midnight';
+import { DataLabWorkspaceStore } from '../../components/data-lab/data-lab-workspace-store';
 import {
   CaptureStatus,
   HistogramBin,
@@ -19,6 +18,7 @@ import {
   ReturnKind,
   ReturnsDistributionService,
 } from './returns-distribution.service';
+import { ReturnsStudyHold } from './returns-study-hold';
 import { ReturnsHistogramChartComponent } from './returns-histogram-chart/returns-histogram-chart.component';
 import { BinDrillDownComponent } from './bin-drill-down/bin-drill-down.component';
 import { DayCandlesComponent } from './day-candles/day-candles.component';
@@ -67,23 +67,26 @@ function captureLineFor(receipt: {
 }
 
 /**
- * The Return Distribution study: a histogram of daily moves over the Data
- * Lab's committed ticker + window, populated entirely by Python (bins,
+ * The Return Distribution study: a histogram of daily moves over the instrument
+ * place's committed ticker + window, populated entirely by Python (bins,
  * normal overlay, statistics, per-day session segments, bin membership).
  * Toggling the return kind or clicking a basket is presentation-only;
- * changing scope or bin width refetches. The window travels to Python as
- * the workspace's int64 ms UTC numbers — no client-side date math.
+ * changing scope or bin width refetches, and coming back to the tab with the
+ * same request shows the study the place already holds (`ReturnsStudyHold`).
+ * The window travels to Python as the workspace's int64 ms UTC numbers — no
+ * client-side date math.
  */
 @Component({
   selector: 'app-returns-distribution',
   templateUrl: './returns-distribution.component.html',
   styleUrl: './returns-distribution.component.scss',
-  imports: [DecimalPipe, AssetIdentityComponent, ReturnsHistogramChartComponent, BinDrillDownComponent, DayCandlesComponent],
+  imports: [AssetIdentityComponent, ReturnsHistogramChartComponent, BinDrillDownComponent, DayCandlesComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class ReturnsDistributionComponent {
   readonly store = inject(DataLabWorkspaceStore);
   private readonly service = inject(ReturnsDistributionService);
+  private readonly hold = inject(ReturnsStudyHold);
 
   readonly kindLabels = KIND_LABELS;
   readonly kind = signal<ReturnKind>('close_to_close');
@@ -106,16 +109,20 @@ export class ReturnsDistributionComponent {
       endMsUtc: this.windowEndMs(),
       binWidthPct: this.binWidthPct(),
     }),
-    stream: ({ params }) =>
-      params.ticker && params.startMsUtc !== null && params.endMsUtc !== null
-        ? this.service.distribution({
-            symbol: params.ticker,
-            fromMsUtc: params.startMsUtc,
-            toMsUtc: params.endMsUtc,
-            binWidthPct: params.binWidthPct,
-            spanPct: 5,
-          })
-        : EMPTY,
+    stream: ({ params }) => {
+      if (!params.ticker || params.startMsUtc === null || params.endMsUtc === null) return EMPTY;
+      const query = {
+        symbol: params.ticker,
+        fromMsUtc: params.startMsUtc,
+        toMsUtc: params.endMsUtc,
+        binWidthPct: params.binWidthPct,
+        spanPct: 5,
+      };
+      const held = this.hold.get(query);
+      return held !== undefined
+        ? of(held)
+        : this.service.distribution(query).pipe(tap((study) => this.hold.put(query, study)));
+    },
   });
 
   readonly activeKindDistribution = computed(() => {
