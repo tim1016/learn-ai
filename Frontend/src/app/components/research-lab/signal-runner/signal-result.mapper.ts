@@ -269,7 +269,8 @@ function mapSignalDiagnostics(r: Record<string, unknown>): SignalDiagnostics {
 }
 
 function mapDataSufficiency(r: Record<string, unknown>): DataSufficiency {
-  const rc = (r['regime_coverage'] as Record<string, unknown>[]) ?? [];
+  // The job writes the coverage as a count per regime, as it does at the top of the result.
+  const rc = Object.entries((r['regime_coverage'] as Record<string, number> | null) ?? {});
   return {
     totalBars: r['total_bars'] as number,
     trainBars: r['train_bars'] as number,
@@ -277,10 +278,7 @@ function mapDataSufficiency(r: Record<string, unknown>): DataSufficiency {
     walkForwardFolds: r['walk_forward_folds'] as number,
     effectiveOosBars: r['effective_oos_bars'] as number,
     regimesCovered: r['regimes_covered'] as number,
-    regimeCoverage: rc.map((e): RegimeCoverageEntry => ({
-      regime: e['regime'] as string,
-      count: e['count'] as number,
-    })),
+    regimeCoverage: rc.map(([regime, count]): RegimeCoverageEntry => ({ regime, count })),
     coverageWarnings: (r['coverage_warnings'] as string[]) ?? [],
   };
 }
