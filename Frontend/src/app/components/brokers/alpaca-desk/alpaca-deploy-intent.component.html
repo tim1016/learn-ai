@@ -25,6 +25,6 @@
     </section>
   }
   @case ('refused') {
-    <app-workspace-state-block [state]="current.content" (actionTriggered)="onAction($event)" />
+    <app-workspace-state-block [state]="current.content" (actionTriggered)="watch.onAction($event)" />
   }
 }
