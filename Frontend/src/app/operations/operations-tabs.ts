@@ -5,8 +5,9 @@ import { defineWorkspaceTabs } from '../shared/workspace/workspace-tabs';
  * Operations' URL vocabulary (ADR 0084): `/operations/<tab>`.
  *
  * One place declares the tabs, as the account workspace does: the strip, the
- * routes and the window title all read this list, so a tab cannot pick up a
- * second name. A tab's id is its URL segment.
+ * menu (and so the breadcrumb and the window title) and the health notices all
+ * read this list, so a tab cannot pick up a second name. A tab's id is its URL
+ * segment.
  */
 export type OperationsTab = 'lake' | 'option-archive' | 'backups' | 'math-checks' | 'data-checks';
 

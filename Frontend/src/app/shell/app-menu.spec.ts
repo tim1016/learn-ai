@@ -8,6 +8,7 @@ import {
   menuItemsFor,
   windowTitleFor,
 } from './app-menu';
+import { OPERATIONS_TABS, operationsTabLabel } from '../operations/operations-tabs';
 import { HELP_DOCUMENTS } from '../shared/help/help-documents';
 
 describe('app menu projections', () => {
@@ -94,20 +95,14 @@ describe('app menu projections', () => {
     expect.soft(
       operations?.items?.map((item) => [item.label, item.routerLink]),
       'lists every Operations tab',
-    ).toEqual([
-      ['Lake', '/operations/lake'],
-      ['Option archive', '/operations/option-archive'],
-      ['Backups', '/operations/backups'],
-      ['Math checks', '/operations/math-checks'],
-      ['Data checks', '/operations/data-checks'],
-    ]);
+    ).toEqual(OPERATIONS_TABS.map((tab) => [tab.label, `/operations/${tab.id}`]));
     expect.soft(
-      operations?.items?.find((item) => item.label === 'Backups')?.styleClass,
+      operations?.items?.find((item) => item.label === operationsTabLabel('backups'))?.styleClass,
       'marks the open tab active',
     ).toBe(ACTIVE_ITEM_CLASS);
-    expect.soft(windowTitleFor('/operations/lake'), 'titles the window for the Lake tab').toBe('Lake · Operations');
-    expect.soft(windowTitleFor('/operations/math-checks'), 'titles the window for the Math checks tab').toBe('Math checks · Operations');
-    expect.soft(windowTitleFor('/operations/data-checks/pre-flight'), 'titles a check by the tab that holds it').toBe('Data checks · Operations');
+    expect.soft(windowTitleFor('/operations/lake'), 'titles the window for the Lake tab').toBe(`${operationsTabLabel('lake')} · Operations`);
+    expect.soft(windowTitleFor('/operations/math-checks'), 'titles the window for the Math checks tab').toBe(`${operationsTabLabel('math-checks')} · Operations`);
+    expect.soft(windowTitleFor('/operations/data-checks/pre-flight'), 'titles a check by the tab that holds it').toBe(`${operationsTabLabel('data-checks')} · Operations`);
 
     // The study route is longer than the Stocks entry, so the longest-match
     // resolution must prefer it — the page highlights its own item.
