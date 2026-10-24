@@ -3119,7 +3119,7 @@
                 "type": "null"
               }
             ],
-            "description": "Why there is no move; set exactly when ``move`` is absent.",
+            "description": "Why there is no move; set exactly when ``move`` is null.",
             "title": "Move Unavailable Reason"
           },
           "not_used": {
@@ -3143,7 +3143,10 @@
         "required": [
           "price",
           "basis",
-          "as_of_ms"
+          "as_of_ms",
+          "move",
+          "move_unavailable_reason",
+          "not_used"
         ],
         "title": "AvailableQuote",
         "type": "object"
@@ -33596,7 +33599,7 @@
                 "type": "null"
               }
             ],
-            "description": "Absent for an underlying the archive does not track."
+            "description": "Null for an underlying the archive does not track."
           },
           "quote": {
             "discriminator": {
@@ -33623,7 +33626,8 @@
         },
         "required": [
           "symbol",
-          "quote"
+          "quote",
+          "options_archive"
         ],
         "title": "InstrumentFacts",
         "type": "object"
@@ -42813,7 +42817,13 @@
           }
         },
         "required": [
-          "kind"
+          "kind",
+          "earliest_required_session_ms",
+          "last_archived_session_ms",
+          "complete_through_session_ms",
+          "missing_sessions",
+          "capturing",
+          "reason"
         ],
         "title": "OptionsArchiveFact",
         "type": "object"
@@ -66524,6 +66534,7 @@
       "UnavailableQuote": {
         "properties": {
           "not_used": {
+            "description": "Every source that was asked, freshest first, with why it did not answer.",
             "items": {
               "$ref": "#/components/schemas/BasisNotUsed"
             },
@@ -66541,7 +66552,8 @@
           }
         },
         "required": [
-          "reason"
+          "reason",
+          "not_used"
         ],
         "title": "UnavailableQuote",
         "type": "object"

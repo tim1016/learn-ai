@@ -52,19 +52,15 @@ class AvailableQuote(BaseModel):
     price: float
     basis: QuoteBasis
     as_of_ms: TimestampMs = Field(description="When the price was observed, not when it was read.")
-    move: DayMove | None = None
-    move_unavailable_reason: str | None = Field(
-        default=None, description="Why there is no move; set exactly when ``move`` is absent."
-    )
-    not_used: list[BasisNotUsed] = Field(
-        default_factory=list, description="Fresher sources that did not answer, freshest first."
-    )
+    move: DayMove | None
+    move_unavailable_reason: str | None = Field(description="Why there is no move; set exactly when ``move`` is null.")
+    not_used: list[BasisNotUsed] = Field(description="Fresher sources that did not answer, freshest first.")
 
 
 class UnavailableQuote(BaseModel):
     status: Literal["unavailable"] = "unavailable"
     reason: str
-    not_used: list[BasisNotUsed] = Field(default_factory=list)
+    not_used: list[BasisNotUsed] = Field(description="Every source that was asked, freshest first, with why it did not answer.")
 
 
 InstrumentQuote = Annotated[AvailableQuote | UnavailableQuote, Field(discriminator="status")]
@@ -79,20 +75,18 @@ OptionsArchiveKind = Literal["none_stored", "some_days", "complete", "unavailabl
 
 class OptionsArchiveFact(BaseModel):
     kind: OptionsArchiveKind
-    earliest_required_session_ms: TimestampMs | None = None
-    last_archived_session_ms: TimestampMs | None = None
-    complete_through_session_ms: TimestampMs | None = None
-    missing_sessions: int | None = Field(default=None, ge=0, le=1_000_000)
-    capturing: bool | None = Field(default=None, description="Whether nightly capture is switched on.")
-    reason: str | None = None
+    earliest_required_session_ms: TimestampMs | None
+    last_archived_session_ms: TimestampMs | None
+    complete_through_session_ms: TimestampMs | None
+    missing_sessions: int | None = Field(ge=0, le=1_000_000)
+    capturing: bool | None = Field(description="Whether nightly capture is switched on.")
+    reason: str | None
 
 
 class InstrumentFacts(BaseModel):
     symbol: str
     quote: InstrumentQuote
-    options_archive: OptionsArchiveFact | None = Field(
-        default=None, description="Absent for an underlying the archive does not track."
-    )
+    options_archive: OptionsArchiveFact | None = Field(description="Null for an underlying the archive does not track.")
 
 
 class InstrumentFactsResponse(BaseModel):

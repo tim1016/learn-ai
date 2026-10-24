@@ -9048,17 +9048,17 @@ export interface components {
              * @enum {string}
              */
             basis: "live_quote" | "delayed_snapshot" | "last_close";
-            move?: components["schemas"]["DayMove"] | null;
+            move: components["schemas"]["DayMove"] | null;
             /**
              * Move Unavailable Reason
-             * @description Why there is no move; set exactly when ``move`` is absent.
+             * @description Why there is no move; set exactly when ``move`` is null.
              */
-            move_unavailable_reason?: string | null;
+            move_unavailable_reason: string | null;
             /**
              * Not Used
              * @description Fresher sources that did not answer, freshest first.
              */
-            not_used?: components["schemas"]["BasisNotUsed"][];
+            not_used: components["schemas"]["BasisNotUsed"][];
             /** Price */
             price: number;
             /**
@@ -21048,8 +21048,8 @@ export interface components {
         };
         /** InstrumentFacts */
         InstrumentFacts: {
-            /** @description Absent for an underlying the archive does not track. */
-            options_archive?: components["schemas"]["OptionsArchiveFact"] | null;
+            /** @description Null for an underlying the archive does not track. */
+            options_archive: components["schemas"]["OptionsArchiveFact"] | null;
             /** Quote */
             quote: components["schemas"]["AvailableQuote"] | components["schemas"]["UnavailableQuote"];
             /** Symbol */
@@ -24596,22 +24596,22 @@ export interface components {
              * Capturing
              * @description Whether nightly capture is switched on.
              */
-            capturing?: boolean | null;
+            capturing: boolean | null;
             /** Complete Through Session Ms */
-            complete_through_session_ms?: number | null;
+            complete_through_session_ms: number | null;
             /** Earliest Required Session Ms */
-            earliest_required_session_ms?: number | null;
+            earliest_required_session_ms: number | null;
             /**
              * Kind
              * @enum {string}
              */
             kind: "none_stored" | "some_days" | "complete" | "unavailable";
             /** Last Archived Session Ms */
-            last_archived_session_ms?: number | null;
+            last_archived_session_ms: number | null;
             /** Missing Sessions */
-            missing_sessions?: number | null;
+            missing_sessions: number | null;
             /** Reason */
-            reason?: string | null;
+            reason: string | null;
         };
         /**
          * OptionsBacktestCapitalEvidenceResponse
@@ -34014,8 +34014,11 @@ export interface components {
         TrustedTemplate: "trusted_default" | "reconciliation" | "ema_crossover" | "ema_crossover_signal" | "ema_crossover_2_bps" | "ema_previous_crossover" | "rsi_mean_reversion" | "deployment_validation";
         /** UnavailableQuote */
         UnavailableQuote: {
-            /** Not Used */
-            not_used?: components["schemas"]["BasisNotUsed"][];
+            /**
+             * Not Used
+             * @description Every source that was asked, freshest first, with why it did not answer.
+             */
+            not_used: components["schemas"]["BasisNotUsed"][];
             /** Reason */
             reason: string;
             /**

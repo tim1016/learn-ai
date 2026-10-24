@@ -150,6 +150,19 @@ def archive_fact(underlying: UnderlyingArchiveHealth, *, capturing: bool) -> Opt
         complete_through_session_ms=underlying.complete_through_session_ms,
         missing_sessions=missing,
         capturing=capturing,
+        reason=None,
+    )
+
+
+def _archive_unavailable(reason: str) -> OptionsArchiveFact:
+    return OptionsArchiveFact(
+        kind="unavailable",
+        earliest_required_session_ms=None,
+        last_archived_session_ms=None,
+        complete_through_session_ms=None,
+        missing_sessions=None,
+        capturing=None,
+        reason=reason,
     )
 
 
@@ -211,11 +224,11 @@ def _archive_for(symbol: str, archive: OptionArchiveHealth | Miss | None) -> Opt
     if symbol not in ARCHIVED_UNDERLYINGS or archive is None:
         return None
     if isinstance(archive, Miss):
-        return OptionsArchiveFact(kind="unavailable", reason=archive.reason)
+        return _archive_unavailable(archive.reason)
     for underlying in archive.underlyings:
         if underlying.underlying == symbol:
             return archive_fact(underlying, capturing=archive.enabled)
-    return OptionsArchiveFact(kind="unavailable", reason=f"The archive's receipts hold no entry for {symbol}.")
+    return _archive_unavailable(f"The archive's receipts hold no entry for {symbol}.")
 
 
 def _quote(
