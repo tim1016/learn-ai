@@ -4,7 +4,7 @@ import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 
 import { JobsService, type JobStreamEvent } from '../../services/jobs.service';
-import { DataLakeObservatoryComponent } from './data-lake-observatory.component';
+import { LakeTabComponent } from './lake-tab.component';
 import {
   ArtifactDetail,
   BackfillDefaults,
@@ -137,7 +137,7 @@ function vendorEntry(symbol: string): VendorSymbolEntry {
 
 const DARK: DataLakeRead<BackfillDefaults> = { kind: 'unavailable', message: 'The data plane did not respond.' };
 
-async function renderObservatory(
+async function renderLake(
   symbols: readonly SymbolRunReadiness[] = [GLD, SPY],
   defaults: DataLakeRead<BackfillDefaults> = { kind: 'ok', value: DEFAULTS },
 ) {
@@ -158,7 +158,7 @@ async function renderObservatory(
     handlers.set(jobId, handler);
     return vi.fn();
   });
-  const view = await render(DataLakeObservatoryComponent, {
+  const view = await render(LakeTabComponent, {
     providers: [
       { provide: DataLakeService, useValue: lake },
       {
@@ -190,9 +190,9 @@ function specOf(startJob: ReturnType<typeof vi.fn>, call: number): Record<string
   return (startJob.mock.calls[call] as [string, { spec: Record<string, unknown> }])[1].spec;
 }
 
-describe('DataLakeObservatoryComponent', () => {
+describe('LakeTabComponent', () => {
   it('says up front that symbols on disk cannot be read, and that a backfill writes what is missing', async () => {
-    const { lake } = await renderObservatory();
+    const { lake } = await renderLake();
 
     expect(lake.runReadiness).toHaveBeenCalledWith('polygon_split_adjusted', 'trade');
     expect(
@@ -208,7 +208,7 @@ describe('DataLakeObservatoryComponent', () => {
   });
 
   it('shows what a run finds for a picked session, and opens its receipt', async () => {
-    const { lake } = await renderObservatory();
+    const { lake } = await renderLake();
 
     fireEvent.click(await screen.findByRole('button', { name: 'GLD, 2026-05-18, Needs Rebuild' }));
 
@@ -225,7 +225,7 @@ describe('DataLakeObservatoryComponent', () => {
   });
 
   it('rebuilds every symbol over its own window, one after another', async () => {
-    const { lake, startJob, endJob } = await renderObservatory([GLD, AMZN]);
+    const { lake, startJob, endJob } = await renderLake([GLD, AMZN]);
 
     fireEvent.click(screen.getByRole('button', { name: 'Rebuild all 2 symbols' }));
     await vi.waitFor(() => expect(startJob).toHaveBeenCalledTimes(1));
@@ -268,7 +268,7 @@ describe('DataLakeObservatoryComponent', () => {
       fill_first_trading_date_ms: sessionOpenMs(2025, 6, 2),
       fill_last_trading_date_ms: sessionOpenMs(2025, 7, 1),
     });
-    const { startJob, endJob } = await renderObservatory([GLD, qqq, iwm]);
+    const { startJob, endJob } = await renderLake([GLD, qqq, iwm]);
 
     const banner = screen
       .getByRole('heading', { name: '2 symbols have sessions missing between their first and last' })
@@ -297,7 +297,7 @@ describe('DataLakeObservatoryComponent', () => {
   });
 
   it('stops a rebuild of every symbol when one run fails, and re-reads the lake', async () => {
-    const { lake, startJob, endJob } = await renderObservatory([GLD, AMZN]);
+    const { lake, startJob, endJob } = await renderLake([GLD, AMZN]);
 
     fireEvent.click(screen.getByRole('button', { name: 'Rebuild all 2 symbols' }));
     await vi.waitFor(() => expect(startJob).toHaveBeenCalledTimes(1));
@@ -312,7 +312,7 @@ describe('DataLakeObservatoryComponent', () => {
     // The backfill panel writes the view on screen. Left running, the rest of
     // the list would be fetched into raw over windows composed for
     // split-adjusted, and the sessions it set out to rebuild would stay unreadable.
-    const { startJob, endJob } = await renderObservatory([GLD, AMZN]);
+    const { startJob, endJob } = await renderLake([GLD, AMZN]);
 
     fireEvent.click(screen.getByRole('button', { name: 'Rebuild all 2 symbols' }));
     await vi.waitFor(() => expect(startJob).toHaveBeenCalledTimes(1));
@@ -325,7 +325,7 @@ describe('DataLakeObservatoryComponent', () => {
   });
 
   it('starts nothing when the backfill form cannot run, and says why', async () => {
-    const { startJob } = await renderObservatory([GLD, AMZN], DARK);
+    const { startJob } = await renderLake([GLD, AMZN], DARK);
 
     fireEvent.click(screen.getByRole('button', { name: 'Rebuild all 2 symbols' }));
 
@@ -335,7 +335,7 @@ describe('DataLakeObservatoryComponent', () => {
   });
 
   it('reads and rebuilds the bars the operator picks', async () => {
-    const { lake, startJob } = await renderObservatory();
+    const { lake, startJob } = await renderLake();
 
     fireEvent.click(screen.getByRole('button', { name: 'Quote' }));
     await vi.waitFor(() =>
@@ -352,7 +352,7 @@ describe('DataLakeObservatoryComponent', () => {
   });
 
   it('reads the view the operator switches to, and refuses to backfill one nothing derives', async () => {
-    const { lake } = await renderObservatory();
+    const { lake } = await renderLake();
 
     fireEvent.click(screen.getByRole('button', { name: 'Lean Adjusted' }));
 
@@ -364,7 +364,7 @@ describe('DataLakeObservatoryComponent', () => {
   it('keeps the grid and the picked session on screen while the lake is read again', async () => {
     // Every finished run re-reads readiness; that alone must not blank a grid
     // whose symbol, window and view have not changed.
-    const { lake, startJob, endJob } = await renderObservatory();
+    const { lake, startJob, endJob } = await renderLake();
     fireEvent.click(await screen.findByRole('button', { name: 'GLD, 2026-05-18, Needs Rebuild' }));
     await screen.findByText("A run can't read this session");
     // Every later coverage read stays pending, so a grid it blanked would stay blank.
@@ -393,7 +393,7 @@ describe('DataLakeObservatoryComponent', () => {
       fill_first_trading_date_ms: sessionOpenMs(2021, 11, 1),
       fill_last_trading_date_ms: sessionOpenMs(2024, 9, 3),
     });
-    await renderObservatory([GLD, SPY, gapped]);
+    await renderLake([GLD, SPY, gapped]);
     fireEvent.click(await screen.findByRole('button', { name: 'GLD, 2026-05-18, Needs Rebuild' }));
     await screen.findByText("A run can't read this session");
     expect(screen.getByRole('button', { name: 'Fill the gap in QQQ' })).toBeTruthy();
@@ -403,13 +403,5 @@ describe('DataLakeObservatoryComponent', () => {
     });
 
     expect(results.violations).toEqual([]);
-  });
-
-  it('opens the pipeline documentation from its header in a new tab, so the lake view stays as it is', async () => {
-    await renderObservatory();
-
-    const link = screen.getByRole('link', { name: 'How this works' });
-    expect(link.getAttribute('href')).toBe('/data-quality-docs');
-    expect(link.getAttribute('target')).toBe('_blank');
   });
 });

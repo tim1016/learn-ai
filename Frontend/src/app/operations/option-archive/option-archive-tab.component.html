@@ -1,4 +1,4 @@
-<section id="option-archive" class="archive-card">
+<section id="option-archive" class="archive-section">
   <h2>Option archive</h2>
   @if (archive.unavailable()) {
     <p role="status">Archive status is unavailable. Check the data service connection.</p>
@@ -30,17 +30,6 @@
         }
       </article>
     }
-    <article id="option-archive-backup">
-      <h3>Lake backup</h3><p>{{ health.backup.reason }}</p>
-      <p>Last checked: <app-timestamp-display [value]="health.backup.last_success_ms" mode="local" /></p>
-      <p>Oldest capture awaiting backup: <app-timestamp-display [value]="health.backup.oldest_unbacked_capture_ms" mode="local" /></p>
-      @if (health.backup.generation_id; as generation) { <p>Generation: {{ generation }}</p> }
-      @if (health.backup.free_bytes !== null) { <p>Destination free space: {{ health.backup.free_bytes }} bytes</p> }
-    </article>
-    <article id="option-archive-restore">
-      <h3>Weekly restore check</h3><p>{{ health.test_restore.reason }}</p>
-      <p>Last passed: <app-timestamp-display [value]="health.test_restore.last_success_ms" mode="local" /></p>
-    </article>
     <p>Vendor retention permission is awaiting a reply. Capture and backup stay on this Mac.</p>
     <button type="button" (click)="archive.retry()">Refresh status</button>
   } @else {

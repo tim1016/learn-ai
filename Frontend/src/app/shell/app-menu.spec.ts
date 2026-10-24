@@ -89,14 +89,23 @@ describe('app menu projections', () => {
     expect(menuItemsFor('/unlisted-page').every((group) => group.styleClass === undefined)).toBe(true);
   });
 
-  it('places the Data Lake Observatory in Operations and the Return Distribution study in Markets', () => {
-    const lakeEntry = menuItemsFor('/data-lake')
-      .find((group) => group.label === 'Operations')
-      ?.items?.find((item) => item.label === 'Data Lake Observatory');
+  it('places the Operations tabs in Operations and the Return Distribution study in Markets', () => {
+    const operations = menuItemsFor('/operations/backups').find((group) => group.label === 'Operations');
 
-    expect.soft(lakeEntry?.routerLink, 'links the Data Lake Observatory entry to /data-lake').toBe('/data-lake');
-    expect.soft(lakeEntry?.styleClass, 'marks the Data Lake Observatory entry active').toBe(ACTIVE_ITEM_CLASS);
-    expect.soft(windowTitleFor('/data-lake'), 'titles the window for the Data Lake Observatory').toBe('Data Lake Observatory · Operations');
+    expect.soft(
+      operations?.items?.slice(0, 3).map((item) => [item.label, item.routerLink]),
+      'lists the Lake, Option archive and Backups tabs',
+    ).toEqual([
+      ['Lake', '/operations/lake'],
+      ['Option archive', '/operations/option-archive'],
+      ['Backups', '/operations/backups'],
+    ]);
+    expect.soft(
+      operations?.items?.find((item) => item.label === 'Backups')?.styleClass,
+      'marks the open tab active',
+    ).toBe(ACTIVE_ITEM_CLASS);
+    expect.soft(windowTitleFor('/operations/lake'), 'titles the window for the Lake tab').toBe('Lake · Operations');
+    expect.soft(windowTitleFor('/operations/math-checks'), 'titles the window for a tab not yet listed').toBe('Math checks · Operations');
 
     // The study route is longer than the Stocks entry, so the longest-match
     // resolution must prefer it — the page highlights its own item.
@@ -164,7 +173,12 @@ describe('app menu projections', () => {
     ['/options-evidence/run/run-7', 'Options setups', 'Options evidence'],
     ['/options-evidence/study/study-9', 'Options setups', 'Options evidence'],
     ['/options-evidence/golden/golden-3', 'Options setups', 'Options evidence'],
-    ['/data-lake', 'Operations', 'Data Lake Observatory'],
+    ['/operations/lake', 'Operations', 'Lake'],
+    ['/operations/option-archive', 'Operations', 'Option archive'],
+    ['/operations/backups', 'Operations', 'Backups'],
+    // Math checks and Data checks open onto a placeholder until their content moves in.
+    ['/operations/math-checks', 'Operations', 'Math checks'],
+    ['/operations/data-checks', 'Operations', 'Data checks'],
     ['/golden-fixtures', 'Operations', 'Golden Fixtures'],
     // Data checks: tabs other shells still host.
     ['/data-lab/validate', 'Operations', 'Validate'],
@@ -247,8 +261,8 @@ describe('app menu projections', () => {
       expect(menuTrailFor('/options-backtest', 'Options Backtest')).toEqual([
         { label: 'Options setups', route: '/options-backtest' },
       ]);
-      expect(menuTrailFor('/data-lake', 'Data Lake Observatory')).toEqual([
-        { label: 'Operations', route: '/data-lake' },
+      expect(menuTrailFor('/operations/option-archive', 'Option archive')).toEqual([
+        { label: 'Operations', route: '/operations/lake' },
       ]);
     });
 

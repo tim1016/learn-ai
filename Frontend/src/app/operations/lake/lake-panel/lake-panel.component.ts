@@ -4,7 +4,7 @@ import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import type { DataLakeProblem } from '../../../shared/data-lake';
 
 /**
- * One panel of the Observatory: a titled surface that shows its read's
+ * One panel of the Lake tab: a titled surface that shows its read's
  * failure or its pending line in place of the body, so every panel reports
  * a dark data plane the same way.
  */

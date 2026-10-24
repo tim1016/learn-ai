@@ -1,6 +1,8 @@
 import { inject } from '@angular/core';
 import { Router, type RedirectFunction } from '@angular/router';
 
+import { operationsTabRoute, type OperationsTab } from '../../operations/operations-tabs';
+
 /* Legacy Data Lab URL ingress adapter.
  *
  * Pure resolver for pre-redesign /data-lab and /data-quality URLs. It maps a
@@ -51,18 +53,36 @@ function routeForMode(mode: unknown): DataLabRoute | undefined {
 }
 
 /**
+ * The Operations tab a retired archive-card anchor belongs to. The card sat on
+ * top of every Data Lab tab with one anchor per underlying (`#option-archive-SPY`)
+ * and one each for the lake backup and the weekly restore check; those moved to
+ * Operations, so an old link carrying one goes there.
+ */
+function archiveTabFor(fragment: string | null | undefined): OperationsTab | null {
+  if (typeof fragment !== 'string' || !/^option-archive(-|$)/.test(fragment)) return null;
+  return fragment === 'option-archive-backup' || fragment === 'option-archive-restore' ? 'backups' : 'option-archive';
+}
+
+/**
  * The redirect for a legacy Data Lab address (`/data-lab`, `/data-quality`).
  *
  * It goes straight to the child the address names — `mode` decides, else
  * `fallback` — in the navigation the router is already making. Everything
  * else the bookmark carried stays in the URL: the query, which the shell
  * reads to populate the workspace and to name what it ignored, and the
- * fragment (`#option-archive-…`). Only a `mode` that names a child is spent,
- * because the path now says it; one that names none stays so the shell can
- * report it.
+ * fragment. Only a `mode` that names a child is spent, because the path now
+ * says it; one that names none stays so the shell can report it.
+ *
+ * An archive-card anchor (`#option-archive-…`) names a card that now lives in
+ * Operations, so such an address leaves Data Lab for that tab, query and
+ * fragment intact.
  */
 export function redirectLegacyDataLab(fallback: DataLabRoute): RedirectFunction {
   return ({ queryParams, fragment }) => {
+    const archiveTab = archiveTabFor(fragment);
+    if (archiveTab !== null) {
+      return inject(Router).createUrlTree([...operationsTabRoute(archiveTab)], { queryParams, fragment: fragment ?? undefined });
+    }
     const named = routeForMode(queryParams['mode']);
     const { mode: _spent, ...rest } = queryParams;
     return inject(Router).createUrlTree([named ?? fallback], {

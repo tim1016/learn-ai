@@ -133,8 +133,8 @@ export class LakeBackfillPanelComponent {
    * membership alone has never made something backfillable; when the vendor
    * has answered, an unvouched pick blocks submission by name instead of
    * shipping a spec the pipeline refuses. When the vendor is dark no verdict
-   * is possible, so nothing blocks — an outage may not silently disable the
-   * Observatory's primary flow.
+   * is possible, so nothing blocks — an outage may not silently disable
+   * the Lake tab's primary flow.
    */
   protected readonly ineligibleSelections = computed<readonly string[]>(() => {
     if (this.vendor.entries() === null) return [];

@@ -9,8 +9,6 @@ import {
   viewChild,
 } from '@angular/core';
 
-import { HowThisWorksLinkComponent } from '../../shared/help/how-this-works-link.component';
-import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 import { AssetIdentityComponent } from '../../shared/asset-identity/asset-identity.component';
 import { formatTimestampDisplay } from '../../shared/timestamp/timestamp-display';
 import { ArtifactInspectorDrawerComponent } from './artifact-inspector/artifact-inspector-drawer.component';
@@ -98,7 +96,7 @@ function tradingDateAt(ms: number): string {
 }
 
 /**
- * What the lake holds and whether a run can read it.
+ * Operations → Lake: what the lake holds and whether a run can read it.
  *
  * The page answers in the order an operator needs: is anything on disk
  * unreadable, what a session needs to be readable, which symbols are
@@ -109,13 +107,11 @@ function tradingDateAt(ms: number): string {
  * never inferred here from catalog status.
  */
 @Component({
-  selector: 'app-data-lake-observatory',
+  selector: 'app-operations-lake',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  templateUrl: './data-lake-observatory.component.html',
-  styleUrl: './data-lake-observatory.component.scss',
+  templateUrl: './lake-tab.component.html',
+  styleUrl: './lake-tab.component.scss',
   imports: [
-    PageHeaderComponent,
-    HowThisWorksLinkComponent,
     AssetIdentityComponent,
     ArtifactInspectorDrawerComponent,
     CoverageHeatmapComponent,
@@ -130,7 +126,7 @@ function tradingDateAt(ms: number): string {
     SymbolReadinessTableComponent,
   ],
 })
-export class DataLakeObservatoryComponent {
+export class LakeTabComponent {
   private readonly lake = inject(DataLakeService);
   private readonly backfillPanel = viewChild(LakeBackfillPanelComponent);
 

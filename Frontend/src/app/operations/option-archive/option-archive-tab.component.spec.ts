@@ -1,11 +1,10 @@
 import { signal } from '@angular/core';
-import { provideRouter } from '@angular/router';
-import { render, screen, waitFor } from '@testing-library/angular';
+import { render, screen } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
-import { OptionArchiveBannerComponent } from './option-archive-banner.component';
-import { OptionArchiveCardComponent } from './option-archive-card.component';
-import { formatTimestampDisplay } from '../timestamp/timestamp-display';
-import { OptionArchiveService, type OptionArchiveHealth } from './option-archive.service';
+
+import { OptionArchiveService, type OptionArchiveHealth } from '../../shared/option-archive/option-archive.service';
+import { formatTimestampDisplay } from '../../shared/timestamp/timestamp-display';
+import { OptionArchiveTabComponent } from './option-archive-tab.component';
 
 function status(): OptionArchiveHealth {
   return { enabled: true, generated_ms: 1792558800000, attention: false,
@@ -19,58 +18,41 @@ function status(): OptionArchiveHealth {
 function world(initial: OptionArchiveHealth | null = status()) {
   return { health: signal(initial), unavailable: signal(false), retry: vi.fn() };
 }
+function renderTab(archive: ReturnType<typeof world>) {
+  return render(OptionArchiveTabComponent, { providers: [{ provide: OptionArchiveService, useValue: archive }] });
+}
 
-describe('option archive health', () => {
-  it('shows coverage and independent backup and restore evidence', async () => {
-    const archive = world();
-    await render(OptionArchiveCardComponent, { providers: [{ provide: OptionArchiveService, useValue: archive }] });
+describe('Operations → Option archive', () => {
+  it('shows each underlying\'s coverage and leaves backup evidence to the Backups tab', async () => {
+    await renderTab(world());
     expect(screen.getByRole('heading', { name: 'Option archive' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Lake backup' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Weekly restore check' })).toBeTruthy();
     expect(screen.getByText('Every requested session is preserved.')).toBeTruthy();
-    expect(screen.getByText(/backup-a/)).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Lake backup' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Weekly restore check' })).toBeNull();
   });
-  it('keeps an older hole and failed backup visible behind a recent success', async () => {
+  it('keeps an older hole visible behind a recent success', async () => {
     const health = status(); health.attention = true;
     health.underlyings[0] = { ...health.underlyings[0], severity: 'at_risk', partial_sessions: 2, lost_sessions: 1,
       reason: 'An older session remains partial.', gaps: [{ session_ms: 1729261800000, permanent: true,
         reason: 'The vendor no longer serves this session.', recorded_ms: 1792558800000 }], phase: 'rth_pause' };
-    health.backup = { severity: 'failed', reason: 'The configured destination is missing.' };
-    await render(OptionArchiveCardComponent, { providers: [{ provide: OptionArchiveService, useValue: world(health) }] });
+    await renderTab(world(health));
     expect(screen.getByText('An older session remains partial.')).toBeTruthy();
     expect(screen.getByText(/The vendor no longer serves this session/)).toBeTruthy();
-    expect(screen.getByText('The configured destination is missing.')).toBeTruthy();
     expect(screen.getByText(/Capture is paused/)).toBeTruthy();
   });
   it('shows unavailable status and retry without inventing health', async () => {
     const archive = world(null); archive.unavailable.set(true);
-    await render(OptionArchiveCardComponent, { providers: [{ provide: OptionArchiveService, useValue: archive }] });
+    await renderTab(archive);
     screen.getByRole('button', { name: 'Retry status' }).click();
     expect(archive.retry).toHaveBeenCalledOnce();
-    expect(screen.queryByRole('heading', { name: 'Lake backup' })).toBeNull();
+    expect(screen.queryByText('Every requested session is preserved.')).toBeNull();
   });
-  it('hides a healthy banner and links unhealthy coverage to the exact row', async () => {
-    const archive = world();
-    await render(OptionArchiveBannerComponent, { providers: [provideRouter([]), { provide: OptionArchiveService, useValue: archive }] });
-    expect(screen.queryByRole('link')).toBeNull();
-    const health = status(); health.attention = true;
-    health.underlyings[0] = { ...health.underlyings[0], severity: 'at_risk' };
-    archive.health.set(health);
-    await waitFor(() => expect(screen.getByRole('link', { name: 'Inspect archive health' }).getAttribute('href')).toBe('/data-lab#option-archive-SPY'));
-  });
-  it('warns on route failure without owning run controls', async () => {
-    const archive = world(null); archive.unavailable.set(true);
-    await render(OptionArchiveBannerComponent, { providers: [provideRouter([]), { provide: OptionArchiveService, useValue: archive }] });
-    expect(screen.getByRole('link', { name: 'Inspect archive health' })).toBeTruthy();
-    expect(screen.queryByRole('button')).toBeNull();
-  });
-  it('renders deadlines, failure, capture and recovery freshness from server evidence', async () => {
+  it('renders deadlines, failure and capture freshness from server evidence', async () => {
     const health = status();
     health.underlyings[0] = { ...health.underlyings[0], earliest_required_session_ms: 1729517400000,
       next_due_ms: 1792645200000, last_success_ms: 1792558800000, last_failure: 'A retained receipt could not be admitted.',
       gaps: [{ session_ms: 1729517400000, permanent: false, days_left: 5, reason: 'Capture pending.', recorded_ms: 1792558800000 }] };
-    health.backup = { ...health.backup, oldest_unbacked_capture_ms: 1792558000000 };
-    await render(OptionArchiveCardComponent, { providers: [{ provide: OptionArchiveService, useValue: world(health) }] });
+    await renderTab(world(health));
     expect(screen.getByText('Earliest required session').nextElementSibling?.textContent?.trim())
       .toBe(formatTimestampDisplay(1729517400000, { mode: 'date-et' }));
     expect(screen.getByText('Next capture due').nextElementSibling?.textContent?.trim())
@@ -79,8 +61,5 @@ describe('option archive health', () => {
       .toBe(formatTimestampDisplay(1792558800000, { mode: 'local' }));
     expect(screen.getByText('A retained receipt could not be admitted.')).toBeTruthy();
     expect(screen.getByText(/5 calendar days remain/)).toBeTruthy();
-    expect(screen.getByText(/Oldest capture awaiting backup/).textContent)
-      .toContain(formatTimestampDisplay(1792558000000, { mode: 'local' }));
   });
-
 });

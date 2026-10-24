@@ -248,7 +248,7 @@ describe('LakeBackfillPanelComponent', () => {
 
   it('names a dark vendor catalog, keeps the lake holdings pickable, and offers a retry', async () => {
     // Vendor dark must degrade to lake holdings — never an empty form. The
-    // Observatory's primary flow survives an outage of one of its two
+    // Lake tab's primary flow survives an outage of one of its two
     // sources.
     const { alpaca, detectChanges } = await renderPanel({
       vendorEntries: [],

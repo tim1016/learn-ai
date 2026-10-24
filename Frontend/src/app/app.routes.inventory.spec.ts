@@ -125,7 +125,13 @@ const ROWS: Readonly<Record<string, Row>> = {
   'options-evidence/:kind/:subjectId': { group: OPTIONS },
 
   // ── Operations ───────────────────────────────────────────────────────────
-  'data-lake': { group: OPERATIONS },
+  'data-lake': { group: OPERATIONS, lands: '/operations/lake' },
+  operations: { group: OPERATIONS, lands: '/operations/lake' },
+  'operations/lake': { group: OPERATIONS },
+  'operations/option-archive': { group: OPERATIONS },
+  'operations/backups': { group: OPERATIONS },
+  'operations/math-checks': { group: OPERATIONS },
+  'operations/data-checks': { group: OPERATIONS },
   'golden-fixtures': { group: OPERATIONS },
   'data-lab/validate': { group: OPERATIONS },
   'data-quality': { group: OPERATIONS, lands: '/data-lab/validate' },
@@ -386,7 +392,12 @@ describe('the route inventory (T01)', () => {
     });
 
     it.each([
-      ['/data-lab?mode=build&ticker=SPY#option-archive-SPY', '/data-lab/export?ticker=SPY#option-archive-SPY'],
+      ['/data-lab?mode=build&ticker=SPY#scope', '/data-lab/export?ticker=SPY#scope'],
+      // The archive card left Data Lab, so its anchors lead to the tab that holds each part of it.
+      ['/data-lab#option-archive-SPY', '/operations/option-archive#option-archive-SPY'],
+      ['/data-lab?ticker=SPY#option-archive', '/operations/option-archive?ticker=SPY#option-archive'],
+      ['/data-lab#option-archive-backup', '/operations/backups#option-archive-backup'],
+      ['/data-lab#option-archive-restore', '/operations/backups#option-archive-restore'],
       ['/data-lab?mode=validate', '/data-lab/validate'],
       ['/data-lab?mode=bogus&ticker=SPY', '/data-lab/explore?mode=bogus&ticker=SPY'],
       ['/data-quality?ticker=SPY&from=2026-01-02&foo=1', '/data-lab/validate?ticker=SPY&from=2026-01-02&foo=1'],

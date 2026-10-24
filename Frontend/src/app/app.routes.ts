@@ -168,14 +168,17 @@ export const routes: Routes = [
       ),
   },
   {
-    // Data-lake catalog surface. This was flag-gated until #1893 retired
-    // DATA_LAKE_ENABLED; the routes are always mounted now, so the page has
-    // no "not enabled" state to render.
+    // The Data Lake Observatory became Operations → Lake. It read no query,
+    // but whatever a bookmark carries goes with it.
     path: "data-lake",
-    loadComponent: () =>
-      import(
-        "./components/data-lake-observatory/data-lake-observatory.component"
-      ).then((m) => m.DataLakeObservatoryComponent),
+    redirectTo: redirectKeepingState(["/operations", "lake"]),
+    pathMatch: "full",
+  },
+  {
+    // Operations: Lake, Option archive, Backups, Math checks and Data checks.
+    path: "operations",
+    loadChildren: () =>
+      import("./operations/operations.routes").then((m) => m.OPERATIONS_ROUTES),
   },
   {
     path: "data-lab-docs",
