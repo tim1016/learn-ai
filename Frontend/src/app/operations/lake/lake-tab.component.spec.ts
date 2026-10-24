@@ -1,4 +1,5 @@
 import { signal } from '@angular/core';
+import { TestBed } from '@angular/core/testing';
 import { fireEvent, render, screen, within } from '@testing-library/angular';
 import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
@@ -140,6 +141,8 @@ const DARK: DataLakeRead<BackfillDefaults> = { kind: 'unavailable', message: 'Th
 async function renderLake(
   symbols: readonly SymbolRunReadiness[] = [GLD, SPY],
   defaults: DataLakeRead<BackfillDefaults> = { kind: 'ok', value: DEFAULTS },
+  /** The filters a link carries in the address, as the router binds them. */
+  inputs: { symbol?: string; price_adjustment_mode?: string; data_type?: string } = {},
 ) {
   const lake = {
     // A fresh answer per read, as the wire gives: nothing downstream may lean on object identity.
@@ -159,6 +162,7 @@ async function renderLake(
     return vi.fn();
   });
   const view = await render(LakeTabComponent, {
+    inputs,
     providers: [
       { provide: DataLakeService, useValue: lake },
       {
@@ -189,6 +193,36 @@ async function renderLake(
 function specOf(startJob: ReturnType<typeof vi.fn>, call: number): Record<string, unknown> {
   return (startJob.mock.calls[call] as [string, { spec: Record<string, unknown> }])[1].spec;
 }
+
+describe('LakeTabComponent opened by a link', () => {
+  it('opens on the symbol the link names, not the first in the list', async () => {
+    const { lake } = await renderLake([GLD, SPY], undefined, { symbol: 'SPY' });
+
+    await vi.waitFor(() => expect(lake.coverage).toHaveBeenCalledWith(expect.objectContaining({ symbol: 'SPY' })));
+    expect(lake.coverage).not.toHaveBeenCalledWith(expect.objectContaining({ symbol: 'GLD' }));
+  });
+
+  it('opens on the view the link names, and ignores one the page does not offer', async () => {
+    const { lake } = await renderLake([GLD, SPY], undefined, { price_adjustment_mode: 'raw', data_type: 'quote' });
+    expect(lake.runReadiness).toHaveBeenCalledWith('raw', 'quote');
+
+    TestBed.resetTestingModule();
+    const unoffered = await renderLake([GLD, SPY], undefined, { price_adjustment_mode: 'adjusted-ish', data_type: 'tick' });
+    expect(unoffered.lake.runReadiness).toHaveBeenCalledWith('polygon_split_adjusted', 'trade');
+  });
+
+  it('moves to the symbol a later link names, after the operator has picked another', async () => {
+    const { view, lake } = await renderLake([GLD, SPY, AMZN], undefined, { symbol: 'SPY' });
+    await vi.waitFor(() => expect(lake.coverage).toHaveBeenLastCalledWith(expect.objectContaining({ symbol: 'SPY' })));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show GLD sessions' }));
+    await vi.waitFor(() => expect(lake.coverage).toHaveBeenLastCalledWith(expect.objectContaining({ symbol: 'GLD' })));
+
+    view.fixture.componentRef.setInput('symbol', 'AMZN');
+    view.fixture.detectChanges();
+    await vi.waitFor(() => expect(lake.coverage).toHaveBeenLastCalledWith(expect.objectContaining({ symbol: 'AMZN' })));
+  });
+});
 
 describe('LakeTabComponent', () => {
   it('says up front that symbols on disk cannot be read, and that a backfill writes what is missing', async () => {

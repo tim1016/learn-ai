@@ -16,6 +16,9 @@ import {
 import { RunSessionService } from '../../services/run-session.service';
 import { DataLabComponent } from './data-lab.component';
 import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
+import { fakeScopedHealth, healthItem, projection } from '../../shared/scoped-health/testing/scoped-health-fixtures';
+import { ScopedHealthService } from '../../shared/scoped-health/scoped-health.service';
+import { TestBed } from '@angular/core/testing';
 import { createDataLabWorkspaceStore, DataLabWorkspaceStore } from './data-lab-workspace-store';
 
 @Component({ selector: 'app-explore-stub', template: 'explore-stub' })
@@ -607,5 +610,35 @@ describe('DataLabComponent (symbol picker binding)', () => {
     result.fixture.componentInstance.store.patchDraft({ adjusted: false });
     result.fixture.detectChanges();
     expect(result.fixture.componentInstance.pickerAdjustmentMode()).toBe('raw');
+  });
+});
+
+describe('DataLabComponent lake health notice', () => {
+  const lakeGap = projection(
+    healthItem({
+      kind: 'stock_bars',
+      instrument: 'SPY',
+      severity: 'warning',
+      explanation: 'SPY has 3 scheduled sessions that are not in the lake.',
+      link: { tab: 'lake', query: { symbol: 'SPY', price_adjustment_mode: 'polygon_split_adjusted', data_type: 'trade' } },
+    }),
+  );
+
+  it('asks nothing until a symbol is committed, then asks about that symbol\'s stock history only', async () => {
+    const health = fakeScopedHealth(lakeGap);
+    TestBed.overrideProvider(ScopedHealthService, { useValue: { read: health.read } });
+    const { fixture } = await renderDirectShell('/data-lab/returns?ticker=SPY&from=2026-04-15&to=2026-05-15');
+
+    expect(health.read).not.toHaveBeenCalled();
+    expect(screen.queryByText(/not in the lake/)).toBeNull();
+
+    fixture.componentInstance.runLegacyIngress();
+    fixture.detectChanges();
+
+    expect(await screen.findByText(/SPY has 3 scheduled sessions/)).toBeTruthy();
+    expect(health.read).toHaveBeenCalledWith({ operations: ['stock_history'], instrument: 'SPY' });
+    expect(screen.getByRole('link', { name: 'Open Lake' }).getAttribute('href')).toBe(
+      '/operations/lake?symbol=SPY&price_adjustment_mode=polygon_split_adjusted&data_type=trade',
+    );
   });
 });

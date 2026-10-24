@@ -8,6 +8,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { routes } from '../app.routes';
 import { routeTreeHasData } from '../shell/current-url.service';
+import { ScopedHealthService } from '../shared/scoped-health/scoped-health.service';
+import { allHealthy, fakeScopedHealth, healthItem, projection } from '../shared/scoped-health/testing/scoped-health-fixtures';
 import { OPERATIONS_TABS } from './operations-tabs';
 
 /** Opens an address on the app's real routes, recording every request the page makes. */
@@ -77,6 +79,28 @@ describe('the Operations place', () => {
     for (const [label, href] of where) {
       expect(screen.getByRole('link', { name: label }).getAttribute('href')).toBe(href);
     }
+  });
+
+  it('shows a chip per health source in its header, each from the data plane\'s own word for it', async () => {
+    const failedBackup = healthItem({
+      kind: 'lake_backup',
+      severity: 'critical',
+      link: { tab: 'backups', query: {}, fragment: 'option-archive-backup' },
+    });
+    const health = fakeScopedHealth(projection(...allHealthy().items.filter((item) => item.scope.data_kind !== 'lake_backup'), failedBackup));
+    TestBed.overrideProvider(ScopedHealthService, { useValue: { read: health.read } });
+
+    await open('/operations/option-archive');
+
+    const chips = await screen.findAllByRole('listitem', {}, { timeout: 2000 }).then((items) => items.filter((item) => item.closest('.health-chips')));
+    expect(chips.map((chip) => [...chip.querySelectorAll('.health-chips__chip > span')].map((part) => part.textContent?.trim()).join(' '))).toEqual([
+      'Lake OK',
+      'Option archive OK',
+      'Backups Failing',
+      'IBKR feed OK',
+    ]);
+    expect(within(chips[2]).getByRole('link').getAttribute('href')).toBe('/operations/backups#option-archive-backup');
+    expect(health.read).toHaveBeenCalledWith();
   });
 
   it('fails in place on a tab it does not have, rather than opening the Lake', async () => {

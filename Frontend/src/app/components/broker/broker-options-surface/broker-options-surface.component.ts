@@ -13,6 +13,8 @@ import {
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
+import { HealthNoticeComponent } from '../../../shared/scoped-health/health-notice.component';
+import { HEALTH_NEEDS } from '../../../shared/scoped-health/scoped-health';
 import { PageGuideComponent } from '../../../shared/page-guide/page-guide.component';
 import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
 import { MarketDataFeedService } from '../../../services/market-data-feed.service';
@@ -82,6 +84,7 @@ const Z_METRICS: readonly ZMetricOption[] = [
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     FormsModule,
+    HealthNoticeComponent,
     PageHeaderComponent,
     PageGuideComponent,
     SectionErrorComponent,
@@ -92,6 +95,8 @@ const Z_METRICS: readonly ZMetricOption[] = [
 export class BrokerOptionsSurfaceComponent {
   private readonly broker = inject(MarketDataFeedService);
   private readonly health = inject(BrokerHealthService);
+  /** The stream is the IBKR feed; its own reason stays where the controls are. */
+  protected readonly healthNeeds = HEALTH_NEEDS.liveChain;
   private readonly injector = inject(Injector);
   private readonly destroyRef = inject(DestroyRef);
   readonly bannerState = this.health.bannerState;
