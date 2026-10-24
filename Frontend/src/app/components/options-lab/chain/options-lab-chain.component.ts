@@ -64,6 +64,13 @@ const DENSITY_STORAGE_KEY = 'optionsLab.chain.density';
 const POLL_INTERVAL_MS = 5_000;
 const EM_DASH = '—';
 
+/**
+ * Why the L / S buttons are disabled. A chain contract fixes strike and
+ * expiry but carries no entry, exit or stop timing, so it cannot become a
+ * runnable setup without inventing rules (PRD #3490, D04).
+ */
+export const ADD_LEG_UNAVAILABLE_REASON = "Add leg can't yet carry timing rules into a setup.";
+
 @Component({
   selector: 'app-options-lab-chain',
   standalone: true,
@@ -76,6 +83,8 @@ const EM_DASH = '—';
 export class OptionsLabChainComponent implements OnInit {
   private market = inject(MarketDataService);
   private destroyRef = inject(DestroyRef);
+
+  protected readonly addLegUnavailableReason = ADD_LEG_UNAVAILABLE_REASON;
 
   ticker = signal('SPY');
 
@@ -383,11 +392,6 @@ export class OptionsLabChainComponent implements OnInit {
     if (typeof localStorage !== 'undefined') {
       localStorage.setItem(DENSITY_STORAGE_KEY, d);
     }
-  }
-
-  addLeg(strike: number, right: 'CALL' | 'PUT', action: 'LONG' | 'SHORT'): void {
-    // stub: future integration with options strategy builder
-    void strike; void right; void action;
   }
 
   trackRow = (_: number, r: ChainRow): number => r.strike;
