@@ -437,7 +437,8 @@ current budget, risk-edit and mode behavior is recorded in ADRs 0059 and 0060.
 
 Tracked open items left by the Data Lab redesign PR
 (its PRD is in Git history). Implemented:
-child routes Explore/Export/Validate, workspace store, legacy URL ingress,
+child routes Explore/Export/Validate (Explore is now the instrument place's
+Chart tab, ADR 0084), workspace store, legacy URL ingress,
 searchable indicator picker, theme-token chart colors, `POST /api/dataset/plan`,
 additive `DataLabSession` ms-UTC columns (dual-read).
 
@@ -469,12 +470,10 @@ additive `DataLabSession` ms-UTC columns (dual-read).
 - **Legacy `sessionId` URL param is preserved but not auto-loaded (low).** The
   Saved setups drawer is the only session-load path; auto-load was deferred to
   avoid URL state triggering fetches.
-- **`computeAllIndicators` has no UI toggle in the new Explore (low).** The
-  signal defaults to false; wire a control if the legacy behavior is missed.
 - **Export and Validate templates still exceed the ~80-line path rule
-  (low).** Explore was split into drawer/controls/headlines children; the
-  Export four-section form (~230 lines) and Validate (~115 lines) remain
-  single templates — same follow-up refactor class as the shell split.
+  (low).** The Export four-section form (~230 lines) and Validate (~115
+  lines) remain single templates — same follow-up refactor class as the
+  shell split.
 - **Responsive overflow assertions need a browser pass (medium).** The §8
   structural rules are in place, but the 320–1920px `scrollWidth === clientWidth`
   checks and AXE scans have not been executed against a live browser.
@@ -494,14 +493,16 @@ re-arms the server-authored timeframe auto-correct, and numeric
 `start_ms_utc`/`end_ms_utc` declared authoritative-over-ISO on
 `ChartDataRequest`. Residuals:
 
-- **PRD §14's explicit-refresh-only rule is superseded for deliberate
-  actions (decision, not a gap).** Explore auto-loads on mount when a
-  committed scope exists; preset clicks, Apply scope (shell bar and the
-  Edit-scope drawer alike), and the one-shot timeframe auto-correct re-fetch
-  immediately through the store's refresh request. Uncommitted edits still
-  only mark stale, and a fetch that fails to load anything leaves the stale
-  badge on — staleness clears only when replacement data settles. Restored
-  saved sessions keep the cached-snapshot + stale-badge behavior.
+- **PRD §14's explicit-refresh-only rule is superseded (decision, not a
+  gap).** The instrument place's Chart tab has no Apply and no Refresh
+  (PRD #3490 R05): it loads when the committed context changes, a repeated
+  equal emission loads nothing, a request a newer one replaced is ended, and
+  the one-shot timeframe auto-correct commits the recommendation to the
+  address. A fetch that fails to load anything leaves the stale flag set —
+  it clears only when replacement data settles. The saved-setups drawer
+  still lives in the Data Lab shell, which no longer hosts a chart, so a saved
+  chart snapshot is staged there and rendered nowhere until saved scopes open
+  under their instrument (#3504).
 - **Committed-window anchors are day-shaped, not session-shaped (interim,
   low).** The Data Lab commits `startMsUtc` = UTC midnight of the from-date
   and `endMsUtc` = the to-date's final UTC instant (23:59:59.999) — applied

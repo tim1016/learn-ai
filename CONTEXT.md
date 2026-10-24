@@ -1622,6 +1622,11 @@ these are the others.
   Returns, Options and Data. Its identity is the symbol, not a page that happens to
   show it. Build dataset is an action on it, not a tab.
   _Avoid_: stock page, ticker page, symbol workspace.
+- **Instrument context** — what an instrument's tabs share: the window, the bar
+  timeframe and the session. It lives in the address (`?from=&to=&timeframe=&session=`),
+  and a picker commits it by moving the address, so Back, Forward and a reload keep
+  it. A complete, distinct context loads once; the same one again loads nothing.
+  _Avoid_: scope, draft scope, Apply, Refresh.
 - **Signal strategy** — one registry-selected Signal Program as a place, with its
   tabs: Overview, Define, Explore, Golden and Proof. Its identity is the registry
   key; the exact program version, symbol and parameters identify evidence inside
