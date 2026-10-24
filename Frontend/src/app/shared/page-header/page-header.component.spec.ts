@@ -84,12 +84,12 @@ describe('PageHeaderComponent trail', () => {
   }
 
   it('leads a page back to its menu group, landing on the group\'s first page', async () => {
-    expect(await trailAt('/golden-search/study-9', 'Golden Search')).toEqual(['Signal strategies -> /strategy-lab']);
+    expect(await trailAt('/golden-search/study-9', 'Golden Search')).toEqual(['Signal strategies -> /signal-strategies']);
   });
 
   it('also leads back to the listed page a deeper heading sits inside', async () => {
     expect(await trailAt('/golden-search/study-9', 'Study 9')).toEqual([
-      'Signal strategies -> /strategy-lab',
+      'Signal strategies -> /signal-strategies',
       'Golden Search -> /golden-search',
     ]);
   });

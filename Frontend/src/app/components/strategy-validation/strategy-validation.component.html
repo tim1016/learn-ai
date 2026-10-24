@@ -97,11 +97,11 @@
             <div class="sv-panel-actions">
               <a
                 class="sv-deploy-link"
-                routerLink="/strategy-lab"
-                [queryParams]="engineLabQueryParams(selected)"
+                [routerLink]="backtestRoute(selected)"
+                [queryParams]="backtestQueryParams(selected)"
               >
                 <i class="pi pi-bolt" aria-hidden="true"></i>
-                Diagnose in Strategy Lab
+                Diagnose in Backtest
               </a>
               @if (isAcceptedForDeploy(selected)) {
               <a

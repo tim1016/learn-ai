@@ -57,6 +57,20 @@ describe('GridSearchHistoryComponent', () => {
     await waitFor(() => expect(list).toHaveBeenLastCalledWith({ status: 'completed' }));
   });
 
+  it('lists one strategy’s searches only, and offers no strategy filter', async () => {
+    const list = vi.fn(async () => []);
+    await render(GridSearchHistoryComponent, {
+      inputs: { strategyKey: 'sma_crossover' },
+      providers: [{ provide: GridSearchService, useValue: { list, delete: vi.fn() } }],
+    });
+    await waitFor(() => expect(list).toHaveBeenCalledWith({ strategy_key: 'sma_crossover' }));
+
+    fireEvent.change(screen.getByRole('combobox', { name: /filter by status/i }), { target: { value: 'completed' } });
+
+    await waitFor(() => expect(list).toHaveBeenLastCalledWith({ status: 'completed', strategy_key: 'sma_crossover' }));
+    expect(screen.queryByRole('combobox', { name: /filter by strategy/i })).toBeNull();
+  });
+
   it('opens a row and deletes only after confirmation', async () => {
     const del = vi.fn(async () => undefined);
     const view = await render(GridSearchHistoryComponent, {

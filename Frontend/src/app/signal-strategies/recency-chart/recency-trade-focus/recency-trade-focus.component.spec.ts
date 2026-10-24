@@ -45,7 +45,7 @@ describe("RecencyTradeFocusComponent", () => {
     expect.soft(screen.getByText(/rsi_min/), "renders the parsed combo parameters: rsi_min").not.toBeNull();
 
     const link = screen.getByRole("link", { name: /open run/i }) as HTMLAnchorElement;
-    expect.soft(link.getAttribute("href"), "links to the underlying study when a studyId is present").toContain("4187");
+    expect.soft(link.getAttribute("href"), "links the run under the strategy that produced it").toBe("/signal-strategies/ema_crossover_2_bps/explore/backtest?run=4187");
 
     const identity = container.querySelector("app-asset-identity");
     expect.soft(identity, "renders the symbol through the shared asset-identity component: present").not.toBeNull();

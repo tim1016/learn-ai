@@ -7,33 +7,38 @@ import {
   signal,
   untracked,
 } from "@angular/core";
-import { Router } from "@angular/router";
+import { Router, RouterLink } from "@angular/router";
 import { Drawer } from "primeng/drawer";
 import { Tab, TabList, TabPanel, TabPanels, Tabs } from "primeng/tabs";
 
-import { HowThisWorksLinkComponent } from "../../shared/help/how-this-works-link.component";
-import { RunDockComponent } from "../../shared/run-dock/run-dock.component";
+import { EngineLabRunHistoryComponent } from "../../../components/lean-engine/engine-lab-run-history/engine-lab-run-history.component";
+import { GoldenValidationWorkbenchComponent } from "../../../components/golden-validation-workbench/golden-validation-workbench.component";
+import { LeanSourceEditorComponent } from "../../../components/strategy-lab/lean-source-editor/lean-source-editor.component";
+import { StrategyLabRunStatsComponent } from "../../../components/strategy-lab/run-stats/strategy-lab-run-stats.component";
+import { StrategyLabConfigRailComponent } from "../../../components/strategy-lab/strategy-lab-config-rail/strategy-lab-config-rail.component";
+import { StrategyLabConfigStore } from "../../../components/strategy-lab/strategy-lab-config.store";
+import { StrategyLabRunReport } from "../../../components/strategy-lab/strategy-lab-run-report.service";
+import { StrategyLabRunner, type AdoptedJob } from "../../../components/strategy-lab/strategy-lab-runner.service";
+import { StrategyLabStageComponent } from "../../../components/strategy-lab/strategy-lab-stage/strategy-lab-stage.component";
 import {
-  RUN_DOCK_SOURCE,
-  RUN_DOCK_STORAGE_KEY,
-} from "../../shared/run-dock/run-dock-source";
-import { EngineLabRunHistoryComponent } from "../lean-engine/engine-lab-run-history/engine-lab-run-history.component";
-import { EngineRunDockSource } from "../lean-engine/engine-run-dock-source";
-import { LeanSourceEditorComponent } from "./lean-source-editor/lean-source-editor.component";
-import { StrategyLabConfigRailComponent } from "./strategy-lab-config-rail/strategy-lab-config-rail.component";
-import { StrategyLabConfigStore } from "./strategy-lab-config.store";
-import { JobsService } from "../../services/jobs.service";
-import { StrategyLabRunner, type AdoptedJob } from "./strategy-lab-runner.service";
-import { StrategyLabRunReport } from "./strategy-lab-run-report.service";
-import { StrategyLabRunStatsComponent } from "./run-stats/strategy-lab-run-stats.component";
-import { StrategyLabStageComponent } from "./strategy-lab-stage/strategy-lab-stage.component";
-import { inputsFromBacktestJob, inputsFromSavedRun, type StrategyLabRunInputs } from "./strategy-lab.models";
-import { GoldenValidationWorkbenchComponent } from "../golden-validation-workbench/golden-validation-workbench.component";
+  inputsFromBacktestJob,
+  inputsFromSavedRun,
+  type StrategyLabRunInputs,
+} from "../../../components/strategy-lab/strategy-lab.models";
+import { JobsService } from "../../../services/jobs.service";
+import { RunDockComponent } from "../../../shared/run-dock/run-dock.component";
+import type { WorkspaceStateContent } from "../../../shared/workspace/workspace-state";
+import { WorkspaceStateBlockComponent } from "../../../shared/workspace/workspace-state-block.component";
+import { EXPLORE_RUN_PARAM, exploreTabRoute } from "../explore-tabs";
+import { ExploreSession } from "../explore-session";
 
 /**
- * Strategy Lab's focused product shell. Configuration and run orchestration
- * are deliberately composed as separate component-scoped services so this
- * screen cannot inherit state or effects from a retired product surface.
+ * Explore's Backtest: Strategy Lab's workbench and run history for one strategy.
+ * Configuration, the runner and the report are the Explore scope's, not this
+ * page's: a backtest in flight belongs to the strategy, so leaving for Sweep,
+ * Walk-forward or Define and coming back finds the same run still going, never a
+ * second runner for the same work. Nothing here approves settings; a run is
+ * exploratory and in-sample.
  */
 @Component({
   selector: "app-strategy-lab",
@@ -44,7 +49,7 @@ import { GoldenValidationWorkbenchComponent } from "../golden-validation-workben
     TabPanels,
     TabPanel,
     Drawer,
-    HowThisWorksLinkComponent,
+    RouterLink,
     StrategyLabConfigRailComponent,
     EngineLabRunHistoryComponent,
     LeanSourceEditorComponent,
@@ -52,25 +57,24 @@ import { GoldenValidationWorkbenchComponent } from "../golden-validation-workben
     StrategyLabRunStatsComponent,
     StrategyLabStageComponent,
     GoldenValidationWorkbenchComponent,
+    WorkspaceStateBlockComponent,
   ],
-  templateUrl: "./strategy-lab.component.html",
-  styleUrl: "./strategy-lab.component.scss",
+  templateUrl: "./explore-backtest.component.html",
+  styleUrl: "./explore-backtest.component.scss",
   changeDetection: ChangeDetectionStrategy.OnPush,
-  providers: [
-    StrategyLabConfigStore,
-    StrategyLabRunner,
-    StrategyLabRunReport,
-    EngineRunDockSource,
-    { provide: RUN_DOCK_SOURCE, useExisting: EngineRunDockSource },
-    { provide: RUN_DOCK_STORAGE_KEY, useValue: "run-dock-expanded:strategy-lab" },
-  ],
 })
-export class StrategyLabComponent {
+export class ExploreBacktestComponent {
   private readonly router = inject(Router);
+  private readonly session = inject(ExploreSession);
   readonly config = inject(StrategyLabConfigStore);
   readonly runs = inject(StrategyLabRunner);
   readonly jobs = inject(JobsService);
   readonly report = inject(StrategyLabRunReport);
+
+  protected readonly key = this.session.key;
+  protected readonly sweepRoute = computed(() => exploreTabRoute(this.key(), "sweep"));
+  protected readonly walkForwardRoute = computed(() => exploreTabRoute(this.key(), "walk-forward"));
+  protected readonly sweepCapability = this.session.sweepCapability;
 
   protected readonly leanSourceOpen = signal(false);
   protected readonly goldenCandidateRunId = signal<number | null>(null);
@@ -80,13 +84,89 @@ export class StrategyLabComponent {
    * The report resource re-emits a new run object on every 5s poll. Collapsing
    * it to the run's identity means downstream reacts once per distinct run
    * instead of once per poll — signal equality is the guard, so no field has
-   * to remember which run was already adopted.
+   * to remember which run was already adopted. Only a run this strategy
+   * produced is adopted: another strategy's run names its owner instead.
    */
   private readonly loadedRun = computed(() => this.report.run());
-  private readonly loadedRunId = computed(() => this.loadedRun()?.id ?? null);
+  private readonly loadedRunId = computed(() => {
+    const run = this.loadedRun();
+    return run !== null && run.strategyName === this.key() ? run.id : null;
+  });
+
+  /** The run on screen, only when this strategy produced it. */
+  protected readonly shownRun = computed(() => {
+    const run = this.report.displayRun();
+    return run !== null && run.strategyName === this.key() ? run : null;
+  });
+  protected readonly markers = computed(() => (this.shownRun() === null ? [] : this.report.markers()));
+  protected readonly equityPoints = computed(() => (this.shownRun() === null ? [] : this.report.equityPoints()));
+  protected readonly reportNotices = computed(() => (this.shownRun() === null ? [] : this.report.reportNotices()));
+
+  /** A run the address names that another strategy produced: never drawn under this strategy's header. */
+  protected readonly mismatch = computed<WorkspaceStateContent | null>(() => {
+    const run = this.loadedRun();
+    if (run === null || run.strategyName === this.key()) return null;
+    return {
+      kind: "unavailable",
+      happened: `Saved run #${run.id} belongs to ${run.strategyName}, not ${this.key()}.`,
+      why: "A saved run opens only under the strategy that produced it, so this page shows none of its report.",
+      next: "Open it under its own strategy, or go back to this strategy's backtests.",
+      actions: [
+        {
+          id: "owner",
+          label: `Open run #${run.id} under ${run.strategyName}`,
+          route: exploreTabRoute(run.strategyName, "backtest"),
+          queryParams: { [EXPLORE_RUN_PARAM]: String(run.id) },
+        },
+        { id: "own", label: `Back to ${this.key()}`, route: exploreTabRoute(this.key(), "backtest") },
+      ],
+    };
+  });
 
   constructor() {
-    const strategiesReady = this.config.loadStrategies();
+    const strategiesReady = this.config.ensureStrategiesLoaded();
+
+    // The tab strip leads back to the run this tool last showed.
+    effect(() => {
+      const runId = this.config.activeRunParam();
+      if (runId !== null) untracked(() => this.session.backtestRunId.set(runId));
+    });
+
+    // A run this runner just saved is opened here, where it is shown. Finished
+    // while another tool was open, it waits: the owner is not pulled back.
+    effect(() => {
+      const runId = this.runs.pendingOpenRunId();
+      if (runId === null) return;
+      untracked(() => {
+        this.runs.pendingOpenRunId.set(null);
+        void this.openRun(runId);
+      });
+    });
+
+    // What Define shows as the values being tried out.
+    effect(() => {
+      const strategy = this.config.selectedStrategy();
+      if (strategy === null) return;
+      const range = this.config.range();
+      const values = this.config.paramValues();
+      const changed = new Set(this.config.changedParameterNames());
+      const engine = this.config.engine();
+      const resolution = this.config.resolution();
+      const restoredFrom = this.loadedRunId();
+      untracked(() =>
+        this.session.exploratory.set({
+          symbol: this.config.effectiveSymbol(),
+          from: range.from,
+          to: range.to,
+          resolution,
+          engine,
+          parameters: Object.keys(strategy.params_schema.properties ?? {})
+            .filter((name) => name !== "symbol")
+            .map((name) => ({ name, value: values[name], changedFromDefault: changed.has(name) })),
+          restoredFromRunId: restoredFrom,
+        }),
+      );
+    });
 
     // The URL is the report's only input. Setting a signal to the value it
     // already holds is a no-op, so a repeated `?run=N` costs nothing and
@@ -136,8 +216,12 @@ export class StrategyLabComponent {
       return;
     }
 
-    void this.router.navigate(["/strategy-lab"], {
-      queryParams: { run: numericId },
+    void this.openRun(numericId);
+  }
+
+  private openRun(runId: number): Promise<boolean> {
+    return this.router.navigate([...exploreTabRoute(this.key(), "backtest")], {
+      queryParams: { [EXPLORE_RUN_PARAM]: runId },
       queryParamsHandling: "merge",
     });
   }
@@ -177,6 +261,10 @@ export class StrategyLabComponent {
     // invocation must not restore its run's configuration over the run now
     // selected, or over no run at all.
     if (this.report.activeRunId() !== run.id) return;
+    // Opened again from another tool: the inputs were taken over already, and
+    // whatever was edited since stays.
+    if (this.session.adoptedBacktestRunId() === run.id) return;
+    this.session.adoptedBacktestRunId.set(run.id);
     if (justProduced) this.runs.justProducedRunId.set(null);
     try {
       this.applyRunInputs(inputsFromSavedRun(run, this.config.range()));
@@ -205,6 +293,9 @@ export class StrategyLabComponent {
     if (inputs === null) return;
     await strategiesReady;
     if (this.runs.adoptedJob() !== job || this.report.runOnStage()) return;
+    // Described once: coming back from another tool keeps what was edited since.
+    if (this.session.describedJobId() === job.id) return;
+    this.session.describedJobId.set(job.id);
     this.applyRunInputs(inputs);
   }
 

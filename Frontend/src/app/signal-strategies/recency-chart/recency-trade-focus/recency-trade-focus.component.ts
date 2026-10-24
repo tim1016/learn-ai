@@ -1,6 +1,8 @@
-import { ChangeDetectionStrategy, Component, computed, input, output } from "@angular/core";
+import { ChangeDetectionStrategy, Component, computed, inject, input, output } from "@angular/core";
+import { Router } from "@angular/router";
 import { AssetIdentityComponent } from "../../../shared/asset-identity/asset-identity.component";
 import { TimestampDisplayComponent } from "../../../shared/timestamp/timestamp-display.component";
+import { EXPLORE_RUN_PARAM, exploreTabRoute } from "../../explore/explore-tabs";
 import type { RecencySwimlaneTrade } from "../recency-swimlane/recency-swimlane-layout";
 
 interface ParsedParam {
@@ -39,6 +41,8 @@ function parseParams(paramsJson: string | undefined): ParsedParam[] | null {
   styleUrls: ["./recency-trade-focus.component.scss"],
 })
 export class RecencyTradeFocusComponent {
+  private readonly router = inject(Router);
+
   readonly trade = input<RecencySwimlaneTrade | null>(null);
   readonly deleteRequested = output<number>();
 
@@ -56,10 +60,14 @@ export class RecencyTradeFocusComponent {
     return `${t.holdingSessions} session${t.holdingSessions === 1 ? "" : "s"}`;
   });
 
-  /** The Strategy Lab run report for the run that produced this trade; none when the run no longer exists. */
+  /** The saved backtest that produced this trade, under its strategy's Backtest; none when the run no longer exists. */
   readonly studyUrl = computed(() => {
-    const studyId = this.trade()?.studyId;
-    return studyId === null || studyId === undefined ? null : `/strategy-lab/runs/${studyId}`;
+    const trade = this.trade();
+    const studyId = trade?.studyId;
+    if (trade === null || studyId === null || studyId === undefined) return null;
+    return this.router.serializeUrl(
+      this.router.createUrlTree([...exploreTabRoute(trade.strategyKey, "backtest")], { queryParams: { [EXPLORE_RUN_PARAM]: studyId } }),
+    );
   });
 
   requestDelete(): void {

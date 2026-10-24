@@ -1,4 +1,4 @@
-import { provideFakeDateWorld } from "../../shared/date-picker/testing/fake-trading-calendar";
+import { provideFakeDateWorld } from "../../../shared/date-picker/testing/fake-trading-calendar";
 import {
   HttpErrorResponse,
   HttpResponse,
@@ -9,26 +9,32 @@ import {
 import { HttpTestingController, provideHttpClientTesting } from "@angular/common/http/testing";
 import { provideZonelessChangeDetection, signal } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
-import { ActivatedRoute, Router, convertToParamMap } from "@angular/router";
+import { ActivatedRoute, Router, convertToParamMap, provideRouter } from "@angular/router";
 import { within } from "@testing-library/angular";
 import { BehaviorSubject, Subject, of, throwError, type Observable } from "rxjs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { BacktestRunDetail } from "../../services/backtest-runs.types";
-import { BacktestRunsService } from "../../services/backtest-runs.service";
-import { JobsService, type JobState } from "../../services/jobs.service";
-import { LeanSidecarService } from "../../services/lean-sidecar.service";
-import { GoldenValidationService } from "../../services/golden-validation.service";
+import type { BacktestRunDetail } from "../../../services/backtest-runs.types";
+import { BacktestRunsService } from "../../../services/backtest-runs.service";
+import { JobsService, type JobState } from "../../../services/jobs.service";
+import { LeanSidecarService } from "../../../services/lean-sidecar.service";
+import { GoldenValidationService } from "../../../services/golden-validation.service";
 import {
   fakeTickerCatalog,
   provideFakeTickerCatalog,
-} from "../../shared/ticker-catalog/testing/fake-ticker-catalog";
+} from "../../../shared/ticker-catalog/testing/fake-ticker-catalog";
 import {
   fakeVendorCatalog,
   provideFakeVendorCatalog,
-} from "../../shared/symbol-catalog/testing/fake-symbol-catalog";
-import { StrategyLabComponent } from "./strategy-lab.component";
-import { inputsFromBacktestJob, inputsFromSavedRun } from "./strategy-lab.models";
+} from "../../../shared/symbol-catalog/testing/fake-symbol-catalog";
+import { EngineRunDockSource } from "../../../components/lean-engine/engine-run-dock-source";
+import { STRATEGY_LAB_PINNED_STRATEGY, StrategyLabConfigStore } from "../../../components/strategy-lab/strategy-lab-config.store";
+import { StrategyLabRunReport } from "../../../components/strategy-lab/strategy-lab-run-report.service";
+import { StrategyLabRunner } from "../../../components/strategy-lab/strategy-lab-runner.service";
+import { inputsFromBacktestJob, inputsFromSavedRun } from "../../../components/strategy-lab/strategy-lab.models";
+import { RUN_DOCK_SOURCE, RUN_DOCK_STORAGE_KEY } from "../../../shared/run-dock/run-dock-source";
+import { ExploreSession } from "../explore-session";
+import { ExploreBacktestComponent } from "./explore-backtest.component";
 
 function run(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail {
   return {
@@ -111,6 +117,20 @@ function backtestPayload(): Record<string, unknown> {
   };
 }
 
+const STRATEGY_KEY = "ema_crossover_signal";
+
+/** The parts of the strategy's Explore session the workbench reads and writes. */
+function exploreSession() {
+  return {
+    key: signal(STRATEGY_KEY).asReadonly(),
+    sweepCapability: signal({ supported: true, reason: null }).asReadonly(),
+    backtestRunId: signal<number | null>(null),
+    adoptedBacktestRunId: signal<number | null>(null),
+    describedJobId: signal<string | null>(null),
+    exploratory: signal(null),
+  };
+}
+
 function strategyCatalog() {
   return [{
     name: "ema_crossover_signal",
@@ -177,7 +197,6 @@ async function createLab(
 ) {
   const jobs = signal<never[]>([]);
   const activeJobs = signal<JobState[]>([]);
-  const navigate = vi.fn(async () => true);
   const diagnose = vi.fn();
   const query: Record<string, string> = { ...options.launch };
   if (options.activeRun) query["run"] = String(options.activeRun);
@@ -203,9 +222,10 @@ async function createLab(
   // is left open, so the catalog is stubbed rather than served.
   const catalog = fakeTickerCatalog([{ symbol: "SPY", name: "SPDR S&P 500 ETF Trust", exchange: "ARCA" }]);
   await TestBed.configureTestingModule({
-    imports: [StrategyLabComponent],
+    imports: [ExploreBacktestComponent],
     providers: [
       provideZonelessChangeDetection(),
+      provideRouter([]),
       provideHttpClient(withInterceptors([bypassAuxiliaryChartRequests])),
       provideHttpClientTesting(),
       ...provideFakeDateWorld(),
@@ -213,7 +233,15 @@ async function createLab(
         provide: ActivatedRoute,
         useValue: { queryParamMap, snapshot: { queryParamMap: queryParamMap.value } },
       },
-      { provide: Router, useValue: { navigate } },
+      // What the strategy's Explore scope holds above the tools.
+      StrategyLabConfigStore,
+      StrategyLabRunner,
+      StrategyLabRunReport,
+      EngineRunDockSource,
+      { provide: RUN_DOCK_SOURCE, useExisting: EngineRunDockSource },
+      { provide: RUN_DOCK_STORAGE_KEY, useValue: "run-dock-expanded:strategy-lab" },
+      { provide: STRATEGY_LAB_PINNED_STRATEGY, useValue: signal<string | null>(STRATEGY_KEY).asReadonly() },
+      { provide: ExploreSession, useValue: exploreSession() },
       {
         provide: JobsService,
         useValue: {
@@ -244,7 +272,8 @@ async function createLab(
       provideFakeVendorCatalog(fakeVendorCatalog([])),
     ],
   }).compileComponents();
-  const fixture = TestBed.createComponent(StrategyLabComponent);
+  const navigate = vi.spyOn(TestBed.inject(Router), "navigate").mockResolvedValue(true);
+  const fixture = TestBed.createComponent(ExploreBacktestComponent);
   fixture.detectChanges();
   const navigateToQuery = (next: Record<string, string>): void => {
     queryParamMap.next(convertToParamMap(next));
@@ -278,19 +307,6 @@ describe("Strategy Lab Workbench", () => {
     expect(root.textContent).toContain("History");
     expect(root.textContent).not.toContain("Run a strategy, inspect its evidence");
     expect(root.querySelector("app-strategy-lab-config-rail")).not.toBeNull();
-    http.verify();
-  });
-
-  it("opens the Strategy Lab manual and the strategy reference in new tabs, so the configured run stays as it is", async () => {
-    const { fixture, http } = await createLab();
-    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
-    await fixture.whenStable();
-    fixture.detectChanges();
-
-    const root = fixture.nativeElement as HTMLElement;
-    const links = ["How this works", "Strategy reference"].map((name) => within(root).getByRole("link", { name }));
-    expect(links.map((link) => link.getAttribute("href"))).toEqual(["/strategy-lab/docs", "/strategy-docs"]);
-    expect(links.map((link) => link.getAttribute("target"))).toEqual(["_blank", "_blank"]);
     http.verify();
   });
 
@@ -357,7 +373,9 @@ describe("Strategy Lab Workbench", () => {
     expect(root.querySelector("details.advanced")?.textContent).toContain(
       "charge the pinned IBKR equity fee model — neither is editable",
     );
-    expect((root.querySelector("#strategy-picker") as HTMLSelectElement).value).toBe("ema_crossover_signal");
+    // The strategy is the page's: the rail names it and offers no other.
+    expect(root.querySelector("#strategy-picker")).toBeNull();
+    expect(root.querySelector(".rail-field__locked")?.textContent).toContain("EMA crossover");
     expect(root.querySelector(".ticker-box__identity .asset-identity__symbol")?.textContent).toContain("QQQ");
     http.verify();
   });
@@ -620,11 +638,81 @@ describe("Strategy Lab Workbench", () => {
 
     fixture.componentInstance.selectHistoryRun("91");
 
-    expect(navigate).toHaveBeenCalledWith(["/strategy-lab"], expect.objectContaining({
+    expect(navigate).toHaveBeenCalledWith(["/signal-strategies", STRATEGY_KEY, "explore", "backtest"], expect.objectContaining({
       queryParams: { run: 91 },
       queryParamsHandling: "merge",
     }));
     http.verify();
+  });
+
+  it("opens a run its runner just saved, once it is on screen, and not before", async () => {
+    const { fixture, http, navigate } = await createLab();
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    await fixture.whenStable();
+
+    TestBed.inject(StrategyLabRunner).pendingOpenRunId.set(321);
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    expect(navigate).toHaveBeenCalledWith(["/signal-strategies", STRATEGY_KEY, "explore", "backtest"], expect.objectContaining({
+      queryParams: { run: 321 },
+      queryParamsHandling: "merge",
+    }));
+    expect(TestBed.inject(StrategyLabRunner).pendingOpenRunId()).toBeNull();
+    http.verify();
+  });
+
+  it("shows a run another strategy produced as a refusal naming its owner, with none of its report", async () => {
+    const foreign = run({ id: 77, strategyName: "rsi_mean_reversion", totalTrades: 12 });
+    const { fixture, http, navigate } = await createLab({ activeRun: 77, backtestRun: foreign });
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.textContent).toContain("Saved run #77 belongs to rsi_mean_reversion, not ema_crossover_signal.");
+    expect(within(root).getByRole("link", { name: "Open run #77 under rsi_mean_reversion" }).getAttribute("href")).toBe(
+      "/signal-strategies/rsi_mean_reversion/explore/backtest?run=77",
+    );
+    // Nothing of the foreign run is drawn or taken over: no statistics, no next steps, and the rail keeps its own inputs.
+    expect(root.querySelector("app-strategy-lab-run-stats")).toBeNull();
+    expect(root.querySelector(".next-steps")).toBeNull();
+    expect(TestBed.inject(StrategyLabConfigStore).initialCash()).toBe(100_000);
+    expect(navigate).not.toHaveBeenCalled();
+    http.verify();
+  });
+
+  it("offers a loaded run of its own strategy the next tools, carrying its id", async () => {
+    const saved = run();
+    const { fixture, http } = await createLab({ activeRun: saved.id, backtestRun: saved });
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    expect(within(root).getByRole("link", { name: "Sweep this run's settings" }).getAttribute("href")).toBe(
+      `/signal-strategies/${STRATEGY_KEY}/explore/sweep?run=91`,
+    );
+    expect(within(root).getByRole("link", { name: "Walk-forward from this run" }).getAttribute("href")).toBe(
+      `/signal-strategies/${STRATEGY_KEY}/explore/walk-forward?run=91`,
+    );
+  });
+
+  it("takes a run's inputs over once: opening the same run again from another tool keeps what was edited since", async () => {
+    const saved = run();
+    const first = await createLab({ activeRun: saved.id, backtestRun: saved });
+    first.http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    await first.fixture.whenStable();
+    await vi.waitFor(() => expect(TestBed.inject(StrategyLabConfigStore).initialCash()).toBe(75_000));
+
+    TestBed.inject(StrategyLabConfigStore).initialCash.set(1_234);
+    // The tool is closed and opened again on the same store and the same run.
+    first.fixture.destroy();
+    const again = TestBed.createComponent(ExploreBacktestComponent);
+    again.detectChanges();
+    await again.whenStable();
+
+    expect(TestBed.inject(StrategyLabConfigStore).initialCash()).toBe(1_234);
   });
 
   it("does not discard the custom QCAlgorithm that produced the run just completed", async () => {
@@ -684,13 +772,11 @@ describe("Strategy Lab Workbench", () => {
       backtestRun: saved,
     });
     const lab = fixture.componentInstance;
-    // The catalog request is deliberately left in flight: `adoptRun` captures
-    // its run, collapses the rail, and then awaits it — that await is the
-    // window `activeRunId` can move under.
+    // The catalog request is deliberately left in flight: the strategy the
+    // address names is applied when it lands, and a saved run is restored only
+    // after that — the window `activeRunId` can move under.
     const strategies = http.expectOne((request) => request.url.endsWith("/api/engine/strategies"));
-    await vi.waitFor(() => {
-      expect(lab.config.configNavCollapsed()).toBe(true);
-    });
+    await fixture.whenStable();
 
     navigateToQuery({});
     strategies.flush(strategyCatalog());

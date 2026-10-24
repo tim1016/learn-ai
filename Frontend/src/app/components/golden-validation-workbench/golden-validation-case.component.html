@@ -21,7 +21,7 @@
     <h4>Evidence conventions · {{ applicability.status | receiptLabel }}</h4>
     <p>{{ applicability.explanation }}</p>
     @if (applicability.status !== 'current') {
-      <a routerLink="/strategy-lab" [queryParams]="{ run: golden().source_run_id }">Open saved configuration to rerun</a>
+      <a [routerLink]="backtestRoute()" [queryParams]="{ run: golden().source_run_id }">Open saved configuration to rerun</a>
       <p>Keep this baseline, inspect the new run and its parity comparison, then designate and explicitly review the new Golden case.</p>
     }
   </section>

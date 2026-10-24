@@ -55,15 +55,17 @@ describe('a strategy’s place', () => {
     await open(`/signal-strategies/${EMA}/overview`, emptyWorld({ entries: [registryEntry()] }));
 
     const strip = await screen.findByRole('navigation', { name: 'Strategy sections' });
-    for (const tab of ['Overview', 'Define']) {
+    for (const tab of ['Overview', 'Define', 'Explore']) {
       expect(within(strip).getByRole('link', { name: tab })).toBeTruthy();
     }
-    for (const tab of ['Explore', 'Golden', 'Proof']) {
+    expect(within(strip).getByRole('link', { name: 'Explore' }).getAttribute('href')).toBe(`/signal-strategies/${EMA}/explore`);
+    for (const tab of ['Golden', 'Proof']) {
       expect(within(strip).queryByRole('link', { name: tab })).toBeNull();
       expect(within(strip).getByText(tab).getAttribute('aria-disabled')).toBe('true');
     }
     // The reason is in view beside the strip, not only read out from it.
-    expect(screen.getByText('Explore', { selector: 'strong' }).closest('li')?.textContent).toMatch(/Backtest, Sweep and Walk-forward open here in an upcoming change/);
+    expect(screen.getByText('Golden', { selector: 'strong' }).closest('li')?.textContent).toMatch(/Golden Search and configuration review open here in an upcoming change/);
+    expect(screen.queryByText('Explore', { selector: 'strong' })).toBeNull();
   });
 
   it('reads nothing again when the owner moves between tabs', async () => {
@@ -225,7 +227,7 @@ describe('Define', () => {
     expect(within(declared).queryByText(/fast_period = 8/)).toBeNull();
 
     const exploratory = await sectionOf('Current exploratory values');
-    expect(within(exploratory).getByText(/Until then nothing here holds exploratory values/)).toBeTruthy();
+    expect(within(exploratory).getByText(/Nothing has been tried out for this strategy yet/)).toBeTruthy();
   });
 
   it('shows a missing description and rule statement as missing, and writes none', async () => {

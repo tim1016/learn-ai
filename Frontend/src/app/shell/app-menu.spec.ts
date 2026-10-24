@@ -150,7 +150,10 @@ describe('app menu projections', () => {
     ['/edge/cross-asset', 'Research', 'Cross-Asset'],
     ['/edge/regimes', 'Research', 'Regimes'],
     ['/spec-strategy', 'Research', 'Strategy Spec'],
+    // The old tool addresses redirect into a strategy's Explore; when they cannot
+    // name one they stay open at the address, under the same group.
     ['/strategy-lab', 'Signal strategies', 'Strategy Lab'],
+    ['/engine/runs/204', 'Signal strategies', 'Strategy Lab'],
     ['/grid-search', 'Signal strategies', 'Grid Search'],
     ['/walk-forward', 'Signal strategies', 'Walk-Forward'],
     ['/golden-search', 'Signal strategies', 'Golden Search'],
@@ -160,6 +163,8 @@ describe('app menu projections', () => {
     // A strategy's place and the multi-strategy comparison both belong to the list's group.
     ['/signal-strategies/ema_crossover_signal/overview', 'Signal strategies', 'Signal strategies'],
     ['/signal-strategies/ema_crossover_signal/define', 'Signal strategies', 'Signal strategies'],
+    ['/signal-strategies/ema_crossover_signal/explore/sweep', 'Signal strategies', 'Signal strategies'],
+    ['/signal-strategies/evidence/run/91', 'Signal strategies', 'Signal strategies'],
     ['/signal-strategies/recency', 'Signal strategies', 'Recency Chart'],
     ['/options-backtest', 'Options setups', 'Options Backtest'],
     ['/options-golden-search', 'Options setups', 'Options Golden Search'],

@@ -4,14 +4,21 @@
       <app-symbol-picker appearance="field" label="Symbol" [symbol]="symbol()" (symbolChange)="setSymbol($event)" />
     </div>
 
-    <label class="field">
-      <span>Strategy</span>
-      <select [value]="strategyKey() ?? ''" (change)="onStrategyEvent($event)" aria-label="Strategy">
-        @for (strategy of eligible(); track strategy.name) {
-          <option [value]="strategy.name">{{ strategy.display_name }}</option>
-        }
-      </select>
-    </label>
+    @if (strategyLocked()) {
+      <div class="field">
+        <span>Strategy</span>
+        <strong>{{ selectedStrategy()?.display_name ?? strategies()[0]?.display_name }}</strong>
+      </div>
+    } @else {
+      <label class="field">
+        <span>Strategy</span>
+        <select [value]="strategyKey() ?? ''" (change)="onStrategyEvent($event)" aria-label="Strategy">
+          @for (strategy of eligible(); track strategy.name) {
+            <option [value]="strategy.name">{{ strategy.display_name }}</option>
+          }
+        </select>
+      </label>
+    }
 
     <div class="field field--window">
       <span>Window</span>

@@ -1,6 +1,5 @@
 import { LowerCasePipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
-import { RouterOutlet } from '@angular/router';
 
 import { CurrentUrlService } from '../shell/current-url.service';
 import { HowThisWorksLinkComponent } from '../shared/help/how-this-works-link.component';
@@ -11,6 +10,7 @@ import { WorkspaceHeaderComponent, type WorkspaceBreadcrumbItem } from '../share
 import type { WorkspaceStateContent } from '../shared/workspace/workspace-state';
 import { WorkspaceStateBlockComponent } from '../shared/workspace/workspace-state-block.component';
 import { WorkspaceTabListComponent, type WorkspaceTabItem } from '../shared/workspace/workspace-tab-list.component';
+import { ExploreScopeComponent } from './explore/explore-scope.component';
 import { PROOF_TONES, proofSummaryOf } from './signal-strategy-evidence';
 import { SignalStrategyChipComponent } from './signal-strategy-chip.component';
 import {
@@ -36,10 +36,10 @@ import { SignalStrategyWorkspaceStore } from './signal-strategy-workspace.store'
   providers: [SignalStrategyWorkspaceStore],
   imports: [
     ExperimentalNoticeComponent,
+    ExploreScopeComponent,
     HowThisWorksLinkComponent,
     LowerCasePipe,
     ReceiptLabelPipe,
-    RouterOutlet,
     SignalStrategyChipComponent,
     WorkspaceHeaderComponent,
     WorkspaceStateBlockComponent,
@@ -51,6 +51,13 @@ import { SignalStrategyWorkspaceStore } from './signal-strategy-workspace.store'
 export class SignalStrategyWorkspaceComponent {
   protected readonly store = inject(SignalStrategyWorkspaceStore);
   private readonly currentUrl = inject(CurrentUrlService).url;
+
+  /**
+   * One scope per registry key. The address of another strategy reuses this
+   * component, so the scope is rebuilt rather than carried over: what one
+   * strategy's Explore holds must never show under the next.
+   */
+  protected readonly scopeKeys = computed(() => [this.store.key()]);
 
   protected readonly proofTones = PROOF_TONES;
   protected readonly summaryOf = proofSummaryOf;

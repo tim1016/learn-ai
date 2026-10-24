@@ -1,8 +1,4 @@
-<section class="strategy-lab" aria-label="Strategy Lab">
-  <div class="strategy-lab__help">
-    <app-how-this-works route="/strategy-lab/docs" />
-    <app-how-this-works route="/strategy-docs" label="Strategy reference" />
-  </div>
+<section class="strategy-lab" aria-label="Backtest">
   <p-tabs [(value)]="config.activeTab">
       <p-tablist>
         <p-tab value="configuration"><i class="pi pi-sliders-h" aria-hidden="true"></i> Workbench</p-tab>
@@ -11,6 +7,22 @@
 
       <p-tabpanels>
         <p-tabpanel value="configuration">
+          @if (mismatch(); as refusal) {
+            <app-workspace-state-block [state]="refusal" />
+          }
+          @if (shownRun(); as shown) {
+            <nav class="next-steps" aria-label="Next steps for this run">
+              <span>Run #{{ shown.id }} is exploratory and in-sample.</span>
+              @if (sweepCapability(); as sweep) {
+                @if (sweep.supported) {
+                  <a [routerLink]="sweepRoute()" [queryParams]="{ run: shown.id }">Sweep this run's settings</a>
+                  <a [routerLink]="walkForwardRoute()" [queryParams]="{ run: shown.id }">Walk-forward from this run</a>
+                } @else {
+                  <span>Sweep and Walk-forward are not allowed for this strategy. {{ sweep.reason }}</span>
+                }
+              }
+            </nav>
+          }
           <div class="workbench">
             <aside class="workbench__rail" aria-label="Configuration and run statistics">
               @if (config.strategiesLoading()) {
@@ -26,6 +38,8 @@
                   [range]="config.range()"
                   [dataPolicy]="config.dataPolicy()"
                   [strategies]="config.selectableStrategies()"
+                  [strategyLocked]="config.pinnedStrategy() !== null"
+                  [engineRestrictions]="config.engineRestrictions()"
                   [selectedStrategyName]="config.selectedStrategyName()"
                   [paramValues]="config.paramValues()"
                   [fillMode]="config.fillMode()"
@@ -56,7 +70,7 @@
                 />
               }
 
-              @if (report.displayRun(); as currentRun) {
+              @if (shownRun(); as currentRun) {
                 @if (report.engineResult(); as result) {
                   <app-strategy-lab-run-stats
                     [run]="currentRun"
@@ -66,6 +80,8 @@
                     [tradesTruncated]="currentRun.tradesTruncated"
                   />
                 }
+              } @else if (mismatch() !== null) {
+                <!-- The refusal above names the run's owner; nothing of it is drawn here. -->
               } @else if (report.loadError()) {
                 <div class="lab-notice lab-notice--error" role="alert">
                   Run report could not be loaded. Try again from History.
@@ -78,10 +94,10 @@
             </aside>
 
             <app-strategy-lab-stage
-              [run]="report.displayRun()"
-              [markers]="report.markers()"
-              [equityPoints]="report.equityPoints()"
-              [notices]="report.reportNotices()"
+              [run]="shownRun()"
+              [markers]="markers()"
+              [equityPoints]="equityPoints()"
+              [notices]="reportNotices()"
               [error]="runs.runError() ?? config.configurationWarning()"
               [running]="runs.running()"
               [runStatus]="runs.runStatusBanner()"
@@ -97,6 +113,7 @@
 
         <p-tabpanel value="history">
           <app-engine-lab-run-history
+            [strategyKey]="key()"
             (runSelected)="selectHistoryRun($event)"
             (goldenRunRequested)="selectGoldenCandidate($event)"
             [goldenRefreshToken]="goldenRefreshToken()"

@@ -17,6 +17,7 @@ import type {
   StrategyValidationSummary,
 } from '../../services/strategy-validation.types';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
+import { exploreTabRoute } from '../../signal-strategies/explore/explore-tabs';
 import { LeanTwinSourceComponent } from './lean-twin-source/lean-twin-source.component';
 import { QuantConnectReferenceCodeComponent } from './quantconnect-reference-code/quantconnect-reference-code.component';
 import { StrategyProofPipelineComponent } from './strategy-proof-pipeline/strategy-proof-pipeline.component';
@@ -132,13 +133,16 @@ export class StrategyValidationComponent {
     return { deploy: '', strategy: strategy.strategy_key };
   }
 
-  protected engineLabQueryParams(strategy: StrategyValidationDetail): Record<string, string> {
+  /** The strategy's Backtest, where it is diagnosed: its key is the address. */
+  protected backtestRoute(strategy: StrategyValidationDetail): readonly string[] {
+    return exploreTabRoute(strategy.strategy_key, 'backtest');
+  }
+
+  protected backtestQueryParams(strategy: StrategyValidationDetail): Record<string, string> {
     return {
-      strategy: strategy.strategy_key,
       engine: this.engineLabEngine(strategy),
       symbol: strategy.validation_case_symbol ?? 'SPY',
       tab: 'configuration',
-      qc_backtest_id: strategy.qc_cloud_backtest_id ?? '',
     };
   }
 

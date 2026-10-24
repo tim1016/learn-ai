@@ -27,7 +27,9 @@
     <p class="in-sample" role="note">
       <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
       Every number on this page is <strong>in-sample</strong>: it was measured on the same data these settings were chosen from. A grid search says which settings fit the past; it says nothing about whether they will keep working.
-      @if (detail(); as d) { <a [routerLink]="['/walk-forward']" [queryParams]="{ search: d.id }">Test this grid out of sample in Walk-Forward →</a> }
+      @if (detail(); as d) {
+        @if (walkForwardRoute(); as route) { <a [routerLink]="route" [queryParams]="{ search: d.id }">Test this grid out of sample in Walk-forward →</a> }
+      }
     </p>
   }
 

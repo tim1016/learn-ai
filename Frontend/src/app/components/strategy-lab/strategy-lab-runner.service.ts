@@ -1,7 +1,6 @@
 import { HttpErrorResponse } from "@angular/common/http";
 import { DOCUMENT } from "@angular/common";
 import { computed, DestroyRef, effect, inject, Injectable, signal } from "@angular/core";
-import { Router } from "@angular/router";
 import { firstValueFrom } from "rxjs";
 
 import { JobsService, type JobState } from "../../services/jobs.service";
@@ -158,7 +157,6 @@ export class StrategyLabRunner {
   private readonly jobs = inject(JobsService);
   private readonly leanSidecar = inject(LeanSidecarService);
   private readonly backtestRuns = inject(BacktestRunsService);
-  private readonly router = inject(Router);
   private readonly destroyRef = inject(DestroyRef);
   private readonly document = inject(DOCUMENT);
   private readonly engineJobId = signal<string | null>(null);
@@ -189,6 +187,13 @@ export class StrategyLabRunner {
   /** The run this runner just persisted, so the workbench can skip a restore
    *  that would clobber the configuration which produced it. */
   readonly justProducedRunId = signal<number | null>(null);
+  /**
+   * The run this runner persisted and the workbench has not opened yet. The
+   * runner never navigates: the workbench opens the run when it is on screen,
+   * so a run that finishes while another tool is open does not pull the owner
+   * back to the Backtest tab, and is there to open when they return.
+   */
+  readonly pendingOpenRunId = signal<number | null>(null);
   /** True once this runner has started or adopted a job — see `wireJobAdoptionEffect`. */
   private adoptionSettled = false;
 
@@ -565,10 +570,10 @@ export class StrategyLabRunner {
     });
   }
 
-  /** Navigate to a study this runner produced; the workbench keeps the configuration that produced it. */
-  private openStudy(runId: number): Promise<boolean> {
+  /** Offer the workbench the study this runner produced; it keeps the configuration that produced it. */
+  private openStudy(runId: number): void {
     this.justProducedRunId.set(runId);
-    return this.router.navigate(["/strategy-lab"], { queryParams: { run: runId }, queryParamsHandling: "merge" });
+    this.pendingOpenRunId.set(runId);
   }
 
   /**
@@ -644,7 +649,10 @@ export class StrategyLabRunner {
       "completed",
       `Completed — ${response.total_trades} trade${response.total_trades === 1 ? "" : "s"}, net ${formatCurrency(response.net_profit)}`,
     );
-    if (response.study_id != null) return this.openStudy(response.study_id);
+    if (response.study_id != null) {
+      this.openStudy(response.study_id);
+      return Promise.resolve();
+    }
     if ((response.save_outcome ?? "failed") === "unknown") return this.waitForStudy();
     this.runError.set(
       "Run completed but persistence failed — no report available. The run was not saved to history; check backend logs.",
@@ -672,7 +680,8 @@ export class StrategyLabRunner {
       const landed = await this.findJustSavedStudy();
       if (landed !== null) {
         this.runError.set("");
-        return void this.openStudy(landed);
+        this.openStudy(landed);
+        return;
       }
     }
     this.runError.set(
@@ -704,7 +713,8 @@ export class StrategyLabRunner {
   private applyLeanResult(response: TrustedRunResponse): Promise<unknown> {
     if (response.strategy_execution_id !== null) {
       this.setRunStatus("completed", "LEAN run finished", `Persisted as study #${response.strategy_execution_id}.`);
-      return this.openStudy(response.strategy_execution_id);
+      this.openStudy(response.strategy_execution_id);
+      return Promise.resolve();
     }
     if ((response.save_outcome ?? "failed") === "unknown") {
       this.setRunStatus("completed", "LEAN run finished", "The history write is still finishing.");

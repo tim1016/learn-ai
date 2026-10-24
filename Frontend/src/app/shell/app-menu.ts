@@ -90,14 +90,20 @@ export const APP_MENU: readonly AppMenuGroup[] = [
     items: [
       { title: 'Signal strategies', route: '/signal-strategies' },
       // These tools sit beside the strategy list until each moves into a strategy's tabs.
-      { title: 'Strategy Lab', route: '/strategy-lab' },
-      { title: 'Grid Search', route: '/grid-search' },
-      { title: 'Walk-Forward', route: '/walk-forward' },
       { title: 'Golden Search', route: '/golden-search' },
       { title: 'Strategy Validation', route: '/strategy-validation' },
     ],
-    // The multi-strategy comparison is one link from the list, not a menu entry.
-    pages: [{ title: 'Recency Chart', route: '/signal-strategies/recency' }],
+    pages: [
+      // The multi-strategy comparison is one link from the list, not a menu entry.
+      { title: 'Recency Chart', route: '/signal-strategies/recency' },
+      // Backtest, Sweep and Walk-forward are a strategy's Explore tabs now. These
+      // addresses redirect there; when the record they name belongs to no
+      // registered strategy they stay open, as a refusal or a chooser, under this group.
+      { title: 'Strategy Lab', route: '/strategy-lab' },
+      { title: 'Strategy Lab', route: '/engine' },
+      { title: 'Grid Search', route: '/grid-search' },
+      { title: 'Walk-Forward', route: '/walk-forward' },
+    ],
   },
   {
     id: 'options-setups',

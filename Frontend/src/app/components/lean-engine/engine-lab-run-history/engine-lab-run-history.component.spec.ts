@@ -215,6 +215,45 @@ describe("EngineLabRunHistoryComponent", () => {
   });
 });
 
+describe("EngineLabRunHistoryComponent — one strategy's history", () => {
+  async function setupFor(strategyKey: string, runs: BacktestRunSummary[]) {
+    const service = makeRunsService(runs);
+    await TestBed.configureTestingModule({
+      imports: [EngineLabRunHistoryComponent],
+      providers: [
+        provideZonelessChangeDetection(),
+        { provide: BacktestRunsService, useValue: service },
+        { provide: Router, useValue: { navigate: vi.fn() } },
+        { provide: JobsService, useValue: jobsServiceMock },
+        { provide: GoldenValidationService, useValue: goldenValidationMock },
+      ],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(EngineLabRunHistoryComponent);
+    fixture.componentRef.setInput("strategyKey", strategyKey);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    return { fixture, service };
+  }
+
+  it("lists only that strategy's runs, scanning the most the run list will return for them", async () => {
+    const { fixture, service } = await setupFor("sma_crossover", FAKE_RUNS);
+    const html = (fixture.nativeElement as HTMLElement).textContent ?? "";
+
+    expect(service.list).toHaveBeenCalledWith(null, 500);
+    expect(html).toContain("sma_crossover");
+    expect(html).not.toContain("rsi_mean_reversion");
+    expect(html).not.toContain("older run of it may not be listed");
+  });
+
+  it("says a strategy's history reaches back only as far as the newest saved runs it scanned, when that scan was full", async () => {
+    const full = Array.from({ length: 500 }, (_, index) => baseRun({ id: index + 1, strategyName: index === 0 ? "sma_crossover" : "rsi_mean_reversion" }));
+    const { fixture } = await setupFor("sma_crossover", full);
+
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain("among the newest 500 saved runs; an older run of it may not be listed");
+  });
+});
+
 describe("EngineLabRunHistoryComponent — filter dropdown", () => {
   it.each(["PYTHON", "LEAN"] as const)("changing the engine filter to %s re-reads with that engine", async (engine) => {
     const runs = makeRunsService();

@@ -10,6 +10,10 @@
   // the wide workbench is sized above the dock and the narrow workbench and
   // History, which flow in the page, pad clear of it (#1974).
   --strategy-lab-chrome: calc(var(--topbar-h) + var(--page-pad-y) * 2 + 48px + var(--run-dock-height, 0px));
+  // The strategy's header, its tab strip and Explore's own strip sit above the
+  // workbench now, so its height gives them room and never shrinks below what
+  // the chart and the rail need.
+  --explore-chrome: 260px;
 
   position: relative;
   display: grid;
@@ -17,17 +21,16 @@
   min-width: 0;
 }
 
-// Beside the tabs, in the tab list's own row, so the workbench's height
-// arithmetic above does not change.
-.strategy-lab__help {
-  position: absolute;
-  top: 0;
-  right: var(--page-pad-x);
-  z-index: 1;
+.next-steps {
   display: flex;
-  align-items: center;
-  height: 48px;
-  gap: var(--space-2);
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-4);
+  margin-bottom: var(--space-3);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+
+  a { color: var(--accent-text); }
 }
 
 .workbench {
@@ -36,7 +39,7 @@
   gap: var(--space-4);
   min-width: 0;
   min-height: 0;
-  height: calc(100dvh - var(--strategy-lab-chrome));
+  height: max(560px, calc(100dvh - var(--strategy-lab-chrome) - var(--explore-chrome)));
   align-items: stretch;
 }
 

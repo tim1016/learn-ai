@@ -1,5 +1,5 @@
 import { HttpClient } from "@angular/common/http";
-import { computed, effect, inject, Injectable, signal, untracked } from "@angular/core";
+import { computed, effect, inject, Injectable, InjectionToken, signal, untracked, type Signal } from "@angular/core";
 import { toSignal } from "@angular/core/rxjs-interop";
 import { ActivatedRoute, type ParamMap } from "@angular/router";
 import { firstValueFrom, map } from "rxjs";
@@ -35,6 +35,23 @@ interface EngineLaunchParams {
 
 const CONFIG_NAV_KEY = "engineLab.configNavOverride";
 
+/**
+ * The one strategy a workbench is for, when its host is a strategy's place:
+ * Explore opens Strategy Lab on a registry key, so the key picks the strategy
+ * and the rail offers no other. Unset (`null`), the workbench is open to every
+ * strategy the catalog lists.
+ */
+export const STRATEGY_LAB_PINNED_STRATEGY = new InjectionToken<Signal<string | null>>(
+  "STRATEGY_LAB_PINNED_STRATEGY",
+  { factory: () => signal<string | null>(null).asReadonly() },
+);
+
+/** Why an engine cannot run a strategy, or `null` when it can. Only a Python run needs no LEAN twin. */
+function engineBar(strategy: StrategyInfo, engine: EngineChoice): string | null {
+  if (engine === "python" || leanValidationTemplateForStrategy(strategy.name, strategy.lean_twin) !== null) return null;
+  return `${strategy.display_name} has no aligned LEAN validation template, so only the Python engine can run it.`;
+}
+
 @Injectable()
 export class StrategyLabConfigStore {
   private readonly http = inject(HttpClient);
@@ -45,10 +62,17 @@ export class StrategyLabConfigStore {
   private readonly calendar = inject(TradingCalendarService);
   /** Whether the window has held both its dates yet; it is started once, never again after that. */
   private windowStarted = false;
-  private readonly launchParams = toSignal(
+  /** The strategy this workbench is pinned to, or `null` when it is open to every strategy. */
+  readonly pinnedStrategy = inject(STRATEGY_LAB_PINNED_STRATEGY);
+  private readonly queryLaunchParams = toSignal(
     this.route.queryParamMap.pipe(map(parseEngineLaunchParams)),
     { initialValue: {} },
   );
+  /** What the link asked for. A pinned strategy is the address's, so a `?strategy=` in the query never overrides it. */
+  private readonly launchParams = computed<EngineLaunchParams>(() => {
+    const pinned = this.pinnedStrategy();
+    return pinned === null ? this.queryLaunchParams() : { ...this.queryLaunchParams(), strategy: pinned };
+  });
   private readonly appliedLaunchParamsKey = signal<string | null>(null);
   private readonly retainingHistoricalSelection = signal(false);
   private readonly configNavOverride = signal<"expanded" | "collapsed" | null>(loadNavOverride());
@@ -65,7 +89,7 @@ export class StrategyLabConfigStore {
    *  so they are never applied, and a restore must not wait for them forever (#2872). */
   readonly launchParamsSettled = computed(() => {
     const key = launchParamsKey(this.launchParams());
-    if (key === "||||||" || key === this.appliedLaunchParamsKey()) return true;
+    if (key === NO_LAUNCH_PARAMS_KEY || key === this.appliedLaunchParamsKey()) return true;
     return this.strategiesRead() && this.strategies().length === 0;
   });
 
@@ -117,11 +141,14 @@ export class StrategyLabConfigStore {
       ? schemaSymbol.trim().toUpperCase()
       : this.range().symbol.trim().toUpperCase() || "SPY";
   });
-  readonly availableStrategies = computed(() =>
-    this.strategies().filter((strategy) =>
-      (strategy.supported_resolutions ?? ["minute"]).includes(this.resolution()),
-    ),
-  );
+  readonly availableStrategies = computed(() => {
+    const pinned = this.pinnedStrategy();
+    return this.strategies().filter(
+      (strategy) =>
+        (pinned === null || strategy.name === pinned) &&
+        (strategy.supported_resolutions ?? ["minute"]).includes(this.resolution()),
+    );
+  });
   readonly selectableStrategies = computed(() => {
     const strategies = this.availableStrategies();
     return this.engine() === "python"
@@ -131,6 +158,24 @@ export class StrategyLabConfigStore {
             leanValidationTemplateForStrategy(strategy.name, strategy.lean_twin) !== null,
         );
   });
+  /**
+   * Engines the pinned strategy cannot run, each with why. A workbench open to
+   * every strategy has none: choosing a LEAN engine there moves to a strategy
+   * that has a twin. Pinned, there is nowhere to move to, so the rail offers
+   * the engine greyed with its reason instead of a Run that stays disabled.
+   */
+  readonly engineRestrictions = computed<Readonly<Partial<Record<EngineChoice, string>>>>(() => {
+    const pinned = this.pinnedStrategy();
+    const strategy = pinned === null ? null : this.strategies().find((candidate) => candidate.name === pinned) ?? null;
+    if (strategy === null) return {};
+    return Object.fromEntries(
+      (["lean", "both"] as const).flatMap((engine) => {
+        const reason = engineBar(strategy, engine);
+        return reason === null ? [] : [[engine, reason] as const];
+      }),
+    );
+  });
+
   /**
    * Parameters the operator changed away from their schema default.
    *
@@ -341,11 +386,24 @@ export class StrategyLabConfigStore {
     effect(() => {
       const params = this.launchParams();
       const key = launchParamsKey(params);
-      if (key === this.appliedLaunchParamsKey() || key === "||||||") return;
+      if (key === this.appliedLaunchParamsKey() || key === NO_LAUNCH_PARAMS_KEY) return;
       if (this.strategies().length === 0) return;
       this.applyLaunchParams(params);
       this.appliedLaunchParamsKey.set(key);
     });
+  }
+
+  private strategiesLoad: Promise<void> | null = null;
+
+  /**
+   * Reads the strategy list the first time it is asked for and hands every later
+   * caller the same read. A workbench that is mounted again on the same store
+   * (Explore's tools come and go while the store stays) does not read it twice
+   * or put the rail back to "Loading strategies…".
+   */
+  ensureStrategiesLoaded(): Promise<void> {
+    this.strategiesLoad ??= this.loadStrategies();
+    return this.strategiesLoad;
   }
 
   async loadStrategies(): Promise<void> {
@@ -357,7 +415,9 @@ export class StrategyLabConfigStore {
       );
       this.strategies.set(list);
       if (this.retainingHistoricalSelection()) this.reconcileHistoricalSelection();
+      const pinned = this.pinnedStrategy();
       const first = list.find((strategy) =>
+        (pinned === null || strategy.name === pinned) &&
         (strategy.supported_resolutions ?? ["minute"]).includes(this.resolution()),
       );
       if (first && this.selectedStrategyName() === null) this.selectStrategy(first.name);
@@ -546,8 +606,10 @@ export class StrategyLabConfigStore {
   }
 
   private applyLaunchParams(params: EngineLaunchParams): void {
-    if (params.engine) this.engine.set(params.engine);
     const strategy = params.strategy ? this.findStrategy(params.strategy) : null;
+    // Pinned, a strategy that cannot run on the engine the link names stays on the engine it had, and says why.
+    const barred = params.engine && strategy !== null && this.pinnedStrategy() !== null ? engineBar(strategy, params.engine) : null;
+    if (params.engine && barred === null) this.engine.set(params.engine);
     const resolution = this.resolveResolution(strategy, params.resolution);
     // A link naming one date only has its other date filled from the one it names, not left as it was.
     const oneDate = (params.from === undefined) !== (params.to === undefined);
@@ -571,6 +633,7 @@ export class StrategyLabConfigStore {
     } else if (params.strategy) {
       this.configurationWarning.set(`Strategy "${params.strategy}" is not registered in Strategy Lab.`);
     }
+    if (barred !== null) this.configurationWarning.set(`${barred} The link's ${params.engine} engine was not applied.`);
     this.activeTab.set(params.tab ?? "configuration");
   }
 
@@ -637,6 +700,9 @@ function parseRunId(value: string | null): number | null {
 function nonBlank(value: string | null): string | undefined {
   return value?.trim() || undefined;
 }
+
+/** The key of a link that asks for nothing: every part of `launchParamsKey` empty. */
+const NO_LAUNCH_PARAMS_KEY = "||||||";
 
 function launchParamsKey(params: EngineLaunchParams): string {
   return [

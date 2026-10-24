@@ -1,12 +1,5 @@
-import { Injector, runInInjectionContext } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import {
-  convertToParamMap,
-  provideRouter,
-  Router,
-  UrlTree,
-  type PartialMatchRouteSnapshot,
-} from '@angular/router';
+import { provideRouter, Router } from '@angular/router';
 import { describe, expect, it } from 'vitest';
 
 import { appConfig } from './app.config';
@@ -26,16 +19,19 @@ import { HELP_DOCUMENTS } from './shared/help/help-documents';
 import { routes } from './app.routes';
 
 describe('routes', () => {
-  it('uses Strategy Lab as the canonical workbench and redirects legacy Engine Lab paths', () => {
-    expect(routes.find((route) => route.path === 'strategy-lab')?.loadComponent).toBeDefined();
-    expect(routes.find((route) => route.path === 'strategy-lab/runs/:id')?.redirectTo).toBeTypeOf('function');
+  it('keeps the old Strategy Lab, Grid Search and Walk-Forward addresses as resolvers of their owner, never as pages', () => {
+    for (const path of ['strategy-lab', 'strategy-lab/runs/:id', 'engine/runs/:id', 'grid-search', 'walk-forward']) {
+      const route = routes.find((candidate) => candidate.path === path);
+      expect.soft(route?.resolve?.['entry'], `${path} resolves its owner`).toBeTypeOf('function');
+      expect.soft(route?.redirectTo, `${path} is not a redirect to another redirect`).toBeUndefined();
+    }
+    // The engine and LEAN aliases end on the Strategy Lab address, which is no redirect route, so the chain holds.
     for (const path of ['engine', 'lean-engine', 'lean-lab']) {
       expect(routes.find((route) => route.path === path)).toMatchObject({
         redirectTo: 'strategy-lab',
         pathMatch: 'full',
       });
     }
-    expect(routes.find((route) => route.path === 'engine/runs/:id')?.redirectTo).toBeTypeOf('function');
     expect(routes.find((route) => route.path === 'engine-docs')).toMatchObject({
       redirectTo: 'strategy-lab/docs',
       pathMatch: 'full',
@@ -50,35 +46,6 @@ describe('routes', () => {
     }
   });
 
-  it.each([
-    ['204', '/strategy-lab?run=204'],
-    ['a b', '/strategy-lab?run=a%20b'],
-  ])('redirects a persisted run URL (id %s) onto the one-page workbench', (id, expectedUrl) => {
-    const route = routes.find((candidate) => candidate.path === 'strategy-lab/runs/:id');
-    const redirect = route?.redirectTo;
-    if (typeof redirect !== 'function') throw new Error('Strategy Lab run route is not a redirect.');
-
-    TestBed.configureTestingModule({ providers: [provideRouter([])] });
-    const params = { id };
-    const queryParams = {};
-    const redirectData: PartialMatchRouteSnapshot = {
-      routeConfig: route ?? null,
-      url: [],
-      params,
-      queryParams,
-      fragment: null,
-      data: {},
-      outlet: 'primary',
-      title: undefined,
-      paramMap: convertToParamMap(params),
-      queryParamMap: convertToParamMap(queryParams),
-    };
-    const tree = runInInjectionContext(TestBed.inject(Injector), () => redirect(redirectData));
-
-    if (!(tree instanceof UrlTree)) throw new Error('Redirect did not produce a UrlTree.');
-    expect(TestBed.inject(Router).serializeUrl(tree)).toBe(expectedUrl);
-  });
-
   it('opens on the entry page at the root address instead of jumping into the app', async () => {
     TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
     const router = TestBed.inject(Router);
@@ -91,7 +58,6 @@ describe('routes', () => {
 
   it.each([
     'options-lab',
-    'strategy-lab',
   ])('marks %s as an intentionally full-bleed workspace', (path) => {
     expect(routes.find((route) => route.path === path)?.data).toMatchObject({ fullBleed: true });
   });
@@ -117,14 +83,6 @@ describe('routes', () => {
     ['account-list hop chain', '/brokers/alpaca?surface=gallery', '/brokers/alpaca'],
     ['account-list hop chain', '/brokers/alpaca/bots', '/brokers/alpaca'],
     ['account-list hop chain', '/brokers/alpaca/gallery', '/brokers/alpaca'],
-    // Angular's router does not chain a redirect target that is itself a
-    // redirect route within one navigation (it re-matches the redirected URL
-    // with redirects disallowed), so engine/runs/:id must redirect straight
-    // to the final /strategy-lab?run=N destination rather than hopping
-    // through strategy-lab/runs/:id. This is a full-router assertion, not a
-    // route-config shape check, because that is exactly the distinction that
-    // would otherwise hide the gap.
-    ['legacy engine/runs/:id bookmark', '/engine/runs/204', '/strategy-lab?run=204'],
   ])('%s: %s lands on %s', async (_kind, path, expectedUrl) => {
     TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
     const router = TestBed.inject(Router);
@@ -135,9 +93,8 @@ describe('routes', () => {
   });
 
   it.each([
-    // Without pathMatch: 'full' the run routes prefix-match, so a trailing
-    // segment still fired the redirect with id 204 instead of falling through
-    // to the wildcard — a URL that is not a run bookmark opened a run.
+    // A trailing segment is no run bookmark: it falls through to the wildcard
+    // rather than resolving run 204's owner.
     '/strategy-lab/runs/204/extra',
     '/engine/runs/204/extra',
     // A lost address starting like a real page fails in place too.

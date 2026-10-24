@@ -6,6 +6,7 @@ import { EntryComponent } from "./components/entry/entry.component";
 import { redirectLegacyDataLab } from "./components/data-lab/data-lab-ingress";
 import { brokerClerkRedirectGuard } from "./fleet/broker-clerk-redirect.guard";
 import { redirectKeepingState } from "./shell/route-redirects";
+import { lazyEntryResolver } from "./signal-strategies/explore/entry/explore-entry.lazy";
 
 const loadBrokerLaneUnavailable = () =>
   import('./fleet/broker-lane-unavailable.component').then(
@@ -33,16 +34,24 @@ const markdownDocRoute = (path: string, data: MarkdownDocRouteData): Route => ({
   data,
 });
 
-// Shared by every legacy persisted-run URL (strategy-lab/runs/:id and the
-// older engine/runs/:id bookmark). Both must redirect straight to this same
-// final destination rather than to each other: Angular's router does not
-// chain a redirect target that is itself a redirect route within one
-// navigation, so a two-hop redirect silently falls through to the wildcard.
-// The run id joins whatever else the bookmark carried (a tab, a filter, a
-// fragment) rather than replacing it.
-const redirectToStrategyLabRun = redirectKeepingState(["/strategy-lab"], {
-  set: (params) => ({ run: String(params["id"] ?? "") }),
-});
+// The old Strategy Lab, Grid Search and Walk-Forward addresses are no longer
+// pages. Each resolves the owner of what it names from the stored record (the
+// run's or the search's own strategy) in its resolver, and ends on that
+// strategy's Explore in one redirect, with the query and fragment it carried.
+// A record that names no registered strategy fails in place, keeping its id;
+// an address that names none opens a chooser. The persisted-run addresses
+// (strategy-lab/runs/:id and the older engine/runs/:id bookmark) each carry
+// the resolver themselves, because the redirect target must not be another
+// redirect route: Angular's router does not chain one within a navigation, so
+// a two-hop redirect silently falls through to the wildcard and loses the run.
+const loadExploreEntry = () =>
+  import("./signal-strategies/explore/entry/explore-entry.component").then(
+    (module) => module.ExploreEntryComponent,
+  );
+const backtestEntry = {
+  resolve: { entry: lazyEntryResolver((resolvers) => resolvers.resolveBacktestEntry) },
+  loadComponent: loadExploreEntry,
+} satisfies Route;
 
 // The retired broker-wide choosers (Bots, Gallery, Settings and
 // Configuration) end at the account list. Their query and fragment go with
@@ -98,6 +107,8 @@ export const routes: Routes = [
     component: EntryComponent,
     data: { fullBleed: true, chromeless: true },
   },
+  // The engine and LEAN aliases keep their query and fragment to `strategy-lab`,
+  // which resolves them like any other Strategy Lab address.
   { path: "lean-lab", redirectTo: "strategy-lab", pathMatch: "full" },
   {
     path: "strategy-docs",
@@ -208,14 +219,7 @@ export const routes: Routes = [
         "./components/data-quality/data-quality-docs/data-quality-docs.component"
       ).then((m) => m.DataQualityDocsComponent),
   },
-  {
-    // The workbench and this URL must be the SAME route config: a different
-    // one would destroy and recreate StrategyLabComponent, tearing down its
-    // component-scoped config store and runner while a run is in flight.
-    path: "strategy-lab/runs/:id",
-    redirectTo: redirectToStrategyLabRun,
-    pathMatch: "full",
-  },
+  { path: "strategy-lab/runs/:id", ...backtestEntry },
   {
     path: "strategy-lab/docs",
     loadComponent: () =>
@@ -223,27 +227,16 @@ export const routes: Routes = [
         (m) => m.StrategyLabAnalyticalManualComponent
       ),
   },
-  {
-    path: "strategy-lab",
-    data: { fullBleed: true },
-    loadComponent: () =>
-      import("./components/strategy-lab/strategy-lab.component").then(
-        (m) => m.StrategyLabComponent
-      ),
-  },
+  { path: "strategy-lab", ...backtestEntry },
   {
     path: "grid-search",
-    loadComponent: () =>
-      import("./components/grid-search/grid-search-page.component").then(
-        (m) => m.GridSearchPageComponent
-      ),
+    resolve: { entry: lazyEntryResolver((resolvers) => resolvers.resolveSweepEntry) },
+    loadComponent: loadExploreEntry,
   },
   {
     path: "walk-forward",
-    loadComponent: () =>
-      import("./components/walk-forward-study/walk-forward-study-page.component").then(
-        (m) => m.WalkForwardStudyPageComponent
-      ),
+    resolve: { entry: lazyEntryResolver((resolvers) => resolvers.resolveWalkForwardEntry) },
+    loadComponent: loadExploreEntry,
   },
   {
     path: "golden-search",
@@ -297,14 +290,7 @@ export const routes: Routes = [
     redirectTo: "strategy-lab/docs",
     pathMatch: "full",
   },
-  {
-    // Redirects straight to the final destination (not to strategy-lab/runs/:id)
-    // for the same reason as that route: Angular does not chain a redirect
-    // through another redirect route within one navigation.
-    path: "engine/runs/:id",
-    redirectTo: redirectToStrategyLabRun,
-    pathMatch: "full",
-  },
+  { path: "engine/runs/:id", ...backtestEntry },
   {
     path: "engine",
     redirectTo: "strategy-lab",

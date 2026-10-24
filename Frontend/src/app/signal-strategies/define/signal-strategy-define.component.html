@@ -13,13 +13,7 @@
     (retry)="store.retry('approvals')"
   />
 
-  <app-signal-strategy-section
-    title="Current exploratory values"
-    scope="Values being tried out, never approved ones. They are exploratory and in-sample, and no page approves settings from them."
-    [read]="always"
-  >
-    <p class="note">Explore opens in an upcoming change. Until then nothing here holds exploratory values.</p>
-  </app-signal-strategy-section>
+  <app-signal-strategy-exploratory-values />
 
   @if (sourceOpen()) {
     <p-drawer

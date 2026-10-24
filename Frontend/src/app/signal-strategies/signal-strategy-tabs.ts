@@ -31,7 +31,6 @@ export const SIGNAL_STRATEGY_TABS = defineWorkspaceTabs<SignalStrategyTabId>(
  * the strip then links to it.
  */
 export const UNAVAILABLE_TAB_REASONS: Readonly<Partial<Record<SignalStrategyTabId, string>>> = {
-  explore: 'Backtest, Sweep and Walk-forward open here in an upcoming change. Until then, use Strategy Lab, Grid Search and Walk-Forward in the menu.',
   golden: 'Golden Search and configuration review open here in an upcoming change. Until then, use Golden Search and Strategy Validation in the menu.',
   proof: 'Program proof opens here in an upcoming change. Until then, use Strategy Validation in the menu.',
 };

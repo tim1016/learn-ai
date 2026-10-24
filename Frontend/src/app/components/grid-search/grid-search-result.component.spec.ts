@@ -48,7 +48,7 @@ function curves(hashes: readonly string[]): GridSearchCellCurves {
   };
 }
 
-async function renderResult(service: Partial<GridSearchService>, inputs: { maxDrawn?: number } = {}) {
+async function renderResult(service: Partial<GridSearchService>, inputs: { maxDrawn?: number; walkForwardRoute?: readonly string[] } = {}) {
   return render(GridSearchResultComponent, {
     inputs: { searchId: 'abc', pollMs: 0, ...inputs },
     providers: [
@@ -80,12 +80,19 @@ function drawnChart(): HTMLElement {
 }
 
 describe('GridSearchResultComponent', () => {
-  it('states that every figure is in-sample and routes into Walk-Forward with the search', async () => {
-    await renderResult({});
+  it('states that every figure is in-sample and routes into the host’s Walk-forward with the search', async () => {
+    await renderResult({}, { walkForwardRoute: ['/signal-strategies', 'sma_crossover', 'explore', 'walk-forward'] });
 
     await waitFor(() => expect(screen.getByRole('note').textContent).toMatch(/in-sample/i));
     const link = screen.getByRole('link', { name: /walk-forward/i }) as HTMLAnchorElement;
-    expect(link.getAttribute('href')).toContain('/walk-forward?search=abc');
+    expect(link.getAttribute('href')).toBe('/signal-strategies/sma_crossover/explore/walk-forward?search=abc');
+  });
+
+  it('offers no way on to Walk-forward when its host names none', async () => {
+    await renderResult({});
+
+    await waitFor(() => expect(screen.getByRole('note').textContent).toMatch(/in-sample/i));
+    expect(screen.queryByRole('link', { name: /walk-forward/i })).toBeNull();
   });
 
   it.each(['signal_bar_close', 'next_bar_open'] as const)("names the fill rule the search ran under (%s), not today's default (#2599)", async (ranUnder) => {

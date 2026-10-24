@@ -38,7 +38,9 @@
     </ul>
   }
 
-  <router-outlet />
+  @for (key of scopeKeys(); track key) {
+    <app-explore-scope />
+  }
 } @else {
   <app-workspace-header [title]="title()" [breadcrumb]="breadcrumb()" />
   <div class="notice">

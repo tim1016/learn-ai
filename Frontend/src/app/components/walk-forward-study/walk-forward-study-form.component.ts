@@ -35,6 +35,7 @@ export class WalkForwardStudyFormComponent {
   private readonly destroyRef = inject(DestroyRef);
 
   readonly strategies = input.required<readonly StrategyInfo[]>();
+  readonly strategyLocked = input(false);
   /** A grid search's stored request to start from (the "test this grid out of sample" hand-off). */
   readonly prefill = input<GridSearchSpecRequest | null>(null);
   /** Debounce between an edit and the server preflight; tests set 0. */

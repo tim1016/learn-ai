@@ -67,4 +67,15 @@ describe('WalkForwardStudyHistoryComponent', () => {
     await waitFor(() => expect(del).toHaveBeenCalledWith('study-1'));
     expect(screen.queryByRole('button', { name: /open study study-1/i })).toBeNull();
   });
+
+  it('lists one strategy’s studies only, and offers no strategy filter', async () => {
+    const list = vi.fn(async () => []);
+    await render(WalkForwardStudyHistoryComponent, {
+      inputs: { strategyKey: 'sma_crossover' },
+      providers: [{ provide: WalkForwardStudyService, useValue: { list, delete: vi.fn() } }],
+    });
+
+    await waitFor(() => expect(list).toHaveBeenCalledWith({ strategy_key: 'sma_crossover' }));
+    expect(screen.queryByRole('combobox', { name: /filter by strategy/i })).toBeNull();
+  });
 });

@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject, input, output, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, output, signal, untracked } from '@angular/core';
 import { ButtonModule } from 'primeng/button';
 
 import { AssetIdentityComponent } from '../../shared/asset-identity/asset-identity.component';
@@ -28,6 +28,8 @@ export class GridSearchHistoryComponent {
   private readonly service = inject(GridSearchService);
 
   readonly strategies = input<readonly StrategyInfo[]>([]);
+  /** The one strategy this history is for. Unset, it lists every strategy's searches. */
+  readonly strategyKey = input<string | null>(null);
   readonly opened = output<string>();
 
   readonly rows = signal<GridSearchSummary[]>([]);
@@ -39,7 +41,11 @@ export class GridSearchHistoryComponent {
   protected readonly displayNames = computed(() => new Map(this.strategies().map((s) => [s.name, s.display_name])));
 
   constructor() {
-    void this.refresh();
+    // Read once the inputs are in: a history pinned to a strategy must not first list every strategy's.
+    effect(() => {
+      this.strategyKey();
+      untracked(() => void this.refresh());
+    });
   }
 
   /** Revision of the latest request; an older response must not overwrite a newer filter's rows. */
@@ -49,7 +55,8 @@ export class GridSearchHistoryComponent {
     const revision = ++this.revision;
     this.loading.set(true);
     try {
-      const rows = await this.service.list(this.filters());
+      const key = this.strategyKey();
+      const rows = await this.service.list(key === null ? this.filters() : { ...this.filters(), strategy_key: key });
       if (revision !== this.revision) return;
       this.rows.set(rows);
       this.error.set(null);

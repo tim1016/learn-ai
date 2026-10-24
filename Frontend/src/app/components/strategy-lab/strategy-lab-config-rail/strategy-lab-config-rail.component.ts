@@ -40,6 +40,10 @@ export class StrategyLabConfigRailComponent {
   readonly range = model.required<TickerRange>();
   readonly dataPolicy = input.required<DataPolicy>();
   readonly strategies = input<readonly StrategyInfo[]>([]);
+  /** The strategy is the page's, not the rail's to change: it is named, not offered as a choice. */
+  readonly strategyLocked = input(false);
+  /** Engines the strategy cannot run, each with why. They stay in the choice, greyed. */
+  readonly engineRestrictions = input<Readonly<Partial<Record<EngineChoice, string>>>>({});
   readonly selectedStrategyName = input<string | null>(null);
   readonly paramValues = input<Record<string, unknown>>({});
   readonly fillMode = input<FillModeName>(RESEARCH_DEFAULT_FILL_MODE);

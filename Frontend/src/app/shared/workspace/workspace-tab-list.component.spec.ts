@@ -36,6 +36,21 @@ describe('WorkspaceTabListComponent', () => {
     expect(screen.getByText(/Needs a confirmed account/)).toBeTruthy();
   });
 
+  it('carries a tab’s query on its link and a short state beside its label', async () => {
+    await render(WorkspaceTabListComponent, {
+      inputs: {
+        tabs: [{ id: 'backtest', label: 'Backtest', route: ['/ws', 'backtest'], queryParams: { run: '91' }, badge: 'running' }],
+        activeId: 'sweep',
+        label: 'Workspace sections',
+      },
+      providers: [provideRouter([])],
+    });
+
+    const link = screen.getByRole('link', { name: /Backtest/ });
+    expect(link.getAttribute('href')).toBe('/ws/backtest?run=91');
+    expect(link.textContent).toContain('running');
+  });
+
   it('marks no tab when none is open', async () => {
     await renderTabs(null);
 

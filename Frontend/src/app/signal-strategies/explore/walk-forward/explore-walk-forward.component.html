@@ -1,0 +1,34 @@
+<section class="walk-forward" aria-label="Walk-forward">
+  @if (blocked(); as state) {
+    <app-workspace-state-block [state]="state" (actionTriggered)="onAction($event)" />
+  } @else {
+    <p-tabs [value]="activeTab()" (valueChange)="setTab($event)">
+      <p-tablist>
+        <p-tab value="new"><i class="pi pi-sliders-h" aria-hidden="true"></i> New Study</p-tab>
+        <p-tab value="history"><i class="pi pi-history" aria-hidden="true"></i> History</p-tab>
+      </p-tablist>
+      <p-tabpanels>
+        <p-tabpanel value="new">
+          @if (handoff(); as source) {
+            @if (source.kind === 'loading') {
+              <p class="notice" role="status">Reading the evidence to start from.</p>
+            } @else if (source.kind === 'refused') {
+              <app-workspace-state-block [state]="source.state" />
+            } @else {
+              <app-explore-handoff-notice [handoff]="source.handoff" />
+            }
+          }
+          <app-walk-forward-study-form [strategies]="strategies()" [strategyLocked]="true" [prefill]="seed()" (launched)="onLaunched($event)" />
+        </p-tabpanel>
+        <p-tabpanel value="history">
+          @if (lookupMessage(); as message) { <p class="notice" role="status">{{ message }}</p> }
+          @if (openStudyId(); as id) {
+            <app-walk-forward-study-result [studyId]="id" [strategies]="strategies()" (closed)="closeStudy()" (deleted)="closeStudy()" />
+          } @else {
+            <app-walk-forward-study-history [strategies]="strategies()" [strategyKey]="key()" (opened)="openStudy($event)" />
+          }
+        </p-tabpanel>
+      </p-tabpanels>
+    </p-tabs>
+  }
+</section>

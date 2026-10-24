@@ -68,6 +68,8 @@ export class GridSearchResultComponent {
   readonly pollMs = input(2000);
   /** Where the back button returns to: Grid Search history, or the walk-forward study that owns this sweep. */
   readonly backLabel = input('History');
+  /** Where "test out of sample" leads, as router commands. Unset, the result offers no such link. */
+  readonly walkForwardRoute = input<readonly string[] | null>(null);
   /** A study-owned sweep is evidence: no Cancel, Finish or Delete here — the study manages it. */
   readonly readonly = input(false);
   /** The most cells drawn at once; the server returns no more curves in one read. */

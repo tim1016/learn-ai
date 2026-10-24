@@ -56,6 +56,10 @@
   </button>
 </div>
 
+@if (scanNote(); as note) {
+  <p class="golden-note" role="status">{{ note }}</p>
+}
+
 @if (goldenCatalogFailed()) {
   <p class="golden-note" role="alert">The Golden catalog could not be read, so Golden badges and Mark golden are unavailable.</p>
 } @else if (goldenCatalogCapped()) {

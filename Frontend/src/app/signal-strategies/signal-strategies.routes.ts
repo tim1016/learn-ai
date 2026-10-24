@@ -1,5 +1,6 @@
 import type { CanMatchFn, Routes } from '@angular/router';
 
+import { lazyEntryResolver } from './explore/entry/explore-entry.lazy';
 import { canBeStrategyKey } from './signal-strategy-tabs';
 
 /**
@@ -15,9 +16,15 @@ const strategyAddress: CanMatchFn = (_route, segments) =>
  *
  * A strategy's address always carries its tab, so a bare `/signal-strategies/:key`
  * names nothing and ends at the not-found page, and `recency` is never taken for
- * a key. Explore, Golden and Proof are declared in
+ * a key. Explore hosts Backtest, Sweep and Walk-forward, each reading its
+ * own native `?run=` or `?search=`. Golden and Proof are declared in
  * `signal-strategy-tabs.ts` and have no page yet: the strip shows them
  * unavailable, with why, until each is routed here.
+ *
+ * Evidence whose owner is not in its address (`evidence/run/:id`,
+ * `evidence/search/:id`) resolves its strategy from the record itself, lands on
+ * that strategy's tool in one redirect, and fails in place, keeping the id, when
+ * the record names none the registry lists.
  */
 export const SIGNAL_STRATEGIES_ROUTES: Routes = [
   {
@@ -30,6 +37,18 @@ export const SIGNAL_STRATEGIES_ROUTES: Routes = [
     path: 'recency',
     loadComponent: () =>
       import('./recency-chart/recency-chart-page.component').then((m) => m.RecencyChartPageComponent),
+  },
+  {
+    path: 'evidence/run/:id',
+    resolve: { entry: lazyEntryResolver((resolvers) => resolvers.resolveBacktestEntry) },
+    loadComponent: () =>
+      import('./explore/entry/explore-entry.component').then((m) => m.ExploreEntryComponent),
+  },
+  {
+    path: 'evidence/search/:id',
+    resolve: { entry: lazyEntryResolver((resolvers) => resolvers.resolveSweepEntry) },
+    loadComponent: () =>
+      import('./explore/entry/explore-entry.component').then((m) => m.ExploreEntryComponent),
   },
   {
     path: ':key',
@@ -46,6 +65,29 @@ export const SIGNAL_STRATEGIES_ROUTES: Routes = [
         path: 'define',
         loadComponent: () =>
           import('./define/signal-strategy-define.component').then((m) => m.SignalStrategyDefineComponent),
+      },
+      {
+        // The tools share the strategy's Explore scope, which the workspace holds above them.
+        path: 'explore',
+        loadComponent: () => import('./explore/explore.component').then((m) => m.ExploreComponent),
+        children: [
+          { path: '', pathMatch: 'full', redirectTo: 'backtest' },
+          {
+            path: 'backtest',
+            loadComponent: () =>
+              import('./explore/backtest/explore-backtest.component').then((m) => m.ExploreBacktestComponent),
+          },
+          {
+            path: 'sweep',
+            loadComponent: () =>
+              import('./explore/sweep/explore-sweep.component').then((m) => m.ExploreSweepComponent),
+          },
+          {
+            path: 'walk-forward',
+            loadComponent: () =>
+              import('./explore/walk-forward/explore-walk-forward.component').then((m) => m.ExploreWalkForwardComponent),
+          },
+        ],
       },
     ],
   },

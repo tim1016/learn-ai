@@ -263,7 +263,7 @@ beforeEach(() => {
 });
 
 describe('StrategyValidationComponent', () => {
-  it('renders the default selection: the catalog, the non-Live operational harness, and its Strategy Lab and Alpaca Deploy links', async () => {
+  it('renders the default selection: the catalog, the non-Live operational harness, and its Backtest and Alpaca Deploy links', async () => {
     await render(StrategyValidationComponent, {
       providers: [
         provideRouter([]),
@@ -294,12 +294,12 @@ describe('StrategyValidationComponent', () => {
     expect.soft(screen.queryByText(/class DeploymentValidationAlgorithm/), 'renders the deployment test program as a non-Live operational harness: no reference source dump').toBeNull();
     expect.soft(screen.queryByText(/DeploymentValidationConsecutiveGreen/), 'renders the deployment test program as a non-Live operational harness: no consecutive-green source dump').toBeNull();
 
-    const labLink = await screen.findByRole('link', { name: /Diagnose in Strategy Lab/ });
+    const labLink = await screen.findByRole('link', { name: /Diagnose in Backtest/ });
 
-    expect.soft(labLink.getAttribute('href'), 'links the selected strategy directly into Strategy Lab validation mode: route').toContain('/strategy-lab?');
-    expect.soft(labLink.getAttribute('href'), 'links the selected strategy directly into Strategy Lab validation mode: strategy').toContain('strategy=deployment_validation');
-    expect.soft(labLink.getAttribute('href'), 'links the selected strategy directly into Strategy Lab validation mode: engine').toContain('engine=both');
-    expect.soft(labLink.getAttribute('href'), 'links the selected strategy directly into Strategy Lab validation mode: symbol').toContain('symbol=SPY');
+    expect.soft(labLink.getAttribute('href'), 'links the selected strategy directly into its Backtest: route').toContain('/signal-strategies/deployment_validation/explore/backtest?');
+    expect.soft(labLink.getAttribute('href'), 'links the selected strategy directly into its Backtest: engine').toContain('engine=both');
+    expect.soft(labLink.getAttribute('href'), 'links the selected strategy directly into its Backtest: symbol').toContain('symbol=SPY');
+    expect.soft(labLink.getAttribute('href'), 'the strategy is the address, so no query repeats it').not.toContain('strategy=');
 
     const deployLink = await screen.findByRole('link', { name: /Deploy strategy/ });
 
@@ -333,7 +333,7 @@ describe('StrategyValidationComponent', () => {
       ],
     });
 
-    const link = await screen.findByRole('link', { name: /Diagnose in Strategy Lab/ });
+    const link = await screen.findByRole('link', { name: /Diagnose in Backtest/ });
 
     expect(screen.getByText('Harness settings')).toBeTruthy();
     expect(link.getAttribute('href')).toContain('engine=python');
