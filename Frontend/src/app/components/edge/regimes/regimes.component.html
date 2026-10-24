@@ -1,4 +1,6 @@
 <section class="route">
+  <app-sample-data-banner [provenance]="data.provenance" />
+
   <header class="route-toolbar">
     <div class="toolbar-spacer"></div>
     <button class="score-pill" type="button" (click)="scoreOpen.set(true)">
@@ -75,7 +77,7 @@
 
     <div class="bottom-card">
       <div class="eyebrow mb4">CENTROID FEATURE RADAR</div>
-      <app-edge-regime-radar [size]="260" [axes]="radarAxes" [regimeData]="radarData" />
+      <app-edge-regime-radar [size]="260" [axes]="radarAxes" [regimeData]="data.regimeCentroids" />
     </div>
 
     <div class="bottom-card">

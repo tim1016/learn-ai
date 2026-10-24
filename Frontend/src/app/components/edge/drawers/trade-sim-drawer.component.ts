@@ -5,8 +5,10 @@ import {
   input,
   output,
 } from "@angular/core";
+import { SampleDataBannerComponent } from "../../../shared/sample-data/sample-data-banner.component";
+import { TimestampDisplayPipe } from "../../../shared/timestamp";
 import { EdgeMiniLineComponent, EDGE_TOK } from "../charts/edge-charts";
-import type { EdgeData } from "../services/edge-mock-data.service";
+import type { EdgeSampleData } from "../services/edge-data.model";
 
 interface CostRow {
   k: string; v: number; c: string; bold: boolean;
@@ -16,12 +18,12 @@ interface CostRow {
   selector: "app-trade-sim-drawer",
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [EdgeMiniLineComponent],
+  imports: [EdgeMiniLineComponent, SampleDataBannerComponent, TimestampDisplayPipe],
   templateUrl: "./trade-sim-drawer.component.html",
   styleUrls: ["./trade-sim-drawer.component.scss"],
 })
 export class TradeSimDrawerComponent {
-  data = input.required<EdgeData>();
+  data = input.required<EdgeSampleData>();
   open = input(false);
 
   closed = output();

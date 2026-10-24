@@ -9,6 +9,7 @@ import {
 } from "@angular/router";
 import { filter, map, startWith } from "rxjs";
 import { PageHeaderComponent } from "../../shared/page-header/page-header.component";
+import { SampleDataBannerComponent } from "../../shared/sample-data/sample-data-banner.component";
 import { EdgeMiniLineComponent } from "./charts/edge-charts";
 import { EdgeMockDataService } from "./services/edge-mock-data.service";
 import { EdgeScoreDrawerComponent } from "./drawers/edge-score-drawer.component";
@@ -40,7 +41,7 @@ interface CapabilityRow {
   imports: [
     RouterLink, RouterLinkActive, RouterOutlet,
     EdgeMiniLineComponent, PageHeaderComponent,
-    EdgeScoreDrawerComponent, TradeSimDrawerComponent,
+    EdgeScoreDrawerComponent, TradeSimDrawerComponent, SampleDataBannerComponent,
   ],
   templateUrl: "./edge.component.html",
   styleUrls: ["./edge.component.scss"],
@@ -63,7 +64,7 @@ export class EdgeComponent {
   );
 
   readonly cards = computed<readonly EdgeNavCard[]>(() => {
-    const sparks = this.mockData.get().sparklines;
+    const sparks = this.edgeData().sparklines;
     return [
       {
         route: "realized-vs-iv",
@@ -74,9 +75,9 @@ export class EdgeComponent {
         catSoft: "var(--ind-cat-volatility-soft)",
         sparkValues: sparks.vrp,
         sparkLabel: "vrp_z · 30d",
-        sparkValue: "+0.42σ",
+        sparkValue: `${this.fmtSigned(last(sparks.vrp))}σ`,
         bullets: [
-          "Variance Risk Premium · oracle vs realtime signals",
+          "Variance Risk Premium · realtime signals",
           "CtC · Parkinson · GK · Yang-Zhang estimators",
           "Coverage diagnostics for forward-blind tail",
         ],
@@ -90,7 +91,7 @@ export class EdgeComponent {
         catSoft: "var(--ind-cat-trend-soft)",
         sparkValues: sparks.equity,
         sparkLabel: "composite equity · 30d",
-        sparkValue: "+12.4%",
+        sparkValue: `${this.fmtSigned((last(sparks.equity) / sparks.equity[0] - 1) * 100, 1)}%`,
         bullets: [
           "Sharpe heatmap · asset × period × split",
           "Equal-weight + vol-weighted parity composites",
@@ -106,7 +107,7 @@ export class EdgeComponent {
         catSoft: "var(--ind-cat-momentum-soft)",
         sparkValues: sparks.stability,
         sparkLabel: "stability · 30d",
-        sparkValue: "0.82",
+        sparkValue: last(sparks.stability).toFixed(2),
         bullets: [
           "OHLCV-only or IV-extended feature space",
           "Hungarian-aligned drift · KL transition divergence",
@@ -131,8 +132,17 @@ export class EdgeComponent {
     },
   ];
 
+  protected fmtSigned(v: number, digits = 2): string {
+    return (v >= 0 ? "+" : "") + v.toFixed(digits);
+  }
+
   private urlIsEdgeRoot(url: string): boolean {
     const base = url.split("?")[0].replace(/\/$/, "");
     return base === "/edge";
   }
 }
+
+function last(values: readonly number[]): number {
+  return values[values.length - 1];
+}
+

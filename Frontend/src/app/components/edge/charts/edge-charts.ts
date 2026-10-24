@@ -19,9 +19,7 @@ import {
   ViewChild,
 } from "@angular/core";
 
-import type {
-  EdgeData, SignalMark,
-} from "../services/edge-mock-data.service";
+import type { EdgeSampleData, RealizedVsIvData } from "../services/edge-data.model";
 
 // Shared color tokens — match _tokens.scss.
 const TOK = {
@@ -101,8 +99,6 @@ export class EdgeMiniLineComponent implements AfterViewInit {
 }
 
 /* ─── Price + IV dual-axis chart ──────────────────────────── */
-export interface PriceIVLayers { rvBands: boolean; edgeStrip: boolean; }
-
 @Component({
   selector: "app-edge-price-iv-chart",
   standalone: true,
@@ -118,10 +114,9 @@ export interface PriceIVLayers { rvBands: boolean; edgeStrip: boolean; }
 export class EdgePriceIVChartComponent implements AfterViewInit {
   width = input.required<number>();
   height = input.required<number>();
-  data = input.required<EdgeData>();
-  showOracle = input(true);
+  data = input.required<RealizedVsIvData>();
   showRealtime = input(true);
-  layers = input.required<PriceIVLayers>();
+  rvBands = input(true);
   hoverIdx = input<number | null>(null);
   /** Drives the x-axis date format: ISO `YYYY-MM-DD` for daily, `MMM DD HH:mm` for intraday. */
   barSize = input<"5m" | "15m" | "1h" | "1D">("1D");
@@ -135,14 +130,13 @@ export class EdgePriceIVChartComponent implements AfterViewInit {
 
   @ViewChild("canvas", { static: true }) canvasRef!: ElementRef<HTMLCanvasElement>;
 
-  // Bottom padding extended to fit the dedicated x-axis tick row beneath the strip.
+  // Bottom padding fits the dedicated x-axis tick row.
   private readonly PAD = { L: 44, R: 52, T: 14, B: 44 };
 
   constructor() {
     effect(() => {
       const _ = this.width() + this.height() + (this.hoverIdx() ?? -1);
-      const __ = (this.showOracle() ? 1 : 0) + (this.showRealtime() ? 1 : 0)
-                + (this.layers().rvBands ? 1 : 0) + (this.layers().edgeStrip ? 1 : 0)
+      const __ = (this.showRealtime() ? 1 : 0) + (this.rvBands() ? 1 : 0)
                 + (this.showLiveIv30() ? 1 : 0);
       void _; void __;
       const data = this.data();
@@ -162,12 +156,12 @@ export class EdgePriceIVChartComponent implements AfterViewInit {
     if (i >= 0 && i < N) this.hover.emit(i);
   }
 
-  private draw(canvas: HTMLCanvasElement, data: EdgeData): void {
+  private draw(canvas: HTMLCanvasElement, data: RealizedVsIvData): void {
     const w = this.width(); const h = this.height();
     const { L, R, T, B } = this.PAD;
     const innerW = w - L - R; const innerH = h - T - B;
     const candles = data.candles; const N = candles.length;
-    const blindStart = N - data.coverage.forward_blind_tail;
+    const blindStart = N - data.coverage.forwardBlindTail;
 
     const lo = Math.min(...candles.map(c => c.l)) * 0.998;
     const hi = Math.max(...candles.map(c => c.h)) * 1.002;
@@ -274,7 +268,7 @@ export class EdgePriceIVChartComponent implements AfterViewInit {
     }
 
     // RV bands
-    if (this.layers().rvBands) {
+    if (this.rvBands()) {
       [{ scale: 1.06, alpha: 0.45 }, { scale: 1.0, alpha: 0.6 }, { scale: 0.94, alpha: 0.85 }].forEach((s) => {
         ctx.strokeStyle = `rgba(242, 173, 61, ${s.alpha})`;
         ctx.lineWidth = 1; ctx.setLineDash([]);
@@ -287,53 +281,8 @@ export class EdgePriceIVChartComponent implements AfterViewInit {
       });
     }
 
-    // Edge Score strip — overlay near the bottom of the chart area, with
-    // breathing room above (so it isn't flush against the lowest price
-    // gridline) and a left-edge label + right-edge current-value chip
-    // so the colormap encoding is self-explanatory.
-    if (this.layers().edgeStrip) {
-      const stripH = 16; const stripY = T + innerH - stripH - 8;
-      // Backdrop with a soft top border to separate from candle area.
-      ctx.fillStyle = "rgba(11,14,20,0.78)";
-      ctx.fillRect(L, stripY, innerW, stripH);
-      const ww = innerW / N;
-      data.edgeScore.forEach((s, i) => {
-        const col = s > 0
-          ? `rgba(38,166,154,${Math.min(1, Math.abs(s) * 1.4)})`
-          : `rgba(239,83,80,${Math.min(1, Math.abs(s) * 1.4)})`;
-        ctx.fillStyle = col;
-        ctx.fillRect(x(i) - ww / 2, stripY, Math.max(1, ww), stripH);
-      });
-      ctx.strokeStyle = TOK.borderL; ctx.lineWidth = 1;
-      ctx.strokeRect(L + 0.5, stripY + 0.5, innerW - 1, stripH - 1);
-
-      // Left-edge "EDGE" label inside a small contrast pill.
-      ctx.fillStyle = "rgba(11,14,20,0.92)";
-      ctx.fillRect(L + 1, stripY + 1, 38, stripH - 2);
-      ctx.fillStyle = TOK.subtle; ctx.font = "9px JetBrains Mono, monospace";
-      ctx.textAlign = "left"; ctx.textBaseline = "middle";
-      ctx.fillText("EDGE", L + 5, stripY + stripH / 2 + 0.5);
-
-      // Right-edge current-value chip — driven by hover, falls back to last bar.
-      const hi = this.hoverIdx();
-      const curIdx = (hi != null && hi >= 0 && hi < N) ? hi : N - 1;
-      const curScore = data.edgeScore[curIdx] ?? 0;
-      const chipText = (curScore >= 0 ? "+" : "") + curScore.toFixed(2);
-      const chipColor = curScore > 0 ? TOK.bull : curScore < 0 ? TOK.bear : TOK.subtle;
-      const chipW = 44; const chipX = L + innerW - chipW - 1;
-      ctx.fillStyle = "rgba(11,14,20,0.92)";
-      ctx.fillRect(chipX, stripY + 1, chipW, stripH - 2);
-      ctx.fillStyle = chipColor; ctx.font = "10px JetBrains Mono, monospace";
-      ctx.textAlign = "right";
-      ctx.fillText(chipText, L + innerW - 4, stripY + stripH / 2 + 0.5);
-      ctx.textBaseline = "alphabetic";
-    }
-
     // Signals
-    const sigs: (SignalMark & { oracle: boolean })[] = [
-      ...(this.showRealtime() ? data.signals.map(s => ({ ...s, oracle: false })) : []),
-      ...(this.showOracle()   ? data.oracleSignals.map(s => ({ ...s, oracle: true })) : []),
-    ];
+    const sigs = this.showRealtime() ? data.signals : [];
     sigs.forEach(s => {
       const cx = x(s.i); const up = s.dir === "long";
       const cy = up ? yP(candles[s.i].l) + 16 : yP(candles[s.i].h) - 16;
@@ -346,13 +295,7 @@ export class EdgePriceIVChartComponent implements AfterViewInit {
         ctx.moveTo(cx, cy + sz); ctx.lineTo(cx - sz, cy - sz); ctx.lineTo(cx + sz, cy - sz);
       }
       ctx.closePath();
-      if (s.oracle) {
-        ctx.setLineDash([2, 2]);
-        ctx.strokeStyle = up ? TOK.bull : TOK.bear; ctx.lineWidth = 1.4;
-        ctx.stroke(); ctx.setLineDash([]);
-      } else {
-        ctx.fill();
-      }
+      ctx.fill();
     });
 
     // Crosshair
@@ -417,7 +360,7 @@ function formatBarDate(d: Date, isDaily: boolean): string {
 export class EdgeVrpHistogramComponent implements AfterViewInit {
   width = input.required<number>();
   height = input.required<number>();
-  data = input.required<EdgeData>();
+  data = input.required<RealizedVsIvData>();
   currentIdx = input.required<number>();
 
   @ViewChild("canvas", { static: true }) canvasRef!: ElementRef<HTMLCanvasElement>;
@@ -433,7 +376,7 @@ export class EdgeVrpHistogramComponent implements AfterViewInit {
   }
   ngAfterViewInit(): void { this.draw(this.canvasRef.nativeElement, this.data()); }
 
-  private draw(canvas: HTMLCanvasElement, data: EdgeData): void {
+  private draw(canvas: HTMLCanvasElement, data: RealizedVsIvData): void {
     const w = this.width(); const h = this.height();
     const PAD_L = 36, PAD_R = 12, PAD_T = 8, PAD_B = 24;
     const innerW = w - PAD_L - PAD_R; const innerH = h - PAD_T - PAD_B;
@@ -512,7 +455,7 @@ export interface HeatmapHover { ai: number; pi: number; }
 export class EdgeSharpeHeatmapComponent implements AfterViewInit {
   width = input.required<number>();
   height = input.required<number>();
-  data = input.required<EdgeData>();
+  data = input.required<EdgeSampleData>();
   hoverCell = input<HeatmapHover | null>(null);
 
   hover = output<HeatmapHover | null>();
@@ -543,7 +486,7 @@ export class EdgeSharpeHeatmapComponent implements AfterViewInit {
     else this.hover.emit(null);
   }
 
-  private draw(canvas: HTMLCanvasElement, data: EdgeData): void {
+  private draw(canvas: HTMLCanvasElement, data: EdgeSampleData): void {
     const w = this.width(); const h = this.height();
     const A = data.assets.length; const P = data.periods.length;
     const cellW = (w - this.PAD.L - this.PAD.R) / P;
@@ -604,7 +547,7 @@ export class EdgeSharpeHeatmapComponent implements AfterViewInit {
 export class EdgeRegimePriceChartComponent implements AfterViewInit {
   width = input.required<number>();
   height = input.required<number>();
-  data = input.required<EdgeData>();
+  data = input.required<EdgeSampleData>();
   viewMode = input<"viterbi" | "posterior">("viterbi");
   hoverIdx = input<number | null>(null);
 
@@ -632,7 +575,7 @@ export class EdgeRegimePriceChartComponent implements AfterViewInit {
     if (i >= 0 && i < N) this.hover.emit(i); else this.hover.emit(null);
   }
 
-  private draw(canvas: HTMLCanvasElement, data: EdgeData): void {
+  private draw(canvas: HTMLCanvasElement, data: EdgeSampleData): void {
     const w = this.width(); const h = this.height();
     const { L, R, T, B } = this.PAD;
     const innerW = w - L - R; const innerH = h - T - B;

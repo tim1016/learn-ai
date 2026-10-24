@@ -1,4 +1,6 @@
 <section class="route">
+  <app-sample-data-banner [provenance]="data.provenance" />
+
   <header class="route-toolbar">
     <div class="toolbar-spacer"></div>
     <button class="score-pill" type="button" (click)="scoreOpen.set(true)">
@@ -16,17 +18,17 @@
   <div class="stat-grid">
     <div class="big-stat ok">
       <div class="eyebrow">ROBUSTNESS</div>
-      <div class="big-stat-value">0.62</div>
+      <div class="big-stat-value">{{ data.headline.robustness.toFixed(2) }}</div>
       <div class="big-stat-hint">composite stability across asset × period × split</div>
     </div>
     <div class="big-stat ok">
       <div class="eyebrow">DSR (MEAN)</div>
-      <div class="big-stat-value">0.74</div>
+      <div class="big-stat-value">{{ data.headline.dsrMean.toFixed(2) }}</div>
       <div class="big-stat-hint">Deflated Sharpe Ratio · López de Prado 2014</div>
     </div>
     <div class="big-stat warn">
       <div class="eyebrow">PBO</div>
-      <div class="big-stat-value">0.31</div>
+      <div class="big-stat-value">{{ data.headline.pbo.toFixed(2) }}</div>
       <div class="big-stat-hint">Probability of Backtest Overfitting · CSCV @ 200 combos</div>
     </div>
     <div class="universe-card">
@@ -124,7 +126,7 @@
       <div class="curve-cell">
         <div class="curve-head">
           <span class="curve-tkr">{{ composite() === 'equal-weight' ? 'EW' : 'IVOL' }} · composite</span>
-          <span class="curve-pct" [style.color]="TOK.bull">+12.4%</span>
+          <span class="curve-pct" [style.color]="curveColor(compositeSeries())">{{ fmtPct(curveDelta(compositeSeries())) }}</span>
         </div>
         <app-edge-mini-line [width]="1300" [height]="120"
           [values]="compositeSeries()" [color]="TOK.accent" fill="rgba(41,98,255,0.10)" />

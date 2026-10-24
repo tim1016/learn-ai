@@ -5,8 +5,10 @@ import {
   input,
   output,
 } from "@angular/core";
+import { SampleDataBannerComponent } from "../../../shared/sample-data/sample-data-banner.component";
+import { TimestampDisplayPipe } from "../../../shared/timestamp";
 import { EdgeMiniLineComponent, EDGE_TOK } from "../charts/edge-charts";
-import type { EdgeData } from "../services/edge-mock-data.service";
+import type { EdgeSampleData } from "../services/edge-data.model";
 
 interface EdgeComponentRow {
   k: string; label: string; sub: string;
@@ -17,12 +19,12 @@ interface EdgeComponentRow {
   selector: "app-edge-score-drawer",
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [EdgeMiniLineComponent],
+  imports: [EdgeMiniLineComponent, SampleDataBannerComponent, TimestampDisplayPipe],
   templateUrl: "./edge-score-drawer.component.html",
   styleUrls: ["./edge-score-drawer.component.scss"],
 })
 export class EdgeScoreDrawerComponent {
-  data = input.required<EdgeData>();
+  data = input.required<EdgeSampleData>();
   open = input(false);
   idx = input<number | undefined>(undefined);
 
@@ -31,7 +33,7 @@ export class EdgeScoreDrawerComponent {
   protected readonly TOK = EDGE_TOK;
 
   protected resolvedIdx = computed(() => this.idx() ?? Math.floor(this.data().N / 2));
-  protected dateLabel = computed(() => this.data().dates[this.resolvedIdx()].toISOString().slice(0, 10));
+  protected dateMs = computed(() => this.data().dates[this.resolvedIdx()].getTime());
   protected composite = computed(() => this.data().edgeScore[this.resolvedIdx()]);
   protected action = computed<"LONG VOL" | "SHORT VOL" | "NO TRADE">(() => {
     const c = this.composite();

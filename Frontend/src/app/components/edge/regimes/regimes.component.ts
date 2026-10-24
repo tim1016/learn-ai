@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from "@angular/core";
+import { SampleDataBannerComponent } from "../../../shared/sample-data/sample-data-banner.component";
 import {
   EDGE_TOK,
   EdgeRegimePriceChartComponent,
@@ -23,6 +24,7 @@ type ViewMode = "viterbi" | "posterior";
     EdgeStabilitySparklineComponent,
     EdgeScoreDrawerComponent,
     TradeSimDrawerComponent,
+    SampleDataBannerComponent,
   ],
   templateUrl: "./regimes.component.html",
   styleUrls: ["./regimes.component.scss"],
@@ -48,11 +50,6 @@ export class RegimesComponent {
   ];
 
   readonly radarAxes: readonly string[] = ["trend", "rv_yz", "atr%", "vol_z", "iv30", "skew", "term"];
-  readonly radarData: readonly (readonly number[])[] = [
-    [0.85, 0.30, 0.25, 0.20, 0.45, 0.50, 0.55],
-    [0.20, 0.80, 0.85, 0.90, 0.85, 0.30, 0.40],
-    [0.75, 0.65, 0.60, 0.50, 0.70, 0.55, 0.50],
-  ];
 
   readonly currentScoreLabel = computed(() => {
     const s = this.data.edgeScore[Math.floor(this.data.N / 2)];
