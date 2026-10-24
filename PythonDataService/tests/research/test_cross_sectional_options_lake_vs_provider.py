@@ -9,9 +9,9 @@ frozen frames are the comparison; ``tests/fixtures/golden/options-pricing/XSIV-0
 
 Every difference is classified against the owner decisions on #3524:
 
-* on the payload itself the two paths agree on every selection column and every IV column, to the bit; the one column that
-  differs is ``price_source``, ``vwap`` on the provider path and ``close_filtered`` on the lake path (a *price rule* change,
-  not a number change: the payload's daily ``vw`` is the 15:59 close);
+* on the payload itself selection, solver inputs and non-IV fields agree exactly. The three IV columns allow only the
+  owner-approved platform roundoff (atol 1e-14, rtol 0); missing-value masks remain exact. ``price_source`` is ``vwap`` on
+  the provider path and ``close_filtered`` on the lake path (a *price rule* change: the payload's daily ``vw`` is the 15:59 close);
 * each case below is a payload where they would not agree, run on the lake path alone and named for what the provider path
   did instead: ``data-quality`` (the input data differs), ``timestamp`` (an instant is read differently), ``decision`` (a
   different contract is picked) and ``refusal`` (a member the provider path computed on a partial chain is now left out).
@@ -20,6 +20,7 @@ Every difference is classified against the owner decisions on #3524:
 from __future__ import annotations
 
 import json
+from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date
@@ -36,6 +37,7 @@ from app.config import settings
 from app.data_lake.option_listing import read_option_listing
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.options_backtest.fetching import LakeOptionCapture
+from app.research.options import iv_builder
 from app.research.options.iv_builder import _get_option_price, build_iv_history
 from app.research.options.option_inputs import (
     MemberOptionInputs,
@@ -45,6 +47,7 @@ from app.research.options.option_inputs import (
 )
 from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 from app.utils.session_anchors import et_midnight_ms
+from app.volatility.solver import ImpliedVolResult
 from tests._helpers.fake_lake_catalog import FakeCatalog, install_fake_catalog, point_lake_writer_at_tmp
 from tests._helpers.option_chain import OptionChain, member_inputs, parse_option_ticker, stock_rows
 from tests._helpers.option_chain_vendor import ChainVendor, payload_by_ticker
@@ -59,6 +62,11 @@ NOW_MS = et_midnight_ms(date(2024, 12, 2)) + 12 * 3_600_000
 #: Volatility the chain was priced with is recovered to within the price rounding over the thinnest vega (see
 #: ``tests/research/options/test_iv_builder_member_inputs.py``); the tolerance is not loosened for the lake path.
 IV_ATOL = 1e-5
+# Owner-approved precision exception (#3524; ADR 0069): CI's maximum IV drift from the macOS fixture was
+# 1.27675647831893e-15. Same-runtime provider/lake replay was exact; one-ULP platform math.log drift was isolated.
+# Only final IVs get this bound. Selection, all 336 solver argument tuples, null masks and other fields stay exact.
+PROVIDER_IV_ATOL = 1e-14
+IV_COLUMNS = ("iv_30d_atm", "iv_30d_put", "iv_30d_call")
 
 
 def payload() -> dict:
@@ -140,19 +148,53 @@ def parity(tmp_path_factory: pytest.TempPathFactory) -> Iterator[ParityWorld]:
 
 
 # ---------------------------------------------------------------------------
-# The payload: the two paths agree to the bit
+# The payload: exact scientific inputs; final IVs allow only classified platform roundoff
 # ---------------------------------------------------------------------------
 
 
-def test_the_lake_path_selects_the_same_contracts_and_derives_the_same_iv_as_the_frozen_provider_path(parity):
+def test_the_lake_path_selects_the_same_contracts_and_derives_the_same_iv_as_the_frozen_provider_path(
+    parity: ParityWorld, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    solver_calls: list[dict[str, float | bool]] = []
+    solve = iv_builder.implied_volatility
+
+    def record_solve(**kwargs: float | bool) -> ImpliedVolResult:
+        solver_calls.append(kwargs)
+        return solve(**kwargs)
+
+    monkeypatch.setattr(iv_builder, "implied_volatility", record_solve)
     iv = build_iv_history(parity.data["underlying"], parity.first, RateTally())
 
     assert records(parity.first.bracket) == parity.expected["bracket"], "selection: every column of the contract finder's frame"
     lake, provider = records(iv), parity.expected["iv"]
     assert len(lake) == len(provider) == len(parity.data["window"])
     assert {row["price_source"] for row in provider} == {"vwap"} and {row["price_source"] for row in lake} == {"close_filtered"}
-    unchanged = lambda rows: [{k: v for k, v in row.items() if k != "price_source"} for row in rows]  # noqa: E731
-    assert unchanged(lake) == unchanged(provider), "the IV columns, dte, spot, quality and gaps: bit-exact (==, no tolerance)"
+    unchanged = lambda rows: [{k: v for k, v in row.items() if k not in (*IV_COLUMNS, "price_source")} for row in rows]  # noqa: E731
+    assert unchanged(lake) == unchanged(provider), "dates, dte, spot, quality and gaps: exact (==, no tolerance)"
+    for column in IV_COLUMNS:
+        actual = np.array([row[column] for row in lake], dtype=np.float64)
+        expected = np.array([row[column] for row in provider], dtype=np.float64)
+        missing = np.isnan(expected)
+        np.testing.assert_array_equal(np.isnan(actual), missing, err_msg=f"{column}: exact missing-value mask")
+        np.testing.assert_allclose(actual[~missing], expected[~missing], atol=PROVIDER_IV_ATOL, rtol=0, equal_nan=False, err_msg=column)
+
+    # The provider's frozen picks and prices define the solver arguments independently of lake admission (#3524).
+    # Compare the multiset because solving one contract does not depend on which other contract was solved first.
+    expected_calls = []
+    for row in parity.expected["bracket"]:
+        for side in ("low", "high"):
+            for suffix, is_call in (("atm_contract", True), ("atm_put_contract", False), ("put_contract", False), ("call_contract", True)):
+                ticker = row[f"{side}_dte_{suffix}"]
+                expected_calls.append({
+                    "option_price": parity.data["priced_bars"][ticker][row["date"]],
+                    "spot": row["stock_close"],
+                    "strike": int(ticker[-8:]) / 1000.0,
+                    "ttm": row[f"{side}_dte"] / 365.0,
+                    "rate": parity.data["rate"],
+                    "is_call": is_call,
+                })
+    assert len(solver_calls) == len(expected_calls) == 336
+    assert Counter(tuple(sorted(call.items())) for call in solver_calls) == Counter(tuple(sorted(call.items())) for call in expected_calls)
 
 
 def test_the_lake_path_recovers_the_volatility_the_chain_was_priced_with(parity):

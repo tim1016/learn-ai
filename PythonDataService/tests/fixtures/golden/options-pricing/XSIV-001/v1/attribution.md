@@ -3,7 +3,8 @@
 Receipt for #3540 (Part B: the Cross-sectional study reads its option inputs from the data lake, not from the vendor live).
 Before that change, the study asked the vendor for a month's expiries, an expiry's contracts and each contract's daily bars
 while it built an IV history. This fixture keeps what that **provider path** returned over one pinned chain, so the lake path
-that replaced it can be held to it: same contracts picked, same IV to the bit, with every difference named.
+that replaced it can be held to it: exact contracts and scientific inputs, with the approved platform-precision exception
+for final IVs documented below.
 
 ## Source
 
@@ -38,9 +39,12 @@ worktree, as the script describes.
 readers and admission (a listing as of each date, one 15:59 minute per contract-day whose close is `priced_bars`' price and
 whose volume is 500) and compares the lake path with this output:
 
-- selection (every column of the bracket frame): equal;
-- the IV columns (`iv_30d_atm`, `iv_30d_put`, `iv_30d_call`), `dte_low`, `dte_high`, `stock_close`, `iv_quality` and
-  `missing_reason`: bit-exact. The price is the same number by either rule here (`vw == c` is the 15:59 close), so no IV may move;
+- selection (every column of the bracket frame), dates, `dte_low`, `dte_high`, `stock_close`, `iv_quality` and
+  `missing_reason`: exact;
+- all 336 real solver calls: exact argument tuples against the frozen bracket and `priced_bars` (price, spot, strike,
+  maturity, rate and option type). The recorder calls the real solver; obsolete provider runtime code is not retained;
+- the IV columns (`iv_30d_atm`, `iv_30d_put`, `iv_30d_call`): `atol=1e-14`, `rtol=0` for the platform precision described
+  below, with exact missing-value masks;
 - `price_source`: `"vwap"` on every row of the provider path, `"close_filtered"` on the lake path. That is the one classified
   difference at this payload: the lake stores no volume-weighted price, and the study prices at the last regular-hours trade.
 
@@ -48,11 +52,46 @@ whose volume is 500) and compares the lake path with this output:
 
 `internal_regression`: the oracle is the study's own earlier code, so this pins drift and not equivalence to anything outside
 the repository. The independent check on the numbers is the volatility the chain was priced with: both paths recover it to
-`IV_ATOL = 1.1e-5` (the price rounding over the thinnest vega on this chain), asserted in the same test.
+`IV_ATOL = 1e-5` (the existing test's bound for price rounding over the thinnest vega on this chain), unchanged in the same test.
 
 ## Tolerance
 
-`atol=0`, `rtol=0`. Both paths run the same code on the same numbers; there is no float arithmetic between them to excuse a difference.
+The original comparison required exact final IVs as well as exact inputs. The owner approved **IV-only `atol=1e-14`,
+`rtol=0`** on 2026-10-24 after the precision diagnosis below:
+[decision on #3524](https://github.com/tim1016/learn-ai/issues/3524#issuecomment-6388479348). This is a comparison-policy
+amendment, not a regenerated baseline: the original `input.json` and `output.json` bytes and hashes are unchanged.
+
+### Precision diagnosis and limits
+
+[CI run 40122504247, job 120956908486](https://github.com/tim1016/learn-ai/actions/runs/40122504247/job/120956908486),
+Linux x86-64/Python 3.12.15, failed the original exact comparison. The complete diff contains 42 changed values out of
+126 final IVs across 42 sessions: 22 call IVs and 20 put IVs across 31 sessions. Every ATM IV, every other output field
+and every selection field matched exactly. Maximum absolute drift is **1.27675647831893e-15** (46 ULP at that value),
+the 2024-11-07 put: `0.22091081813026978` versus frozen `0.22091081813027105`. The approved bound is about eight times
+that observed maximum and applies only to this fixture's three IV columns; it is not a claim of a universal solver bound.
+
+Both macOS ARM/Python 3.12.13 and an isolated Linux ARM/Python 3.12.15, glibc 2.41 replay ran the historical provider
+wrapper/finder/builder from `8c9bba4a`, using the fixture-era chain helper from `a200d770`, alongside the current finder
+and builder. The current builder received `MemberOptionInputs` from the existing in-memory helper. Within each runtime,
+all final IVs and all 336 solver inputs/results were bit-exact between the historical and current paths, apart from the
+already-classified `price_source`. The macOS replay also reproduced the original frozen output exactly. Across these
+two runtimes, all solver input tuples, contract selections and generated four-decimal market prices were exact; every
+solve used the Newton path, with no QuantLib or Brent fallback. NumPy 2.2.6, SciPy 1.17.1, pandas 3.0.1 and Numba 0.61.2
+matched between these replays and CI. The canonical solver and interpolation source were unchanged from `8c9bba4a`.
+
+Linux ARM changed one of the 336 individual solves relative to macOS. Its first differing operation was
+`math.log(151.0 / 144.0)`, with the identical argument `1.0486111111111112`: macOS returned `0.04746653723892375`,
+Linux ARM `0.04746653723892376`, one ULP apart. For price 1.1964, spot 151, strike 144, maturity 31/365, rate 0.043,
+put, the solved IV was respectively `0.22454547682425238` and `0.22454547682425352`. Substituting only that Linux
+logarithm result in the macOS diagnostic reproduced the Linux solved IV exactly. Its final interpolated-IV drift was
+9.71445146547012e-16. This isolates platform transcendental rounding in unchanged code as a concrete precision cause.
+
+The Linux ARM replay used no physical lake writers: its runtime image had no pytest/respx. Actual writer/reader/admission
+coverage is supplied by this fixture's ordinary test, including the CI run's passing exact stored-price and selection
+checks. Linux x86-64 was assessed through its complete CI diff, not a local execution of the historical provider on x86.
+The single ARM logarithm probe does not identify every x86 primitive discrepancy. No diagnostic used vendor calls,
+shared Postgres/Redis or live service containers; the disposable Linux process had no network, read-only source mounts,
+dummy configuration and bounded CPU/memory. Only fixture comparison policy changes; pricing and solver arithmetic do not.
 
 ## Not shown
 

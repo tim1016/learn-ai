@@ -4,6 +4,11 @@ Formula: 30-day constant-maturity IV via variance-time interpolation between the
 Reference: Cboe VIX Methodology (2019), constant-maturity total-variance interpolation step only; this module uses selected-contract BSM IVs and does not replicate the model-free VIX calculation.
 Canonical implementation: app/research/options/iv_builder.py
 Validated against: the per-date pair and the end-to-end recovery are pinned by tests/research/options/test_iv_builder_bracket_window.py; tests/research/options/test_iv_builder_member_inputs.py recovers the volatility a priced option chain was generated with; and the whole build, over option inputs read back from the data lake, against the provider path it replaced (golden fixture XSIV-001) by tests/research/test_cross_sectional_options_lake_vs_provider.py. The option's price is its last regular-hours trade (``option_inputs.regular_session_close``): a lake bar carries a close and a volume and no bid, ask or vwap, so the price rule below resolves to its close tier.
+
+Accepted precision exception (#3524, ADR 0069): comparison with XSIV-001's frozen macOS output allows atol=1e-14,
+rtol=0 for final IVs only (measured Linux CI maximum 1.27675647831893e-15). Platform math.log rounding in the unchanged
+Newton solver was isolated; provider/current-builder replay was exact within each tested runtime. Selection, all solver
+inputs, missing-value masks and non-IV fields remain exact. The fixture attribution records the evidence and replay scope.
 """
 from __future__ import annotations
 
