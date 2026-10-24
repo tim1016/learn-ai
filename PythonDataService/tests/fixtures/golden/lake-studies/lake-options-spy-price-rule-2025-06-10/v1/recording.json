@@ -1,0 +1,16 @@
+{
+  "source": "https://github.com/tim1016/learn-ai/issues/3524#issuecomment-6387331949",
+  "vendor_fetched_on": "2026-10-24",
+  "records": [
+    {
+      "kind": "call",
+      "file": "O_SPY250613C00600000_day_2025-06-10.json",
+      "minute_fixture": "options-backtest-spy-2025-06-10"
+    },
+    {
+      "kind": "put",
+      "file": "O_SPY250613P00600000_day_2025-06-10.json",
+      "minute_fixture": "options-backtest-spy-2025-06-10"
+    }
+  ]
+}

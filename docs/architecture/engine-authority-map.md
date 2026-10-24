@@ -44,6 +44,24 @@ fills what is missing; the UI is never a writer), and
 `app/research/lake_study.py` owns the run around a study's math: cache identity,
 the data-source block and the typed refusal. No calculation ownership changes.
 
+**Cross-sectional study data admission (#3524).** The Cross-sectional study admits
+stock bars and option inputs from the lake before computing. Stock targets use
+split-adjusted regular-session daily folds; IV spots and strike picks use raw
+regular-session closes. `app/research/cross_sectional_inputs.py` owns admission
+of the universe through the shared minute reader, and
+`app/research/options/option_inputs.py` owns listing and contract-day admission
+through the lake's existing capture driver and process-wide vendor gate.
+A member with any unavailable stock or option input is excluded with its reason;
+when no member remains the job refuses. The option price is the last minute
+close wholly inside the regular session, with regular volume at least 50
+(owner decision, #3524; ADR 0078). Listings are read as of first use, standard
+contracts only, without a count cap. The session archive and retained contract
+files are interchangeable because identity pins each member's original bytes.
+`app/services/cross_sectional_study_service.py` keys the cache on adjusted, raw
+and option-input digests. FRED remains a separate live reference input; a default
+rate due to its outage degrades the member and prevents caching. IC, N_eff,
+binomial and graduation calculation ownership remains unchanged.
+
 **Indicator reliability data admission (#3523).** Indicator reliability (Research
 Lab → Backtests → Reliability) admits lake bars of the session the person picks
 (regular hours by default, or extended) before it computes; its Polygon fetch and its

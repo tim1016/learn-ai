@@ -3065,6 +3065,155 @@
       "validated_by": [
         "tests/research/test_signal_study_lake_vs_provider.py"
       ]
+    },
+    {
+      "id": "SPY-DAILY-001",
+      "name": "SPY daily bars 2025-01-13 to 17: the vendor's real answer against the Cross-sectional study's regular-session fold of the minute capture",
+      "category": "market-data",
+      "canonical_module": "PythonDataService/app/research/cross_sectional_inputs.py",
+      "canonical_callable": "daily_rows",
+      "reference": {
+        "kind": "vendor_observed",
+        "oracle": "Polygon (Massive) REST API daily aggregates for SPY, 2025-01-13 to 2025-01-17, adjusted=false, recorded byte for byte in input.json",
+        "citation": "GET https://api.polygon.io/v2/aggs/ticker/SPY/range/1/day/2025-01-13/2025-01-17?adjusted=false&sort=asc&limit=50000, recorded 2026-10-24 with the owner's approval, see attribution.md; the minute side is tests/fixtures/polygon_capture/spy_minute_2025-01-13_2025-01-17. https://github.com/tim1016/learn-ai/issues/3524"
+      },
+      "market_input": {
+        "source": "polygon",
+        "vendor": "Polygon (Massive) REST API, recorded byte for byte",
+        "generated_by": "tests/fixtures/golden/market-data/SPY-DAILY-001/v1/regenerate.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 0.0,
+        "rtol": 0.0,
+        "note": "Open, high and low are exact (the study's fold and the vendor's daily bar print the same decimal prices). The close and volume differ for stated reasons: the vendor's close is the official print and its volume counts trades the minute aggregates omit. Those differences are accepted and pinned as measured, the close at atol=1e-9 and the volume share at atol=1e-12, rtol=0, in the validating test; nothing is loosened to make them pass."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "generated": "2026-10-24",
+          "justification": "Recorded for the Cross-sectional study's daily bar (#3524): the owner approved a vendor check of the regular-session fold against Polygon's own daily bars.",
+          "content_sha256": {
+            "input.json": "9d3d66a6c548563d7d1e15b203e0733978734f028eea20ca0e33cc0a405cc674",
+            "output.json": "56739b8b4ba01708e86e32f4944e6dda238b62815109740e8801fe9379dca752",
+            "attribution.md": "23bff12e64d352af00e72431339cf59e2ad78626d86e35aaa58673074e4c5ca0",
+            "regenerate.py": "7f9f0e03bb0d39ae07bd7cda2cb230f7ba68f27e9bf22730a6d9dbbd10adb84d"
+          },
+          "file_sha256": {
+            "input.json": "99731a29543f202041a21894a7a7166225735675e52b5a625962971836774409",
+            "output.json": "7bc388fa5c8fba19823242e74a3146ff29f78e7a485c250432b9b33a0979c08d",
+            "attribution.md": "23bff12e64d352af00e72431339cf59e2ad78626d86e35aaa58673074e4c5ca0",
+            "regenerate.py": "7f9f0e03bb0d39ae07bd7cda2cb230f7ba68f27e9bf22730a6d9dbbd10adb84d"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/research/test_cross_sectional_lake_vs_provider.py::test_the_regular_fold_of_a_real_spy_week_equals_the_vendors_real_daily_open_high_and_low"
+      ]
+    },
+    {
+      "id": "XSIV-001",
+      "name": "The Cross-sectional study's option inputs through the provider path (the vendor's expiries, contracts and daily bars), frozen before they moved to the data lake",
+      "category": "options-pricing",
+      "canonical_module": "PythonDataService/app/research/options/contract_finder.py, PythonDataService/app/research/options/iv_builder.py",
+      "canonical_callable": "find_bracket_contracts, build_iv_history",
+      "reference": {
+        "kind": "internal_regression",
+        "oracle": "self: the study's provider path as of 8c9bba4a (#3540 Part A), whose app/ code the fixture was generated with; the independent check is the volatility the chain was priced with",
+        "citation": "tests/fixtures/golden/options-pricing/XSIV-001/v1/regenerate.py over tests/_helpers/option_chain.OptionChain; https://github.com/tim1016/learn-ai/issues/3524"
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "tests/fixtures/golden/options-pricing/XSIV-001/v1/regenerate.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-14,
+        "rtol": 0.0,
+        "note": "Owner-approved precision exception (#3524, 2026-10-24): only final IVs allow atol=1e-14, rtol=0; measured Linux x86 CI maximum 1.27675647831893e-15 (46 ULP). Platform math.log rounding was isolated in unchanged solver code; historical/current-builder replay was exact within each tested runtime. Selection, all 336 solver input tuples, missing-value masks and non-IV fields remain exact. price_source differs by the named price rule. Original input/output bytes and hashes are unchanged; attribution records evidence and replay limits."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "generated": "2026-10-24",
+          "justification": "Frozen before the Cross-sectional study's option inputs moved from the vendor to the data lake (#3540 Part B), so the lake path can be held to what the provider path returned.",
+          "content_sha256": {
+            "input.json": "8faa9ac2084e9752bed93bb971a64ee0df53b989c6129793680cd5306c202c65",
+            "output.json": "4a3524efbc55146241dd5bf69d310105e20916074de464b0efe1336bb519845d",
+            "attribution.md": "28bca0029eb998c67c2c174e5dd7db4709f084f9c1409acfe2651abf6bb35020",
+            "regenerate.py": "fdaa164f2aacfa5b838f13f8682cd0b0b8969a1f19a1f05547381d91938b8f0c"
+          },
+          "file_sha256": {
+            "input.json": "cfef88d941bf1b7acdb252c03956966e02420f9c2c52276207db856f1f5ce7ab",
+            "output.json": "9f303d1153233b039d7397045e32846d82db95ae255de5e4a05d5bcded699472",
+            "attribution.md": "28bca0029eb998c67c2c174e5dd7db4709f084f9c1409acfe2651abf6bb35020",
+            "regenerate.py": "fdaa164f2aacfa5b838f13f8682cd0b0b8969a1f19a1f05547381d91938b8f0c"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/research/test_cross_sectional_options_lake_vs_provider.py"
+      ]
+    },
+    {
+      "id": "lake-options-spy-price-rule-2025-06-10",
+      "name": "SPY option price rule: last regular-session close against the owner-approved vendor daily VWAP",
+      "category": "lake-studies",
+      "canonical_module": "PythonDataService/app/research/options/option_inputs.py",
+      "canonical_callable": "regular_session_close",
+      "reference": {
+        "kind": "hand_computed",
+        "oracle": "Literal regular-session closes and volume sums from the existing real minute recording, and exact Decimal differences from the approved vendor daily VWAP; independent of the canonical fold.",
+        "citation": "https://github.com/tim1016/learn-ai/issues/3524#issuecomment-6387331949; options-backtest-spy-2025-06-10/v1 minute recording and this fixture attribution."
+      },
+      "market_input": {
+        "source": "polygon",
+        "vendor": "Polygon (Massive) daily aggregates fetched 2026-10-24, recovered from the owner-approved issue comment; minute inputs recorded 2026-10-12.",
+        "generated_by": "tests/fixtures/golden/lake-studies/lake-options-spy-price-rule-2025-06-10/v1/regenerate.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 0.0,
+        "rtol": 0.0,
+        "note": "Exact Decimal equality for the recorded price, volume and regular-close-minus-daily-VWAP differences; a tolerance would hide the wrong minute or aggregation rule."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "recording.json",
+          "output": "expected.json",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "O_SPY250613C00600000_day_2025-06-10.json": "f720965b9407429b5c5184d774dd0262e2c71ec34f1599d4f61f271b4115264b",
+            "O_SPY250613P00600000_day_2025-06-10.json": "2fbbae43d3bf564768a8cca3c1703858af66c622c975e864fec144641297f0cd",
+            "attribution.md": "3b79975e92b25054b474cdf357f1875901fece88eb60468957390eae45a6f4f1",
+            "expected.json": "cc4e79fd4db773618cdbdee8e9553ff2d4011440e70d452fa4c6ea5dc897181e",
+            "recording.json": "d0dc2844db004c6242a14973ecbc74dc010dabe0d2302c66fadd14427e58b057",
+            "regenerate.py": "b74841dfc263a30ebd2291c25c97e418f2643547c13e581c4895f6a7a473eaca"
+          },
+          "file_sha256": {
+            "O_SPY250613C00600000_day_2025-06-10.json": "164ce61f68e50be092bda9805209d3b5236f7577992252c1992d6c880f070800",
+            "O_SPY250613P00600000_day_2025-06-10.json": "58254e607c1479216381c02e1db480566cfc05efee13a12ae3801c73902c3839",
+            "attribution.md": "3b79975e92b25054b474cdf357f1875901fece88eb60468957390eae45a6f4f1",
+            "expected.json": "1664aaf1536d2c57ddbb6e446321d463903096e720294a52b304052e486bc312",
+            "recording.json": "c6db90c95c9970614401c1cd2bde466d580a77d3042b3375fe7d239bafee11ca",
+            "regenerate.py": "b74841dfc263a30ebd2291c25c97e418f2643547c13e581c4895f6a7a473eaca"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/research/options/test_option_inputs_fold.py::test_the_vendors_real_spy_day_through_the_lake_prices_each_option_at_its_15_59_close"
+      ]
     }
   ]
 }

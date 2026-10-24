@@ -16,11 +16,20 @@ import {
   ValiditySummary,
 } from '../../../../services/research.service';
 import { AssetIdentityComponent } from '../../../../shared/asset-identity/asset-identity.component';
+import { CrossSectionalUniverseNoticeComponent } from '../universe-notice/universe-notice.component';
 
 /** The cross-sectional study's result view: verdict, aggregate cards, binomial row, per-ticker table. */
 @Component({
   selector: 'app-cross-sectional-report',
-  imports: [CommonModule, TableModule, TagModule, TooltipModule, CardModule, AssetIdentityComponent],
+  imports: [
+    CommonModule,
+    TableModule,
+    TagModule,
+    TooltipModule,
+    CardModule,
+    AssetIdentityComponent,
+    CrossSectionalUniverseNoticeComponent,
+  ],
   templateUrl: './cross-sectional-report.component.html',
   styleUrl: './cross-sectional-report.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,

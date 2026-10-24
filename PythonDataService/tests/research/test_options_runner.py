@@ -150,6 +150,7 @@ class TestOptionsRunner:
         )
 
         assert report.error is None, "report has no error"
+        assert report.failure_code is None, "and no failure code"
         assert report.bars_used > 0, "report uses bars"
 
     def test_insufficient_data_fails(self):
@@ -167,6 +168,7 @@ class TestOptionsRunner:
 
         assert report.error is not None
         assert report.passed_validation is False
+        assert report.failure_code == "iv_failed_diagnostics", "too little IV is the IV history being unfit, not the math failing"
 
     def test_bad_iv_data_fails_diagnostics(self):
         """IV data with too many missing values should fail diagnostics."""
@@ -201,3 +203,22 @@ class TestOptionsRunner:
             or "missing" in report.error.lower()
             or "valid" in report.error.lower()
         )
+        assert report.failure_code == "iv_failed_diagnostics"
+
+    def test_a_failure_of_the_studys_own_math_is_typed_as_a_computation_error(self):
+        """IV dates that never meet the stock dates raise in the merge; that is not the IV history failing its gate."""
+        iv_data, stock_bars = _make_synthetic_data(n_days=60)
+        for row in iv_data:
+            row["date"] = "1999-01-01"  # 60 usable IV days on a date no stock bar has
+
+        report = run_options_feature_research(
+            ticker="SPY",
+            feature_name="iv_30d",
+            iv_data=iv_data,
+            stock_daily_bars=stock_bars,
+            start_date="2024-01-01",
+            end_date="2024-04-01",
+        )
+
+        assert report.error is not None and "aligned" in report.error
+        assert report.failure_code == "computation_error"

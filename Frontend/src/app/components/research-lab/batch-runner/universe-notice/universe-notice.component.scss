@@ -1,0 +1,24 @@
+@use '../../../../styles/tokens' as *;
+
+:host {
+  display: block;
+}
+
+.universe-notice {
+  display: flex;
+  gap: 0.625rem;
+  align-items: flex-start;
+  margin-bottom: 1rem;
+  padding: 0.625rem 0.875rem;
+  background: rgba($warn, 0.08);
+  border: 1px solid rgba($warn, 0.25);
+  border-left: 3px solid $warn;
+  border-radius: 6px;
+  font-size: 0.8125rem;
+  color: $text-secondary;
+  line-height: 1.5;
+
+  i { color: $warn; flex-shrink: 0; margin-top: 0.125rem; }
+  strong { color: $text-primary; font-weight: 600; }
+  .block { display: block; }
+}

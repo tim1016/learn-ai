@@ -26,7 +26,7 @@ describe('StudyListComponent', () => {
     await renderList();
 
     const studies = within(screen.getByRole('list', { name: 'Studies' }));
-    expect(studies.getAllByText(/^Reads Polygon/).length, 'the Cross-sectional study still reads the provider').toBe(1);
+    expect(studies.getAllByText('Reads Data lake, Polygon, FRED risk-free rate (live)').length, 'the Cross-sectional study reads its stock bars from the lake').toBe(1);
     expect(studies.getAllByText('Reads Data lake, Polygon').length, 'the Feature, Signal and Indicator reliability studies read the lake').toBe(3);
     expect(
       studies.getAllByText('Reads Data lake, Polygon, IV recorder (recorded IV30), Polygon option snapshot (current IV marker)').length,

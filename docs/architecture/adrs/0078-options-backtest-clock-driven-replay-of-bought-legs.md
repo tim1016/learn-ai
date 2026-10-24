@@ -273,6 +273,19 @@ Why. Two runs at once must not double the rate the vendor sees, and nothing shou
 
 **Configurable limit amendment (#3479, #3480; owner, 2026-10-22).** The one limit is now the deployment setting `OPTION_VENDOR_REQUESTS_IN_FLIGHT`: default four, at most 64. It still bounds the whole process through the same gate. The owner raised it on the archive machine to capture the two-year option backlog faster. Each request mostly waits on the vendor, and the paid plan has no per-minute cap. At 32 in flight the vendor answered every request without throttling. A vendor 429 puts that session back on retry, so a vendor that throttles slows the archive without stalling it.
 
+**Cross-sectional study amendment (#3524, #3540; owner, 2026-10-24).** The study
+saves the option listings and contract days it needs through the same foreground
+capture driver and process-wide gate, one member at a time: at most four listing
+requests or eight contract-day requests for one session in flight. At the archive
+machine's configured 32 slots this leaves at least 24 slots for other callers.
+It reads archived sessions through the whole-container validator; only folded
+contract prices survive that read. Whole-container decode cost is accepted for
+this release and measured separately (#3551). A missing archived session is
+captured now and kept for later archive adoption, so re-running a study consumes
+the same stored bytes. A missing input older than the options plan refuses the
+member without a vendor request. FRED remains a labelled live reference input.
+
+
 ### 17. A stored day that cannot be read, or holds a bar that cannot be placed, is refused whole
 
 *Whose:* made for the owner. It applies the fail-fast rule of the temporal-rigor rules.

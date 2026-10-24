@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import asdict
 from datetime import date
 from typing import Annotated, Any, Literal
 
@@ -35,14 +34,9 @@ from pydantic.alias_generators import to_camel
 
 from app.engine.edge.confidence import DEFAULT_CONFIDENCE_FLOOR
 from app.engine.edge.features_realtime.hf_realized_vol import Session as HfSession
-from app.jobs import cache as result_cache
 from app.jobs.progress import JobCancelled, ProgressEmitter
 from app.jobs.runner import run_in_thread
 from app.models.requests import DatasetGenerationRequest
-from app.research.batch_runner import (
-    CrossSectionalReport,
-    run_cross_sectional_study,
-)
 from app.research.lake_study import SESSION_POLICY_FOR_REQUEST
 from app.research.study_records.captures import capture_realized_vs_iv
 from app.research.study_records.models import RecordId
@@ -53,7 +47,9 @@ from app.schemas.ticker_request import (
     MultiTickerRequest,
     Session,
     TickerRequest,
+    Timespan,
 )
+from app.services.cross_sectional_study_service import CrossSectionalParams, run_cross_sectional_job
 from app.services.dataset_service import RunCancelledError
 from app.services.engine_backtest_service import execute_engine_backtest
 from app.services.feature_study_service import FeatureStudyParams, run_feature_study
@@ -200,16 +196,34 @@ class CrossSectionalJobRequest(_CamelCaseMultiTickerRequest):
 
     The Frontend's research request, plus an injected ``job_id`` from the
     jobs facade.
+
+    The study runs on daily bars (``app.research.cross_sectional_inputs``), so the
+    inherited ``timespan`` default of ``minute`` is overridden to ``day``: a caller
+    that names no resolution gets the study it always got, and any other resolution
+    is refused with a reason. Daily bars use only the scheduled regular session
+    (the owner's decision, #3524); ``extended`` is refused at the request boundary.
     """
 
+    timespan: Timespan = "day"
+    session: Literal["rth"] = "rth"
     job_id: str = Field(..., min_length=1)
     feature_name: str = Field(..., min_length=1)
     target_type: str = "directional"
     force: bool = False
     """Skip the result cache and always re-run. Default: serve from
-    cache if a prior run with identical params is still warm."""
+    cache if a prior run over the same admitted data is still warm."""
     rerun_of: RecordId | None = None
     """The saved run this one was prefilled from (the History's Rerun); lineage only, never an input."""
+
+    @field_validator("symbols")
+    @classmethod
+    def _symbols_are_distinct(cls, symbols: list[str]) -> list[str]:
+        """A repeated symbol would be counted twice in every statistic; refuse it rather than pick a reading."""
+        upper = [symbol.upper() for symbol in symbols]
+        repeated = sorted({symbol for symbol in upper if upper.count(symbol) > 1})
+        if repeated:
+            raise ValueError(f"symbols must not repeat: {', '.join(repeated)}")
+        return symbols
 
 
 class FeatureResearchJobRequest(_CamelCaseTickerRequest):
@@ -698,114 +712,35 @@ async def start_lean_engine_run_job(req: LeanEngineRunJobRequest) -> dict:
 async def start_cross_sectional_job(req: CrossSectionalJobRequest) -> dict:
     """Kick off a cross-sectional study in a worker thread. Returns 202.
 
-    The runner processes tickers sequentially — ~30–90 seconds per ticker
-    on Polygon Starter — so we wire ``ProgressEmitter`` into the runner's
-    optional ``on_phase`` / ``on_log`` / ``on_progress`` callbacks. The
-    Frontend's run-dock subscribes to the SSE stream and renders each
-    ticker's status as it lands.
+    The worker admits each member's daily stock bars from the data lake
+    (materializing what it lacks) and then its option inputs (saving what the
+    lake lacks), then runs the members one after another, wiring
+    ``ProgressEmitter`` into the runner's ``on_phase`` / ``on_log`` /
+    ``on_progress`` callbacks so the run-dock shows each ticker as it lands.
+    A member the lake cannot admit is excluded with its reason; when none can
+    be the job fails with a typed refusal and computes nothing.
 
-    A successful prior run with identical params is served from cache —
-    the response carries ``status=cached`` and the worker thread is
-    skipped. Pass ``force=true`` in the body to bypass the cache.
+    A prior run over the same admitted data with nothing failed in it is served
+    from cache (the lookup follows admission — see
+    ``app.services.cross_sectional_study_service``). Pass ``force=true`` to bypass.
     """
-    # Note: ``req.symbols`` is already validated by Pydantic (min_length=1
-    # on the list, plus per-element ``min_length=1, max_length=20`` from
-    # ``MultiTickerRequest``); an empty list or empty-string element fails
-    # at validation, never reaches here.
+    # Note: ``req.symbols`` is already validated by Pydantic (non-empty list, no repeats).
     if not req.feature_name.strip():
         raise HTTPException(status_code=400, detail="feature_name is required")
 
-    cache_params = {
-        "feature_name": req.feature_name,
-        "tickers": req.symbols,
-        "from_date": req.from_date,
-        "to_date": req.to_date,
-        "target_type": req.target_type,
-    }
-    if not req.force:
-        hit = result_cache.lookup("cross_sectional", cache_params)
-        if hit is not None:
-            _, cached = hit
-            result_cache.serve_cached_result(req.job_id, "cross_sectional", cached)
-            return {"job_id": req.job_id, "status": "cached"}
+    params = CrossSectionalParams(
+        feature_name=req.feature_name,
+        symbols=tuple(t.upper() for t in req.symbols),
+        from_date=date.fromisoformat(req.from_date),
+        to_date=date.fromisoformat(req.to_date),
+        timespan=req.timespan,
+        multiplier=req.multiplier,
+        target_type=req.target_type,
+        session_policy=SESSION_POLICY_FOR_REQUEST[req.session],
+    )
 
-    def work(emit: ProgressEmitter, cancel) -> dict:
-        cancel.raise_if_cancelled()
-        emit.phase("starting")
-        emit.log(
-            f"Starting cross-sectional study on {len(req.symbols)} ticker"
-            f"{'' if len(req.symbols) == 1 else 's'} "
-            f"({', '.join(t.upper() for t in req.symbols[:5])}"
-            f"{'…' if len(req.symbols) > 5 else ''}) "
-            f"for feature '{req.feature_name}'"
-        )
-
-        def on_phase(phase: str) -> None:
-            cancel.raise_if_cancelled()
-            emit.phase(phase)
-
-        def on_log(message: str) -> None:
-            emit.log(message)
-
-        def on_progress(current: int, total: int, message: str) -> None:
-            emit.progress(
-                current=current,
-                total=total,
-                unit="tickers",
-                message=message,
-            )
-
-        def cancel_check() -> bool:
-            # Raises JobCancelled when set; otherwise returns False so
-            # call sites can use it either as a poll or as a sync barrier.
-            cancel.raise_if_cancelled()
-            return False
-
-        report: CrossSectionalReport = run_cross_sectional_study(
-            feature_name=req.feature_name,
-            tickers=[t.upper() for t in req.symbols],
-            start_date=req.from_date,
-            end_date=req.to_date,
-            polygon_client=polygon_client,
-            target_type=req.target_type,
-            on_phase=on_phase,
-            on_log=on_log,
-            on_progress=on_progress,
-            cancel_check=cancel_check,
-        )
-
-        cancel.raise_if_cancelled()
-        emit.phase("completed")
-        emit.log(report.summary)
-
-        # Snake-case dict the Frontend mapper transforms into camelCase
-        # ``BatchResearchResult``. ``tickers_tested`` is kept as a legacy
-        # alias for the raw count so any older consumer keeps working;
-        # new consumers should use ``tickers_tested_raw`` /
-        # ``tickers_valid`` / ``validity_summary``.
-        result = {
-            "success": True,
-            "feature_name": report.feature_name,
-            "target_type": report.target_type,
-            "tickers_tested": report.tickers_tested_raw,
-            "tickers_tested_raw": report.tickers_tested_raw,
-            "tickers_valid": report.tickers_valid,
-            "tickers_passed": report.tickers_passed,
-            "pass_rate": report.pass_rate,
-            "cross_sectional_consistent": report.cross_sectional_consistent,
-            "aggregate_ic": report.aggregate_ic,
-            "aggregate_ic_uniform": report.aggregate_ic_uniform,
-            "aggregate_ic_ci": asdict(report.aggregate_ic_ci),
-            "binomial_test": asdict(report.binomial_test),
-            "n_eff_assets": report.n_eff_assets,
-            "n_eff_assets_method": report.n_eff_assets_method,
-            "validity_summary": asdict(report.validity_summary),
-            "stage_info": asdict(report.stage_info),
-            "ticker_results": report.ticker_results,
-            "summary": report.summary,
-        }
-        result_cache.store("cross_sectional", cache_params, result)
-        return result
+    def work(emit: ProgressEmitter, cancel) -> dict | None:
+        return run_cross_sectional_job(params, job_id=req.job_id, force=req.force, emit=emit, cancel=cancel)
 
     run_in_thread(
         req.job_id,

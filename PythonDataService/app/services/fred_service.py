@@ -1,8 +1,8 @@
 """FRED Treasury rate service for dynamic risk-free rate interpolation.
 
-Formula: Linear interpolation in DTE between the 4 published Treasury tenors (DTB4WK / DTB3 / DTB6 / DTB1YR). For DTE outside the tenor range, clamp to the nearest tenor. `DEFAULT_RISK_FREE_RATE` is used when FRED is unreachable (logged warning), and the rate's source then says so.
+Formula: Linear interpolation in DTE between the 4 published Treasury tenors (DTB4WK / DTB3 / DTB6 / DTB1YR). For DTE outside the tenor range, clamp to the nearest tenor. `DEFAULT_RISK_FREE_RATE` is used when FRED is unreachable (logged warning), and the rate's source then says so; `RateResolution.fetch_failed` tells an outage (a key is configured and FRED gave no rate) from a deployment with no key.
 Reference: FRED data series — `https://fred.stlouisfed.org/series/{DTB4WK,DTB3,DTB6,DTB1YR}`. Variance-time / DTE interpolation across the published Treasury yield curve is the standard convention; CME options-pricing systems use the same family of tenors.
-Canonical implementation: this file (`get_risk_free_rate`). Its fallback is `app/services/risk_free_rate.py::DEFAULT_RISK_FREE_RATE`, the one default a pricing request with no rate also uses, so a failed lookup and an omitted rate price at the same number (#2764).
+Canonical implementation: this file (`get_risk_free_rate_and_source`; `resolve_risk_free_rate` adds whether a fallback was a FRED outage). Its fallback is `app/services/risk_free_rate.py::DEFAULT_RISK_FREE_RATE`, the one default a pricing request with no rate also uses, so a failed lookup and an omitted rate price at the same number (#2764).
 Validated against: PythonDataService/tests/test_fred_service.py (interpolation, fallback, parsing).
 
 Fetches daily Treasury bill/bond rates from FRED and interpolates
@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -38,6 +39,20 @@ TENOR_MAP: dict[str, int] = {
 # Where a resolved rate came from: FRED, or the one default when FRED could not answer.
 RATE_SOURCE_FRED = "FRED"
 RATE_SOURCE_DEFAULT = "default"
+
+
+@dataclass(frozen=True)
+class RateResolution:
+    """A resolved risk-free rate, where it came from, and whether a default was a FRED outage.
+
+    ``fetch_failed`` is true only for a default taken while a FRED key *is* configured: FRED was asked and gave no
+    rate, so asking again could answer differently. A default taken with no key configured is the same on every
+    attempt until the configuration changes, so it is not a failure to ask again.
+    """
+
+    rate: float
+    source: str
+    fetch_failed: bool = False
 
 # Cache: {observation_date_str: {dte_days: rate}}
 _rate_cache: dict[str, dict[int, float]] = {}
@@ -135,26 +150,28 @@ def _interpolate_rate(rates: dict[int, float], dte_days: float) -> float:
     return DEFAULT_RISK_FREE_RATE
 
 
-def get_risk_free_rate(dte_days: float = 30, observation_date: str | None = None) -> float:
-    """Get interpolated risk-free rate for a given DTE.
-
-    Args:
-        dte_days: Days to expiration for the option; fractional when measured
-                  to an expiry anchor instant.
-        observation_date: Date string (YYYY-MM-DD) for which to fetch rates.
-                         Defaults to today.
-
-    Returns:
-        Annualized risk-free rate as a decimal (e.g. 0.043 for 4.3%).
-        Falls back to DEFAULT_RISK_FREE_RATE on any error.
-    """
-    rate, _source = get_risk_free_rate_and_source(dte_days, observation_date)
-    return rate
+def fred_key_configured() -> bool:
+    """True when a FRED API key is configured, so a default rate means FRED was asked and did not answer."""
+    return bool(getattr(settings, "FRED_API_KEY", None))
 
 
 def get_risk_free_rate_and_source(dte_days: float = 30, observation_date: str | None = None) -> tuple[float, str]:
-    """``get_risk_free_rate`` plus where the rate came from: ``RATE_SOURCE_FRED``,
-    or ``RATE_SOURCE_DEFAULT`` when FRED could not answer."""
+    """Interpolated risk-free rate for a given DTE, and where it came from.
+
+    Args:
+        dte_days: Days to expiration of the option; fractional when measured to an expiry anchor instant.
+        observation_date: Date string (YYYY-MM-DD) for which to fetch rates. Defaults to today.
+
+    Returns:
+        ``(rate, source)``: the annualized rate as a decimal (0.043 for 4.3%) and ``RATE_SOURCE_FRED``, or
+        ``DEFAULT_RISK_FREE_RATE`` and ``RATE_SOURCE_DEFAULT`` when FRED could not answer.
+    """
+    resolution = resolve_risk_free_rate(dte_days, observation_date)
+    return resolution.rate, resolution.source
+
+
+def resolve_risk_free_rate(dte_days: float = 30, observation_date: str | None = None) -> RateResolution:
+    """``get_risk_free_rate_and_source`` plus whether a default rate was a FRED outage (:class:`RateResolution`)."""
     global _rate_cache, _cache_timestamp
 
     if observation_date is None:
@@ -163,7 +180,7 @@ def get_risk_free_rate_and_source(dte_days: float = 30, observation_date: str | 
     # Check cache
     if _is_cache_valid() and observation_date in _rate_cache:
         cached_rates = _rate_cache[observation_date]
-        return _interpolate_rate(cached_rates, dte_days), RATE_SOURCE_FRED
+        return RateResolution(_interpolate_rate(cached_rates, dte_days), RATE_SOURCE_FRED)
 
     # Fetch fresh rates
     rates = _fetch_all_tenors(observation_date)
@@ -179,10 +196,10 @@ def get_risk_free_rate_and_source(dte_days: float = 30, observation_date: str | 
             dte_days,
             result,
         )
-        return result, RATE_SOURCE_FRED
+        return RateResolution(result, RATE_SOURCE_FRED)
 
     logger.warning("[FRED] No rates available for %s, using fallback %.4f", observation_date, DEFAULT_RISK_FREE_RATE)
-    return DEFAULT_RISK_FREE_RATE, RATE_SOURCE_DEFAULT
+    return RateResolution(DEFAULT_RISK_FREE_RATE, RATE_SOURCE_DEFAULT, fetch_failed=fred_key_configured())
 
 
 def clear_cache() -> None:

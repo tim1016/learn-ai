@@ -6,15 +6,17 @@ from unittest.mock import patch
 
 import pytest
 
+from app.config import settings
 from app.services.fred_service import (
     RATE_SOURCE_DEFAULT,
     RATE_SOURCE_FRED,
     TENOR_MAP,
+    RateResolution,
     _interpolate_rate,
     _parse_latest_rate,
     clear_cache,
-    get_risk_free_rate,
     get_risk_free_rate_and_source,
+    resolve_risk_free_rate,
 )
 from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 
@@ -70,7 +72,7 @@ class TestParseLatestRate:
 
 
 class TestGetRiskFreeRate:
-    """Test the main get_risk_free_rate function with mocked FRED calls."""
+    """Test the rate lookup with mocked FRED calls."""
 
     def setup_method(self):
         clear_cache()
@@ -79,20 +81,17 @@ class TestGetRiskFreeRate:
     def test_fetches_and_caches(self, mock_fetch):
         mock_fetch.return_value = [{"value": "5.10"}]
 
-        rate = get_risk_free_rate(dte_days=30, observation_date="2025-01-15")
-        assert rate > 0
-        assert rate == pytest.approx(0.051)  # 5.10% → 0.051
+        rate, source = get_risk_free_rate_and_source(dte_days=30, observation_date="2025-01-15")
+        assert source == RATE_SOURCE_FRED
+        assert rate == pytest.approx(0.051)  # 5.10% -> 0.051
 
         # Verify all 4 tenor series were fetched
         assert mock_fetch.call_count == len(TENOR_MAP)
-        assert get_risk_free_rate_and_source(dte_days=30, observation_date="2025-01-15")[1] == RATE_SOURCE_FRED
 
     @patch("app.services.fred_service._fetch_series")
     def test_fallback_on_failure(self, mock_fetch):
         mock_fetch.return_value = []
 
-        rate = get_risk_free_rate(dte_days=30, observation_date="2025-01-15")
-        assert rate == DEFAULT_RISK_FREE_RATE
         # A fallback is never reported as FRED's answer (#2764).
         assert get_risk_free_rate_and_source(dte_days=30, observation_date="2025-01-15") == (
             DEFAULT_RISK_FREE_RATE,
@@ -103,8 +102,34 @@ class TestGetRiskFreeRate:
     def test_cache_prevents_refetch(self, mock_fetch):
         mock_fetch.return_value = [{"value": "4.30"}]
 
-        get_risk_free_rate(dte_days=30, observation_date="2025-01-15")
+        get_risk_free_rate_and_source(dte_days=30, observation_date="2025-01-15")
         initial_count = mock_fetch.call_count
 
-        get_risk_free_rate(dte_days=30, observation_date="2025-01-15")
+        get_risk_free_rate_and_source(dte_days=30, observation_date="2025-01-15")
         assert mock_fetch.call_count == initial_count  # No additional calls
+
+
+class TestResolveRiskFreeRate:
+    """A default rate is an outage only when a key is configured: the one case where asking again could answer."""
+
+    def setup_method(self):
+        clear_cache()
+
+    @pytest.mark.parametrize(
+        ("api_key", "fetch_failed"),
+        [pytest.param("", False, id="no_key_is_the_same_answer_every_time"), pytest.param("k", True, id="key_but_no_rate_is_an_outage")],
+    )
+    @patch("app.services.fred_service._fetch_series", return_value=[])
+    def test_a_default_says_whether_fred_was_asked_and_did_not_answer(self, _fetch, monkeypatch, api_key, fetch_failed):
+        monkeypatch.setattr(settings, "FRED_API_KEY", api_key, raising=False)
+
+        assert resolve_risk_free_rate(30, "2025-01-15") == RateResolution(DEFAULT_RISK_FREE_RATE, RATE_SOURCE_DEFAULT, fetch_failed)
+
+    @patch("app.services.fred_service._fetch_series", return_value=[{"value": "5.10"}])
+    def test_a_rate_fred_gave_is_never_an_outage(self, _fetch, monkeypatch):
+        monkeypatch.setattr(settings, "FRED_API_KEY", "k", raising=False)
+
+        first = resolve_risk_free_rate(30, "2025-01-15")
+        cached = resolve_risk_free_rate(30, "2025-01-15")
+
+        assert first == cached == RateResolution(pytest.approx(0.051), RATE_SOURCE_FRED, False)

@@ -117,15 +117,17 @@ export const RESEARCH_STUDIES: readonly StudyDefinition[] = [
     help: null,
     constraints: [
       { label: 'Bars', value: 'daily, fixed' },
-      { label: 'Session', value: "the provider's daily bar, fixed" },
+      { label: 'Session', value: 'regular trading hours, one bar per session, fixed' },
     ],
+    // Stock bars and option inputs are admitted from the lake (#3524); FRED stays a separate live reference.
     source: providerSource({
-      sources: ['Polygon stock bars', 'Polygon option bars', 'FRED risk-free rate'],
-      adjustment: 'split_adjusted',
-      resolution: 'daily',
+      sources: ['Data lake', 'polygon', 'FRED risk-free rate (live)'],
+      adjustment: 'polygon_split_adjusted',
+      resolution: 'daily bars, folded from 1-minute bars',
+      sessionPolicy: 'regular',
     }),
     limitations: [
-      'Implied volatility is rebuilt from the provider’s option bars, so a member with no usable option history is left out of the statistics and listed with its reason.',
+      'Implied volatility uses saved option listings and each option’s last regular-hours trade. A member without usable option inputs is left out and listed with its reason.',
       'Only the members counted as valid enter the aggregate; the counts above the table say how many that is.',
     ],
     nextStep: 'Widen or narrow the universe, or change the feature or the target, and run again.',

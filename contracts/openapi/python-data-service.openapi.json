@@ -12227,7 +12227,7 @@
       },
       "CrossSectionalJobRequest": {
         "additionalProperties": false,
-        "description": "Body of POST /api/jobs-internal/cross-sectional.\n\nThe Frontend's research request, plus an injected ``job_id`` from the\njobs facade.",
+        "description": "Body of POST /api/jobs-internal/cross-sectional.\n\nThe Frontend's research request, plus an injected ``job_id`` from the\njobs facade.\n\nThe study runs on daily bars (``app.research.cross_sectional_inputs``), so the\ninherited ``timespan`` default of ``minute`` is overridden to ``day``: a caller\nthat names no resolution gets the study it always got, and any other resolution\nis refused with a reason. Daily bars use only the scheduled regular session\n(the owner's decision, #3524); ``extended`` is refused at the request boundary.",
         "properties": {
           "featureName": {
             "minLength": 1,
@@ -12268,13 +12268,9 @@
             "title": "Rerunof"
           },
           "session": {
+            "const": "rth",
             "default": "rth",
-            "enum": [
-              "rth",
-              "extended"
-            ],
-            "title": "Session",
-            "type": "string"
+            "title": "Session"
           },
           "symbols": {
             "items": {
@@ -12290,7 +12286,7 @@
             "type": "string"
           },
           "timespan": {
-            "default": "minute",
+            "default": "day",
             "enum": [
               "minute",
               "hour",
@@ -90614,7 +90610,7 @@
     },
     "/api/jobs-internal/cross-sectional": {
       "post": {
-        "description": "Kick off a cross-sectional study in a worker thread. Returns 202.\n\nThe runner processes tickers sequentially \u2014 ~30\u201390 seconds per ticker\non Polygon Starter \u2014 so we wire ``ProgressEmitter`` into the runner's\noptional ``on_phase`` / ``on_log`` / ``on_progress`` callbacks. The\nFrontend's run-dock subscribes to the SSE stream and renders each\nticker's status as it lands.\n\nA successful prior run with identical params is served from cache \u2014\nthe response carries ``status=cached`` and the worker thread is\nskipped. Pass ``force=true`` in the body to bypass the cache.",
+        "description": "Kick off a cross-sectional study in a worker thread. Returns 202.\n\nThe worker admits each member's daily stock bars from the data lake\n(materializing what it lacks) and then its option inputs (saving what the\nlake lacks), then runs the members one after another, wiring\n``ProgressEmitter`` into the runner's ``on_phase`` / ``on_log`` /\n``on_progress`` callbacks so the run-dock shows each ticker as it lands.\nA member the lake cannot admit is excluded with its reason; when none can\nbe the job fails with a typed refusal and computes nothing.\n\nA prior run over the same admitted data with nothing failed in it is served\nfrom cache (the lookup follows admission \u2014 see\n``app.services.cross_sectional_study_service``). Pass ``force=true`` to bypass.",
         "operationId": "start_cross_sectional_job_api_jobs_internal_cross_sectional_post",
         "requestBody": {
           "content": {

@@ -84,6 +84,7 @@ export interface LakeCoverageRaw {
 export interface LakeDataSourceRaw {
   kind: 'lake';
   provider: string;
+  /** The symbol, or a universe's label when the study reads several. */
   symbol: string;
   price_adjustment_mode: string;
   session_policy: LakeSessionPolicy;
@@ -93,11 +94,12 @@ export interface LakeDataSourceRaw {
   /** The first and last session admitted (ET midnight); `null` until admission succeeds. */
   effective_window: { start_ms: number; end_ms: number } | null;
   warmup_sessions: number;
-  bar_minutes: number;
+  /** The fold length in minutes; `null` when the study's bar is one New York session (a daily bar). */
+  bar_minutes: number | null;
   aggregation: string;
   identity_digest: string;
   calculation_version: string;
-  /** sha256 of every byte read; `null` when nothing was admitted. */
+  /** sha256 of every byte read (of the members' digests, for a universe); `null` when nothing was admitted. */
   snapshot_digest: string | null;
   coverage: LakeCoverageRaw | null;
   bars_used: number | null;
@@ -160,6 +162,7 @@ export interface LakeCoverage {
 
 export interface LakeStudyDataSource {
   provider: string;
+  /** The symbol, or a universe's label when the study reads several. */
   symbol: string;
   priceAdjustmentMode: string;
   /** `extended` is every bar the provider served for the day; `regular` is the scheduled session. */
@@ -168,7 +171,8 @@ export interface LakeStudyDataSource {
   windowEndMs: number;
   effectiveWindow: { startMs: number; endMs: number } | null;
   warmupSessions: number;
-  barMinutes: number;
+  /** `null` for daily bars, which are a fold per session rather than a number of minutes. */
+  barMinutes: number | null;
   aggregation: string;
   identityDigest: string;
   calculationVersion: string;
@@ -292,9 +296,9 @@ export function readLakeStudyRefusal(payload: unknown): LakeStudyRefused | null 
 /** Minutes in the fold that makes a daily bar (`DAY_BAR_MINUTES` in the Realized vs IV study). */
 const DAILY_BAR_MINUTES = 24 * 60;
 
-function resolutionText(barMinutes: number): string {
+function resolutionText(barMinutes: number | null): string {
   if (barMinutes === 1) return '1-minute bars';
-  if (barMinutes === DAILY_BAR_MINUTES) return 'daily bars, folded from 1-minute bars';
+  if (barMinutes === null || barMinutes === DAILY_BAR_MINUTES) return 'daily bars, folded from 1-minute bars';
   return `${barMinutes}-minute bars, folded from 1-minute bars`;
 }
 

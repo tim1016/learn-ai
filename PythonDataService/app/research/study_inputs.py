@@ -74,7 +74,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 from uuid import UUID
 
 import asyncpg
@@ -186,7 +186,9 @@ _UNREADABLE_FILE: tuple[type[Exception], ...] = (*_DECODE_ERRORS, AdjustmentVers
 # it waits out a live writer and steals a dead one's lease — so admission asks it and never calls the file damaged.
 _REPAIRED_BY_CAPTURE: tuple[type[Exception], ...] = (LakeAdmissionError, AdjustmentVersionError)
 
-_REFUSAL_PRECEDENCE: tuple[tuple[SessionOutcome, RefusalCode], ...] = (
+#: Which code a study answers with when several sessions (or other inputs) fail for different reasons: the first outcome
+#: in this order that any of them shows.
+REFUSAL_PRECEDENCE: tuple[tuple[SessionOutcome, RefusalCode], ...] = (
     ("unavailable_from_provider", "data_unavailable_from_provider"),
     ("corrupt", "data_corrupt"),
     ("captured_before_final", "captured_before_final"),
@@ -535,9 +537,22 @@ def _recorded_empty_prefix(
     return failures
 
 
-def _summarise(issues: Sequence[SessionIssue], total: int) -> str:
-    """One plain sentence per outcome, naming up to three sessions each."""
-    by_outcome: dict[SessionOutcome, list[SessionIssue]] = {}
+class IssueLike(Protocol):
+    """What :func:`summarise_issues` reads of an input a study could not have: its outcome, the session, and plain words."""
+
+    @property
+    def outcome(self) -> str: ...
+
+    @property
+    def trading_date(self) -> date: ...
+
+    @property
+    def reason(self) -> str: ...
+
+
+def summarise_issues(issues: Sequence[IssueLike], total: int, *, unit: str = "sessions") -> str:
+    """One plain sentence per outcome, naming up to three inputs each; ``unit`` is what ``total`` counts."""
+    by_outcome: dict[str, list[IssueLike]] = {}
     for issue in issues:
         by_outcome.setdefault(issue.outcome, []).append(issue)
     parts: list[str] = []
@@ -547,11 +562,14 @@ def _summarise(issues: Sequence[SessionIssue], total: int) -> str:
         "captured_before_final": "were captured before their data stopped forming, so their tail is missing",
         "building": "are still being captured by another run",
         "missing": "are not in the lake",
+        "window_not_complete": "are not over in New York yet, so the lake takes none of their data",
+        "symbol_not_addressable": "name something the lake cannot store",
+        "lake_unavailable": "could not be asked of the lake, whose catalog is unavailable",
     }
     for outcome, listed in by_outcome.items():
         shown = ", ".join(f"{i.trading_date.isoformat()} ({i.reason})" for i in listed[:3])
         more = f" and {len(listed) - 3} more" if len(listed) > 3 else ""
-        parts.append(f"{len(listed)} of {total} sessions {meaning[outcome]}: {shown}{more}")
+        parts.append(f"{len(listed)} of {total} {unit} {meaning[outcome]}: {shown}{more}")
     return "; ".join(parts)
 
 
@@ -804,10 +822,10 @@ def admit_minute_inputs(
     )
     if coverage.blocking:
         outcomes = {issue.outcome for issue in coverage.blocking}
-        code: RefusalCode = next(refusal for outcome, refusal in _REFUSAL_PRECEDENCE if outcome in outcomes)
+        code: RefusalCode = next(refusal for outcome, refusal in REFUSAL_PRECEDENCE if outcome in outcomes)
         raise StudyInputRefusal(
             code,
-            f"The lake cannot admit this window: {_summarise(coverage.blocking, len(required) - len(dropped))}.",
+            f"The lake cannot admit this window: {summarise_issues(coverage.blocking, len(required) - len(dropped))}.",
             coverage=coverage,
         )
 

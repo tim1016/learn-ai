@@ -5,7 +5,7 @@ import type { components } from '../api/broker.types';
 import { environment } from '../../environments/environment';
 import { toSignalEngineResult } from './research-experiments.mappers';
 import { failureAsError, isPythonRefusal } from './python-http-failure';
-import type { LakeStudyDataSource } from '../shared/lake-study/lake-study';
+import type { LakeStudyDataSource, LakeStudyRefused } from '../shared/lake-study/lake-study';
 
 type Schema = components['schemas'];
 
@@ -521,6 +521,8 @@ export interface TickerBatchResult {
    *  effective sample size is below the trust threshold (default 10).
    *  Surfaced in the UI as a "low confidence" annotation on the row. */
   lowConfidence?: boolean;
+  /** Set when the ticker is left out of the statistics: where, why, and whether asking again could answer differently. */
+  exclusion?: MemberExclusion;
 }
 
 export interface ValiditySummary {
@@ -528,6 +530,133 @@ export interface ValiditySummary {
   invalidIv: number;
   invalidData: number;
   errored: number;
+}
+
+/** Where in the study a requested member was left out of the statistics. */
+export type MemberExclusionStage = 'stock_bars' | 'option_inputs' | 'iv_inputs' | 'iv_diagnostics' | 'computation';
+
+/** A requested member that is not in the statistics: where, the typed code, the plain reason, and whether asking again could answer differently. */
+export interface MemberExclusion {
+  ticker: string;
+  stage: MemberExclusionStage;
+  code: string;
+  reason: string;
+  retryable: boolean;
+}
+
+/**
+ * Every requested member, accounted for (#3524): how many were asked for, how many are in the statistics (the
+ * denominator of every one of them), and why each of the rest is not.
+ */
+export interface StudyUniverse {
+  requested: string[];
+  requestedCount: number;
+  evaluated: string[];
+  evaluatedCount: number;
+  excluded: MemberExclusion[];
+  excludedCount: number;
+  /**
+   * In the statistics, but short of what was asked: days were priced at the default risk-free rate because FRED, the
+   * one live input, did not answer.
+   */
+  degraded: { ticker: string; rateDaysFetchFailed: number }[];
+  denominator: number;
+  inclusionPolicy: { name: string; description: string };
+  /** True only when every requested member is evaluated and none is degraded. */
+  complete: boolean;
+}
+
+/** What the lake held or was asked to save for one kind of option input: stored before the run, added by it. */
+export interface OptionInputCounts {
+  expected: number;
+  reused: number;
+  added: number;
+}
+
+/** Where a member's contract days were read from: the nightly archive's session containers, files this study keeps, or both. */
+export type OptionInputsSource = 'archive' | 'kept' | 'mixed';
+
+/** One option input the lake could not supply: which, on which session, and why, in the lake's words and as its code. */
+export interface OptionInputIssue {
+  kind: 'listing' | 'contract_day';
+  /** The session's open, `int64 ms UTC`. */
+  tradingDateMs: number;
+  subject: string;
+  outcome: string;
+  reason: string;
+  failureReason: string | null;
+  retryable: boolean;
+}
+
+/** A member's option inputs: its stored files' receipt when admitted, or the typed reason it was left out. */
+export interface OptionInputsMember {
+  ticker: string;
+  status: 'admitted' | 'excluded';
+  /** Admitted: the digest of the stored files the inputs were read from, and where the contract days came from. */
+  digest?: string;
+  source?: OptionInputsSource;
+  listings?: OptionInputCounts;
+  contractDays?: OptionInputCounts & { fromArchive: number };
+  /** Excluded: the code, the plain reason, whether asking again could change it, and the first issues behind it. */
+  code?: string;
+  reason?: string;
+  retryable?: boolean;
+  issues?: OptionInputIssue[];
+  issuesTotal?: number;
+}
+
+/**
+ * A study's option inputs, read from the data lake (#3540): the listings and the contract bars the IV history is built
+ * from, saved into the lake first if it lacked them. The archive's SPY, QQQ and IWM sessions are read; anything else is
+ * fetched once and kept.
+ */
+export interface LakeOptionInputsSource {
+  kind: 'lake';
+  policy: string;
+  /** The rule that prices a contract on a session, in words. */
+  priceRuleWords: string;
+  digest: string | null;
+  listings: OptionInputCounts;
+  contractDays: OptionInputCounts & { fromArchive: number };
+  members: OptionInputsMember[];
+}
+
+/** The risk-free rate: FRED, asked live and not archived, so the only input of the study the lake does not hold. */
+export interface RiskFreeRateSource {
+  kind: 'provider';
+  provider: string;
+  daysFromFred: number;
+  daysFromDefault: number;
+  /** Days priced at the default only because FRED, with a key configured, gave no rate. */
+  daysFetchFailed: number;
+  valuesDigest: string | null;
+}
+
+/**
+ * Where a cross-sectional study's inputs came from (#3524, #3540). The stock bars and the option inputs are the lake's,
+ * admitted per member; the risk-free rate is the one live input.
+ */
+export interface CrossSectionalDataSource {
+  kind: 'lake';
+  calculationVersion: string;
+  /**
+   * The lake part, mapped by the mapper every lake study shares. It names the universe as its subject and counts
+   * member-sessions; its `cache` is the whole result's.
+   */
+  stockBars: LakeStudyDataSource | null;
+  optionInputs: LakeOptionInputsSource | null;
+  riskFreeRate: RiskFreeRateSource | null;
+}
+
+/**
+ * What a study that ended without a result parked (#3524): the lake's refusal (its reason, counts and source) when
+ * the stock bars could not be admitted, or just the universe and source when the bars were admitted and no member
+ * could be evaluated. Either way every requested member is accounted for in `universe`.
+ */
+export interface CrossSectionalFailure {
+  refused: LakeStudyRefused | null;
+  universe: StudyUniverse | null;
+  dataSource: CrossSectionalDataSource | null;
 }
 
 export interface AggregateIcCi {
@@ -595,6 +724,10 @@ export interface BatchResearchResult {
    *  daily stock returns). Disclosed via tooltip. */
   nEffAssetsMethod?: 'ic' | 'returns';
   stageInfo?: CrossSectionalStageInfo;
+  /** `partial` when any requested member is not evaluated or was built on unanswered provider requests. */
+  status?: 'complete' | 'partial';
+  universe?: StudyUniverse;
+  dataSource?: CrossSectionalDataSource;
   error?: string;
 }
 

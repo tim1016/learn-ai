@@ -9,17 +9,22 @@
   [previous]="inputs.isPrevious()"
   [captured]="inputs.captured()"
   [prefill]="prefillNotice()"
+  [dataSource]="sourceLine()"
+  dataSourceWindows="date-et"
   (run)="runBatch()"
 >
-  <!-- The universe, its window and nothing else: the picker's own sampling
-       card is hidden because bars are daily by construction (#3527). -->
-  <app-multi-ticker-range-picker
-    studyInstrument
-    [(value)]="range"
-    [hideSampling]="true"
-    [showAutoFetch]="false"
-    title="Cross-sectional data"
-  />
+  <div studyInstrument class="universe-input">
+    <!-- The universe, its window and nothing else: the picker's own sampling
+         card is hidden because bars are daily by construction (#3527). -->
+    <app-multi-ticker-range-picker
+      [(value)]="range"
+      [hideSampling]="true"
+      [showAutoFetch]="false"
+      title="Cross-sectional data"
+    />
+    <!-- How many member-sessions of stock bars the lake lacks, with each member's capture. It warns; Run study is never held up by it. -->
+    <app-universe-lake-holding [symbols]="universeSymbols()" [from]="range().from" [to]="range().to" />
+  </div>
 
   <div studyConfig class="study-config">
     <div class="config-field">
@@ -56,16 +61,55 @@
       />
     }
 
-    @if (error(); as err) {
+    <!-- A run with no result says why: the lake's refusal (reason, counts, sessions), or the empty universe. -->
+    @if (refusal(); as refused) {
+      <app-lake-study-source [refusal]="refused.refusal" />
+    } @else if (error(); as err) {
       <p-message severity="error" class="mb-4">{{ err }}</p-message>
+    }
+    @if (failure(); as failed) {
+      @if (failed.refused === null && failureOptionInputsLine(); as line) {
+        <div class="text-sm text-color-secondary mb-2"><strong>Data lake</strong><p>{{ line }}</p></div>
+      }
+      @if (failed.refused === null && failureRiskFreeRateLine(); as rateLine) {
+        <div class="text-sm text-color-secondary mb-2"><strong>FRED (live)</strong><p>{{ rateLine }}</p></div>
+      }
+      @if (failed.universe; as uni) {
+        <app-cross-sectional-universe-notice [universe]="uni" kind="unevaluated" />
+      }
     }
   </div>
 
   <!-- Final aggregate result -->
   <div studyResult>
     @if (result(); as res) {
+      @if (servedFromCache()) {
+        <p class="text-sm text-color-secondary mb-3" data-testid="cache-note">
+          Stored result, computed
+          <app-timestamp-display [value]="cachedAtMs()" />
+          from the same admitted data.
+        </p>
+        @if (!loading()) {
+          <p-button
+            class="block mb-3"
+            label="Run again, ignoring the stored result"
+            icon="pi pi-refresh"
+            severity="secondary"
+            [outlined]="true"
+            size="small"
+            (onClick)="runBatch(true)"
+          />
+        }
+      }
       <app-cross-sectional-report [result]="res" />
+      <!-- The option inputs are the lake's, saved by this run or read from the archive: their own line, apart from the stock bars'. -->
+      @if (optionInputsLine(); as line) {
+        <div class="text-sm text-color-secondary mb-2"><strong>Data lake</strong><p>{{ line }}</p></div>
+      }
+      <!-- The risk-free rate is FRED's, asked live: the one input the lake does not hold. -->
+      @if (riskFreeRateLine(); as rateLine) {
+        <div class="text-sm text-color-secondary mb-2"><strong>FRED (live)</strong><p>{{ rateLine }}</p></div>
+      }
     }
-
   </div>
 </app-study-page>

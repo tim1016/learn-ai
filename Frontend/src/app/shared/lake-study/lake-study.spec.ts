@@ -100,6 +100,13 @@ describe('lake study data source', () => {
     expect(line.counts).toEqual({ added: 2, reused: 6, missing: 0 });
   });
 
+  it('words a daily fold as daily bars and a universe by its label, not as a number of minutes', () => {
+    const line = toDataSourceProvenance(mapLakeStudyDataSource(block({ bar_minutes: null, symbol: 'SPY, QQQ' })));
+
+    expect(line.resolution).toBe('daily bars, folded from 1-minute bars');
+    expect(line.subject).toBe('SPY, QQQ');
+  });
+
   it('prints no window, counts or identity the server did not record', () => {
     const line = toDataSourceProvenance(
       mapLakeStudyDataSource(block({ effective_window: null, coverage: null, snapshot_digest: null })),

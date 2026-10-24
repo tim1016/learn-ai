@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -27,6 +28,24 @@ logger = logging.getLogger(__name__)
 
 MIN_NW_LAG = 5  # Minimum Newey-West lag for daily options data (autocorrelated)
 ROLLING_IC_WINDOW = 20  # 20-day rolling window for time-series IC (daily data)
+
+#: Why a run failed, as a caller branches on it: the IV history was unfit for the study (its diagnostics gate), or the
+#: study's own math raised. Never read from the error text.
+OptionsFailureCode = Literal["iv_failed_diagnostics", "computation_error"]
+
+_MIN_DAILY_POINTS = 30
+
+
+class IvDataUnusable(ValueError):
+    """The IV history cannot support the study: it failed its diagnostics, or holds too few points."""
+
+
+@dataclass
+class OptionsResearchReport(ResearchReport):
+    """The stock feature report plus a typed reason when the run failed, so no caller reads the error text for it."""
+
+    failure_code: OptionsFailureCode | None = None
+    """Set together with ``error``: ``iv_failed_diagnostics`` when :class:`IvDataUnusable` was raised, else ``computation_error``."""
 
 
 def _compute_daily_forward_return(
@@ -71,8 +90,20 @@ def run_options_feature_research(
     end_date: str,
     target_type: str = "directional",
     config: ResearchConfig | None = None,
-) -> ResearchReport:
+) -> OptionsResearchReport:
     """Run options feature research with IV data.
+
+    Formula: align daily IV features with forward log return, its absolute value or five-session realized volatility;
+      compute IC/HAC statistics, stationarity, quantile monotonicity and robustness, then apply the internal validation gate.
+    Reference: internal daily options-research policy, not an external port; the composed IC/HAC method's references are
+      in app/research/validation/ic.py, and the feature definitions are in app/research/features/options_features.py.
+    Canonical implementation: this file for daily target construction, alignment and the validation gate;
+      app/research/features/options_features.py::OptionsFeatures for features; app/research/validation/ic.py,
+      quantile.py and robustness.py for the corresponding statistics; app/ml/preprocessing/stationarity.py for stationarity.
+    Validated against: tests/research/test_options_runner.py (daily target arithmetic and report integration),
+      tests/fixtures/test_research_fixtures.py (RP-001 and REL-001 for the composed IC calculation), and
+      tests/research/test_cross_sectional_lake_vs_provider.py (target/input-path parity). Integration and parity checks
+      exercise this internal policy; they are not an independent reference implementation of the complete report.
 
     Same pipeline as stock feature research but:
     - Daily granularity (not minute)
@@ -84,7 +115,7 @@ def run_options_feature_research(
     if config is None:
         config = ResearchConfig()
 
-    report = ResearchReport(
+    report = OptionsResearchReport(
         ticker=ticker,
         feature_name=feature_name,
         start_date=start_date,
@@ -116,12 +147,11 @@ def run_options_feature_research(
         diagnostics = run_iv_diagnostics(iv_df)
         if not diagnostics.valid:
             warnings_str = "; ".join(diagnostics.warnings)
-            raise ValueError(f"IV data failed diagnostics: {warnings_str}")
+            raise IvDataUnusable(f"IV data failed diagnostics: {warnings_str}")
 
         # Minimum data requirement (lower for daily vs minute data)
-        min_daily_points = 30
-        if len(iv_df) < min_daily_points:
-            raise ValueError(f"Not enough IV data points: {len(iv_df)} < {min_daily_points}")
+        if len(iv_df) < _MIN_DAILY_POINTS:
+            raise IvDataUnusable(f"Not enough IV data points: {len(iv_df)} < {_MIN_DAILY_POINTS}")
 
         report.bars_used = len(iv_df)
 
@@ -136,8 +166,8 @@ def run_options_feature_research(
 
         # Merge on date
         merged = stock_df.merge(iv_df, on="date", how="inner", suffixes=("_stock", "_iv"))
-        if len(merged) < min_daily_points:
-            raise ValueError(f"Not enough aligned data after merge: {len(merged)} < {min_daily_points}")
+        if len(merged) < _MIN_DAILY_POINTS:
+            raise ValueError(f"Not enough aligned data after merge: {len(merged)} < {_MIN_DAILY_POINTS}")
 
         # Recompute target on merged data
         close = merged["close"].astype(float) if "close" in merged.columns else merged["close_stock"].astype(float)
@@ -273,9 +303,15 @@ def run_options_feature_research(
             report.is_monotonic,
         )
 
+    except IvDataUnusable as e:
+        logger.error("[Options Research] IV history unusable: %s", str(e))
+        report.error = str(e)
+        report.failure_code = "iv_failed_diagnostics"
+        report.passed_validation = False
     except Exception as e:
         logger.error("[Options Research] Error: %s", str(e), exc_info=True)
         report.error = str(e)
+        report.failure_code = "computation_error"
         report.passed_validation = False
 
     return report

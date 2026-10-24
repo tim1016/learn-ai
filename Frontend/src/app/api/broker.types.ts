@@ -4969,15 +4969,17 @@ export interface paths {
          * Start Cross Sectional Job
          * @description Kick off a cross-sectional study in a worker thread. Returns 202.
          *
-         *     The runner processes tickers sequentially — ~30–90 seconds per ticker
-         *     on Polygon Starter — so we wire ``ProgressEmitter`` into the runner's
-         *     optional ``on_phase`` / ``on_log`` / ``on_progress`` callbacks. The
-         *     Frontend's run-dock subscribes to the SSE stream and renders each
-         *     ticker's status as it lands.
+         *     The worker admits each member's daily stock bars from the data lake
+         *     (materializing what it lacks) and then its option inputs (saving what the
+         *     lake lacks), then runs the members one after another, wiring
+         *     ``ProgressEmitter`` into the runner's ``on_phase`` / ``on_log`` /
+         *     ``on_progress`` callbacks so the run-dock shows each ticker as it lands.
+         *     A member the lake cannot admit is excluded with its reason; when none can
+         *     be the job fails with a typed refusal and computes nothing.
          *
-         *     A successful prior run with identical params is served from cache —
-         *     the response carries ``status=cached`` and the worker thread is
-         *     skipped. Pass ``force=true`` in the body to bypass the cache.
+         *     A prior run over the same admitted data with nothing failed in it is served
+         *     from cache (the lookup follows admission — see
+         *     ``app.services.cross_sectional_study_service``). Pass ``force=true`` to bypass.
          */
         post: operations["start_cross_sectional_job_api_jobs_internal_cross_sectional_post"];
         delete?: never;
@@ -12655,6 +12657,12 @@ export interface components {
          *
          *     The Frontend's research request, plus an injected ``job_id`` from the
          *     jobs facade.
+         *
+         *     The study runs on daily bars (``app.research.cross_sectional_inputs``), so the
+         *     inherited ``timespan`` default of ``minute`` is overridden to ``day``: a caller
+         *     that names no resolution gets the study it always got, and any other resolution
+         *     is refused with a reason. Daily bars use only the scheduled regular session
+         *     (the owner's decision, #3524); ``extended`` is refused at the request boundary.
          */
         CrossSectionalJobRequest: {
             /** Featurename */
@@ -12678,9 +12686,9 @@ export interface components {
             /**
              * Session
              * @default rth
-             * @enum {string}
+             * @constant
              */
-            session?: "rth" | "extended";
+            session?: "rth";
             /** Symbols */
             symbols: string[];
             /**
@@ -12690,7 +12698,7 @@ export interface components {
             targetType?: string;
             /**
              * Timespan
-             * @default minute
+             * @default day
              * @enum {string}
              */
             timespan?: "minute" | "hour" | "day";
