@@ -21,7 +21,11 @@ and what it reads now, field by field:
   backend never read it; that label stays inert so this migration does not
   silently change the sample. The session is now an explicit identity field
   (``session_policy``, default ``extended``); asking for ``regular`` is opt-in.
-  Which session the study *should* use is an owner decision (D02).
+  Which session the study *should* use is an owner decision (D02). A session
+  counts as complete only once the vendor has delivered its whole tape (the
+  close, plus four hours of after-hours for ``extended``, plus the vendor's
+  15-minute delay), and a held day captured before that is captured again
+  rather than read as complete (``app.data_lake.capture_finality``).
 * **Warmup.** None. Features use only bars inside the window (RSI-14, MACD
   12/26/9, rolling 30, ``pct_change(5)``), over one continuous series straight
   across overnight gaps; their first values in the window are NaN.

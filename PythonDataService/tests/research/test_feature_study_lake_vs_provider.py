@@ -23,20 +23,26 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date
+from pathlib import Path
 
 import numpy as np
 import pytest
 import respx
 from polygon.rest.models import Agg
 
-from app.lean_sidecar.trading_calendar import expected_sessions
+from app.data_lake.admission import read_committed_bytes
+from app.data_lake.capture_finality import VENDOR_DELAY_MS, capture_final_ms
+from app.engine.data.lean_format import LeanMinuteDataReader
+from app.engine.data.policy_store import resolve_data_roots
+from app.lean_sidecar.trading_calendar import expected_sessions, session_close_ms_utc
 from app.research.config import ResearchConfig
 from app.research.features.ta_features import TechnicalFeatures
 from app.research.runner import run_feature_research
 from app.research.study_inputs import StudyInputRefusal, admit_minute_inputs, bars_as_rows, fold_minute_bars
 from app.services.feature_study_service import FeatureStudyParams, feature_study_identity
 from app.services.polygon_client import PolygonClientService
-from tests._helpers.fake_lake_catalog import install_fake_catalog, mock_launcher, point_lake_writer_at_tmp
+from tests._helpers.fake_lake_catalog import FakeCatalog, install_fake_catalog, mock_launcher, point_lake_writer_at_tmp
+from tests._helpers.lake_study import commit_bars, corrected_day, lake_file
 from tests._helpers.pinned_vendor import VendorBar, VendorCalls, mock_vendor, scaled, vendor_history
 
 FEATURES = ["momentum_5m", "rsi_14", "realized_vol_30", "volume_zscore", "macd_signal"]
@@ -107,6 +113,19 @@ def lake_rows(window: list[date], *, bar_minutes: int = 1, session: str = "exten
     identity = feature_study_identity(FeatureStudyParams("SPY", "rsi_14", window[0], window[-1], "minute", bar_minutes, session))  # type: ignore[arg-type]
     admitted = admit_minute_inputs(identity.inputs, requester="comparison", now_ms=NOW_MS)
     return bars_as_rows(fold_minute_bars(admitted.window_bars, identity.bar_minutes))
+
+
+def held_rows(world: World, window: list[date]) -> list[dict]:
+    """What the lake holds for ``window`` as committed, read with no admission pass and no refresh in front of it."""
+    reader = LeanMinuteDataReader(resolve_data_roots(source="polygon", adjusted=True), session="extended")
+    bars = [
+        bar
+        for day in window
+        for bar in reader.parse_day_zip(
+            read_committed_bytes(lake_file(world.lake, "polygon_split_adjusted", day)), "SPY", day
+        )
+    ]
+    return bars_as_rows(fold_minute_bars(bars, 1))
 
 
 # ---------------------------------------------------------------------------
@@ -187,13 +206,21 @@ def compare(provider: list[dict], lake: list[dict], window: list[date], *, deriv
     return result
 
 
+@dataclass
+class World:
+    """The in-memory catalog and the temporary lake the lake path runs against."""
+
+    catalog: FakeCatalog
+    lake: Path
+
+
 @pytest.fixture
 def world(monkeypatch: pytest.MonkeyPatch, tmp_path):
     catalog = install_fake_catalog(monkeypatch)
-    point_lake_writer_at_tmp(tmp_path, monkeypatch)
+    lake = point_lake_writer_at_tmp(tmp_path, monkeypatch)
     with respx.mock:
         mock_launcher()
-        yield catalog
+        yield World(catalog, lake)
 
 
 # ---------------------------------------------------------------------------
@@ -323,6 +350,40 @@ def test_a_split_announced_after_capture_is_not_in_a_held_window_until_the_lake_
     assert stale.max_price_diff > 100, "the held days still carry the pre-split basis"
     assert refreshed.prices_changed == 0 and refreshed.timestamps_changed == 0
     assert calls.count > 0
+
+
+def test_a_day_captured_before_its_after_hours_tape_finished_is_a_shorter_sample_until_it_is_captured_again(world):
+    """Cause: ``data-quality`` (capture time). A regular-hours chart opened at 16:30 ET leaves the day with its
+    after-hours tape cut at 16:15, and the lake reads it as complete. The provider path re-fetched the whole day on
+    every run. Admission now sees when the day was captured and captures it again, so the difference exists only in
+    what the lake holds, not in what a study computes on. A day with no recorded capture time cannot be judged: that
+    is the residual (``docs/known-gaps.md``).
+    """
+    tape = tape_for(DST_WINDOW)
+    mock_vendor("SPY", tape, adjusted=tape)
+    lake_rows(DST_WINDOW)  # every session captured once, after it had finished forming
+    day = DST_WINDOW[3]
+    cut = session_close_ms_utc(day) + VENDOR_DELAY_MS
+    commit_bars(
+        world.catalog, world.lake, day,
+        corrected_day(day, [b for b in tape[day] if b["t"] < cut], bump="0"), mode="polygon_split_adjusted",
+    )
+    row = next(r for r in world.catalog.rows.values() if r["trading_date"] == day and r["price_adjustment_mode"] == "polygon_split_adjusted")
+    row["completed_at_ms"] = capture_final_ms(day, "regular") + 1
+    provider = provider_rows(tape, DST_WINDOW)
+
+    held = compare(provider, held_rows(world, DST_WINDOW), DST_WINDOW)
+    after_admission = compare(provider, lake_rows(DST_WINDOW), DST_WINDOW)
+
+    assert held.errors == (None, None)
+    assert held.causes == ["data-quality"] and held.only_lake == 0
+    assert held.only_provider == sum(1 for b in tape[day] if b["t"] >= cut), "exactly the bars after 16:15 are gone"
+    assert held.prices_changed == 0, "what remains is the vendor's own"
+    assert held.feature_max_diff["rsi_14"] > 1e-9 or held.feature_valid_moved > 0, "a feature remembers the shorter sample"
+    assert held.target_valid[1] < held.target_valid[0], "and the last bars of that day lose their forward label"
+    assert after_admission.timestamps_changed == 0 and after_admission.prices_changed == 0
+    assert max(after_admission.feature_max_diff.values()) <= 1e-9
+    assert after_admission.mean_ic[1] == pytest.approx(after_admission.mean_ic[0], abs=1e-9, rel=0)
 
 
 def test_duplicate_or_out_of_order_vendor_bars_were_tolerated_or_crashed_before_and_are_refused_now(world):

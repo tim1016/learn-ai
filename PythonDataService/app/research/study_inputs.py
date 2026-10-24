@@ -51,6 +51,7 @@ from uuid import UUID
 
 from app.data_lake.adjustment_versions import AdjustmentVersionError, adjusted_root_for, companion_path
 from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
+from app.data_lake.capture_finality import CaptureSession, capture_final_ms
 from app.data_lake.catalog_client import CatalogUnavailableError
 from app.data_lake.path_policy import LeanMinuteBarPath
 from app.data_lake.polygon_fetcher import polygon_history_floor
@@ -58,6 +59,7 @@ from app.data_lake.root_identity import read_marker
 from app.data_lake.run_materialization import (
     LakeMaterializationError,
     MinuteWindowMaterialization,
+    early_minute_captures,
     materialize_minute_window,
 )
 from app.data_lake.types import ArtifactFailure, ArtifactFailureReason, is_lake_addressable_symbol
@@ -68,16 +70,15 @@ from app.engine.data.policy_store import resolve_data_roots
 from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms_utc
 from app.research.sweep.snapshot import DataSnapshot
-from app.services.chart_bar_source import split_sessions_at_boundary
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
-from app.utils.timestamps import now_ms_utc
+from app.utils.timestamps import display_time, now_ms_utc
 
 logger = logging.getLogger(__name__)
 
 #: The lake reader's session filter: ``regular`` is the scheduled session
 #: (early closes respected), ``extended`` is every bar the provider served for
 #: the day — pre-market and after-hours included.
-SessionPolicy = Literal["regular", "extended"]
+SessionPolicy = CaptureSession
 AdjustmentMode = Literal["raw", "polygon_split_adjusted"]
 
 #: What admission concludes about one required session.
@@ -331,11 +332,12 @@ class _SessionRead:
     """What reading one session's file showed; bars and receipts only when ``state == "ready"``.
 
     ``absent``: no file, or none of its bars belong to the policy's session. ``unreadable``: a file that cannot be
-    admitted or decoded. ``invalid``: it decoded to bars that break the session's invariants. ``repairable`` is
-    whether a capture can put the session right (see :data:`_REPAIRED_BY_CAPTURE`).
+    admitted or decoded. ``invalid``: it decoded to bars that break the session's invariants. ``early``: readable,
+    but captured before the policy's data stopped forming, so its tail is missing for good unless it is captured
+    again. ``repairable`` is whether a capture can put the session right (see :data:`_REPAIRED_BY_CAPTURE`).
     """
 
-    state: Literal["ready", "absent", "unreadable", "invalid"]
+    state: Literal["ready", "absent", "unreadable", "invalid", "early"]
     reason: str = ""
     repairable: bool = False
     bars: list[TradeBar] = field(default_factory=list)
@@ -434,17 +436,22 @@ def _why_not_ready(
     """
     if failure is not None:
         reason = _describe_failure(failure)
-        if read.state in ("unreadable", "invalid"):
+        if read.state != "absent":
             reason = f"{read.reason}; rebuild: {reason}"
         return _OUTCOME_FOR_FAILURE[failure.reason], reason
     if read.state in ("unreadable", "invalid"):
         if capture_timed_out and read.repairable:
             return "building", f"{read.reason}; the capture did not finish in time"
         return "corrupt", read.reason
+    beyond_provider = f"older than the provider's history, which starts {floor.isoformat()}"
     if older_than_floor:
-        return "unavailable_from_provider", f"older than the provider's history, which starts {floor.isoformat()}"
+        if read.state == "early":
+            return "unavailable_from_provider", f"{read.reason}; it is {beyond_provider}, so it cannot be captured again"
+        return "unavailable_from_provider", beyond_provider
     if capture_timed_out:
         return "building", "the capture did not finish in time"
+    if read.state == "early":
+        return "missing", read.reason if fetched else f"{read.reason}; not captured again"
     return "missing", read.reason if fetched else "not in the lake; not fetched"
 
 
@@ -507,13 +514,13 @@ def admit_minute_inputs(
         )
     lead = lead_in_sessions(window[0], identity.warmup_sessions)
     required = [*lead, *window]
-    policy_for_clock = "rth" if identity.session_policy == "regular" else "extended"
-    _, live, _ = split_sessions_at_boundary(required[0].isoformat(), required[-1].isoformat(), now, policy_for_clock)
+    live = [day for day in required if now < capture_final_ms(day, identity.session_policy)]
     if live:
         raise StudyInputRefusal(
             "window_not_complete",
-            f"{len(live)} session(s) have not finished (from {live[0].session_date.isoformat()}); the lake holds "
-            "completed sessions only. End the window on an earlier session.",
+            f"{len(live)} session(s) have not finished forming (from {live[0].isoformat()}); the lake holds a session "
+            f"only once its {identity.session_policy} data is final (the close, plus the after-hours tape for "
+            "extended, plus the vendor's 15-minute delay). End the window on an earlier session.",
         )
 
     roots = resolve_data_roots(source="polygon", adjusted=identity.adjusted)
@@ -529,6 +536,24 @@ def admit_minute_inputs(
     except CatalogUnavailableError as exc:
         raise StudyInputRefusal("lake_unavailable", f"The data lake's catalog is unavailable ({exc}).") from exc
 
+    try:
+        early = early_minute_captures(
+            symbol=symbol,
+            days=[day for day in required if first_read[day].state == "ready"],
+            price_adjustment_mode=identity.price_adjustment_mode,
+            session=identity.session_policy,
+        )
+    except CatalogUnavailableError as exc:
+        raise StudyInputRefusal("lake_unavailable", f"The data lake's catalog is unavailable ({exc}).") from exc
+    for day, captured_ms in early.items():
+        first_read[day] = _SessionRead(
+            "early",
+            f"captured {display_time(captured_ms)} ET, before its {identity.session_policy} data stopped forming "
+            f"({display_time(capture_final_ms(day, identity.session_policy))} ET)",
+            repairable=True,
+        )
+    check_cancelled()
+
     needs_work = [day for day in required if first_read[day].state != "ready"]
     fixable = [day for day in needs_work if day >= floor and first_read[day].repairable]
     materialization: MinuteWindowMaterialization | None = None
@@ -541,6 +566,7 @@ def admit_minute_inputs(
                 end=max(fixable),
                 price_adjustment_mode=identity.price_adjustment_mode,
                 requester=requester,
+                final_for=identity.session_policy,
             )
         except LakeMaterializationError as exc:
             raise StudyInputRefusal("lake_unavailable", f"The data lake cannot materialize this window: {exc}") from exc
@@ -570,7 +596,7 @@ def admit_minute_inputs(
             final[day], reasons[day] = _why_not_ready(
                 reads[day],
                 failure=failures.get(day),
-                older_than_floor=day < floor and first_read[day].state == "absent",
+                older_than_floor=day < floor and first_read[day].state in ("absent", "early"),
                 capture_timed_out=materialization is not None and materialization.interruption == "did_not_finish",
                 floor=floor,
                 fetched=materialization is not None,

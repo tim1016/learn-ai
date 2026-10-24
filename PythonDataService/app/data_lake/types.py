@@ -243,6 +243,11 @@ class DataRunSpec(BaseModel):
     # call at full range once the day loop completes. Default True preserves
     # existing single-shot-ensure behavior.
     include_daily_trade: bool = True
+    # A minute day already captured is reused as it is, however early it was captured: an immutable day written
+    # while the vendor was still delivering it (a regular-hours chart at 16:30 ET) keeps its missing tail forever.
+    # A consumer that reads a whole session names the policy it reads here and gets such a day refreshed instead
+    # (``app.data_lake.capture_finality``). None, the default, leaves every other consumer exactly as it was.
+    require_final_capture_for: Literal["regular", "extended"] | None = None
     # lean_image_digest is required — source of the LEAN-image-extracted
     # session calendar used by ensure_data's Phase 0 bootstrap.
     lean_image_digest: str

@@ -25,6 +25,7 @@ import respx
 
 from app.data_lake import catalog_client, run_materialization
 from app.data_lake.adjustment_versions import companion_path
+from app.data_lake.capture_finality import AFTER_HOURS_TAIL_MS, VENDOR_DELAY_MS, capture_final_ms
 from app.data_lake.catalog_client import CatalogUnavailableError
 from app.data_lake.lean_writer import build_minute_trade_zip_bytes
 from app.data_lake.types import ArtifactFailure, ArtifactFailureReason
@@ -40,7 +41,14 @@ from app.research.study_inputs import (
     lead_in_sessions,
 )
 from tests._helpers.fake_lake_catalog import FakeCatalog, install_fake_catalog, mock_launcher, point_lake_writer_at_tmp
-from tests._helpers.lake_study import commit_bars, commit_payload, lake_file, leave_publication_in_flight, minute_bar
+from tests._helpers.lake_study import (
+    commit_bars,
+    commit_payload,
+    corrected_day,
+    lake_file,
+    leave_publication_in_flight,
+    minute_bar,
+)
 from tests._helpers.pinned_vendor import VendorCalls, mock_vendor, scaled, vendor_history
 
 ET = ZoneInfo("America/New_York")
@@ -364,6 +372,171 @@ def test_a_minute_study_neither_waits_on_nor_builds_the_daily_rollup(catalog, la
 
     assert counts(admitted.coverage.window) == (2, len(MARCH) - 2, 0, 0)
     assert rollups() == [rollup_before], "the study left the daily rollup exactly as it found it"
+
+
+# ---------------------------------------------------------------------------
+# A day captured before its data stopped forming is not a complete day (#3521 review M3)
+# ---------------------------------------------------------------------------
+
+
+def _capture_early(catalog: FakeCatalog, lake: Path, tape, day: date, *, completed_at_ms: int | None, mode: str = "raw") -> None:
+    """Leave ``day`` as a regular-hours chart opened right after the close leaves it.
+
+    The artifact holds the vendor's bars up to the quarter hour it had delivered by then, and the catalog says when
+    the capture completed. The next fetch of the day would return the whole tape.
+    """
+    delivered_until = session_close_ms_utc(day) + VENDOR_DELAY_MS
+    commit_bars(catalog, lake, day, corrected_day(day, [b for b in tape[day] if b["t"] < delivered_until], bump="0"), mode=mode)
+    row = next(
+        r
+        for r in catalog.rows.values()
+        if r["trading_date"] == day and r["resolution"] == "minute" and r["price_adjustment_mode"] == mode
+    )
+    row["completed_at_ms"] = completed_at_ms
+
+
+def _bars_of(admitted, day: date) -> list[int]:
+    return [b.start_ms for b in admitted.window_bars if datetime.fromtimestamp(b.start_ms / 1000, ET).date() == day]
+
+
+@respx.mock
+def test_a_day_captured_before_its_after_hours_tape_finished_is_captured_again_for_an_extended_study(catalog, lake):
+    mock_launcher()
+    calls = VendorCalls()
+    tape = vendor_history(MARCH)
+    mock_vendor("SPY", tape, calls=calls)
+    admit(identity(MARCH))
+    day = MARCH[2]
+    _capture_early(catalog, lake, tape, day, completed_at_ms=capture_final_ms(day, "regular") + 1)
+    calls.requests.clear()
+
+    admitted = admit(identity(MARCH, session="extended"))
+
+    assert counts(admitted.coverage.window) == (len(MARCH) - 1, 1, 0, 0), "the refreshed day is added, the rest reused"
+    assert calls.days() == [day], "only the early day is fetched again"
+    assert _bars_of(admitted, day) == [b["t"] for b in tape[day]], "the study computes on the whole tape, not 16:15"
+    row = next(r for r in catalog.rows.values() if r["trading_date"] == day)
+    assert row["completed_at_ms"] >= capture_final_ms(day, "extended"), "the new capture is itself final"
+
+
+@respx.mock
+def test_the_same_capture_is_complete_for_a_regular_hours_study(catalog, lake):
+    """Early is relative to what the reader reads: the regular session finished forming a quarter hour after the close."""
+    mock_launcher()
+    calls = VendorCalls()
+    tape = vendor_history(MARCH)
+    mock_vendor("SPY", tape, calls=calls)
+    admit(identity(MARCH))
+    day = MARCH[2]
+    _capture_early(catalog, lake, tape, day, completed_at_ms=capture_final_ms(day, "regular") + 1)
+    calls.requests.clear()
+
+    admitted = admit(identity(MARCH, session="regular"))
+
+    assert counts(admitted.coverage.window) == (len(MARCH), 0, 0, 0)
+    assert calls.count == 0, "nothing the regular session lacks is missing from the artifact"
+
+
+@respx.mock
+def test_a_day_captured_before_the_regular_close_plus_the_vendor_delay_is_early_for_a_regular_study(catalog, lake):
+    mock_launcher()
+    calls = VendorCalls()
+    tape = vendor_history(MARCH)
+    mock_vendor("SPY", tape, calls=calls)
+    admit(identity(MARCH, session="regular"))
+    day = MARCH[0]
+    _capture_early(catalog, lake, tape, day, completed_at_ms=capture_final_ms(day, "regular") - 1)
+    calls.requests.clear()
+
+    admitted = admit(identity(MARCH, session="regular"))
+
+    assert counts(admitted.coverage.window) == (len(MARCH) - 1, 1, 0, 0)
+    assert calls.days() == [day]
+
+
+@respx.mock
+def test_an_early_day_the_provider_no_longer_serves_refuses_instead_of_computing_on_its_truncated_tape(catalog, lake):
+    mock_launcher()
+    tape = vendor_history(MARCH)
+    mock_vendor("SPY", tape)
+    admit(identity(MARCH))
+    _capture_early(catalog, lake, tape, MARCH[1], completed_at_ms=capture_final_ms(MARCH[1], "regular") + 1)
+
+    refusal = refusal_of(identity(MARCH), now_ms=LATER_MS)
+
+    assert refusal.code == "data_unavailable_from_provider"
+    assert [(i.trading_date, i.outcome) for i in refusal.coverage.issues] == [(MARCH[1], "unavailable_from_provider")]
+    assert "cannot be captured again" in refusal.coverage.issues[0].reason
+    assert counts(refusal.coverage.window) == (len(MARCH) - 1, 0, 0, 1)
+
+
+@respx.mock
+def test_a_day_with_no_recorded_capture_time_is_not_called_early(catalog, lake):
+    """The catalog stamps every completion; a row without a stamp predates it or was imported, and cannot be judged."""
+    mock_launcher()
+    calls = VendorCalls()
+    tape = vendor_history(MARCH)
+    mock_vendor("SPY", tape, calls=calls)
+    admit(identity(MARCH))
+    _capture_early(catalog, lake, tape, MARCH[1], completed_at_ms=None)
+    calls.requests.clear()
+
+    admitted = admit(identity(MARCH))
+
+    assert counts(admitted.coverage.window) == (len(MARCH), 0, 0, 0)
+    assert calls.count == 0
+
+
+@respx.mock
+def test_a_consumer_that_names_no_session_still_reuses_an_early_day_as_it_always_has(catalog, lake):
+    """The refresh is opt-in: charts and backtests that never asked keep reusing the day (no new vendor traffic)."""
+    mock_launcher()
+    calls = VendorCalls()
+    tape = vendor_history(MARCH)
+    mock_vendor("SPY", tape, calls=calls)
+    admit(identity(MARCH))
+    day = MARCH[1]
+    _capture_early(catalog, lake, tape, day, completed_at_ms=capture_final_ms(day, "regular") + 1)
+    calls.requests.clear()
+
+    plain = run_materialization.materialize_minute_window(
+        symbol="SPY", start=day, end=day, price_adjustment_mode="raw", requester="chart"
+    )
+    assert (plain.fetched_artifact_count, plain.refreshed_artifact_count) == (0, 0)
+    assert calls.count == 0, "a consumer that named no session reused the early day"
+
+    asked = run_materialization.materialize_minute_window(
+        symbol="SPY", start=day, end=day, price_adjustment_mode="raw", requester="study", final_for="extended"
+    )
+
+    assert asked.fetched_artifact_count + asked.refreshed_artifact_count >= 1
+    assert calls.days() == [day], "only the study's request went to the vendor"
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("policy", "after_close_ms", "refused"),
+    [
+        pytest.param("regular", 5 * 60_000, True, id="regular_before_the_vendor_delay_has_passed"),
+        pytest.param("regular", VENDOR_DELAY_MS, False, id="regular_once_the_delay_has_passed"),
+        pytest.param("extended", AFTER_HOURS_TAIL_MS, True, id="extended_while_the_after_hours_tape_runs"),
+        pytest.param("extended", AFTER_HOURS_TAIL_MS + VENDOR_DELAY_MS, False, id="extended_once_the_tape_and_delay_have_passed"),
+    ],
+)
+def test_a_session_is_complete_only_when_the_vendor_has_delivered_its_whole_tape(
+    catalog, lake, policy, after_close_ms, refused
+):
+    mock_launcher()
+    mock_vendor("SPY", vendor_history(MARCH))
+    admit(identity(MARCH, session=policy))  # held, so a later "now" reads it without going to the vendor
+    last = MARCH[-1]
+    now = session_close_ms_utc(last) + after_close_ms
+
+    if refused:
+        refusal = refusal_of(identity(MARCH, session=policy), now_ms=now)
+        assert refusal.code == "window_not_complete" and last.isoformat() in refusal.reason
+    else:
+        assert counts(admit(identity(MARCH, session=policy), now_ms=now).coverage.window) == (len(MARCH), 0, 0, 0)
 
 
 # ---------------------------------------------------------------------------

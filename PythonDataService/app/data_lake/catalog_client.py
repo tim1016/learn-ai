@@ -621,6 +621,47 @@ async def select_coverage_minute_bars(
     ]
 
 
+async def select_minute_capture_times(
+    market: str,
+    symbol: str,
+    data_type: str,
+    start_trading_date: date,
+    end_trading_date: date,
+    *,
+    price_adjustment_mode: str,
+    data_root_id: UUID | None = None,
+) -> dict[date, int]:
+    """When each complete minute artifact in the window finished its capture (``int64 ms UTC``), by trading date.
+
+    The catalog stamps ``CompletedAtMs`` on every completion; a row that
+    predates the column or was imported may carry none, and is left out — a
+    reader that asks whether a day was captured early
+    (:mod:`app.data_lake.capture_finality`) reads an absent time as final.
+    Root-scoped like :func:`select_coverage_minute_bars`.
+    """
+    root_id = _resolve_data_root_id(data_root_id)
+    query = """
+        SELECT "TradingDate", "CompletedAtMs"
+          FROM "DataLakeArtifacts"
+         WHERE "ArtifactKind" = 'time_series_bars'
+           AND "Resolution" = 'minute'
+           AND "Market" = $1
+           AND "Symbol" = $2
+           AND "DataType" = $3
+           AND "TradingDate" >= $4
+           AND "TradingDate" <= $5
+           AND "PriceAdjustmentMode" = $6
+           AND "DataRootId" = $7
+           AND "Status" = 'complete'
+           AND "CompletedAtMs" IS NOT NULL
+    """
+    async with connection() as conn:
+        rows = await conn.fetch(
+            query, market, symbol, data_type, start_trading_date, end_trading_date, price_adjustment_mode, root_id
+        )
+    return {r["TradingDate"]: r["CompletedAtMs"] for r in rows}
+
+
 @dataclass(frozen=True)
 class MinuteBarLeaseStatus:
     """Current row state for one minute-bar claim, independent of Status.

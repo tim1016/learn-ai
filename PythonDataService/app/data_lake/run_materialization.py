@@ -9,10 +9,13 @@ arbitrates who fetches what, and every run leaves with a fingerprint of the
 lake state it materialized against — whose scope :func:`materialize_engine_run`
 states canonically.
 
-This module is only the bridge, and its public surface is two symbols:
-:func:`materialize_engine_run` and the :class:`LakeMaterializationError` it
-raises. Everything else is private, because the call composes three things no
-caller should have to solve — or be able to second-guess — for itself:
+This module is only the bridge. A backtest run calls
+:func:`materialize_engine_run` and sees :class:`LakeMaterializationError`; the
+chart calls :func:`materialize_chart_range`; a research study that reads minute
+bars calls :func:`materialize_minute_window` (and asks
+:func:`early_minute_captures` which held days were captured too early). Everything
+else is private, because each call composes three things no caller should have
+to solve — or be able to second-guess — for itself:
 
 1. **The spec.** What a Python-engine run actually needs from the lake —
    minute and daily trade bars, and nothing else (see
@@ -32,7 +35,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -41,6 +44,8 @@ from uuid import UUID, uuid4
 
 import asyncpg
 
+from app.data_lake import catalog_client
+from app.data_lake.capture_finality import CaptureSession, captured_early
 from app.data_lake.catalog_client import CatalogUnavailableError
 from app.data_lake.ensure_data import ensure_data
 from app.data_lake.types import (
@@ -114,6 +119,7 @@ def _build_engine_run_spec(
     request_id: UUID | None = None,
     fetch_timeout_seconds: int = 600,
     include_daily_trade: bool = True,
+    require_final_capture_for: CaptureSession | None = None,
 ) -> DataRunSpec:
     """Describe what a Python-engine backtest needs from the lake.
 
@@ -129,6 +135,11 @@ def _build_engine_run_spec(
     whole-symbol artifact rebuilt whenever the symbol's catalogued coverage
     changes, so building it for a reader that never opens it costs a pass
     over the symbol's whole history.
+
+    ``require_final_capture_for`` names the session policy a reader that needs
+    the whole day reads; a minute day captured before that data stopped
+    forming is then refreshed rather than reused
+    (:mod:`app.data_lake.capture_finality`).
     """
     # Imported here rather than at module scope: the digest is the sidecar
     # package's to publish, and the lake should not depend on it to import.
@@ -152,6 +163,7 @@ def _build_engine_run_spec(
         include_factor_files=False,
         include_map_files=False,
         include_daily_trade=include_daily_trade,
+        require_final_capture_for=require_final_capture_for,
         lean_image_digest=PINNED_LEAN_IMAGE_DIGEST,
         fetch_timeout_seconds=fetch_timeout_seconds,
     )
@@ -563,6 +575,7 @@ def materialize_minute_window(
     price_adjustment_mode: PriceAdjustmentMode,
     requester: str,
     fetch_timeout_seconds: int = 600,
+    final_for: CaptureSession | None = None,
 ) -> MinuteWindowMaterialization:
     """Put a window's minute bars in the lake and report, per session, what it could not.
 
@@ -572,6 +585,11 @@ def materialize_minute_window(
     opens, and without raising for a data reason. Raises
     :class:`LakeMaterializationError` only when the lake cannot name its
     session calendar (no pinned LEAN image), which no window can fix.
+
+    ``final_for`` is the session policy the caller reads: a day already held
+    that was captured before that policy's data stopped forming is refreshed
+    instead of reused. Left ``None`` it is reused however early it was
+    captured, as it is for every other consumer.
     """
     spec = _build_engine_run_spec(
         symbol=symbol,
@@ -581,6 +599,7 @@ def materialize_minute_window(
         requester=requester,
         fetch_timeout_seconds=fetch_timeout_seconds,
         include_daily_trade=False,
+        require_final_capture_for=final_for,
     )
     try:
         result = _materialize_run_data_sync(spec, resolution="minute")
@@ -610,6 +629,43 @@ def materialize_minute_window(
         refreshed_artifact_count=result.refreshed_artifact_count,
         withheld=tuple(f for f in result.failures if _withholds_bars_the_run_reads(f, resolution="minute")),
     )
+
+
+def early_minute_captures(
+    *,
+    symbol: str,
+    days: Sequence[date],
+    price_adjustment_mode: PriceAdjustmentMode,
+    session: CaptureSession,
+) -> dict[date, int]:
+    """The days among ``days`` the lake holds a minute artifact for that was captured before ``session`` data stopped
+    forming, each with the instant (``int64 ms UTC``) it was captured.
+
+    The catalog records when each artifact completed; a day completed before
+    its :func:`~app.data_lake.capture_finality.capture_final_ms` holds only the
+    minutes the vendor had delivered by then. Asked of the catalog, never the
+    file. Blocking; raises :class:`CatalogUnavailableError` when the catalog
+    cannot answer.
+    """
+    if not days:
+        return {}
+
+    async def _times() -> dict[date, int]:
+        await catalog_client.init_pool()
+        return await catalog_client.select_minute_capture_times(
+            "usa",
+            symbol,
+            "trade",
+            min(days),
+            max(days),
+            price_adjustment_mode=price_adjustment_mode,
+        )
+
+    try:
+        captured = run_on_background_loop(_times(), timeout=35)
+    except (asyncpg.PostgresError, OSError, TimeoutError, CallerStoppedWaitingError) as exc:
+        raise CatalogUnavailableError(f"cannot read capture times from the catalog ({type(exc).__name__})") from exc
+    return {day: captured[day] for day in days if day in captured and captured_early(captured[day], day, session)}
 
 
 # ---------------------------------------------------------------------------

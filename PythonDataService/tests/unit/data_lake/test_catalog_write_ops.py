@@ -81,6 +81,44 @@ async def test_claim_minute_bar_inserts_row_and_returns_id(clean_artifacts, pool
     assert isinstance(artifact_id, int)
 
 
+async def test_select_minute_capture_times_reports_when_each_complete_day_finished_and_is_root_scoped(
+    clean_artifacts, pool
+):
+    """The time a reader judges "captured before the day stopped forming" by (#3521 review M3)."""
+    done, pending = date(2024, 5, 20), date(2024, 5, 21)
+    for day in (done, pending):
+        await catalog_client.claim_minute_bar(
+            identity=_minute_identity(day),
+            worker_id="w-1",
+            lease_ttl_ms=300_000,
+            data_contract_hash="a" * 64,
+            file_path=f"{day}.zip",
+        )
+    started_ms = int(time.time() * 1000)
+    artifact_id = (await catalog_client.select_minute_bar_claim_state(_minute_identity(done))).id
+    assert await catalog_client.complete_artifact(
+        artifact_id=artifact_id,
+        row_count=1,
+        first_bar_start_ms=0,
+        last_bar_start_ms=1,
+        file_size_bytes=10,
+        file_sha256="b" * 64,
+        lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
+    )
+    finished_ms = int(time.time() * 1000)
+
+    times = await catalog_client.select_minute_capture_times(
+        "usa", "SPY", "trade", done, pending, price_adjustment_mode="raw"
+    )
+    other_root = await catalog_client.select_minute_capture_times(
+        "usa", "SPY", "trade", done, pending, price_adjustment_mode="raw", data_root_id=uuid4()
+    )
+
+    assert set(times) == {done}, "a day still being fetched has no capture time"
+    assert started_ms <= times[done] <= finished_ms
+    assert other_root == {}
+
+
 async def test_select_claim_state_returns_none_for_no_row(clean_artifacts, pool):
     assert (
         await catalog_client.select_minute_bar_claim_state(_minute_identity()) is None
