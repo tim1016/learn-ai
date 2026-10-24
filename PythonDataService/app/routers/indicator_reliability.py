@@ -10,7 +10,9 @@ This is NOT cross-sectional factor IC used in equity factor models.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from datetime import date
 
 from fastapi import APIRouter, HTTPException, status
 
@@ -22,6 +24,7 @@ from app.models.indicator_reliability_models import (
     IndicatorReliabilityResponse,
     RegimeICPoint,
     RegimeResults,
+    ReliabilityDataSource,
     VerdictModel,
 )
 from app.research.indicator_reliability import (
@@ -46,23 +49,28 @@ from app.research.indicator_reliability import (
     get_indicator_category,
 )
 from app.services.dataset_service import (
-    INDICATOR_CONFIGS,
-    bar_minutes_for,
     calculate_dynamic_indicators,
-    fetch_bars_chunked,
-    filter_session,
     get_indicator_configs,
     list_available_indicators,
-    resolve_indicator_window,
 )
-from app.services.indicator_warmup_policy import requested_indicator_warmup_lookback
-from app.services.polygon_client import PolygonClientService
+from app.services.indicator_reliability_service import (
+    ReliabilityParams,
+    ReliabilityRefusal,
+    admit_reliability_inputs,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# Module-level singleton
-_polygon_client = PolygonClientService()
+#: A refusal that no change to the lake can fix is the caller's to correct (422); one the lake's state decides is a
+#: conflict (409); a lake that cannot be asked at all is unavailable (503).
+_REFUSAL_STATUS = {
+    "resolution_unsupported": status.HTTP_422_UNPROCESSABLE_ENTITY,
+    "symbol_not_addressable": status.HTTP_422_UNPROCESSABLE_ENTITY,
+    "no_sessions_in_window": status.HTTP_422_UNPROCESSABLE_ENTITY,
+    "window_not_complete": status.HTTP_422_UNPROCESSABLE_ENTITY,
+    "lake_unavailable": status.HTTP_503_SERVICE_UNAVAILABLE,
+}
 
 
 def _to_horizon_ic_result(
@@ -143,14 +151,28 @@ def _build_verdict(
     )
 
 
-@router.post("/indicator-reliability", response_model=IndicatorReliabilityResponse)
+@router.post(
+    "/indicator-reliability",
+    response_model=IndicatorReliabilityResponse,
+    responses={
+        status.HTTP_409_CONFLICT: {
+            "description": (
+                "The lake cannot admit the window, or the warmup policy refuses a shortened lead-in. The body is "
+                "{detail: {code, message, sessions, sessions_total, coverage, data_source}}."
+            )
+        },
+        status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "The data lake's catalog is unavailable; same body as 409."},
+    },
+)
 async def calculate_indicator_reliability(
     request: IndicatorReliabilityRequest,
 ) -> IndicatorReliabilityResponse:
     """Analyze indicator reliability using IC with OOS validation.
 
     This endpoint:
-    1. Fetches OHLCV bars for the ticker and date range
+    1. Admits regular-hours OHLCV bars for the ticker and date range (warmup lead-in included) from the data
+       lake, materializing what it lacks; a window the lake cannot admit is refused with a typed code and the
+       coverage counts (409, 503, or 422 for a request that can never run), never computed on a shorter series
     2. Calculates the specified indicator using pandas-ta
     3. Splits data into 70% train / 30% test
     4. Computes IC on both splits for each horizon
@@ -180,43 +202,44 @@ async def calculate_indicator_reliability(
                 detail="Maximum horizon is 100 bars",
             )
 
-        # Compute warmup period
         indicator_entry = {
             "name": request.indicator_name,
             "params": request.indicator_params,
         }
-        max_lookback = requested_indicator_warmup_lookback([indicator_entry], INDICATOR_CONFIGS)
-        window = resolve_indicator_window(
-            request.from_date,
-            max_lookback=max_lookback,
-            bar_minutes=bar_minutes_for(request.timespan, request.multiplier),
-        )
-        warmup_start = window.fetch_from
-
-        # Fetch bars (including warmup)
-        bars = fetch_bars_chunked(
-            _polygon_client,
-            ticker=request.symbol,
-            from_date=warmup_start,
-            to_date=request.to_date,
+        params = ReliabilityParams(
+            symbol=request.symbol.upper(),
+            indicator_name=request.indicator_name,
+            indicator_params=request.indicator_params,
+            from_date=date.fromisoformat(request.from_date),
+            to_date=date.fromisoformat(request.to_date),
             timespan=request.timespan,
             multiplier=request.multiplier,
-            adjusted=True,
+            horizons=tuple(request.horizons),
+            include_slope=request.include_slope,
+            warmup_policy=request.warmup_policy,
         )
+        try:
+            # Admission can wait on the provider for minutes; keep it off the event loop.
+            study = await asyncio.to_thread(admit_reliability_inputs, params)
+        except ReliabilityRefusal as refusal:
+            logger.warning(
+                "[Reliability] refused",
+                extra={"action": "reliability_refused", "code": refusal.code, "symbol": request.symbol},
+            )
+            raise HTTPException(
+                status_code=_REFUSAL_STATUS.get(refusal.code, status.HTTP_409_CONFLICT),
+                detail=refusal.as_detail(),
+            ) from refusal
 
-        if len(bars) < max_lookback + max(request.horizons):
+        df = study.frame
+        max_lookback = study.max_lookback
+        if len(df) < max_lookback + max(request.horizons):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Insufficient data: got {len(bars)} bars, need at least {max_lookback + max(request.horizons)}",
+                detail=f"Insufficient data: got {len(df)} bars, need at least {max_lookback + max(request.horizons)}",
             )
 
-        logger.info("[Reliability] Fetched %d bars (including warmup)", len(bars))
-
-        # Convert to DataFrame and filter session
-        import pandas as pd
-
-        df = pd.DataFrame(bars)
-        df = filter_session(df, "rth")
+        logger.info("[Reliability] Admitted %d bars (including warmup)", len(df))
 
         # Calculate the indicator
         df, column_meta = calculate_dynamic_indicators(df, [indicator_entry])
@@ -232,7 +255,7 @@ async def calculate_indicator_reliability(
         logger.info("[Reliability] Indicator column: %s", indicator_column)
 
         # Trim warmup period
-        df = df[df["timestamp"] >= window.window_start_ms].reset_index(drop=True)
+        df = df[df["timestamp"] >= study.window_start_ms].reset_index(drop=True)
 
         if len(df) < 100:
             raise HTTPException(
@@ -407,6 +430,7 @@ async def calculate_indicator_reliability(
             next_steps=next_steps,
             info_footnotes=info_footnotes,
             warnings=warnings,
+            data_source=ReliabilityDataSource.model_validate(study.data_source(bars_used=len(df))),
         )
 
     except HTTPException:

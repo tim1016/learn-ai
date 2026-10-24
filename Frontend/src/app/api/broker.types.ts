@@ -6398,7 +6398,9 @@ export interface paths {
          * @description Analyze indicator reliability using IC with OOS validation.
          *
          *     This endpoint:
-         *     1. Fetches OHLCV bars for the ticker and date range
+         *     1. Admits regular-hours OHLCV bars for the ticker and date range (warmup lead-in included) from the data
+         *        lake, materializing what it lacks; a window the lake cannot admit is refused with a typed code and the
+         *        coverage counts (409, 503, or 422 for a request that can never run), never computed on a shorter series
          *     2. Calculates the specified indicator using pandas-ta
          *     3. Splits data into 70% train / 30% test
          *     4. Computes IC on both splits for each horizon
@@ -20847,6 +20849,13 @@ export interface components {
             timespan?: "minute" | "hour" | "day";
             /** To Date */
             to_date: string;
+            /**
+             * Warmup Policy
+             * @description What to do when the lake cannot supply the whole warmup lead-in the policy sizes (history floor, symbol listing, sparse bars). 'allow_shortened' computes on the lead-in that exists and reports the shortfall in data_source.warmup; 'require_full' refuses with code 'warmup_shortened'.
+             * @default allow_shortened
+             * @enum {string}
+             */
+            warmup_policy?: "allow_shortened" | "require_full";
         };
         /**
          * IndicatorReliabilityResponse
@@ -20884,6 +20893,8 @@ export interface components {
             daily_ic_dates?: string[];
             /** Daily Ic Values */
             daily_ic_values?: number[];
+            /** @description The lake input behind this result: identity, admitted snapshot, coverage and warmup */
+            data_source?: components["schemas"]["ReliabilityDataSource"] | null;
             /**
              * Decay Curve
              * @description IC at every integer horizon 1..N on the in-sample period
@@ -29151,6 +29162,170 @@ export interface components {
              * @enum {string}
              */
             kind: "regular_session";
+        };
+        /**
+         * ReliabilityArtifactCounts
+         * @description Artifact counts, kept apart from session counts (a session is one minute artifact plus metadata).
+         */
+        ReliabilityArtifactCounts: {
+            /** Fetched */
+            fetched: number;
+            /** Refreshed */
+            refreshed: number;
+            /** Reused */
+            reused: number;
+        };
+        /** ReliabilityCoverage */
+        ReliabilityCoverage: {
+            artifacts: components["schemas"]["ReliabilityArtifactCounts"];
+            warmup: components["schemas"]["ReliabilityCoverageGroup"];
+            window: components["schemas"]["ReliabilityCoverageGroup"];
+        };
+        /**
+         * ReliabilityCoverageGroup
+         * @description Distinct-session counts from lake admission for the window or its warmup lead-in.
+         */
+        ReliabilityCoverageGroup: {
+            /**
+             * Added
+             * @description Sessions this run made ready
+             */
+            added: number;
+            /** Building */
+            building: number;
+            /** Corrupt */
+            corrupt: number;
+            /** Expected Sessions */
+            expected_sessions: number;
+            /**
+             * Failed
+             * @description building + corrupt + unavailable_from_provider
+             */
+            failed: number;
+            /**
+             * Missing
+             * @description Sessions not held and not fetched
+             */
+            missing: number;
+            /**
+             * Reused
+             * @description Sessions ready before this run began
+             */
+            reused: number;
+            /** Unavailable From Provider */
+            unavailable_from_provider: number;
+        };
+        /**
+         * ReliabilityDataSource
+         * @description Where this study's bars came from: the lake input identity, the admitted bytes, and what admission did.
+         */
+        ReliabilityDataSource: {
+            /** Aggregation */
+            aggregation: string;
+            /** Bar Minutes */
+            bar_minutes: number;
+            /**
+             * Bars Used
+             * @description Bars the statistics ran on, after the warmup was trimmed
+             */
+            bars_used?: number | null;
+            /** Calculation Version */
+            calculation_version: string;
+            /** Corporate Action Versions */
+            corporate_action_versions?: {
+                [key: string]: string;
+            };
+            coverage?: components["schemas"]["ReliabilityCoverage"] | null;
+            /** Data Root Id */
+            data_root_id?: string | null;
+            /**
+             * Identity Digest
+             * @description Hash of every input that decides the numbers
+             */
+            identity_digest?: string | null;
+            /**
+             * Kind
+             * @default lake
+             * @constant
+             */
+            kind?: "lake";
+            /** Minute Bars Read */
+            minute_bars_read?: number | null;
+            /**
+             * Price Adjustment Mode
+             * @enum {string}
+             */
+            price_adjustment_mode: "raw" | "polygon_split_adjusted";
+            /** Provider */
+            provider: string;
+            /**
+             * Result Identity Digest
+             * @description identity + admitted snapshot + calculation version
+             */
+            result_identity_digest?: string | null;
+            /**
+             * Session Policy
+             * @enum {string}
+             */
+            session_policy: "regular" | "extended";
+            /**
+             * Snapshot Digest
+             * @description sha256 of every byte admitted; null when nothing was admitted
+             */
+            snapshot_digest?: string | null;
+            /** @description Requested against admitted lead-in; null when a refusal came before any bar was read */
+            warmup?: components["schemas"]["ReliabilityWarmup"] | null;
+            /**
+             * Window End Ms
+             * @description Requested last date, ET midnight, int64 ms UTC
+             */
+            window_end_ms: number;
+            /**
+             * Window Start Ms
+             * @description Requested first date, ET midnight, int64 ms UTC
+             */
+            window_start_ms: number;
+        };
+        /**
+         * ReliabilityWarmup
+         * @description The warmup lead-in the policy asked for against the one the lake supplied.
+         *
+         *     Before the lake, a lead-in cut short by the provider's history floor, the symbol's listing date or sparse
+         *     sessions was computed on without a word. ``shortened`` and ``cause`` say it; ``policy`` says what the run was
+         *     allowed to do about it.
+         */
+        ReliabilityWarmup: {
+            /**
+             * Admitted Bars
+             * @description Bars at the study's resolution before the window's first session
+             */
+            admitted_bars: number;
+            /** Admitted Sessions */
+            admitted_sessions: number;
+            /**
+             * Cause
+             * @enum {string}
+             */
+            cause: "none" | "provider_history_floor" | "symbol_history_starts" | "sparse_session_bars";
+            /**
+             * Policy
+             * @enum {string}
+             */
+            policy: "allow_shortened" | "require_full";
+            /**
+             * Requested Bars
+             * @description Warmup bars the policy sizes: indicator lookback x the warmup multiplier
+             */
+            requested_bars: number;
+            /**
+             * Requested Sessions
+             * @description Lead-in sessions the policy asks for, never before the provider floor
+             */
+            requested_sessions: number;
+            /** Shortened */
+            shortened: boolean;
+            /** Shortfall Bars */
+            shortfall_bars: number;
         };
         /**
          * RemoveAction
@@ -47391,6 +47566,13 @@ export interface operations {
                     "application/json": components["schemas"]["IndicatorReliabilityResponse"];
                 };
             };
+            /** @description The lake cannot admit the window, or the warmup policy refuses a shortened lead-in. The body is {detail: {code, message, sessions, sessions_total, coverage, data_source}}. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -47399,6 +47581,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+            /** @description The data lake's catalog is unavailable; same body as 409. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

@@ -33166,6 +33166,16 @@
             "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
             "title": "To Date",
             "type": "string"
+          },
+          "warmup_policy": {
+            "default": "allow_shortened",
+            "description": "What to do when the lake cannot supply the whole warmup lead-in the policy sizes (history floor, symbol listing, sparse bars). 'allow_shortened' computes on the lead-in that exists and reports the shortfall in data_source.warmup; 'require_full' refuses with code 'warmup_shortened'.",
+            "enum": [
+              "allow_shortened",
+              "require_full"
+            ],
+            "title": "Warmup Policy",
+            "type": "string"
           }
         },
         "required": [
@@ -33234,6 +33244,17 @@
             },
             "title": "Daily Ic Values",
             "type": "array"
+          },
+          "data_source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReliabilityDataSource"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The lake input behind this result: identity, admitted snapshot, coverage and warmup"
           },
           "decay_curve": {
             "description": "IC at every integer horizon 1..N on the in-sample period",
@@ -55209,6 +55230,327 @@
           "kind"
         ],
         "title": "RegularSessionFlattenPricing",
+        "type": "object"
+      },
+      "ReliabilityArtifactCounts": {
+        "description": "Artifact counts, kept apart from session counts (a session is one minute artifact plus metadata).",
+        "properties": {
+          "fetched": {
+            "title": "Fetched",
+            "type": "integer"
+          },
+          "refreshed": {
+            "title": "Refreshed",
+            "type": "integer"
+          },
+          "reused": {
+            "title": "Reused",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fetched",
+          "reused",
+          "refreshed"
+        ],
+        "title": "ReliabilityArtifactCounts",
+        "type": "object"
+      },
+      "ReliabilityCoverage": {
+        "properties": {
+          "artifacts": {
+            "$ref": "#/components/schemas/ReliabilityArtifactCounts"
+          },
+          "warmup": {
+            "$ref": "#/components/schemas/ReliabilityCoverageGroup"
+          },
+          "window": {
+            "$ref": "#/components/schemas/ReliabilityCoverageGroup"
+          }
+        },
+        "required": [
+          "window",
+          "warmup",
+          "artifacts"
+        ],
+        "title": "ReliabilityCoverage",
+        "type": "object"
+      },
+      "ReliabilityCoverageGroup": {
+        "description": "Distinct-session counts from lake admission for the window or its warmup lead-in.",
+        "properties": {
+          "added": {
+            "description": "Sessions this run made ready",
+            "title": "Added",
+            "type": "integer"
+          },
+          "building": {
+            "title": "Building",
+            "type": "integer"
+          },
+          "corrupt": {
+            "title": "Corrupt",
+            "type": "integer"
+          },
+          "expected_sessions": {
+            "title": "Expected Sessions",
+            "type": "integer"
+          },
+          "failed": {
+            "description": "building + corrupt + unavailable_from_provider",
+            "title": "Failed",
+            "type": "integer"
+          },
+          "missing": {
+            "description": "Sessions not held and not fetched",
+            "title": "Missing",
+            "type": "integer"
+          },
+          "reused": {
+            "description": "Sessions ready before this run began",
+            "title": "Reused",
+            "type": "integer"
+          },
+          "unavailable_from_provider": {
+            "title": "Unavailable From Provider",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_sessions",
+          "reused",
+          "added",
+          "missing",
+          "failed",
+          "building",
+          "corrupt",
+          "unavailable_from_provider"
+        ],
+        "title": "ReliabilityCoverageGroup",
+        "type": "object"
+      },
+      "ReliabilityDataSource": {
+        "description": "Where this study's bars came from: the lake input identity, the admitted bytes, and what admission did.",
+        "properties": {
+          "aggregation": {
+            "title": "Aggregation",
+            "type": "string"
+          },
+          "bar_minutes": {
+            "title": "Bar Minutes",
+            "type": "integer"
+          },
+          "bars_used": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Bars the statistics ran on, after the warmup was trimmed",
+            "title": "Bars Used"
+          },
+          "calculation_version": {
+            "title": "Calculation Version",
+            "type": "string"
+          },
+          "corporate_action_versions": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Corporate Action Versions",
+            "type": "object"
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReliabilityCoverage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "data_root_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Root Id"
+          },
+          "identity_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Hash of every input that decides the numbers",
+            "title": "Identity Digest"
+          },
+          "kind": {
+            "const": "lake",
+            "default": "lake",
+            "title": "Kind"
+          },
+          "minute_bars_read": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minute Bars Read"
+          },
+          "price_adjustment_mode": {
+            "enum": [
+              "raw",
+              "polygon_split_adjusted"
+            ],
+            "title": "Price Adjustment Mode",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "result_identity_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "identity + admitted snapshot + calculation version",
+            "title": "Result Identity Digest"
+          },
+          "session_policy": {
+            "enum": [
+              "regular",
+              "extended"
+            ],
+            "title": "Session Policy",
+            "type": "string"
+          },
+          "snapshot_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "sha256 of every byte admitted; null when nothing was admitted",
+            "title": "Snapshot Digest"
+          },
+          "warmup": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReliabilityWarmup"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Requested against admitted lead-in; null when a refusal came before any bar was read"
+          },
+          "window_end_ms": {
+            "description": "Requested last date, ET midnight, int64 ms UTC",
+            "title": "Window End Ms",
+            "type": "integer"
+          },
+          "window_start_ms": {
+            "description": "Requested first date, ET midnight, int64 ms UTC",
+            "title": "Window Start Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "provider",
+          "price_adjustment_mode",
+          "session_policy",
+          "bar_minutes",
+          "aggregation",
+          "window_start_ms",
+          "window_end_ms",
+          "calculation_version"
+        ],
+        "title": "ReliabilityDataSource",
+        "type": "object"
+      },
+      "ReliabilityWarmup": {
+        "description": "The warmup lead-in the policy asked for against the one the lake supplied.\n\nBefore the lake, a lead-in cut short by the provider's history floor, the symbol's listing date or sparse\nsessions was computed on without a word. ``shortened`` and ``cause`` say it; ``policy`` says what the run was\nallowed to do about it.",
+        "properties": {
+          "admitted_bars": {
+            "description": "Bars at the study's resolution before the window's first session",
+            "title": "Admitted Bars",
+            "type": "integer"
+          },
+          "admitted_sessions": {
+            "title": "Admitted Sessions",
+            "type": "integer"
+          },
+          "cause": {
+            "enum": [
+              "none",
+              "provider_history_floor",
+              "symbol_history_starts",
+              "sparse_session_bars"
+            ],
+            "title": "Cause",
+            "type": "string"
+          },
+          "policy": {
+            "enum": [
+              "allow_shortened",
+              "require_full"
+            ],
+            "title": "Policy",
+            "type": "string"
+          },
+          "requested_bars": {
+            "description": "Warmup bars the policy sizes: indicator lookback x the warmup multiplier",
+            "title": "Requested Bars",
+            "type": "integer"
+          },
+          "requested_sessions": {
+            "description": "Lead-in sessions the policy asks for, never before the provider floor",
+            "title": "Requested Sessions",
+            "type": "integer"
+          },
+          "shortened": {
+            "title": "Shortened",
+            "type": "boolean"
+          },
+          "shortfall_bars": {
+            "title": "Shortfall Bars",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "policy",
+          "requested_bars",
+          "requested_sessions",
+          "admitted_sessions",
+          "admitted_bars",
+          "shortened",
+          "shortfall_bars",
+          "cause"
+        ],
+        "title": "ReliabilityWarmup",
         "type": "object"
       },
       "RemoveAction": {
@@ -93358,7 +93700,7 @@
     },
     "/api/research/indicator-reliability": {
       "post": {
-        "description": "Analyze indicator reliability using IC with OOS validation.\n\nThis endpoint:\n1. Fetches OHLCV bars for the ticker and date range\n2. Calculates the specified indicator using pandas-ta\n3. Splits data into 70% train / 30% test\n4. Computes IC on both splits for each horizon\n5. Applies Bonferroni and FDR multiple testing corrections\n6. Compares against random baseline (100 shuffled signals)\n7. Returns warnings about overfit risk and data issues\n\nIMPORTANT: This is time-series IC for a single asset, NOT cross-sectional factor IC.",
+        "description": "Analyze indicator reliability using IC with OOS validation.\n\nThis endpoint:\n1. Admits regular-hours OHLCV bars for the ticker and date range (warmup lead-in included) from the data\n   lake, materializing what it lacks; a window the lake cannot admit is refused with a typed code and the\n   coverage counts (409, 503, or 422 for a request that can never run), never computed on a shorter series\n2. Calculates the specified indicator using pandas-ta\n3. Splits data into 70% train / 30% test\n4. Computes IC on both splits for each horizon\n5. Applies Bonferroni and FDR multiple testing corrections\n6. Compares against random baseline (100 shuffled signals)\n7. Returns warnings about overfit risk and data issues\n\nIMPORTANT: This is time-series IC for a single asset, NOT cross-sectional factor IC.",
         "operationId": "calculate_indicator_reliability_api_research_indicator_reliability_post",
         "requestBody": {
           "content": {
@@ -93381,6 +93723,9 @@
             },
             "description": "Successful Response"
           },
+          "409": {
+            "description": "The lake cannot admit the window, or the warmup policy refuses a shortened lead-in. The body is {detail: {code, message, sessions, sessions_total, coverage, data_source}}."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -93390,6 +93735,9 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "description": "The data lake's catalog is unavailable; same body as 409."
           }
         },
         "summary": "Calculate Indicator Reliability",

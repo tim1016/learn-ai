@@ -12,6 +12,8 @@ StrengthLabel = Literal["Noise", "Weak", "Moderate", "Strong"]
 StabilityLabel = Literal["Low", "Moderate", "High"]
 DirectionLabel = Literal["Mean-Reversion", "Momentum", "None"]
 TradeabilityLabel = Literal["Likely tradeable", "Marginal", "Unlikely", "Unknown"]
+WarmupPolicy = Literal["allow_shortened", "require_full"]
+WarmupShortfallCause = Literal["none", "provider_history_floor", "symbol_history_starts", "sparse_session_bars"]
 
 
 class VerdictModel(BaseModel):
@@ -52,6 +54,14 @@ class IndicatorReliabilityRequest(TickerRequest):
     include_slope: bool = Field(
         default=False,
         description="Also compute IC on indicator slope (1-bar change)",
+    )
+    warmup_policy: WarmupPolicy = Field(
+        default="allow_shortened",
+        description=(
+            "What to do when the lake cannot supply the whole warmup lead-in the policy sizes (history floor, "
+            "symbol listing, sparse bars). 'allow_shortened' computes on the lead-in that exists and reports the "
+            "shortfall in data_source.warmup; 'require_full' refuses with code 'warmup_shortened'."
+        ),
     )
 
 
@@ -176,6 +186,76 @@ class RegimeResults(BaseModel):
     )
 
 
+class ReliabilityCoverageGroup(BaseModel):
+    """Distinct-session counts from lake admission for the window or its warmup lead-in."""
+
+    expected_sessions: int
+    reused: int = Field(..., description="Sessions ready before this run began")
+    added: int = Field(..., description="Sessions this run made ready")
+    missing: int = Field(..., description="Sessions not held and not fetched")
+    failed: int = Field(..., description="building + corrupt + unavailable_from_provider")
+    building: int
+    corrupt: int
+    unavailable_from_provider: int
+
+
+class ReliabilityArtifactCounts(BaseModel):
+    """Artifact counts, kept apart from session counts (a session is one minute artifact plus metadata)."""
+
+    fetched: int
+    reused: int
+    refreshed: int
+
+
+class ReliabilityCoverage(BaseModel):
+    window: ReliabilityCoverageGroup
+    warmup: ReliabilityCoverageGroup
+    artifacts: ReliabilityArtifactCounts
+
+
+class ReliabilityWarmup(BaseModel):
+    """The warmup lead-in the policy asked for against the one the lake supplied.
+
+    Before the lake, a lead-in cut short by the provider's history floor, the symbol's listing date or sparse
+    sessions was computed on without a word. ``shortened`` and ``cause`` say it; ``policy`` says what the run was
+    allowed to do about it.
+    """
+
+    policy: WarmupPolicy
+    requested_bars: int = Field(..., description="Warmup bars the policy sizes: indicator lookback x the warmup multiplier")
+    requested_sessions: int = Field(..., description="Lead-in sessions the policy asks for, never before the provider floor")
+    admitted_sessions: int
+    admitted_bars: int = Field(..., description="Bars at the study's resolution before the window's first session")
+    shortened: bool
+    shortfall_bars: int
+    cause: WarmupShortfallCause
+
+
+class ReliabilityDataSource(BaseModel):
+    """Where this study's bars came from: the lake input identity, the admitted bytes, and what admission did."""
+
+    kind: Literal["lake"] = "lake"
+    provider: str
+    price_adjustment_mode: Literal["raw", "polygon_split_adjusted"]
+    session_policy: Literal["regular", "extended"]
+    bar_minutes: int
+    aggregation: str
+    window_start_ms: int = Field(..., description="Requested first date, ET midnight, int64 ms UTC")
+    window_end_ms: int = Field(..., description="Requested last date, ET midnight, int64 ms UTC")
+    warmup: ReliabilityWarmup | None = Field(
+        None, description="Requested against admitted lead-in; null when a refusal came before any bar was read"
+    )
+    calculation_version: str
+    identity_digest: str | None = Field(None, description="Hash of every input that decides the numbers")
+    snapshot_digest: str | None = Field(None, description="sha256 of every byte admitted; null when nothing was admitted")
+    result_identity_digest: str | None = Field(None, description="identity + admitted snapshot + calculation version")
+    data_root_id: str | None = None
+    corporate_action_versions: dict[str, str] = Field(default_factory=dict)
+    coverage: ReliabilityCoverage | None = None
+    minute_bars_read: int | None = None
+    bars_used: int | None = Field(None, description="Bars the statistics ran on, after the warmup was trimmed")
+
+
 class IndicatorReliabilityResponse(BaseModel):
     """Response from indicator reliability analysis."""
 
@@ -257,6 +337,10 @@ class IndicatorReliabilityResponse(BaseModel):
 
     # Warnings
     warnings: list[str] = Field(default_factory=list)
+
+    data_source: ReliabilityDataSource | None = Field(
+        None, description="The lake input behind this result: identity, admitted snapshot, coverage and warmup"
+    )
 
     error: str | None = None
 

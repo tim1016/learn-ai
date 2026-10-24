@@ -50,6 +50,20 @@ provider-era entry can reach. No calculation ownership changes: the feature,
 target, IC and robustness math is untouched. The session the study reads
 (extended hours today, as before) is an owner decision (D02 of PRD #3490).
 
+**Indicator reliability data admission (#3523).** Indicator reliability (Research
+Lab → Backtests → Reliability) admits regular-hours lake bars before it computes;
+its Polygon fetch and its bar-length-blind session filter (#3527) are gone from
+the router. `app/services/indicator_reliability_service.py` keeps the warmup
+sizing (`dataset_service.resolve_indicator_window`, unchanged), admits the lead-in
+sessions with the window through the same `study_inputs` admission, folds the
+minute bars to the requested size, and reports the lead-in it really got
+(`data_source.warmup`) where the provider path used a shortened one without a
+word. The study reads minute artifacts only: it neither reads nor waits on the
+derived daily rollup. It has never cached; the response carries the identity
+(input identity, admitted snapshot digest, calculation version) a cache or a
+saved result would key on. No calculation ownership changes: the IC,
+correction, baseline, regime and IR-proxy math is untouched.
+
 Committed lake-file admission (#2456) is owned by
 `PythonDataService/app/data_lake/admission.py`, backed by committed catalog
 receipts. Python reads and LEAN preflight refuse files whose exact bytes have

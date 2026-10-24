@@ -25,6 +25,13 @@ report's indicator step. The live bots' warm-up
   `rsi_length=14`; `tsi` a hidden `signal=13`; `fisher` recurses with fixed
   0.67/0.5 weights; `squeeze` reads hidden `mom_length=12, mom_smooth=6`.
 
+Indicator reliability (#3523) reads its lead-in from the data lake: the
+sessions this sizing names are admitted with the window, and the result
+reports the lead-in it really got (`data_source.warmup`: requested and
+admitted bars, and why a shortfall happened — the provider floor, the symbol's
+first listed session, or sessions holding few bars). `warmup_policy:
+"require_full"` refuses a shortfall instead of reporting it.
+
 ## What changed
 
 Before #2611 every request warmed up on a lookback of at least 200 bars —
