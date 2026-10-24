@@ -18,8 +18,18 @@ fails here; an *intentional* divergence is the owner's decision (D02) and is lis
 
 The lake's 1/10,000 price grid is ``data-quality``, never ``precision``: it changes the input data, and ``precision`` is
 floating-point accumulation. A tolerance may loosen only for the latter, so each output the grid moves is pinned at its
-*measured* magnitude (``test_prices_finer_than_the_lake_grid...``), with a stated margin, at three price levels, because
-the movement of an indicator such as RSI depends on the price it is computed at.
+*measured* magnitude (``test_prices_finer_than_the_lake_grid...``) at three price levels, because the movement of an
+indicator such as RSI depends on the price it is computed at. The pin is two-sided, at the measured value to full
+precision, and its tolerance is the floating-point accumulation error of the statistic (``accumulation_atol``), the only
+thing that can differ between two platforms running the same arithmetic.
+
+One measured quantity is not a smooth function of the data: the information coefficient is a Spearman correlation, and
+a rank is discontinuous at a tie. Indicator values that are mathematically equal (RSI over a flat stretch) differ by
+float noise, which orders them one way on one platform and another way on the next. Re-rounding the same tape moved the
+study's own in-sample and out-of-sample mean IC by up to 9e-5 (a $2 name), far above any accumulation bound; the study
+reports its IC to that precision across platforms. The comparison therefore ranks the indicator after
+``collapse_noise_ties`` makes values within the strict-float 1e-9 one value, which makes the pinned IC movement exactly
+reproducible; the app is untouched.
 
 Not provable offline: that Polygon's own N-minute aggregate equals a fold of its minute aggregates. Cases that fold use an
 independent reference for the vendor side (``vendor_fold``); that equivalence with the live API is an assumption of the
@@ -65,6 +75,37 @@ HALF_DAY_WINDOW = expected_sessions(date(2024, 7, 1), date(2024, 7, 12))
 DENSE = {"regular_keep": 1.0, "extended_keep": 0.5}
 ENTRY = {"name": "rsi", "params": {"length": 14}}
 HORIZONS = (1, 5)
+EPS = float(np.finfo(np.float64).eps)
+
+
+def accumulation_atol(n_terms: int, scale: float) -> float:
+    """The floating-point accumulation error of a statistic that two paths each compute once; class ``precision``.
+
+    A sum or recursion over ``n_terms`` terms carries a relative error of at most about ``n_terms * eps`` (recursive
+    summation's bound, with unit roundoff ``eps / 2`` doubled), plus a few single roundings that the ``+ 8`` covers. The
+    movement pinned below is the difference of two such values, hence the ``2 *``, and the error is relative to the
+    statistic's own size (``scale``), not to the movement. Measured here by re-rounding the same tape (every price times
+    20 factors that are not powers of two, both paths alike, so no mathematical result changes): the pinned RSI movement
+    stayed within 3e-12 of its pinned value, about 50 times below this bound.
+    """
+    return 2 * (n_terms + 8) * EPS * scale
+
+
+def collapse_noise_ties(values: pd.Series, tolerance: float = 1e-9) -> pd.Series:
+    """Values within ``tolerance`` of their neighbour in sorted order (single linkage) become one value: an exact tie.
+
+    At the strict-float default two indicator values that close are the same value, so their order is an accident of
+    rounding. NaN stays NaN.
+    """
+    out = values.to_numpy(dtype=float).copy()
+    finite = ~np.isnan(out)
+    order = np.argsort(out[finite], kind="stable")
+    ordered = out[finite][order]
+    starts = np.concatenate(([True], np.diff(ordered) > tolerance))
+    collapsed = np.empty_like(ordered)
+    collapsed[order] = ordered[starts][np.cumsum(starts) - 1]
+    out[finite] = collapsed
+    return pd.Series(out, index=values.index)
 
 
 def tape_for(window: list[date], *, lead: int = 3, start_price: float = 150.0, **options) -> dict[date, list[VendorBar]]:
@@ -164,8 +205,9 @@ class Comparison:
 
 
 def _ic_means(frame: pd.DataFrame, column: str) -> dict[int, tuple[float, float | None]]:
+    ranked = frame.assign(**{column: collapse_noise_ties(frame[column])})
     raw, _, _ = reliability_math.compute_indicator_reliability_with_oos(
-        df=frame, indicator_column=column, horizons=list(HORIZONS), include_slope=False,
+        df=ranked, indicator_column=column, horizons=list(HORIZONS), include_slope=False,
         train_ratio=reliability_math.TRAIN_RATIO, random_simulations=20,
     )
     return {r.horizon: (r.is_mean_ic, r.oos_mean_ic) for r in raw}
@@ -328,21 +370,20 @@ def test_the_old_session_filter_dropped_every_daily_bar_which_is_why_a_daily_req
     # trades), so the study refuses the size with a reason instead (see test_indicator_reliability_inputs.py).
 
 
-#: What the lake's price grid moves, measured on this pinned payload (seed 11, the DST window) at three price levels: the
-#: largest absolute difference between the two paths' RSI(14) at a shared bar, and the largest difference in the
-#: in-sample and out-of-sample mean IC over the horizons. Prices carry five or six decimals, finer than the grid. The
-#: movement of RSI grows as the price falls: a rounding of at most 5e-5 is a larger share of a bar-to-bar change on a
-#: $2 name than on a $150 one. Re-measure (print the three ``Comparison`` fields per case) only when the pinned tape or
-#: the lake's encoding intentionally changes; never to make a failing test pass.
+#: What the lake's price grid moves, measured on this pinned payload (seed 11, the DST window) at three price levels,
+#: to full precision: the largest absolute difference between the two paths' RSI(14) at a shared bar, and the largest
+#: difference in the in-sample and out-of-sample mean IC over the horizons (ranked after ``collapse_noise_ties``).
+#: Prices carry five or six decimals, finer than the grid. The movement of RSI grows as the price falls: a rounding of at
+#: most 5e-5 is a larger share of a bar-to-bar change on a $2 name than on a $150 one. Re-measure (print the three
+#: ``Comparison`` fields per case) only when the pinned tape or the lake's encoding intentionally changes; never to make
+#: a failing test pass.
 QUANTIZATION_MEASURED = {
-    "price_150": (150.0, 5, {"indicator": 7.021e-3, "is_ic": 3.109e-5, "oos_ic": 3.921e-5}),
-    "price_12": (12.0, 5, {"indicator": 1.0896e-1, "is_ic": 9.602e-5, "oos_ic": 4.453e-4}),
-    "price_2": (2.0, 6, {"indicator": 5.980e-1, "is_ic": 1.235e-4, "oos_ic": 1.2827e-3}),
+    "price_150": (150.0, 5, {"indicator": 0.00702114256191777, "is_ic": 3.0130969563779697e-05, "oos_ic": 3.9209370563890455e-05}),
+    "price_12": (12.0, 5, {"indicator": 0.10896007634036664, "is_ic": 9.578706822373217e-05, "oos_ic": 0.00044390342070593086}),
+    "price_2": (2.0, 6, {"indicator": 0.5979791116729452, "is_ic": 0.00011980786879826899, "oos_ic": 0.0012648701465169318}),
 }
-#: The headroom over a measured movement. The tape is seeded and the arithmetic deterministic, so this only absorbs
-#: platform differences in float summation order inside pandas and numpy; a real change in the lake's encoding, or in
-#: an indicator's math, moves these by orders of magnitude more.
-MEASURED_MARGIN = 1.5
+#: RSI is bounded by 100; a correlation by 1. Both are the sizes the accumulation error is relative to.
+RSI_SCALE, CORRELATION_SCALE = 100.0, 1.0
 
 
 @pytest.mark.parametrize(("start_price", "decimals", "measured"), QUANTIZATION_MEASURED.values(), ids=QUANTIZATION_MEASURED)
@@ -350,10 +391,11 @@ def test_prices_finer_than_the_lake_grid_move_each_output_by_its_measured_amount
     world, start_price, decimals, measured
 ):
     """Cause: ``data-quality`` (input quantization). The lake rounds half-up to 1/10,000 (``lean_writer.to_deci_cent``);
-    the provider path does not. That changes the input data, so it is not ``precision`` and no float tolerance covers it.
+    the provider path does not. That changes the input data, so it is not ``precision``: the movement is a fact about the
+    data and is pinned at its measured value. What ``precision`` (float accumulation) adds on top of it is the tolerance.
 
-    Each recorded output is pinned at its measured movement times ``MEASURED_MARGIN``, so a lake encoding change that
-    moved the IC by 1e-3 would fail here. The table above is what D02 is decided on.
+    A lake encoding change that moved the IC by 1e-3 would fail here, as would one that moved it by 1e-9. The table above
+    is what D02 is decided on.
     """
     tape = tape_for(DST_WINDOW, start_price=start_price, decimals=decimals)
     mock_vendor("SPY", tape, adjusted=tape)
@@ -364,10 +406,18 @@ def test_prices_finer_than_the_lake_grid_move_each_output_by_its_measured_amount
     assert comparison.quantization_only, "every price that moved moved by at most half a ten-thousandth"
     assert comparison.causes == ["data-quality"]
     assert comparison.indicator_valid_moved == 0
-    # atol is the measured movement with its margin; rtol is 0 because the quantity compared is itself a difference.
-    assert 0 < comparison.indicator_max_diff <= measured["indicator"] * MEASURED_MARGIN
-    assert 0 < comparison.is_ic_max_diff <= measured["is_ic"] * MEASURED_MARGIN
-    assert 0 < comparison.oos_ic_max_diff <= measured["oos_ic"] * MEASURED_MARGIN
+    # RSI is a recursion over every bar of the series. A rank correlation's rank sums are exact, so its error is the mean
+    # and the division over one session's bars.
+    session_bars = 390
+    np.testing.assert_allclose(
+        comparison.indicator_max_diff, measured["indicator"], rtol=0,
+        atol=accumulation_atol(comparison.lake_bars, RSI_SCALE), err_msg="indicator",
+    )
+    for name in ("is_ic", "oos_ic"):
+        np.testing.assert_allclose(
+            getattr(comparison, f"{name}_max_diff"), measured[name], rtol=0,
+            atol=accumulation_atol(session_bars, CORRELATION_SCALE), err_msg=name,
+        )
 
 
 def test_fractional_share_volume_is_kept_exactly_by_both_paths(world):
