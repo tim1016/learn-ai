@@ -461,4 +461,12 @@ describe('ExploreComponent', () => {
     expect(drawer.textContent).not.toContain('Indicators could not be loaded.');
     http.verify();
   });
+
+  it('opens the indicator reference from the chart bar in a new tab, so the scope stays as it is', async () => {
+    await renderExplore();
+
+    const link = screen.getByRole('link', { name: 'How this works' });
+    expect(link.getAttribute('href')).toBe('/data-lab-docs');
+    expect(link.getAttribute('target')).toBe('_blank');
+  });
 });

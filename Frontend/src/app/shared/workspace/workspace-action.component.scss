@@ -1,0 +1,33 @@
+:host {
+  display: inline-flex;
+}
+
+.workspace-action {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.25rem;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semi);
+  line-height: 1;
+  text-decoration: none;
+  cursor: pointer;
+
+  &:hover:not(:disabled) { background: var(--bg-hover); }
+  &:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+  &:disabled { opacity: 0.5; cursor: not-allowed; }
+}
+
+/* The one prominent action of the active task. */
+.workspace-action--primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--text-on-accent);
+
+  &:hover:not(:disabled) { background: var(--accent-hover); }
+}

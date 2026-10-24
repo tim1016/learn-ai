@@ -10,9 +10,9 @@
 export type Resolution = "minute" | "hour" | "daily";
 
 /** Trading session filter. ``rth`` = regular hours (09:30–16:00 ET);
- *  ``extended`` = pre + post-market (04:00–20:00 ET). The Engine Lab
- *  consumer treats Extended as a UI preview today — the Python engine
- *  still hardcodes RTH (see ``PythonDataService/app/routers/engine.py``). */
+ *  ``extended`` = pre + post-market (04:00–20:00 ET). The picker does not
+ *  offer Extended: the Python engine still hardcodes RTH (see
+ *  ``PythonDataService/app/routers/engine.py``). */
 export type Session = "rth" | "extended";
 
 export interface TickerRange {

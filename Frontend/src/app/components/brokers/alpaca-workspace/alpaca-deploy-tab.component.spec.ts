@@ -201,6 +201,14 @@ describe('AlpacaDeployTabComponent', () => {
     expect(await screen.findByRole('heading', { name: 'What' })).toBeTruthy();
   });
 
+  it('opens the broker costs and timing manual in a new tab, so the half-filled deploy form stays as it is', async () => {
+    await renderDeployTab();
+
+    const link = await screen.findByRole('link', { name: 'How this works' });
+    expect(link.getAttribute('href')).toBe('/docs/broker-manual');
+    expect(link.getAttribute('target')).toBe('_blank');
+  });
+
   it('explains in place when this clerk has no resolved lane', async () => {
     await renderDeployTab({ lane: null });
 

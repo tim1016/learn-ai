@@ -1,6 +1,6 @@
 <div class="edge-wrap">
   <app-page-header
-    title="Edge — quantitative research views"
+    [title]="pageTitle()"
     [hasTabs]="true"
   />
 
@@ -62,40 +62,43 @@
 
   @if (isRoot()) {
     <section class="edge-root">
+      <app-sample-data-banner [provenance]="edgeData().provenance" />
+
       <!-- KPI score cards — composite edge signal overview -->
+      @let headline = edgeData().headline;
       <div class="edge-kpi-row">
         <div class="edge-kpi ok">
           <div class="edge-kpi-label">Edge composite</div>
-          <div class="edge-kpi-value">+0.41</div>
+          <div class="edge-kpi-value">{{ fmtSigned(headline.edgeComposite) }}</div>
           <div class="edge-kpi-sub">long-vol bias</div>
         </div>
         <div class="edge-kpi ok">
           <div class="edge-kpi-label">DSR (mean)</div>
-          <div class="edge-kpi-value">0.74</div>
+          <div class="edge-kpi-value">{{ headline.dsrMean.toFixed(2) }}</div>
           <div class="edge-kpi-sub">López de Prado 2014</div>
         </div>
         <div class="edge-kpi warn">
           <div class="edge-kpi-label">PBO</div>
-          <div class="edge-kpi-value">0.31</div>
+          <div class="edge-kpi-value">{{ headline.pbo.toFixed(2) }}</div>
           <div class="edge-kpi-sub">CSCV @ 200 combos</div>
         </div>
         <div class="edge-kpi-contrib">
           <div class="edge-eyebrow">SCORE COMPONENTS</div>
           <div class="edge-contrib-row">
             <span class="edge-contrib-label">VRP contrib</span>
-            <span class="edge-contrib-val" style="color:var(--ind-cat-volatility)">+0.30</span>
+            <span class="edge-contrib-val" style="color:var(--ind-cat-volatility)">{{ fmtSigned(headline.contributions.vrp) }}</span>
           </div>
           <div class="edge-contrib-row">
             <span class="edge-contrib-label">Regime contrib</span>
-            <span class="edge-contrib-val" style="color:var(--ind-cat-momentum)">+0.16</span>
+            <span class="edge-contrib-val" style="color:var(--ind-cat-momentum)">{{ fmtSigned(headline.contributions.regime) }}</span>
           </div>
           <div class="edge-contrib-row">
             <span class="edge-contrib-label">IV contrib</span>
-            <span class="edge-contrib-val">−0.04</span>
+            <span class="edge-contrib-val">{{ fmtSigned(headline.contributions.iv) }}</span>
           </div>
           <div class="edge-contrib-row">
             <span class="edge-contrib-label">Trend contrib</span>
-            <span class="edge-contrib-val">−0.01</span>
+            <span class="edge-contrib-val">{{ fmtSigned(headline.contributions.trend) }}</span>
           </div>
         </div>
       </div>

@@ -16,6 +16,7 @@ import type {
   StrategyValidationFlag,
   StrategyValidationSummary,
 } from '../../services/strategy-validation.types';
+import { BreadcrumbComponent } from '../../shared/breadcrumb/breadcrumb.component';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { LeanTwinSourceComponent } from './lean-twin-source/lean-twin-source.component';
 import { QuantConnectReferenceCodeComponent } from './quantconnect-reference-code/quantconnect-reference-code.component';
@@ -25,6 +26,7 @@ import { GoldenValidationWorkbenchComponent } from '../golden-validation-workben
 @Component({
   selector: 'app-strategy-validation',
   imports: [
+    BreadcrumbComponent,
     RouterLink,
     ReceiptLabelPipe,
     LeanTwinSourceComponent,

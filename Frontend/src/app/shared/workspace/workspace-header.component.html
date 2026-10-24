@@ -1,0 +1,27 @@
+<header class="workspace-header">
+  <app-breadcrumb [heading]="title()" [items]="breadcrumb()" />
+
+  <div class="workspace-header__row">
+    <div class="workspace-header__heading">
+      <h1 class="workspace-header__title">{{ title() }}</h1>
+      <div class="workspace-header__help"><ng-content select="[workspaceHelp]" /></div>
+    </div>
+
+    @if (hasActions()) {
+      <div class="workspace-header__actions">
+        @for (action of secondaryActions(); track action.id) {
+          <app-workspace-action [action]="action" (triggered)="actionTriggered.emit($event)" />
+        }
+        @if (primaryAction(); as primary) {
+          <app-workspace-action variant="primary" [action]="primary" (triggered)="actionTriggered.emit($event)" />
+        }
+      </div>
+    }
+  </div>
+
+  @if (purpose(); as text) {
+    <p class="workspace-header__purpose">{{ text }}</p>
+  }
+
+  <div class="workspace-header__facts"><ng-content select="[workspaceFacts]" /></div>
+</header>

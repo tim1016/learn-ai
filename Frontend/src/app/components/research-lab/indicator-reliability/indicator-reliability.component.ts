@@ -32,7 +32,6 @@ import { MethodologyDrawerService } from '../../../shared/methodology-drawer/met
 import {
   IndicatorVerdictHeroComponent,
   type VerdictAnalysis,
-  type VerdictCta,
 } from '../../../shared/indicator-verdict-hero';
 import { TickerRangePickerComponent } from '../../../shared/ticker-range-picker/ticker-range-picker.component';
 import type { TickerRange } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
@@ -291,9 +290,6 @@ export class IndicatorReliabilityComponent {
       best.oos_retention !== null ? best.oos_retention >= 0.6 : true;
     const largeStatisticalEffect = Math.abs(best.oos_mean_ic ?? best.is_mean_ic) > 0.1;
 
-    const indicatorDisplay = res.display_name
-      || `${res.indicator_name.toUpperCase()}`;
-
     const directionLabel =
       best.direction_label === 'Mean-Reversion' ? 'mean-reversion'
       : best.direction_label === 'Momentum' ? 'trend-following'
@@ -307,8 +303,6 @@ export class IndicatorReliabilityComponent {
     })();
 
     return {
-      indicatorDisplay,
-      ticker: res.ticker,
       bestHorizonLabel: `${best.horizon}-bar`,
       oosIc: best.oos_mean_ic ?? best.is_mean_ic,
       isIc: best.is_mean_ic,
@@ -327,15 +321,6 @@ export class IndicatorReliabilityComponent {
       randomShuffles: res.random_simulations,
     };
   });
-
-  onVerdictCta(kind: VerdictCta): void {
-    // These are advisory emits today — each CTA is resolved later when
-    // the corresponding flow exists. For now we write intent to the
-    // console so the wiring is observable in dev, and the verdict panel
-    // stays useful as a read-only summary.
-     
-    console.info('[indicator-reliability] verdict CTA:', kind);
-  }
 
   // Indicator options (loaded from API)
   indicatorOptions = signal<IndicatorOption[]>([]);

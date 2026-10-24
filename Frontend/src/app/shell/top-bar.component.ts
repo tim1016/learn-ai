@@ -2,6 +2,8 @@ import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 import { NgOptimizedImage } from '@angular/common';
 import { RouterLink } from '@angular/router';
 
+import { HOME_ROUTE } from './app-menu';
+
 export type ShellAccountMode = 'paper' | 'live' | 'unknown';
 
 /** Universal shell chrome with typed projection boundaries for feature slices.
@@ -28,7 +30,7 @@ export type ShellAccountMode = 'paper' | 'live' | 'unknown';
           <ng-content select="[shell-nav]" />
         </div>
       </div>
-      <a class="top-bar__brand" routerLink="/data-lab" aria-label="Botasur home">
+      <a class="top-bar__brand" [routerLink]="homeRoute" aria-label="Botasur home">
         <img
           class="top-bar__brand-lockup"
           ngSrc="/assets/brand/botasur-header-mark.svg"
@@ -43,6 +45,9 @@ export type ShellAccountMode = 'paper' | 'live' | 'unknown';
         <div class="top-bar__connection" data-shell-slot="connection">
           <ng-content select="[shell-connection]" />
         </div>
+        <div class="top-bar__help" data-shell-slot="help">
+          <ng-content select="[shell-help]" />
+        </div>
       </div>
     </header>
   `,
@@ -50,4 +55,5 @@ export type ShellAccountMode = 'paper' | 'live' | 'unknown';
 })
 export class TopBarComponent {
   readonly accountMode = input<ShellAccountMode>('unknown');
+  protected readonly homeRoute = HOME_ROUTE;
 }

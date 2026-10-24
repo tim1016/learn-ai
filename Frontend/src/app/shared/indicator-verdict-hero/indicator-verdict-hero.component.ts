@@ -3,7 +3,6 @@ import {
   Component,
   computed,
   input,
-  output,
 } from "@angular/core";
 import { CommonModule } from "@angular/common";
 
@@ -15,18 +14,12 @@ import {
   verdictHeadline,
 } from "./indicator-verdict-hero.types";
 
-export type VerdictCta =
-  | "send-to-preflight"
-  | "save-verdict"
-  | "run-on-another-ticker";
-
 /**
  * Verdict hero for the Indicator Reliability page.
  *
- * Three-column band at the top of the analysis:
+ * Two-column band at the top of the analysis:
  *   1. Screens-passed gauge (N/5 + tier label)
  *   2. Headline verdict + reason pills + blocker bar
- *   3. Three big-action CTAs
  *
  * Below that: a 3-cell WHEN / WHERE / HOW decision band.
  *
@@ -57,7 +50,6 @@ export type VerdictCta =
 })
 export class IndicatorVerdictHeroComponent {
   readonly analysis = input.required<VerdictAnalysis>();
-  readonly cta = output<VerdictCta>();
 
   readonly verdict = computed<Verdict>(() => computeVerdict(this.analysis()));
 
@@ -173,10 +165,6 @@ export class IndicatorVerdictHeroComponent {
       : " Test with costs in Pre-flight.";
     return `Classic threshold; Sharpe proxy ${a.sharpe.toFixed(2)}.${note}`;
   });
-
-  onCta(kind: VerdictCta): void {
-    this.cta.emit(kind);
-  }
 
   pillColorVar(kind: string): string {
     if (kind === "good") return "var(--bull)";

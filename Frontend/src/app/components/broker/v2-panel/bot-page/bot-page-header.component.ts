@@ -6,6 +6,7 @@ import { AlpacaLaneModeChipComponent } from '../../../brokers/alpaca-desk/alpaca
 import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 import { BotInstrumentComponent } from '../../../../shared/bot-instrument/bot-instrument.component';
 import { BotStrategyLabelComponent } from '../../../../shared/bot-strategy-label/bot-strategy-label.component';
+import { HowThisWorksLinkComponent } from '../../../../shared/help/how-this-works-link.component';
 import { AuthoredUsdPipe } from '../../../../shared/pipes/authored-usd.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import type { BotPanelView, MarketPulseView } from '../lib/broker-v2-panel.types';
@@ -48,7 +49,7 @@ let nextSummaryId = 0;
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     AlpacaLaneModeChipComponent, AssetIdentityComponent, AuthoredUsdPipe, BotInstrumentComponent,
-    BotStrategyLabelComponent, RouterLink, TimestampDisplayComponent,
+    BotStrategyLabelComponent, HowThisWorksLinkComponent, RouterLink, TimestampDisplayComponent,
   ],
   templateUrl: './bot-page-header.component.html',
   styleUrl: './bot-page-header.component.scss',

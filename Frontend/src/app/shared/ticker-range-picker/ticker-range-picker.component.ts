@@ -73,7 +73,7 @@ export class TickerRangePickerComponent {
   readonly presentation = input<TickerRangePickerPresentation>('card');
 
   readonly title = input('Backtest data');
-  readonly sessionMode = input<SessionMode>('preview');
+  readonly sessionMode = input<SessionMode>('disabled');
 
   protected readonly bounds = computed<DateBounds>(() => {
     const bounds = this.dateBounds();

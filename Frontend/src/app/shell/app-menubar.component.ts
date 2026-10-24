@@ -29,13 +29,16 @@ import { menuItemsFor } from './app-menu';
 })
 export class AppMenubarComponent {
   /**
-   * Collapses to the overflow trigger below the width the row needs.
-   * Six triggers plus the centered brand and broker controls measure ~1130px;
-   * PrimeNG's 960px default would let the row overflow before collapsing.
+   * Collapses to the overflow trigger below the width the header holds the
+   * menu in. The six group names (Signal strategies and Options setups are
+   * the long ones) need more than the half of the header beside the centered
+   * brand until ~1750px, so above this width they wrap onto two lines; the
+   * header's height holds both. PrimeNG's 960px default would let that
+   * wrapped row overflow the header before collapsing.
    */
   protected readonly collapseBelow = '1150px';
 
-  private readonly currentUrl = inject(CurrentUrlService).url;
+  private readonly pageUrl = inject(CurrentUrlService).pageUrl;
 
-  protected readonly items = computed(() => menuItemsFor(this.currentUrl()));
+  protected readonly items = computed(() => menuItemsFor(this.pageUrl()));
 }

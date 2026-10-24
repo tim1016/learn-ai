@@ -27,6 +27,7 @@ import {
   fakeVendorCatalog,
   provideFakeVendorCatalog,
 } from "../../shared/symbol-catalog/testing/fake-symbol-catalog";
+import { CurrentUrlService } from "../../shell/current-url.service";
 import { StrategyLabComponent } from "./strategy-lab.component";
 import { inputsFromBacktestJob, inputsFromSavedRun } from "./strategy-lab.models";
 
@@ -214,6 +215,8 @@ async function createLab(
         useValue: { queryParamMap, snapshot: { queryParamMap: queryParamMap.value } },
       },
       { provide: Router, useValue: { navigate } },
+      // The shared breadcrumb reads the page's URL; this spec fakes the router.
+      { provide: CurrentUrlService, useValue: { pageUrl: signal("/strategy-lab") } },
       {
         provide: JobsService,
         useValue: {
@@ -278,6 +281,31 @@ describe("Strategy Lab Workbench", () => {
     expect(root.textContent).toContain("History");
     expect(root.textContent).not.toContain("Run a strategy, inspect its evidence");
     expect(root.querySelector("app-strategy-lab-config-rail")).not.toBeNull();
+    http.verify();
+  });
+
+  it("is titled by its menu label, under the trail back to its group", async () => {
+    const { fixture, http } = await createLab();
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    expect(within(root).getByRole("heading", { level: 1 }).textContent?.trim()).toBe("Strategy Lab");
+    expect(within(root).getByRole("navigation", { name: "Breadcrumb" }).textContent).toContain("Signal strategies");
+    http.verify();
+  });
+
+  it("opens the Strategy Lab manual and the strategy reference in new tabs, so the configured run stays as it is", async () => {
+    const { fixture, http } = await createLab();
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    const links = ["How this works", "Strategy reference"].map((name) => within(root).getByRole("link", { name }));
+    expect(links.map((link) => link.getAttribute("href"))).toEqual(["/strategy-lab/docs", "/strategy-docs"]);
+    expect(links.map((link) => link.getAttribute("target"))).toEqual(["_blank", "_blank"]);
     http.verify();
   });
 

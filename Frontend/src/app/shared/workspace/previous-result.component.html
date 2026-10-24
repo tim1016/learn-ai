@@ -1,0 +1,24 @@
+@if (previous()) {
+  <div class="previous-result__banner" role="status">
+    <p class="previous-result__title">Previous result</p>
+    <p class="previous-result__note">It was produced for the inputs below, not the inputs now entered.</p>
+    @if (captured(); as inputs) {
+      <dl class="previous-result__inputs">
+        @for (fact of inputs.facts; track fact.label) {
+          <div><dt>{{ fact.label }}</dt><dd>{{ fact.value }}</dd></div>
+        }
+      </dl>
+    }
+  </div>
+}
+
+<div class="previous-result__body" [class.is-previous]="previous()"><ng-content /></div>
+
+@if (!previous()) {
+  <div class="previous-result__actions">
+    <ng-content select="[resultActions]" />
+    @if (actionsTemplate(); as template) {
+      <ng-container [ngTemplateOutlet]="template" />
+    }
+  </div>
+}

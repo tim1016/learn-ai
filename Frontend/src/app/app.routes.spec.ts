@@ -20,7 +20,9 @@ import { AlpacaActivityPageComponent } from './components/brokers/alpaca-desk/ac
 import { BotPanelShellComponent } from './components/broker/v2-panel/panel-shell/bot-panel-shell.component';
 import { EntryComponent } from './components/entry/entry.component';
 import { OptionsBacktestPageComponent } from './components/options-backtest/options-backtest-page.component';
+import { NotFoundComponent } from './shell/not-found.component';
 import { accountWorkspaceFixRoute, type AccountWorkspaceFixDestination } from './fleet/account-workspace';
+import { HELP_DOCUMENTS } from './shared/help/help-documents';
 import { routes } from './app.routes';
 
 describe('routes', () => {
@@ -38,6 +40,14 @@ describe('routes', () => {
       redirectTo: 'strategy-lab/docs',
       pathMatch: 'full',
     });
+  });
+
+  it('routes every served document, so the help index has no dead link', () => {
+    const paths = new Set(routes.map((route) => route.path));
+
+    for (const document of HELP_DOCUMENTS) {
+      expect.soft(paths.has(document.route.slice(1)), `${document.title} is served at ${document.route}`).toBe(true);
+    }
   });
 
   it.each([
@@ -101,25 +111,18 @@ describe('routes', () => {
     ['deprecated broker URL', '/broker/bots/bot-1', '/brokers/alpaca'],
     ['deprecated broker URL', '/broker/offline-replay', '/brokers/alpaca'],
     ['deprecated broker URL', '/broker/deploy', '/brokers/alpaca'],
-    // The guard still folds `?surface=bots` onto `/brokers/alpaca/bots`,
-    // which now redirects back to the list. The chain has to terminate on the
-    // list rather than loop or strand the bookmark.
+    // The retired chooser URLs end on the list; `?surface=bots` goes there
+    // directly. Neither loops nor strands the bookmark.
     ['account-list hop chain', '/brokers/alpaca?surface=bots', '/brokers/alpaca'],
     ['account-list hop chain', '/brokers/alpaca?surface=gallery', '/brokers/alpaca'],
     ['account-list hop chain', '/brokers/alpaca/bots', '/brokers/alpaca'],
     ['account-list hop chain', '/brokers/alpaca/gallery', '/brokers/alpaca'],
-    // Without pathMatch: 'full' the run routes prefix-match, so a trailing
-    // segment still fired the redirect with id 204 instead of falling through
-    // to the wildcard — a URL that is not a run bookmark opened a run.
-    ['persisted-run URL with a trailing segment', '/strategy-lab/runs/204/extra', '/data-lab/explore'],
-    ['persisted-run URL with a trailing segment', '/engine/runs/204/extra', '/data-lab/explore'],
-    // Angular's router does not chain a redirect target that is itself a
-    // redirect route within one navigation (it re-matches the redirected URL
-    // with redirects disallowed), so engine/runs/:id must redirect straight
-    // to the final /strategy-lab?run=N destination rather than hopping
-    // through strategy-lab/runs/:id. This is a full-router assertion, not a
-    // route-config shape check, because that is exactly the distinction that
-    // would otherwise hide the gap.
+    // A redirect lands in one hop (PRD #3490 R32): engine/runs/:id goes
+    // straight to the final /strategy-lab?run=N rather than through
+    // strategy-lab/runs/:id. Angular follows an absolute redirect into another
+    // redirect by restarting from the root, but not a relative one (it is
+    // re-matched with redirects off), so this is a full-router assertion, not
+    // a route-config shape check.
     ['legacy engine/runs/:id bookmark', '/engine/runs/204', '/strategy-lab?run=204'],
   ])('%s: %s lands on %s', async (_kind, path, expectedUrl) => {
     TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
@@ -128,6 +131,28 @@ describe('routes', () => {
     await router.navigateByUrl(path);
 
     expect(router.url).toBe(expectedUrl);
+  });
+
+  it.each([
+    // Without pathMatch: 'full' the run routes prefix-match, so a trailing
+    // segment still fired the redirect with id 204 instead of falling through
+    // to the wildcard — a URL that is not a run bookmark opened a run.
+    '/strategy-lab/runs/204/extra',
+    '/engine/runs/204/extra',
+    // A lost address starting like a real page fails in place too.
+    '/research-lab/nothing-here',
+    '/no-such-page?x=1#frag',
+  ])('leaves %s where it is on the not-found page, never on a default page', async (path) => {
+    TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
+    const router = TestBed.inject(Router);
+
+    await router.navigateByUrl(path);
+
+    expect(router.url).toBe(path);
+    let leaf = router.routerState.snapshot.root;
+    while (leaf.firstChild !== null) leaf = leaf.firstChild;
+    expect(leaf.data).toMatchObject({ notFound: true });
+    expect(await leaf.routeConfig?.loadComponent?.()).toBe(NotFoundComponent);
   });
 
   it('lazily loads the Options Backtest page at its own address', async () => {
@@ -287,7 +312,7 @@ describe('routes', () => {
 
     // Review B3 (#2562): every place an attention line's fix can send the
     // owner resolves through the app's own route table to its own page —
-    // never the `**` wildcard, which lands on the Data Lab. Keyed by every
+    // never the `**` wildcard, which says no page is there. Keyed by every
     // destination, so a new one cannot land without a row here.
     const FIX_PAGES: Readonly<Record<AccountWorkspaceFixDestination, { url: string; page: unknown }>> = {
       bot: { url: '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid-1', page: BotPanelShellComponent },

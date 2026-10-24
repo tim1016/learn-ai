@@ -1,6 +1,8 @@
 import type { MenuItem } from 'primeng/api';
 
 import { accountWorkspaceLocation, routePathOf } from '../fleet/account-workspace';
+import type { BreadcrumbItem } from '../shared/breadcrumb/breadcrumb-item';
+import { HELP_DOCUMENTS } from '../shared/help/help-documents';
 
 export interface AppMenuItem {
   /** The single display name for every navigation projection. */
@@ -14,8 +16,15 @@ export interface AppMenuGroup {
   readonly title: string;
   /** PrimeIcons class, e.g. `pi pi-chart-line`. */
   readonly icon: string;
-  /** Non-empty: every group trigger opens onto at least one destination. */
+  /** Non-empty: every group trigger opens onto at least one destination. The first is the group's landing. */
   readonly items: readonly [AppMenuItem, ...AppMenuItem[]];
+  /**
+   * Pages the group owns that the menu does not list: a detail page, or a tab
+   * another place's shell still hosts. Resolved like an item's route, longest
+   * match first, so a page under a listed prefix highlights its own group.
+   * They shrink as later slices move those pages into the group's workspaces.
+   */
+  readonly pages?: readonly AppMenuItem[];
 }
 
 export interface ActiveMenuNode {
@@ -32,33 +41,35 @@ export const ACTIVE_GROUP_CLASS = 'app-menubar-group--active';
 export const ACTIVE_ITEM_CLASS = 'app-menubar-item--active';
 
 /**
- * Canonical application information architecture.
+ * Canonical application information architecture (ADR 0084).
  *
- * Every shell navigation surface projects from this ordered menu. Retired
- * IBKR navigation remains redirect-only in the route table and is
- * intentionally absent here.
+ * Six groups, in this order: Markets, Research, Signal strategies, Options
+ * setups, Accounts, Operations. Every shell navigation surface projects from
+ * this ordered menu. Retired IBKR navigation remains redirect-only in the
+ * route table and is intentionally absent here. Documents are not a group:
+ * the top-bar help index lists them (`HELP_DOCUMENTS`) and a page's "How this
+ * works" link opens one.
+ *
+ * Routes keep their current addresses; each page sits under the group the
+ * route inventory (PRD #3490 R32) assigns it, and later slices move pages into
+ * the groups' workspaces.
  */
 export const APP_MENU: readonly AppMenuGroup[] = [
   {
-    id: 'data-lab',
-    title: 'Stocks',
+    id: 'markets',
+    title: 'Markets',
     icon: 'pi pi-chart-line',
     items: [
       { title: 'Stocks', route: '/data-lab' },
       { title: 'Return Distribution', route: '/data-lab/returns' },
-      { title: 'Data Lake Observatory', route: '/data-lake' },
-    ],
-  },
-  {
-    id: 'options',
-    title: 'Options',
-    icon: 'pi pi-sliders-h',
-    items: [
       { title: 'Options Lab', route: '/options-lab' },
       { title: 'Options Chain (Live)', route: '/broker/options-chain' },
       { title: 'Options Surface (3D)', route: '/broker/options-surface' },
       { title: 'Pricing Lab', route: '/pricing-lab' },
     ],
+    // Instrument headlines: the news page is a Research Lab tab until the
+    // instrument workspace hosts it.
+    pages: [{ title: 'Ticker News', route: '/research-lab/market/news' }],
   },
   {
     id: 'research',
@@ -66,70 +77,116 @@ export const APP_MENU: readonly AppMenuGroup[] = [
     icon: 'pi pi-compass',
     items: [
       { title: 'Research Lab', route: '/research-lab' },
-      { title: 'Golden Fixtures', route: '/golden-fixtures' },
       { title: 'Edge Analysis', route: '/edge' },
       { title: 'Realized vs IV', route: '/edge/realized-vs-iv' },
       { title: 'Cross-Asset', route: '/edge/cross-asset' },
       { title: 'Regimes', route: '/edge/regimes' },
+      { title: 'Strategy Spec', route: '/spec-strategy' },
     ],
   },
   {
-    id: 'alpaca',
-    title: 'Alpaca',
+    id: 'signal-strategies',
+    title: 'Signal strategies',
+    icon: 'pi pi-briefcase',
+    items: [
+      { title: 'Strategy Lab', route: '/strategy-lab' },
+      { title: 'Grid Search', route: '/grid-search' },
+      { title: 'Walk-Forward', route: '/walk-forward' },
+      { title: 'Golden Search', route: '/golden-search' },
+      { title: 'Strategy Validation', route: '/strategy-validation' },
+    ],
+    // The multi-strategy comparison stays a Research Lab tab until the
+    // signal strategy list hosts it.
+    pages: [{ title: 'Recency Chart', route: '/research-lab/backtests/recency-chart' }],
+  },
+  {
+    id: 'options-setups',
+    title: 'Options setups',
+    icon: 'pi pi-sliders-h',
+    items: [
+      { title: 'Options Backtest', route: '/options-backtest' },
+      { title: 'Options Golden Search', route: '/options-golden-search' },
+    ],
+    // The analytical builder is an Options Lab tab until the options setup
+    // workspace hosts it (R32 files it under Options setups, not Markets).
+    pages: [
+      { title: 'Options evidence', route: '/options-evidence' },
+      { title: 'Strategy Builder', route: '/options-lab/strategy-builder' },
+    ],
+  },
+  {
+    id: 'accounts',
+    title: 'Accounts',
     icon: 'pi pi-link',
     // One way in (ADR 0064 Decision 2): an account is a place, and Deploy,
     // the bot roster and the Gallery are things one does *on* an account, so
     // they are that account's workspace tabs rather than four broker-wide
     // entries that would each have to ask which account they meant.
     items: [{ title: 'Accounts', route: '/brokers/alpaca' }],
+    // A lane that cannot open for the address given fails in place under
+    // Accounts too (FR-096).
+    pages: [{ title: 'Broker lane unavailable', route: '/brokers' }],
   },
   {
-    id: 'strategy-tools',
-    title: 'Strategy Tools',
-    icon: 'pi pi-briefcase',
+    id: 'operations',
+    title: 'Operations',
+    icon: 'pi pi-server',
     items: [
-      { title: 'Strategy Validation', route: '/strategy-validation' },
-      { title: 'Strategy Spec', route: '/spec-strategy' },
-      { title: 'Strategy Lab', route: '/strategy-lab' },
-      { title: 'Grid Search', route: '/grid-search' },
-      { title: 'Walk-Forward', route: '/walk-forward' },
-      { title: 'Golden Search', route: '/golden-search' },
-      { title: 'Options Backtest', route: '/options-backtest' },
+      { title: 'Data Lake Observatory', route: '/data-lake' },
+      { title: 'Golden Fixtures', route: '/golden-fixtures' },
     ],
-  },
-  {
-    id: 'documentation',
-    title: 'Documentation',
-    icon: 'pi pi-book',
-    items: [
-      { title: 'Options Backtest Manual', route: '/docs/options-backtest-manual' },
-      { title: 'Broker Costs & Timing', route: '/docs/broker-manual' },
-      { title: 'Bot Business Logic Manual', route: '/docs/bot-business-manual' },
-      { title: 'Architecture Manual', route: '/docs/architecture-manual' },
-      { title: 'Strategy Docs', route: '/strategy-docs' },
-      { title: 'Indicator Reference', route: '/data-lab-docs' },
-      { title: 'Pipeline Docs', route: '/data-quality-docs' },
-      { title: 'Indicator Reliability', route: '/docs/indicator-reliability-methodology' },
-      { title: 'Signal Engine', route: '/docs/signal-engine-methodology' },
-      { title: 'Golden Search Manual', route: '/docs/golden-search-manual' },
-      { title: 'Golden Search Charts', route: '/docs/golden-search-guide' },
-      { title: 'Legal Notices', route: '/legal/notices' },
+    // Data checks: tabs the Data Lab and Research Lab shells still host.
+    pages: [
+      { title: 'Validate', route: '/data-lab/validate' },
+      { title: 'Data Divergence', route: '/research-lab/inspect/data-divergence' },
+      { title: 'Strategy Pre-flight', route: '/research-lab/inspect/pre-flight' },
     ],
   },
 ];
 
-const ACTIVE_MENU_ITEMS = APP_MENU.flatMap((group) =>
-  group.items.map((item) => ({ group, item, activePath: item.route })),
+/**
+ * The window title of the page an unknown address opens. It lives here, with
+ * the other window titles, so the app shell can read it without importing the
+ * not-found page and pulling it out of its lazy route.
+ */
+export const NOT_FOUND_TITLE = 'Page not found';
+
+/**
+ * The app's landing: where the entry page's "I'm In", the brand link and a
+ * lost URL's way back lead. It is the first destination of the first group
+ * (Markets), so moving Markets' landing is one edit here.
+ */
+export const HOME_ROUTE = APP_MENU[0].items[0].route;
+
+/** The menu's name for a listed route, so a page can take its title from the entry that leads to it. */
+export function menuLabelFor(route: string): string {
+  const item = APP_MENU.flatMap((group) => group.items).find((candidate) => candidate.route === route);
+  if (item === undefined) throw new Error(`No menu entry lists ${route}.`);
+  return item.title;
+}
+
+/** Where a group opens: its first item (the group trigger itself never navigates). */
+export function groupLanding(group: AppMenuGroup): string {
+  return group.items[0].route;
+}
+
+const ACTIVE_MENU_NODES = APP_MENU.flatMap((group) =>
+  [...group.items, ...(group.pages ?? [])].map((item) => ({ group, item, activePath: item.route })),
 ).sort((left, right) => right.activePath.length - left.activePath.length);
+
+const HELP_DOCUMENT_ROUTES: ReadonlySet<string> = new Set(HELP_DOCUMENTS.map((document) => document.route));
 
 /**
  * Resolves the single active menu node for a URL.
  *
  * It deliberately owns the menubar's longest-match behavior and the account
- * alias, so every navigation projection agrees with it.
+ * alias, so every navigation projection agrees with it. A served document has
+ * no node: the help index is its home, and a document that sits under a
+ * listed prefix (the Strategy Lab manual) must not light up that page's group.
  */
 export function activeMenuNodeFor(url: string): ActiveMenuNode | null {
   const path = routePathOf(url);
+  if (HELP_DOCUMENT_ROUTES.has(path)) return null;
 
   // Every account-workspace URL is one account's place (ADR 0064), so every
   // tab of it highlights Accounts — the workspace's own tabs, not the menu,
@@ -143,16 +200,41 @@ export function activeMenuNodeFor(url: string): ActiveMenuNode | null {
   // opened as a drawer over its workspace, so a `?deploy` URL is either this
   // workspace or the account list — and both land on Accounts.
   if (accountWorkspaceLocation(url)?.broker === 'alpaca') {
-    const workspaceNode = nodeForActivePath('/brokers/alpaca');
-    if (workspaceNode !== null) return workspaceNode;
+    const workspaceNode = ACTIVE_MENU_NODES.find((node) => node.activePath === '/brokers/alpaca');
+    if (workspaceNode !== undefined) return workspaceNode;
   }
 
-  return ACTIVE_MENU_ITEMS.find(({ activePath }) => path === activePath || path.startsWith(`${activePath}/`)) ?? null;
+  return ACTIVE_MENU_NODES.find(({ activePath }) => path === activePath || path.startsWith(`${activePath}/`)) ?? null;
 }
 
-/** Resolves the document title from the same active node the menubar highlights. */
-export function pageTitleFor(url: string): string | null {
-  return activeMenuNodeFor(url)?.item.title ?? null;
+/**
+ * Resolves the window title for a URL: the page, then its group, as
+ * `Page · Group` (PRD #3490 R01). A page named for its group (Accounts) says
+ * it once, and a served document is titled by itself.
+ */
+export function windowTitleFor(url: string): string | null {
+  const node = activeMenuNodeFor(url);
+  if (node === null) return HELP_DOCUMENTS.find((document) => document.route === routePathOf(url))?.title ?? null;
+  return node.item.title === node.group.title ? node.item.title : `${node.item.title} · ${node.group.title}`;
+}
+
+/**
+ * The trail from a page back to its group: the group (landing on its first
+ * item), then the listed page it sits inside when its own heading names
+ * something deeper. A listed page that is the group's own landing, or the
+ * page being viewed, adds no link to the same place. Empty for a page outside
+ * every group.
+ */
+export function menuTrailFor(url: string, heading: string): readonly BreadcrumbItem[] {
+  const node = activeMenuNodeFor(url);
+  if (node === null) return [];
+  const landing = groupLanding(node.group);
+  const trail: BreadcrumbItem[] = [{ label: node.group.title, route: landing }];
+  const isListed = node.group.items.includes(node.item);
+  if (isListed && node.item.title !== heading && node.item.route !== landing && node.item.route !== routePathOf(url)) {
+    trail.push({ label: node.item.title, route: node.item.route });
+  }
+  return trail;
 }
 
 /**
@@ -160,10 +242,11 @@ export function pageTitleFor(url: string): string | null {
  *
  * ``MenuItem`` carries no URL-driven active concept, so the active group and
  * entry are marked here with the classes the shell stylesheet targets. Every
- * group is a trigger — no group label navigates.
+ * group is a trigger — no group label navigates. A URL with no page (`null`,
+ * or one outside every group) marks nothing.
  */
-export function menuItemsFor(url: string): MenuItem[] {
-  const active = activeMenuNodeFor(url);
+export function menuItemsFor(url: string | null): MenuItem[] {
+  const active = url === null ? null : activeMenuNodeFor(url);
   return APP_MENU.map((group) => ({
     label: group.title,
     icon: group.icon,
@@ -174,8 +257,4 @@ export function menuItemsFor(url: string): MenuItem[] {
       styleClass: item === active?.item ? ACTIVE_ITEM_CLASS : undefined,
     })),
   }));
-}
-
-function nodeForActivePath(activePath: string): ActiveMenuNode | null {
-  return ACTIVE_MENU_ITEMS.find((node) => node.activePath === activePath) ?? null;
 }
