@@ -84,6 +84,12 @@ describe('an instrument\'s Returns tab', () => {
     await waitFor(() => expect(service.distribution).toHaveBeenCalledTimes(1));
   });
 
+  it('says the raw price adjustment in the address changes nothing here, and says nothing for the default', async () => {
+    await openPlace(`/markets/SPY/returns?${WINDOW_QUERY}&adjustment=raw`, [{ provide: ReturnsDistributionService, useValue: returnsService() }]);
+
+    expect(await screen.findByText(/so the Raw price adjustment changes nothing here/)).toBeTruthy();
+  });
+
   it('shows no note about the session when it is the regular one', async () => {
     await openPlace(`/markets/SPY/returns?${WINDOW_QUERY}`, [{ provide: ReturnsDistributionService, useValue: returnsService() }]);
     await run();

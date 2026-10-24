@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/c
 
 import { WorkspaceStateBlockComponent } from '../../shared/workspace/workspace-state-block.component';
 import type { WorkspaceStateContent } from '../../shared/workspace/workspace-state';
+import { DEFAULT_ADJUSTMENT } from '../instrument-context';
 import { InstrumentContextService } from '../instrument-context.service';
 import { ReturnsDistributionComponent } from './returns-distribution.component';
 
@@ -51,6 +52,12 @@ export class InstrumentReturnsComponent {
     this.context.shown().session === 'extended'
       ? 'Returns always splits the whole trading day at the open and the close, so the Extended hours setting changes nothing here.'
       : null,
+  );
+
+  protected readonly adjustmentNote = computed(() =>
+    this.context.shown().adjustment === DEFAULT_ADJUSTMENT
+      ? null
+      : 'Returns always measures split- and dividend-adjusted moves from the lake\'s raw bars and its factor files, so the Raw price adjustment changes nothing here.',
   );
 
   protected onAction(id: string): void {

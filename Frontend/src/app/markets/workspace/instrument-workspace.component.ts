@@ -21,7 +21,7 @@ import { InstrumentAdmissionService, type InstrumentAdmission } from '../instrum
 import { InstrumentFactsHeaderComponent } from '../facts/instrument-facts-header.component';
 import { InstrumentDataStore } from '../data/instrument-data.store';
 import { ReturnsStudyHold } from '../returns/returns-study-hold';
-import { unreadQueryKeys } from '../instrument-context';
+import { DEFAULT_ADJUSTMENT, unreadQueryKeys } from '../instrument-context';
 import { InstrumentContextService } from '../instrument-context.service';
 import { INSTRUMENT_TABS, UNAVAILABLE_INSTRUMENT_TABS } from '../instrument-tabs';
 import { SavedSetupsComponent } from '../saved-setups/saved-setups.component';
@@ -115,14 +115,12 @@ export class InstrumentWorkspaceComponent {
 
   protected readonly healthNeeds = HEALTH_NEEDS.stockHistory;
   /**
-   * The symbol the lake notice speaks for: the committed one, and only while the committed scope reads the
-   * split-adjusted view, the one view the health projection covers. A raw view gets no notice rather than
-   * another tree's finding.
+   * The symbol the lake notice speaks for: the address's, and only while the context reads the split-adjusted
+   * view, the one view the health projection covers. A raw view gets no notice rather than another tree's finding.
    */
-  protected readonly healthInstrument = computed(() => {
-    const scope = this.store.committedScope();
-    return scope?.adjusted ? scope.ticker : null;
-  });
+  protected readonly healthInstrument = computed(() =>
+    this.context.context()?.adjustment === DEFAULT_ADJUSTMENT ? this.symbol() : null,
+  );
 
   /** Build dataset is an action on the instrument, so it is in the header on every tab; it opens only for an instrument that opens. */
   protected readonly headerActions = computed<readonly WorkspaceAction[]>(() =>

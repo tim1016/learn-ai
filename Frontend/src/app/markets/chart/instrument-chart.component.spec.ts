@@ -1,5 +1,6 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting, type TestRequest } from '@angular/common/http/testing';
+import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { render, screen, waitFor } from '@testing-library/angular';
@@ -46,7 +47,15 @@ function committedStore() {
   return store;
 }
 
-function providersFor(store: DataLabWorkspaceStore, context = { commitTimeframe: vi.fn(() => true) }) {
+/** The place's context as the chart reads it: the settings the address names, and the commit a rejected timeframe uses. */
+function fakeContext(settings: { adjustment?: string; forwardFill?: boolean } = {}) {
+  return {
+    commitTimeframe: vi.fn(() => true),
+    shown: signal({ adjustment: 'polygon_split_adjusted', forwardFill: true, ...settings }),
+  };
+}
+
+function providersFor(store: DataLabWorkspaceStore, context = fakeContext()) {
   return [
     provideRouter([]),
     ...provideFakeDateWorld(),
@@ -57,7 +66,7 @@ function providersFor(store: DataLabWorkspaceStore, context = { commitTimeframe:
   ];
 }
 
-async function renderChart(store = committedStore(), context = { commitTimeframe: vi.fn(() => true) }) {
+async function renderChart(store = committedStore(), context = fakeContext()) {
   const result = await render(InstrumentChartComponent, { providers: providersFor(store, context) });
   const http = TestBed.inject(HttpTestingController);
   return { ...result, http, store, context };
@@ -265,5 +274,21 @@ describe('InstrumentChartComponent', () => {
     // flushCatalog() serves an empty catalog, so the picker's neutral state shows.
     expect(drawer.textContent).toContain('No indicators available');
     expect(drawer.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it('says when the context makes it read raw prices or unfilled minute gaps', async () => {
+    const { http } = await renderChart(committedStore(), fakeContext({ adjustment: 'raw', forwardFill: false }));
+    flushCatalog(http);
+    (await chartRequests(http, 1))[0].flush(chartResponse());
+
+    expect(await screen.findByText('This chart reads raw prices, not adjusted for splits and minute gaps that are not forward-filled.')).toBeTruthy();
+  });
+
+  it('says nothing about its price adjustment or forward fill when the context holds the defaults', async () => {
+    const { http } = await renderChart();
+    flushCatalog(http);
+    (await chartRequests(http, 1))[0].flush(chartResponse());
+
+    expect(screen.queryByText(/This chart reads/)).toBeNull();
   });
 });

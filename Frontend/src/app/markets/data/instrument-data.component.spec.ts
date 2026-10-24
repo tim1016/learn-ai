@@ -160,6 +160,29 @@ describe('an instrument\'s Data tab', () => {
     opened.http.expectNone(READ_URL);
   });
 
+  it('keeps the tree in the place\'s address, so a reload reads it, and takes the key out when the default is picked again', async () => {
+    const reloaded = await openPlace(`/markets/SPY/data?${WINDOW_QUERY}&adjustment=raw`);
+
+    const raw = await waitFor(() => reloaded.http.expectOne(READ_URL));
+    expect(raw.request.params.get('price_adjustment_mode')).toBe('raw');
+    raw.flush(dataReport([dataSession(0, 'ready')], { price_adjustment_mode: 'raw' }));
+    expect((await screen.findByRole<HTMLSelectElement>('combobox', { name: 'Price adjustment' })).value).toBe('raw');
+
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Price adjustment' }), 'polygon_split_adjusted');
+    const split = await waitFor(() => reloaded.http.expectOne(READ_URL));
+    expect(split.request.params.get('price_adjustment_mode')).toBe('polygon_split_adjusted');
+    split.flush(dataReport([dataSession(0, 'ready')]));
+    await waitFor(() => expect(reloaded.router.url).toBe(`/markets/SPY/data?${WINDOW_QUERY}&timeframe=1d&session=regular`));
+    expect(reloaded.router.url).not.toContain('adjustment');
+  });
+
+  it('says in place that an adjustment this place does not offer cannot be used, and reads nothing for it', async () => {
+    const opened = await openPlace(`/markets/SPY/data?${WINDOW_QUERY}&adjustment=dividend`);
+
+    expect(await screen.findByText(/The price adjustment "dividend" is not one this place offers/)).toBeTruthy();
+    opened.http.expectNone(READ_URL);
+  });
+
   describe('Fill', () => {
     it('asks the backfill job for exactly the span Python named, in the tree read, once however often it is pressed', async () => {
       const runner = fakeRunner();

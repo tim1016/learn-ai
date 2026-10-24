@@ -2,7 +2,14 @@ import { barTimeframeByValue, barTimeframeFor, parseChartTimeframe } from '../..
 import { DATA_LAB_WORKSPACE_SCHEMA_VERSION } from '../../components/data-lab/data-lab-workspace-store';
 import type { DataLabCompanionSettings } from '../../components/data-lab/data-lab-workspace-store';
 import type { DataLabSession, DataLabSessionChartSnapshot } from '../../services/data-lab-session.service';
-import { windowMsUtc, type InstrumentSession, type InstrumentWindow } from '../instrument-context';
+import {
+  DEFAULT_ADJUSTMENT,
+  DEFAULT_FORWARD_FILL,
+  windowMsUtc,
+  type InstrumentAdjustment,
+  type InstrumentSession,
+  type InstrumentWindow,
+} from '../instrument-context';
 
 /*
  * Opening a saved setup under its instrument (PRD #3490 R10, R33).
@@ -22,11 +29,17 @@ export interface SetupOpening {
   readonly ticker: string;
   /** The v2 workspace envelope for `DataLabWorkspaceStore.restore`, which validates it. */
   readonly envelope: Record<string, unknown>;
-  /** The context the address takes: the setup's window (null when its dates are not dates), bar timeframe and session. */
+  /**
+   * The context the address takes: the setup's window (null when its dates are not dates), bar timeframe, session,
+   * price adjustment and forward-fill choice. The address is where the place reads all of them, so a setup saved with
+   * raw prices or without forward fill has to say so there, or the chart would read the defaults after a reload.
+   */
   readonly address: {
     readonly window: InstrumentWindow | null;
     readonly timeframe: string;
     readonly session: InstrumentSession;
+    readonly adjustment: InstrumentAdjustment;
+    readonly forwardFill: boolean;
   };
   /** The saved chart, when it can stand in for a request without one being made. */
   readonly chart: DataLabSessionChartSnapshot | null;
@@ -102,6 +115,10 @@ export function planSetupOpening(
   if (timeframe === undefined) throw new Error('The place offers no 1 day bar timeframe.');
 
   const sessionKind: InstrumentSession = config.session === 'extended' ? 'extended' : 'regular';
+  // Only a boolean the record holds is taken, as the store's validator takes it; a record without one reads the
+  // default. The envelope below still hands the validator the record's own values, so it names what it drops.
+  const adjustment: InstrumentAdjustment = config.adjusted === false ? 'raw' : DEFAULT_ADJUSTMENT;
+  const forwardFill = typeof config.forwardFill === 'boolean' ? config.forwardFill : DEFAULT_FORWARD_FILL;
   const entries: readonly unknown[] = Array.isArray(config.entries) ? config.entries : [];
   const envelope: Record<string, unknown> = {
     schemaVersion: DATA_LAB_WORKSPACE_SCHEMA_VERSION,
@@ -126,7 +143,7 @@ export function planSetupOpening(
   return {
     ticker,
     envelope,
-    address: { window: ms === null ? null : dates, timeframe: timeframe.value, session: sessionKind },
+    address: { window: ms === null ? null : dates, timeframe: timeframe.value, session: sessionKind, adjustment, forwardFill },
     chart,
     notes,
   };

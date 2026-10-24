@@ -52,6 +52,14 @@ function setup(overrides: Partial<DataLabSession['config']> = {}, chartSnapshot:
 }
 
 describe('planSetupOpening', () => {
+  it('opens a record saved on raw prices on the raw tree, in its address, and reads a record without the choices as the defaults', () => {
+    expect(planSetupOpening(setup({ adjusted: false }), '1d', COMPANIONS).address).toMatchObject({ adjustment: 'raw' });
+
+    const { adjusted: _adjusted, forwardFill: _forwardFill, ...rest } = setup().config;
+    const bare = planSetupOpening({ ...setup(), config: rest as DataLabSession['config'] }, '1d', COMPANIONS);
+    expect(bare.address).toMatchObject({ adjustment: 'polygon_split_adjusted', forwardFill: true });
+  });
+
   it('turns a whole record into the v2 envelope, the address it opens on and the chart it carries, with nothing to say', () => {
     const plan = planSetupOpening(setup(), '1d', COMPANIONS);
 
@@ -65,7 +73,13 @@ describe('planSetupOpening', () => {
       savedSession: { id: 'session-1', schemaVersion: 2 },
       companions: COMPANIONS,
     });
-    expect(plan.address).toEqual({ window: { from: '2026-04-15', to: '2026-05-15' }, timeframe: '5m', session: 'extended' });
+    expect(plan.address).toEqual({
+      window: { from: '2026-04-15', to: '2026-05-15' },
+      timeframe: '5m',
+      session: 'extended',
+      adjustment: 'polygon_split_adjusted',
+      forwardFill: false,
+    });
     expect(plan.chart).not.toBeNull();
     expect(plan.notes).toEqual([]);
   });

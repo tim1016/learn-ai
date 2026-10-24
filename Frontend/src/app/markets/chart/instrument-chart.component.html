@@ -1,5 +1,8 @@
 <section class="chart-tab__bar" aria-label="Chart controls">
   <button type="button" (click)="indicatorsDrawerOpen.set(true)">Indicators</button>
+  @if (settingsNote(); as note) {
+    <p class="chart-tab__muted" role="status">{{ note }}</p>
+  }
 </section>
 
 <app-chart-indicator-controls

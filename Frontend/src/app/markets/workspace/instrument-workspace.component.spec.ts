@@ -527,8 +527,9 @@ describe('an instrument\'s place', () => {
       const opened = await openLoaded(`/markets/SPY/chart?${WINDOW_QUERY}`);
       await screen.findByText(/SPY has 3 scheduled sessions/);
 
-      opened.store().patchDraft({ adjusted: false });
-      opened.store().commitScope();
+      // The Data tab's pick is the context's: it is in the address, and the notice reads it from there.
+      opened.context().commitAdjustment('raw');
+      await waitFor(() => expect(opened.router.url).toContain('adjustment=raw'));
       opened.harness.fixture.detectChanges();
 
       await waitFor(() => expect(screen.queryByText(/not in the lake/)).toBeNull());
