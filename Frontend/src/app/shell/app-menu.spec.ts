@@ -125,7 +125,7 @@ describe('app menu projections', () => {
     ['/data-lab/export', 'Markets', 'Stocks'],
     ['/data-lab/returns', 'Markets', 'Return Distribution'],
     ['/options-lab/chain', 'Markets', 'Options Lab'],
-    ['/options-lab/strategy-builder', 'Markets', 'Options Lab'],
+    ['/options-lab/strategy-builder', 'Options setups', 'Strategy Builder'],
     ['/options-lab/strategy-finder', 'Markets', 'Options Lab'],
     ['/broker/options-chain', 'Markets', 'Options Chain (Live)'],
     ['/broker/options-surface', 'Markets', 'Options Surface (3D)'],

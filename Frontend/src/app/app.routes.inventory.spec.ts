@@ -65,7 +65,6 @@ const ROWS: Readonly<Record<string, Row>> = {
   'data-lab/returns': { group: MARKETS },
   'options-lab': { group: MARKETS, lands: '/options-lab/chain' },
   'options-lab/chain': { group: MARKETS },
-  'options-lab/strategy-builder': { group: MARKETS },
   'options-lab/strategy-finder': { group: MARKETS },
   'broker/options-chain': { group: MARKETS },
   'broker/options-surface': { group: MARKETS },
@@ -123,6 +122,8 @@ const ROWS: Readonly<Record<string, Row>> = {
   'options-golden-search': { group: OPTIONS },
   'options-golden-search/:studyId': { group: OPTIONS },
   'options-evidence/:kind/:subjectId': { group: OPTIONS },
+  // The analytical builder is an Options Lab tab, filed under Options setups (R32).
+  'options-lab/strategy-builder': { group: OPTIONS },
 
   // ── Operations ───────────────────────────────────────────────────────────
   'data-lake': { group: OPERATIONS },

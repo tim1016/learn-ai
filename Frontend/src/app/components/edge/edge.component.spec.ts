@@ -25,6 +25,17 @@ describe("EdgeComponent — sample labeling", () => {
     harness = await RouterTestingHarness.create();
   });
 
+  it.each([
+    ["/edge", "Edge Analysis"],
+    ["/edge/realized-vs-iv", "Realized vs IV"],
+    ["/edge/cross-asset", "Cross-Asset"],
+    ["/edge/regimes", "Regimes"],
+  ])("heads %s with its menu label, not one shared heading", async (url, label) => {
+    await harness.navigateByUrl(url);
+
+    expect(screen.getByRole("heading", { level: 1, name: label })).toBeTruthy();
+  });
+
   it("labels the hub's headline numbers as sample data", async () => {
     await harness.navigateByUrl("/edge");
 

@@ -107,7 +107,12 @@ export const APP_MENU: readonly AppMenuGroup[] = [
       { title: 'Options Backtest', route: '/options-backtest' },
       { title: 'Options Golden Search', route: '/options-golden-search' },
     ],
-    pages: [{ title: 'Options evidence', route: '/options-evidence' }],
+    // The analytical builder is an Options Lab tab until the options setup
+    // workspace hosts it (R32 files it under Options setups, not Markets).
+    pages: [
+      { title: 'Options evidence', route: '/options-evidence' },
+      { title: 'Strategy Builder', route: '/options-lab/strategy-builder' },
+    ],
   },
   {
     id: 'accounts',
@@ -209,15 +214,17 @@ export function windowTitleFor(url: string): string | null {
 /**
  * The trail from a page back to its group: the group (landing on its first
  * item), then the listed page it sits inside when its own heading names
- * something deeper. A listed page that is the group's own landing adds no
- * second link to the same place. Empty for a page outside every group.
+ * something deeper. A listed page that is the group's own landing, or the
+ * page being viewed, adds no link to the same place. Empty for a page outside
+ * every group.
  */
 export function menuTrailFor(url: string, heading: string): readonly BreadcrumbItem[] {
   const node = activeMenuNodeFor(url);
   if (node === null) return [];
   const landing = groupLanding(node.group);
   const trail: BreadcrumbItem[] = [{ label: node.group.title, route: landing }];
-  if (node.group.items.includes(node.item) && node.item.title !== heading && node.item.route !== landing) {
+  const isListed = node.group.items.includes(node.item);
+  if (isListed && node.item.title !== heading && node.item.route !== landing && node.item.route !== routePathOf(url)) {
     trail.push({ label: node.item.title, route: node.item.route });
   }
   return trail;

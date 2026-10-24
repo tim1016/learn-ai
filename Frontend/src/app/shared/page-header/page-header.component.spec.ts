@@ -67,6 +67,7 @@ describe('PageHeaderComponent slots', () => {
 
 describe('PageHeaderComponent trail', () => {
   const routes = [
+    { path: 'golden-search', component: RouteStub },
     { path: 'golden-search/:studyId', component: RouteStub },
     { path: 'docs/broker-manual', component: RouteStub },
     { path: '**', component: RouteStub, data: { notFound: true } },
@@ -92,6 +93,10 @@ describe('PageHeaderComponent trail', () => {
       'Signal strategies -> /strategy-lab',
       'Golden Search -> /golden-search',
     ]);
+  });
+
+  it('adds no link from a page to itself, though its heading differs from the menu label', async () => {
+    expect(await trailAt('/golden-search', 'Find a golden study')).toEqual(['Signal strategies -> /strategy-lab']);
   });
 
   it.each([

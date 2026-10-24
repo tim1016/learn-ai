@@ -11,7 +11,9 @@ import { Router } from "@angular/router";
 import { Drawer } from "primeng/drawer";
 import { Tab, TabList, TabPanel, TabPanels, Tabs } from "primeng/tabs";
 
+import { BreadcrumbComponent } from "../../shared/breadcrumb/breadcrumb.component";
 import { HowThisWorksLinkComponent } from "../../shared/help/how-this-works-link.component";
+import { menuLabelFor } from "../../shell/app-menu";
 import { RunDockComponent } from "../../shared/run-dock/run-dock.component";
 import {
   RUN_DOCK_SOURCE,
@@ -44,6 +46,7 @@ import { GoldenValidationWorkbenchComponent } from "../golden-validation-workben
     TabPanels,
     TabPanel,
     Drawer,
+    BreadcrumbComponent,
     HowThisWorksLinkComponent,
     StrategyLabConfigRailComponent,
     EngineLabRunHistoryComponent,
@@ -71,6 +74,9 @@ export class StrategyLabComponent {
   readonly runs = inject(StrategyLabRunner);
   readonly jobs = inject(JobsService);
   readonly report = inject(StrategyLabRunReport);
+
+  /** The page is titled by the menu entry that leads to it (PRD #3490 R01). */
+  protected readonly title = menuLabelFor("/strategy-lab");
 
   protected readonly leanSourceOpen = signal(false);
   protected readonly goldenCandidateRunId = signal<number | null>(null);
