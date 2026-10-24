@@ -13,10 +13,10 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import pytest
 
+from app.data_lake.capture_finality import PRE_MARKET_HEAD_MS
 from app.engine.edge.features_realtime.hf_realized_vol import _et_session_mask
 from app.engine.edge.session_bars import (
     DAY_BAR_MINUTES,
-    PRE_MARKET_HEAD_MS,
     bars_in_session,
     full_session_bars,
 )

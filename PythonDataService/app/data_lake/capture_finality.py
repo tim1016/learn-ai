@@ -54,6 +54,11 @@ VENDOR_DELAY_MS = 15 * 60_000
 #: How long the vendor's after-hours tape runs past the scheduled close.
 AFTER_HOURS_TAIL_MS = 4 * 3_600_000
 
+#: How long before the scheduled open the vendor's pre-market tape begins: 04:00 ET against the 09:30 open. Capture
+#: finality does not read it (a day's data is final once its tail has passed); it sits here, beside the tail, so the
+#: extended session's two edges are named in one place (``app.engine.edge.session_bars`` counts bars from both).
+PRE_MARKET_HEAD_MS = 5 * 3_600_000 + 30 * 60_000
+
 #: The longest a writer holds a minute-bar claim before another may take it over (``ensure_data._LEASE_TTL_MS``; a
 #: test pins the two together). The vendor was asked no earlier than this before the catalog says the artifact completed.
 CLAIM_LEASE_MS = 300_000

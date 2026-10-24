@@ -12,7 +12,7 @@ Validated against: tests/edge/test_session_bars.py (a pandas count of the same g
 
 The extended session is every bar the vendor served (``app.data_lake.capture_finality.CaptureSession``): its tape ends
 ``AFTER_HOURS_TAIL_MS`` after the scheduled close (so an early close ends at 17:00) and begins ``PRE_MARKET_HEAD_MS`` before the
-open. The head is the one number here the calendar and ``capture_finality`` do not hold; it is named once, here.
+open. The calendar holds the scheduled open and close; the vendor's head and tail are named once, in ``capture_finality``.
 """
 
 from __future__ import annotations
@@ -20,14 +20,11 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import date
 
-from app.data_lake.capture_finality import AFTER_HOURS_TAIL_MS, CaptureSession
+from app.data_lake.capture_finality import AFTER_HOURS_TAIL_MS, PRE_MARKET_HEAD_MS, CaptureSession
 from app.lean_sidecar.trading_calendar import session_window_for_date
 
 #: A daily bar is the fold of a whole ET day of minutes (``fold_minute_bars`` floors a day-long period at ET midnight).
 DAY_BAR_MINUTES = 24 * 60
-
-#: How long before the regular open the vendor's pre-market tape begins: 04:00 ET against the 09:30 open.
-PRE_MARKET_HEAD_MS = 5 * 3_600_000 + 30 * 60_000
 
 
 def bars_in_session(day: date, bar_minutes: int, session: CaptureSession) -> int:
