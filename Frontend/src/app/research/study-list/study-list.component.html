@@ -1,0 +1,39 @@
+<app-workspace-header title="Studies" [purpose]="purpose" />
+
+<div class="study-list">
+  <ul class="study-cards" aria-label="Studies">
+    @for (study of studies; track study.id) {
+      <li class="study-card">
+        <a class="study-card__title" [routerLink]="study.route">{{ study.title }}</a>
+        <p class="study-card__question">{{ study.question }}</p>
+        <p class="study-card__reads">Reads {{ study.reads }}</p>
+      </li>
+    }
+    <li class="study-card">
+      <a class="study-card__title" [routerLink]="ruleSandbox.route">{{ ruleSandbox.title }}</a>
+      <p class="study-card__question">{{ ruleSandbox.summary }}</p>
+    </li>
+  </ul>
+
+  <section class="study-section" aria-labelledby="demos-heading">
+    <h2 id="demos-heading">Demonstrations <span class="sample-tag">sample data</span></h2>
+    <p class="study-section__note">Generated for demonstration. They measure nothing and are never approval or deployment evidence.</p>
+    <ul class="study-cards">
+      @for (demo of demos; track demo.id) {
+        <li class="study-card">
+          <a class="study-card__title" [routerLink]="demo.route">{{ demo.title }}</a>
+          <p class="study-card__question">{{ demo.summary }}</p>
+        </li>
+      }
+    </ul>
+  </section>
+
+  <section class="study-section" aria-labelledby="past-heading">
+    <h2 id="past-heading">Saved results</h2>
+    <ul class="study-links">
+      @for (link of pastResults; track link.route) {
+        <li><a [routerLink]="link.route">{{ link.label }}</a></li>
+      }
+    </ul>
+  </section>
+</div>

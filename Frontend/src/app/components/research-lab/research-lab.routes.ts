@@ -1,5 +1,19 @@
 import { Routes } from '@angular/router';
 
+import { redirectKeepingState } from '../../shell/route-redirects';
+
+/**
+ * Old Research Lab addresses of the five studies, each straight to its study
+ * under `/research` (ADR 0084) in one redirect that keeps query and fragment.
+ * A relative `redirectTo` cannot chain through a second redirect, so the old
+ * `build/*` and `inspect/*` aliases name the final study too.
+ */
+const movedStudy = (path: string, ...study: [string, ...string[]]): Routes[number] => ({
+  path,
+  redirectTo: redirectKeepingState(['/research', ...study]),
+  pathMatch: 'full',
+});
+
 export const researchLabRoutes: Routes = [
   // Detail routes retain focused content while inheriting the root application
   // shell. Listed before the research-lab child shell so their more-specific
@@ -40,31 +54,30 @@ export const researchLabRoutes: Routes = [
       ),
   },
 
-  // Shell with two-group sub-nav and lazy children.
+  // The five studies moved to /research.
+  movedStudy('features/validate', 'feature'),
+  movedStudy('features/cross-sectional', 'cross-sectional'),
+  movedStudy('signals/engine', 'signal'),
+  movedStudy('backtests/reliability', 'indicator-reliability'),
+  movedStudy('build/validate', 'feature'),
+  movedStudy('build/indicator-reliability', 'indicator-reliability'),
+  movedStudy('build/signal-engine', 'signal'),
+  movedStudy('inspect/cross-sectional', 'cross-sectional'),
+  movedStudy('feature-runner', 'feature'),
+  movedStudy('indicator-reliability', 'indicator-reliability'),
+  movedStudy('signal-engine', 'signal'),
+  movedStudy('cross-sectional', 'cross-sectional'),
+
+  // Sub-nav shell for the pages Research Lab still hosts: Strategy Runs and
+  // History (#3518, #3519), instrument headlines, the Recency Chart and the two
+  // data checks (the slices of the places they belong to).
   {
     path: '',
     loadComponent: () =>
       import('./research-lab.component').then((m) => m.ResearchLabComponent),
     children: [
-      { path: '', redirectTo: 'features/validate', pathMatch: 'full' },
+      { path: '', redirectTo: redirectKeepingState(['/research']), pathMatch: 'full' },
 
-      // Features
-      {
-        path: 'features/validate',
-        loadComponent: () =>
-          import('./feature-runner/feature-runner.component').then(
-            (m) => m.FeatureRunnerComponent,
-          ),
-        data: { title: 'Feature Validation' },
-      },
-      {
-        path: 'features/cross-sectional',
-        loadComponent: () =>
-          import('./batch-runner/batch-runner.component').then(
-            (m) => m.BatchRunnerComponent,
-          ),
-        data: { title: 'Cross-Sectional Sweep' },
-      },
       {
         path: 'features/experiments',
         loadComponent: () =>
@@ -74,15 +87,6 @@ export const researchLabRoutes: Routes = [
         data: { title: 'Experiment History' },
       },
 
-      // Signals
-      {
-        path: 'signals/engine',
-        loadComponent: () =>
-          import('./signal-runner/signal-runner.component').then(
-            (m) => m.SignalRunnerComponent,
-          ),
-        data: { title: 'Signal Engine' },
-      },
       {
         path: 'signals/history',
         loadComponent: () =>
@@ -101,14 +105,6 @@ export const researchLabRoutes: Routes = [
       },
 
       // Backtests
-      {
-        path: 'backtests/reliability',
-        loadComponent: () =>
-          import(
-            './indicator-reliability/indicator-reliability.component'
-          ).then((m) => m.IndicatorReliabilityComponent),
-        data: { title: 'Indicator Reliability' },
-      },
       {
         path: 'backtests/strategy-runs',
         loadComponent: () =>
@@ -145,19 +141,11 @@ export const researchLabRoutes: Routes = [
       },
 
       // Legacy redirects — old build/* and inspect/* paths → new canonical paths
-      { path: 'build/validate', redirectTo: 'features/validate', pathMatch: 'full' },
-      { path: 'build/indicator-reliability', redirectTo: 'backtests/reliability', pathMatch: 'full' },
-      { path: 'build/signal-engine', redirectTo: 'signals/engine', pathMatch: 'full' },
-      { path: 'inspect/cross-sectional', redirectTo: 'features/cross-sectional', pathMatch: 'full' },
       { path: 'inspect/strategy-runs', redirectTo: 'backtests/strategy-runs', pathMatch: 'full' },
       { path: 'inspect/experiments', redirectTo: 'features/experiments', pathMatch: 'full' },
       { path: 'inspect/signal-history', redirectTo: 'signals/history', pathMatch: 'full' },
 
       // Legacy single-page tab IDs (pre-router)
-      { path: 'feature-runner', redirectTo: 'features/validate', pathMatch: 'full' },
-      { path: 'indicator-reliability', redirectTo: 'backtests/reliability', pathMatch: 'full' },
-      { path: 'signal-engine', redirectTo: 'signals/engine', pathMatch: 'full' },
-      { path: 'cross-sectional', redirectTo: 'features/cross-sectional', pathMatch: 'full' },
       { path: 'data-divergence', redirectTo: 'inspect/data-divergence', pathMatch: 'full' },
       { path: 'strategy-preflight', redirectTo: 'inspect/pre-flight', pathMatch: 'full' },
       { path: 'experiment-history', redirectTo: 'features/experiments', pathMatch: 'full' },
