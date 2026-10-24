@@ -1,7 +1,7 @@
 """The one call a study makes after a result or a failure is produced (#3520).
 
 A job or a route hands its work to this module and gets the same work back, which now also writes one record when the
-run ends, however it ends: a result, an exception, a cancel, or a failure the work reports itself (a typed refusal). The
+run ends, however it ends: a result, an exception, a cancel, or a failure the work reports itself. The
 study's computation is not touched and does not know. Two shapes cover the five studies:
 
 * ``keeps_job_record(study, request, work)`` for a study that runs as a job (Feature, Signal, Cross-sectional);
@@ -110,6 +110,10 @@ def _served_from_cache(result: Mapping[str, Any]) -> bool:
     return isinstance(cache, Mapping) and cache.get("hit") is True
 
 
+_Outcome = tuple[RecordStatus, str | None, Mapping[str, Any] | None]
+"""How a run ended: its status, the detail the History shows for it, and the result it delivered (``None`` for none)."""
+
+
 class RunRecorder:
     """Writes the record of one run, once, when it ends."""
 
@@ -130,29 +134,38 @@ class RunRecorder:
 
     def deliver(self, result: Mapping[str, Any]) -> str | None:
         """The run produced ``result``. Returns what to tell the user if it could not be recorded, else ``None``."""
-        wire = to_wire_json(result)
-        if _served_from_cache(wire):
-            logger.info(
-                "a result served from the cache is not recorded again",
-                extra={"action": "study_record_skipped_cache_hit", "study": self._study},
-            )
-            self._ended = True
-            return None
-        status, detail = STUDY_SPECS[self._study].settle(wire)
-        return self._keep(status, detail, wire)
 
-    def fail(self, reason: str, payload: Any = None) -> str | None:
-        """The run ended without a result. ``payload`` is what it answered with anyway (a typed refusal)."""
-        return self._keep("failed", reason, None if payload is None else to_wire_json(payload))
+        def settled() -> _Outcome | None:
+            wire = to_wire_json(result)
+            if _served_from_cache(wire):
+                logger.info(
+                    "a result served from the cache is not recorded again",
+                    extra={"action": "study_record_skipped_cache_hit", "study": self._study},
+                )
+                return None
+            status, detail = STUDY_SPECS[self._study].settle(wire)
+            return status, detail, wire
+
+        return self._keep(settled)
+
+    def fail(self, reason: str) -> str | None:
+        """The run ended without a result."""
+        return self._keep(lambda: ("failed", reason, None))
 
     def cancel(self, reason: str) -> str | None:
-        return self._keep("cancelled", reason, None)
+        return self._keep(lambda: ("cancelled", reason, None))
 
-    def _keep(self, status: RecordStatus, detail: str | None, wire: Mapping[str, Any] | None) -> str | None:
+    def _keep(self, settle: Callable[[], _Outcome | None]) -> str | None:
+        """Write the record ``settle`` describes, once. Everything that can raise is inside the guard, ``settle`` included."""
         if self._ended:
             return None
         self._ended = True
+        status: RecordStatus | None = None
         try:
+            outcome = settle()
+            if outcome is None:
+                return None
+            status, detail, wire = outcome
             captured = self._capture(self._request)
             store = StudyRecordStore(self._study, root=self._root)
             record_id = uuid4().hex
@@ -219,9 +232,9 @@ class _WatchedEmitter:
         self._emit = emit
         self._run = run
 
-    def failed(self, code: str, message: str, *, result: Any = None) -> None:
-        _say(self._emit, self._run.fail(message, result))
-        self._emit.failed(code, message, result=result)
+    def failed(self, code: str, message: str) -> None:
+        _say(self._emit, self._run.fail(message))
+        self._emit.failed(code, message)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._emit, name)

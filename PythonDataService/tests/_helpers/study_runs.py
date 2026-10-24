@@ -17,12 +17,15 @@ from app.jobs.progress import JobCancelled
 
 
 class StubEmitter:
-    """The part of ``ProgressEmitter`` a study's work calls, remembering what it was told."""
+    """The part of ``ProgressEmitter`` a study's work calls, remembering what it was told.
+
+    Each method keeps the real emitter's signature, so a call the real one would refuse fails here too.
+    """
 
     def __init__(self) -> None:
         self.logs: list[tuple[str, str]] = []
         self.phases: list[str] = []
-        self.failures: list[tuple[str, str, Any]] = []
+        self.failures: list[tuple[str, str]] = []
 
     def log(self, message: str, *, level: str = "info") -> None:
         self.logs.append((level, message))
@@ -33,8 +36,8 @@ class StubEmitter:
     def progress(self, current: int, total: int, **_: Any) -> None:
         return None
 
-    def failed(self, code: str, message: str, *, result: Any = None) -> None:
-        self.failures.append((code, message, result))
+    def failed(self, code: str, message: str) -> None:
+        self.failures.append((code, message))
 
 
 @dataclass

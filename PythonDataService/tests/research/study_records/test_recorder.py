@@ -7,14 +7,15 @@ artifact root. The job routes' own wiring is in ``test_job_routes.py``; the rout
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from app.jobs.progress import JobCancelled
+from app.jobs.progress import JobCancelled, ProgressEmitter
 from app.research.study_records.models import StudyRecordConfig, StudyRecordResult, StudyType
-from app.research.study_records.recorder import keeps_job_record, to_wire_json
+from app.research.study_records.recorder import RunRecorder, capture_request, keeps_job_record, to_wire_json
 from app.research.study_records.store import StudyRecordStore
 from app.routers.jobs import CrossSectionalJobRequest, FeatureResearchJobRequest
 from tests._helpers.study_runs import StubCancel, StubEmitter, a_cross_sectional_result, a_feature_result
@@ -112,14 +113,11 @@ def test_a_cancelled_job_leaves_a_cancelled_record(tmp_path: Path) -> None:
     assert stored.result is None
 
 
-def test_a_failure_the_work_reports_itself_is_recorded_with_what_it_answered_and_still_reaches_the_job(
-    tmp_path: Path,
-) -> None:
-    """A typed refusal ends the job from inside the work and returns nothing: the run still failed."""
-    refusal = {"success": False, "status": "refused", "error": "The lake lacks 3 sessions.", "refusal": {"code": "gap"}}
+def test_a_failure_the_work_reports_itself_is_recorded_and_still_reaches_the_job(tmp_path: Path) -> None:
+    """The work can end the job from inside, by calling ``emit.failed``, and return nothing: the run still failed."""
 
     def work(emit: Any, cancel: Any) -> None:
-        emit.failed("DATA_NOT_ADMITTED", "The lake lacks 3 sessions.", result=refusal)
+        emit.failed("DATA_NOT_ADMITTED", "The lake lacks 3 sessions.")
 
     emit = StubEmitter()
     recorded = keeps_job_record("feature-study", a_feature_request(), work, root=tmp_path)
@@ -128,8 +126,27 @@ def test_a_failure_the_work_reports_itself_is_recorded_with_what_it_answered_and
 
     config, stored = only_record(tmp_path)
     assert config.status == "failed" and config.status_detail == "The lake lacks 3 sessions."
-    assert stored.result == refusal
-    assert emit.failures == [("DATA_NOT_ADMITTED", "The lake lacks 3 sessions.", refusal)], "the job's own terminal event is unchanged"
+    assert stored.result is None
+    assert emit.failures == [("DATA_NOT_ADMITTED", "The lake lacks 3 sessions.")], "the job's own terminal event is unchanged"
+
+
+@pytest.mark.parametrize("method", ["log", "phase", "failed"])
+def test_the_stub_emitter_takes_the_arguments_the_real_emitter_takes(method: str) -> None:
+    """A stub that accepts more than the real emitter lets work pass here that raises in a job."""
+    stub_parameters = inspect.signature(getattr(StubEmitter, method)).parameters
+    real_parameters = inspect.signature(getattr(ProgressEmitter, method)).parameters
+
+    assert [(p.name, p.kind) for p in stub_parameters.values()] == [(p.name, p.kind) for p in real_parameters.values()]
+
+
+def test_a_result_the_recorder_cannot_read_is_reported_and_never_raised(tmp_path: Path) -> None:
+    """Recording is guarded from the first step: a result of the wrong shape must not fail a study that ran."""
+    run = RunRecorder("feature-study", a_feature_request(), capture_request, root=tmp_path)
+
+    problem = run.deliver(["not", "a", "mapping"])  # type: ignore[arg-type]
+
+    assert problem is not None and problem.startswith("This run could not be saved to the History")
+    assert StudyRecordStore("feature-study", root=tmp_path).config_paths() == []
 
 
 def test_a_result_served_from_the_cache_is_a_copy_of_a_recorded_run_and_is_not_recorded_again(tmp_path: Path) -> None:
