@@ -11,6 +11,7 @@ import { Router } from "@angular/router";
 import { Drawer } from "primeng/drawer";
 import { Tab, TabList, TabPanel, TabPanels, Tabs } from "primeng/tabs";
 
+import { HowThisWorksLinkComponent } from "../../shared/help/how-this-works-link.component";
 import { RunDockComponent } from "../../shared/run-dock/run-dock.component";
 import {
   RUN_DOCK_SOURCE,
@@ -43,6 +44,7 @@ import { GoldenValidationWorkbenchComponent } from "../golden-validation-workben
     TabPanels,
     TabPanel,
     Drawer,
+    HowThisWorksLinkComponent,
     StrategyLabConfigRailComponent,
     EngineLabRunHistoryComponent,
     LeanSourceEditorComponent,

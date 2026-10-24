@@ -81,4 +81,12 @@ describe('GoldenSearchPageComponent', () => {
 
     await waitFor(() => expect(navigate).toHaveBeenCalledWith(['/golden-search', 'study-0009-zzzz']));
   });
+
+  it('opens the operating manual from the header, returning to the open study', async () => {
+    await renderPage({ studyId: 'study-0001-aaaa' });
+
+    const link = screen.getByRole('link', { name: 'How this works' });
+    expect(link.getAttribute('href')).toBe('/docs/golden-search-manual?study=study-0001-aaaa');
+    expect(link.getAttribute('target')).toBe('_blank');
+  });
 });
