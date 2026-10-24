@@ -5,7 +5,7 @@ These replace the retired GraphQL ``getResearchExperiments`` / ``getSignalExperi
 through the jobs surface. The rows that remain are history.
 
 A signal experiment's report was stored as the JSON text of the Python signal engine's own report
-(``_serialize_signal_report`` in ``app/routers/jobs.py``). ``SignalExperimentReport`` and the models under it copy that
+(``serialize_signal_report`` in ``app/services/signal_study_service.py``). ``SignalExperimentReport`` and the models under it copy that
 content field for field under its stored snake_case names; the only reshaping is that the two ``dict``s keyed by a
 number or a label (``regime_coverage``, ``sharpe_values_by_threshold``) are served as lists of entries, as the
 GraphQL report served them, because a JSON object key cannot carry a number.

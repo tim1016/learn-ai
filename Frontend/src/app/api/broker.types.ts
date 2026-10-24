@@ -5302,9 +5302,16 @@ export interface paths {
          * Start Signal Engine Job
          * @description Kick off a signal-engine run in a worker thread.
          *
-         *     Eight phases (load bars → graduation). Long phases (backtest grid,
-         *     walk-forward) emit fine-grained ``on_progress`` so the bar moves
-         *     while the worker is mid-sweep.
+         *     The worker admits the study's bars from the data lake (materializing what
+         *     is missing), then runs the signal pipeline: nine phases (admit and load
+         *     bars through graduation). Long phases (backtest grid, walk-forward) emit
+         *     fine-grained ``on_progress`` so the bar moves while the worker is
+         *     mid-sweep. A window the lake cannot admit, or a bar size the study can
+         *     never run on, fails the job with a typed refusal; no result is computed.
+         *
+         *     A successful prior run over the same admitted data is served from cache
+         *     (the lookup follows admission — see ``signal_study_service``). Pass
+         *     ``force=true`` to bypass.
          */
         post: operations["start_signal_engine_job_api_jobs_internal_signal_engine_post"];
         delete?: never;
@@ -30696,6 +30703,17 @@ export interface components {
          *     pre-migration default. Signal-engine processing operates on
          *     15-minute bars by default; the inherited base default of 1 would
          *     silently switch every caller to 1-minute bars.
+         *
+         *     The worker reads the study's bars from the data lake itself, materializing
+         *     what the lake lacks (``app.services.signal_study_service``). Only minute
+         *     bars short enough to reach the study's validity gate are accepted; longer
+         *     bars are refused with a reason.
+         *
+         *     ``session`` is the base request's legacy label (the browser sends
+         *     ``"rth"``) and has never been read; it stays inert so no caller's sample
+         *     changes silently. ``session_policy`` is the real control and defaults to
+         *     the session the study has always computed on: ``extended``, 04:00-20:00
+         *     ET. ``regular`` is opt-in.
          */
         SignalEngineJobRequest: {
             /** Featurename */
@@ -30730,6 +30748,12 @@ export interface components {
              * @enum {string}
              */
             session?: "rth" | "extended";
+            /**
+             * Sessionpolicy
+             * @default extended
+             * @enum {string}
+             */
+            sessionPolicy?: "extended" | "regular";
             /** Symbol */
             symbol: string;
             /**
