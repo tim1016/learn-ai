@@ -78,7 +78,7 @@ describe('PageHeaderComponent trail', () => {
     const fixture = TestBed.createComponent(TitledHost);
     fixture.componentInstance.title = title;
     fixture.detectChanges();
-    return Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('.page-breadcrumb a')).map(
+    return Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('nav[aria-label="Breadcrumb"] a')).map(
       (link) => `${link.textContent?.trim()} -> ${link.getAttribute('href')}`,
     );
   }

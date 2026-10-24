@@ -1,22 +1,21 @@
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
-import { RouterLink } from '@angular/router';
 
+import { BreadcrumbComponent } from '../breadcrumb/breadcrumb.component';
+import type { BreadcrumbItem } from '../breadcrumb/breadcrumb-item';
 import { WorkspaceActionComponent } from './workspace-action.component';
 import type { WorkspaceAction } from './workspace-action';
 
 /** One step of the trail back to the page's list or parent. */
-export interface WorkspaceBreadcrumbItem {
-  readonly label: string;
-  /** Router commands. Absent: the item is plain text, as the current level is. */
-  readonly route?: readonly string[];
-  /** Carries the list's filters and paging back with the link. */
-  readonly queryParams?: Readonly<Record<string, string>>;
-}
+export type WorkspaceBreadcrumbItem = BreadcrumbItem;
 
 /**
  * The header every workspace opens with: breadcrumb, title, purpose line, a
  * facts/chips slot, a help slot and the actions of the active task (PRD #3490
  * R02, R03).
+ *
+ * The breadcrumb is the page's place in the menu unless the host passes its
+ * own: a page inside a group needs no trail written out, and a host with a
+ * deeper path (a list, then one record) passes `breadcrumb` to replace it.
  *
  * Slots:
  *   - `[workspaceFacts]` — chips or figures under the purpose line.
@@ -34,7 +33,7 @@ export interface WorkspaceBreadcrumbItem {
 @Component({
   selector: 'app-workspace-header',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, WorkspaceActionComponent],
+  imports: [BreadcrumbComponent, WorkspaceActionComponent],
   templateUrl: './workspace-header.component.html',
   styleUrl: './workspace-header.component.scss',
 })
@@ -42,7 +41,8 @@ export class WorkspaceHeaderComponent {
   readonly title = input.required<string>();
   /** One line on what this place is for. */
   readonly purpose = input<string | null>(null);
-  readonly breadcrumb = input<readonly WorkspaceBreadcrumbItem[]>([]);
+  /** Replaces the menu's trail; `[]` draws none. Omit it to get the menu's. */
+  readonly breadcrumb = input<readonly WorkspaceBreadcrumbItem[] | null>(null);
   /** The one prominent action of the active task, or `null` when it has none. */
   readonly primaryAction = input<WorkspaceAction | null>(null);
   readonly secondaryActions = input<readonly WorkspaceAction[]>([]);

@@ -45,29 +45,8 @@
 }
 
 // The trail back to the page's group (PRD #3490 R01).
-.page-breadcrumb ol {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1);
-  margin: 0 0 var(--space-1);
-  padding: 0;
-  list-style: none;
-  color: var(--text-subtle);
-  font-size: var(--fs-xs);
-}
-
-.page-breadcrumb li + li::before {
-  content: '/';
-  margin-right: var(--space-1);
-}
-
-.page-breadcrumb a {
-  color: var(--accent-text);
-  text-decoration: none;
-
-  &:hover {
-    text-decoration: underline;
-  }
+app-breadcrumb {
+  margin-bottom: var(--space-1);
 }
 
 .page-title {

@@ -1,0 +1,28 @@
+:host {
+  display: block;
+
+  &:empty { display: none; }
+}
+
+.breadcrumb ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+}
+
+.breadcrumb li + li::before {
+  content: '/';
+  margin-right: var(--space-1);
+}
+
+.breadcrumb a {
+  color: var(--accent-text);
+  text-decoration: none;
+
+  &:hover { text-decoration: underline; }
+}
