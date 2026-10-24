@@ -75,14 +75,6 @@
   overflow-wrap: anywhere;
 }
 
-.dl-shell__stale-badge {
-  padding: 0.1rem 0.5rem;
-  border-radius: 999px;
-  background: var(--bg-warn, rgba(255, 193, 7, 0.15));
-  color: var(--text-warn, #ffb300);
-  font-size: 0.75rem;
-}
-
 .dl-shell__scope-controls {
   display: flex;
   flex-wrap: wrap;

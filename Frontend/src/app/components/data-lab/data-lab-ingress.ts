@@ -1,11 +1,13 @@
 import { inject } from '@angular/core';
 import { Router, type RedirectFunction } from '@angular/router';
 
+import { legacyInstrumentTarget } from '../../markets/instrument-address';
+
 /* Legacy Data Lab URL ingress adapter.
  *
  * Pure resolver for pre-redesign /data-lab and /data-quality URLs. It maps a
- * legacy URL to one of the canonical child routes plus a validated,
- * string-only param bag. Unknown keys are dropped with a warning; invalid
+ * legacy URL to one of the canonical child routes (or to the instrument place
+ * the chart moved to) plus a validated, string-only param bag. Unknown keys are dropped with a warning; invalid
  * values (bad mode, non-UUID sessionId, malformed recipe entries) are dropped
  * or ignored with warnings rather than failing the redirect. Resolved state
  * may populate the workspace but never auto-fetches — that decision lives in
@@ -15,13 +17,15 @@ import { Router, type RedirectFunction } from '@angular/router';
  * are kept verbatim, everything else is dropped with a warning. */
 
 export type DataLabRoute =
-  | '/data-lab/explore'
   | '/data-lab/export'
   | '/data-lab/validate'
   | '/data-lab/returns';
 
+/** Where a legacy address ends: a Data Lab child, or the instrument place that now holds the chart. */
+export type LegacyDataLabTarget = DataLabRoute | 'instrument';
+
 export interface LegacyDataLabResolution {
-  route: DataLabRoute;
+  route: LegacyDataLabTarget;
   /** Surviving, validated query params (string values only). */
   params: Record<string, string>;
   /** Human-readable notes about dropped keys / invalid values. */
@@ -38,37 +42,47 @@ const KNOWN_KEYS: ReadonlySet<string> = new Set([
   'mode',
 ]);
 
-const MODE_TO_ROUTE: Readonly<Record<string, DataLabRoute>> = {
-  explore: '/data-lab/explore',
+const MODE_TO_ROUTE: Readonly<Record<string, LegacyDataLabTarget>> = {
+  explore: 'instrument',
   build: '/data-lab/export',
   export: '/data-lab/export',
   validate: '/data-lab/validate',
 };
 
-/** The child a legacy `mode` names, or `undefined` for a value that names none. */
-function routeForMode(mode: unknown): DataLabRoute | undefined {
+/** The place a legacy `mode` names, or `undefined` for a value that names none. */
+function routeForMode(mode: unknown): LegacyDataLabTarget | undefined {
   return typeof mode === 'string' && Object.hasOwn(MODE_TO_ROUTE, mode) ? MODE_TO_ROUTE[mode] : undefined;
 }
 
 /**
- * The redirect for a legacy Data Lab address (`/data-lab`, `/data-quality`).
+ * The redirect for a legacy Data Lab address (`/data-lab`, `/data-quality`,
+ * `/data-lab/explore`).
  *
- * It goes straight to the child the address names — `mode` decides, else
- * `fallback` — in the navigation the router is already making. Everything
- * else the bookmark carried stays in the URL: the query, which the shell
- * reads to populate the workspace and to name what it ignored, and the
- * fragment (`#option-archive-…`). Only a `mode` that names a child is spent,
- * because the path now says it; one that names none stays so the shell can
- * report it.
+ * It goes straight to the place the address names — `mode` decides, else
+ * `fallback` — in the navigation the router is already making. A chart goes to
+ * the instrument its `ticker` names, window and session carried over, or to
+ * Markets when the address names no instrument: it never opens a default one.
+ * Everything else the bookmark carried stays in the URL: the query, which the
+ * Data Lab shell reads to populate the workspace and to name what it ignored,
+ * and the fragment (`#option-archive-…`). Only a `mode` that names a place is
+ * spent, because the path now says it; one that names none stays so the shell
+ * can report it.
  */
-export function redirectLegacyDataLab(fallback: DataLabRoute): RedirectFunction {
+export function redirectLegacyDataLab(fallback: LegacyDataLabTarget): RedirectFunction {
   return ({ queryParams, fragment }) => {
     const named = routeForMode(queryParams['mode']);
     const { mode: _spent, ...rest } = queryParams;
-    return inject(Router).createUrlTree([named ?? fallback], {
-      queryParams: named === undefined ? queryParams : rest,
-      fragment: fragment ?? undefined,
-    });
+    const target = named ?? fallback;
+    const kept = named === undefined ? queryParams : rest;
+    const router = inject(Router);
+    if (target === 'instrument') {
+      const instrument = legacyInstrumentTarget(kept, 'chart');
+      return router.createUrlTree(instrument.commands, {
+        queryParams: instrument.queryParams,
+        fragment: fragment ?? undefined,
+      });
+    }
+    return router.createUrlTree([target], { queryParams: kept, fragment: fragment ?? undefined });
   };
 }
 
@@ -95,13 +109,13 @@ export function resolveLegacyDataLabUrl(url: string): LegacyDataLabResolution {
   const isQualityPath = path === '/data-quality';
 
   // Mode selection — invalid values fall back with a warning. The default
-  // destination is Explore; `sessionId` alone never leaves it.
-  let route: DataLabRoute = '/data-lab/explore';
+  // destination is the instrument's chart; `sessionId` alone never leaves it.
+  let route: LegacyDataLabTarget = 'instrument';
   // A canonical child path keeps its own destination. The /data-quality →
   // /data-lab/validate redirect preserves the query string, so the shell
   // first sees the REDIRECTED URL — keying only on the original legacy
   // paths would drop the bookmark's ticker/range before this runs.
-  const canonical = /^\/data-lab\/(explore|export|validate|returns)$/.exec(path);
+  const canonical = /^\/data-lab\/(export|validate|returns)$/.exec(path);
   if (canonical) route = canonical[0] as DataLabRoute;
   const mode = query.get('mode');
   if (mode !== null) {
@@ -112,7 +126,7 @@ export function resolveLegacyDataLabUrl(url: string): LegacyDataLabResolution {
     route = '/data-lab/validate';
   }
 
-  // sessionId: Explore unless the legacy mode explicitly selects Export or
+  // sessionId: the chart unless the legacy mode explicitly selects Export or
   // Validate. Non-UUID values are dropped with a warning.
   const sessionId = query.get('sessionId');
   if (sessionId !== null) {

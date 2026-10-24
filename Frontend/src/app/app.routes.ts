@@ -88,7 +88,7 @@ const RETIRED_IBKR_NAVIGATION_ROUTES: Routes = [
 
 export const routes: Routes = [
   {
-    // The app opens on the entry painting, whose "I'm In" leads to Data Lab.
+    // The app opens on the entry painting, whose "I'm In" leads to Markets.
     // There is no sign-in behind it: every other address still opens directly.
     // Loaded with the app, not lazily: the shell learns a page is chromeless
     // only once its route is active, so a lazy chunk would leave the top bar
@@ -158,9 +158,15 @@ export const routes: Routes = [
     pathMatch: "full",
   },
   {
-    // Data Lab shell (explore / export / validate child routes). The route
-    // config owns the component-scoped workspace store — see
-    // components/data-lab/data-lab.routes.ts.
+    // Markets and an instrument's place (ADR 0084); see markets/markets.routes.ts.
+    path: "markets",
+    loadChildren: () =>
+      import("./markets/markets.routes").then((m) => m.MARKETS_ROUTES),
+  },
+  {
+    // Data Lab shell (export / validate / returns child routes; the chart moved
+    // to the instrument place). The route config owns the component-scoped
+    // workspace store — see components/data-lab/data-lab.routes.ts.
     path: "data-lab",
     loadChildren: () =>
       import("./components/data-lab/data-lab.routes").then(

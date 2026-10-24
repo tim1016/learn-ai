@@ -13,7 +13,7 @@ import { HELP_DOCUMENTS } from '../shared/help/help-documents';
 
 describe('app menu projections', () => {
   it('projects the canonical menu: six groups in order, each a trigger, none for documents, Accounts offering only Accounts', () => {
-    const groups = menuItemsFor('/data-lab');
+    const groups = menuItemsFor('/markets');
 
     for (const group of groups) {
       expect.soft(group.routerLink, `keeps the ${group.label} group a trigger, never a destination`).toBeUndefined();
@@ -98,8 +98,8 @@ describe('app menu projections', () => {
     expect.soft(lakeEntry?.styleClass, 'marks the Data Lake Observatory entry active').toBe(ACTIVE_ITEM_CLASS);
     expect.soft(windowTitleFor('/data-lake'), 'titles the window for the Data Lake Observatory').toBe('Data Lake Observatory · Operations');
 
-    // The study route is longer than the Stocks entry, so the longest-match
-    // resolution must prefer it — the page highlights its own item.
+    // The study route is not under the Markets entry's address, so it must
+    // resolve to its own item — the page highlights its own item.
     const returnsEntry = menuItemsFor('/data-lab/returns')
       .find((group) => group.label === 'Markets')
       ?.items?.find((item) => item.label === 'Return Distribution');
@@ -113,16 +113,18 @@ describe('app menu projections', () => {
   it('titles the window Page · Group, and an account page by its group alone', () => {
     expect.soft(windowTitleFor('/options-backtest'), 'Options Backtest sits in Options setups').toBe('Options Backtest · Options setups');
     expect.soft(windowTitleFor('/pricing-lab'), 'Pricing Lab sits in Markets').toBe('Pricing Lab · Markets');
-    expect.soft(windowTitleFor('/data-lab'), 'the Data Lab route is presented as Stocks').toBe('Stocks · Markets');
+    expect.soft(windowTitleFor('/markets'), 'the Markets list is titled by its menu label, once').toBe('Markets');
     expect.soft(windowTitleFor('/brokers/alpaca?deploy='), 'the account list says Accounts once').toBe('Accounts');
     expect.soft(windowTitleFor('/unlisted-page'), 'a page outside every group has no menu title').toBeNull();
     expect.soft(activeMenuNodeFor('/unlisted-page'), 'highlights nothing for a route outside the menu').toBeNull();
   });
 
   it.each([
-    ['/data-lab', 'Markets', 'Stocks'],
-    ['/data-lab/explore', 'Markets', 'Stocks'],
-    ['/data-lab/export', 'Markets', 'Stocks'],
+    ['/markets', 'Markets', 'Markets'],
+    // An instrument's place, on any tab or sub-page, lights its owning entry.
+    ['/markets/SPY/chart', 'Markets', 'Markets'],
+    ['/markets/SPY/chart/news', 'Markets', 'Markets'],
+    ['/data-lab/export', 'Markets', 'Build dataset'],
     ['/data-lab/returns', 'Markets', 'Return Distribution'],
     ['/options-lab/chain', 'Markets', 'Options Lab'],
     ['/options-lab/strategy-builder', 'Markets', 'Options Lab'],
@@ -130,8 +132,6 @@ describe('app menu projections', () => {
     ['/broker/options-chain', 'Markets', 'Options Chain (Live)'],
     ['/broker/options-surface', 'Markets', 'Options Surface (3D)'],
     ['/pricing-lab', 'Markets', 'Pricing Lab'],
-    // Instrument headlines are Markets', though the Research Lab shell still hosts the page.
-    ['/research-lab/market/news', 'Markets', 'Ticker News'],
     ['/research-lab', 'Research', 'Research Lab'],
     ['/research-lab/features/validate', 'Research', 'Research Lab'],
     ['/research-lab/features/cross-sectional', 'Research', 'Research Lab'],

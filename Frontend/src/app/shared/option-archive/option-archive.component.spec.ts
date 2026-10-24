@@ -56,7 +56,7 @@ describe('option archive health', () => {
     const health = status(); health.attention = true;
     health.underlyings[0] = { ...health.underlyings[0], severity: 'at_risk' };
     archive.health.set(health);
-    await waitFor(() => expect(screen.getByRole('link', { name: 'Inspect archive health' }).getAttribute('href')).toBe('/data-lab#option-archive-SPY'));
+    await waitFor(() => expect(screen.getByRole('link', { name: 'Inspect archive health' }).getAttribute('href')).toBe('/data-lab/export#option-archive-SPY'));
   });
   it('warns on route failure without owning run controls', async () => {
     const archive = world(null); archive.unavailable.set(true);

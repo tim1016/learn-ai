@@ -511,11 +511,11 @@ test.describe('Account-first Alpaca navigation', () => {
     await installFleetBoundary(page);
 
     // Standing nowhere near an account: a pill has no tab to keep, so it
-    // opens the account's own Home. Data Lab is one of the pages that used to
+    // opens the account's own Home. Markets is one of the pages that used to
     // nest a second <main> in the shell's; AXE runs here once the route has
     // rendered, every rule, so the landmark rules see the real shell (#2689).
-    await page.goto('/data-lab');
-    await expect(page.getByRole('heading', { name: 'Stocks', level: 1 })).toBeVisible();
+    await page.goto('/markets');
+    await expect(page.getByRole('heading', { name: 'Markets', level: 1 })).toBeVisible();
     const axe = await new AxeBuilder({ page }).analyze();
     expect(
       axe.violations.map(({ id, nodes }) => `${id}: ${nodes.map((node) => node.target.join(' ')).join(' | ')}`),
@@ -530,7 +530,7 @@ test.describe('Account-first Alpaca navigation', () => {
   test('offers the Accounts group as Accounts alone, and retires the broker-wide surfaces', async ({ page }) => {
     await installFleetBoundary(page);
 
-    await page.goto('/data-lab');
+    await page.goto('/markets');
     // The group and its one entry share a name; the group comes first in the tree.
     const accounts = page.getByRole('menuitem', { name: 'Accounts', exact: true }).first();
     await accounts.click();

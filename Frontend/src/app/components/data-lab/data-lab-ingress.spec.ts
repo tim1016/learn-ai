@@ -5,9 +5,9 @@ import { resolveLegacyDataLabUrl } from './data-lab-ingress';
 const UUID = '6f9619ff-8b86-d011-b42d-00c04fc964ff';
 
 describe('resolveLegacyDataLabUrl — PRD §14 table', () => {
-  it('/data-lab → /data-lab/explore', () => {
+  it('/data-lab → the instrument place', () => {
     expect(resolveLegacyDataLabUrl('/data-lab')).toEqual({
-      route: '/data-lab/explore',
+      route: 'instrument',
       params: {},
       warnings: [],
     });
@@ -15,7 +15,7 @@ describe('resolveLegacyDataLabUrl — PRD §14 table', () => {
 
   it.each([
     ['/data-quality → /data-lab/validate', '/data-quality', '/data-lab/validate'],
-    ['?mode=explore → /data-lab/explore', '/data-lab?mode=explore', '/data-lab/explore'],
+    ['?mode=explore → the instrument place', '/data-lab?mode=explore', 'instrument'],
     ['?mode=build → /data-lab/export', '/data-lab?mode=build', '/data-lab/export'],
     ['?mode=export → /data-lab/export', '/data-lab?mode=export', '/data-lab/export'],
     ['?mode=validate → /data-lab/validate', '/data-lab?mode=validate', '/data-lab/validate'],
@@ -32,7 +32,7 @@ describe('resolveLegacyDataLabUrl — PRD §14 table', () => {
     const res = resolveLegacyDataLabUrl(
       `/data-lab?ticker=AAPL&from=2026-01-02&to=2026-06-30&trading-session=regular`,
     );
-    expect(res.route).toBe('/data-lab/explore');
+    expect(res.route).toBe('instrument');
     expect(res.params).toEqual({
       ticker: 'AAPL',
       from: '2026-01-02',
@@ -42,9 +42,9 @@ describe('resolveLegacyDataLabUrl — PRD §14 table', () => {
     expect(res.warnings).toEqual([]);
   });
 
-  it('sessionId=<uuid> keeps Explore unless mode explicitly selects Export/Validate', () => {
+  it('sessionId=<uuid> keeps the chart unless mode explicitly selects Export/Validate', () => {
     const explore = resolveLegacyDataLabUrl(`/data-lab?sessionId=${UUID}`);
-    expect(explore.route).toBe('/data-lab/explore');
+    expect(explore.route).toBe('instrument');
     expect(explore.params).toEqual({ sessionId: UUID });
 
     const exportSel = resolveLegacyDataLabUrl(`/data-lab?sessionId=${UUID}&mode=build`);
@@ -69,7 +69,7 @@ describe('resolveLegacyDataLabUrl — PRD §14 table', () => {
 
   it('drops an invalid mode and an invalid sessionId with warnings', () => {
     const res = resolveLegacyDataLabUrl('/data-lab?mode=hack&sessionId=not-a-uuid');
-    expect(res.route).toBe('/data-lab/explore');
+    expect(res.route).toBe('instrument');
     expect(res.params).toEqual({});
     expect(res.warnings.some(w => w.includes('invalid mode'))).toBe(true);
     expect(res.warnings.some(w => w.includes('not a UUID'))).toBe(true);

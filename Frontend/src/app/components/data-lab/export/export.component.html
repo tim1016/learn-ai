@@ -7,7 +7,7 @@
   <h2 id="export-scope-h">1. Scope and bars</h2>
   <p class="export__muted">
     Ticker, window, timeframe, and session come from the shared workspace — edit them in the
-    shell scope bar or on <a routerLink="/data-lab/explore">Explore</a>.
+    shell scope bar.
   </p>
   <dl class="export__kv">
     <dt>Ticker</dt>
@@ -51,7 +51,7 @@
 <section class="export__section" aria-labelledby="export-cols-h">
   <h2 id="export-cols-h">2. Indicators and columns</h2>
   <p class="export__muted">
-    {{ indicatorSummary() }} shared with Explore — manage them in the Explore Indicators drawer.
+    {{ indicatorSummary() }}
   </p>
   @if (planLoading()) {
     <p class="export__muted" role="status">Updating the column list…</p>

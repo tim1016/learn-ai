@@ -22,7 +22,7 @@ describe('TopBarComponent', () => {
     const { container } = await render(TopBarComponent, { providers: [provideRouter([])] });
 
     expect.soft(screen.getByRole('banner', { name: 'Botasur application' }), 'renders a labelled header').toBeTruthy();
-    expect.soft(screen.getByRole('link', { name: 'Botasur home' }).getAttribute('href'), 'links the Botasur home to /data-lab').toBe('/data-lab');
+    expect.soft(screen.getByRole('link', { name: 'Botasur home' }).getAttribute('href'), 'links the Botasur home to /markets').toBe('/markets');
     expect.soft(screen.getByText('Botasur'), 'renders the Botasur name').toBeTruthy();
     expect.soft(container.querySelector('.top-bar__brand-lockup')?.getAttribute('src'), 'renders the brand lockup mark').toBe(
       '/assets/brand/botasur-header-mark.svg',

@@ -102,7 +102,7 @@ export class ValidateComponent {
     const window = this.store.committedWindow();
     return window
       ? `${this.store.committedTicker() || '—'} · ${utcMsToIsoDate(window.startMsUtc)} → ${utcMsToIsoDate(window.endMsUtc)}`
-      : 'No committed scope — commit a ticker and window (Explore or the shell scope bar) before running quality analysis.';
+      : 'No committed scope — commit a ticker and window (the shell scope bar) before running quality analysis.';
   });
 
   /** Quality analysis requires from_date/to_date server-side; without a

@@ -32,9 +32,6 @@
   <div class="dl-shell__scope-summary">
     <span class="dl-shell__scope-label">Committed scope</span>
     <span class="dl-shell__scope-value">{{ committedSummary() }}</span>
-    @if (store.chartStale() && store.lastChartRequestSignature() !== null) {
-      <span class="dl-shell__stale-badge" role="status">Out of date</span>
-    }
   </div>
   <div class="dl-shell__scope-controls">
     <div class="dl-shell__field dl-shell__field--instrument">
@@ -82,7 +79,7 @@
 </section>
 
 <nav class="dl-shell__tabs" aria-label="Data Lab sections">
-  <a routerLink="explore" routerLinkActive="dl-tab--active">Explore</a>
+  <a [routerLink]="chartLink().commands" [queryParams]="chartLink().queryParams">Chart</a>
   <a routerLink="export" routerLinkActive="dl-tab--active">Build dataset</a>
   <a routerLink="validate" routerLinkActive="dl-tab--active">Validate</a>
   <a routerLink="returns" routerLinkActive="dl-tab--active">Returns study</a>

@@ -35,120 +35,35 @@ import {
   ChartRangePreset,
   DataLabRangePresetsService,
 } from '../../services/data-lab-range-presets.service';
+import { instrumentCommands, legacyInstrumentTarget, MARKETS_ROUTE } from '../../markets/instrument-address';
 import { resolveLegacyDataLabUrl } from './data-lab-ingress';
-import { dataLabIndicatorInstanceId } from './data-lab-workspace-store';
+import {
+  BAR_TIMEFRAMES,
+  barTimeframeFor,
+  isoOrEmpty,
+  parseChartTimeframe,
+  parseYmdMsUtc,
+  PRESET_DEFAULT_TIMEFRAMES,
+  presetQuickRanges,
+  PRESET_LABELS,
+} from './data-lab-scope';
+import { dataLabIndicatorInstanceId, seedDefaultIndicators } from './data-lab-workspace-store';
 import { utcDayEndMs, utcMsToIsoDate } from './data-lab-request-mapper';
 import {
   DataLabDraftScope,
   DataLabWorkspaceStore,
-  DEFAULT_DATA_LAB_INDICATORS,
   DATA_LAB_WORKSPACE_SCHEMA_VERSION,
 } from './data-lab-workspace-store';
-
-/* Pure helpers kept exported for their existing spec pin
- * (data-lab.parse-chart-timeframe.spec.ts). They predate the workspace redesign
- * and stay here verbatim so that suite keeps passing unchanged. */
-
-export type PolygonTimespan = 'minute' | 'hour' | 'day' | 'week' | 'month';
-
-/**
- * Parse the chart component's timeframe vocabulary ("1m", "5m", "15m",
- * "1h", "4h", "1D", "1W", "1M") into Polygon's (timespan, multiplier)
- * pair. Returns null for unrecognized inputs so callers can ignore
- * vocabulary the dataset endpoint can't honor.
- */
-export function parseChartTimeframe(
-  timeframe: string,
-): { timespan: PolygonTimespan; multiplier: number } | null {
-  const match = timeframe.match(/^(\d+)([mhDWM])$/);
-  if (!match) return null;
-  const multiplier = parseInt(match[1], 10);
-  const unit = match[2];
-  const timespan: PolygonTimespan | null =
-    unit === 'm' ? 'minute' :
-    unit === 'h' ? 'hour' :
-    unit === 'D' ? 'day' :
-    unit === 'W' ? 'week' :
-    unit === 'M' ? 'month' :
-    null;
-  if (!timespan) return null;
-  return { timespan, multiplier };
-}
-
-/** Bar-timeframe presets shared by the shell's compact scope bar and the
- *  Export form. User-facing vocabulary mapped onto (timespan, multiplier). */
-export interface BarTimeframeOption {
-  value: string;
-  label: string;
-  timespan: 'minute' | 'hour' | 'day';
-  multiplier: number;
-}
-
-export const BAR_TIMEFRAMES: readonly BarTimeframeOption[] = [
-  { value: '1m', label: '1 min', timespan: 'minute', multiplier: 1 },
-  { value: '5m', label: '5 min', timespan: 'minute', multiplier: 5 },
-  { value: '15m', label: '15 min', timespan: 'minute', multiplier: 15 },
-  { value: '30m', label: '30 min', timespan: 'minute', multiplier: 30 },
-  { value: '1h', label: '1 hour', timespan: 'hour', multiplier: 1 },
-  { value: '4h', label: '4 hours', timespan: 'hour', multiplier: 4 },
-  { value: '1d', label: '1 day', timespan: 'day', multiplier: 1 },
-];
-
-/** Display-only default timeframe per short range preset — a UI default so a
- *  1D window doesn't render as a single daily candle. Longer presets keep the
- *  current timeframe. */
-const PRESET_DEFAULT_TIMEFRAMES: Record<string, string> = {
-  '1D': '5m',
-  '5D': '30m',
-};
-
-/** The shared quick-range label each server preset is shown under: five sessions are a week. */
-const PRESET_LABELS: Readonly<Record<string, QuickRangeKey>> = {
-  '1D': '1D',
-  '5D': '1W',
-  '1M': '1M',
-  '3M': '3M',
-  '6M': '6M',
-  '1Y': '1Y',
-  '2Y': '2Y',
-  '5Y': '5Y',
-};
-
-/** The UTC calendar date of a window boundary; empty for ms 0, which is "no window yet", not 1970. */
-function isoOrEmpty(ms: number): string {
-  return ms > 0 ? utcMsToIsoDate(ms) : '';
-}
-
-/** Parse a strict YYYY-MM-DD string to int64 ms UTC at UTC midnight. The
- *  shared `parseYmd` builds LOCAL-midnight Dates, which would make stored
- *  MsUtc window boundaries shift with the viewer's timezone — every
- *  YMD→ms boundary in this shell therefore goes through `Date.UTC`. Pure;
- *  returns null for malformed or impossible calendar dates. */
-export function parseYmdMsUtc(s: string): number | null {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
-  const [y, m, d] = s.split('-').map(Number);
-  const ms = Date.UTC(y, m - 1, d);
-  const check = new Date(ms);
-  if (
-    check.getUTCFullYear() !== y ||
-    check.getUTCMonth() !== m - 1 ||
-    check.getUTCDate() !== d
-  ) {
-    return null;
-  }
-  return ms;
-}
 
 /**
  * Data Lab route shell.
  *
  * Owns the compact scope bar (with the calendar-resolved quick-range chips),
- * the three route tabs, the saved-setups drawer, and one RunDockComponent.
- * All workspace state lives in the route-provided {@link DataLabWorkspaceStore};
- * child routes inject the same instance. The shell never fetches the chart
- * itself — deliberate scope actions (preset click, Apply scope) commit and
- * request a refresh through the store; URL ingress only populates the
- * workspace (Explore auto-fetches on mount when a committed scope exists).
+ * the route tabs (Build dataset, Validate, Returns study), the saved-setups
+ * drawer, and one RunDockComponent. All workspace state lives in the
+ * route-provided {@link DataLabWorkspaceStore}; child routes inject the same
+ * instance. The chart left for the instrument place (`/markets/:symbol/chart`);
+ * an address that asked for it is sent there.
  */
 @Component({
   selector: 'app-data-lab',
@@ -181,10 +96,10 @@ export class DataLabComponent {
   readonly store = inject(DataLabWorkspaceStore);
 
   /** The page is titled by the menu entry that leads to it (PRD #3490 R01):
-   *  Stocks, or Return Distribution on its own study. */
+   *  Build dataset, Return Distribution or Validate. */
   private readonly menuNode = inject(CurrentUrlService).menuNode;
   protected readonly pageTitle = computed(
-    () => this.menuNode()?.item.title ?? menuLabelFor('/data-lab'),
+    () => this.menuNode()?.item.title ?? menuLabelFor('/data-lab/returns'),
   );
 
   readonly barTimeframes = BAR_TIMEFRAMES;
@@ -196,12 +111,7 @@ export class DataLabComponent {
   constructor() {
     // Seed the product's thirteen-indicator default recipe into a fresh
     // workspace. Seeding never fetches anything.
-    if (this.store.indicators().length === 0) {
-      for (const entry of DEFAULT_DATA_LAB_INDICATORS) {
-        this.store.addIndicator(entry.canonicalKey, entry.params);
-      }
-      this.store.markChartStale();
-    }
+    seedDefaultIndicators(this.store);
     // Legacy ingress runs once for the URL present at construction and is
     // re-checked on each completed navigation — the guard inside makes the
     // re-check a no-op on canonical URLs.
@@ -225,13 +135,13 @@ export class DataLabComponent {
 
   /** If the current URL carries legacy Data Lab query state, resolve it,
    *  populate and commit the workspace from it, and name what it ignored in
-   *  the migration banner. The fetch decision belongs to Explore's mount
-   *  auto-load, not to the ingress itself.
+   *  the migration banner.
    *
    *  The legacy addresses (`/data-lab`, `/data-quality`) redirect straight to
    *  the child their `mode` names, query intact (`redirectLegacyDataLab`), so
    *  this normally runs on a URL that is already canonical and navigates
-   *  nowhere. Only a canonical child whose `mode` names another child is moved.
+   *  nowhere. Only a canonical child whose `mode` names another child is moved,
+   *  and one whose `mode` names the chart goes to the instrument it names.
    *  The trigger keys on the legacy `mode` marker, the legacy parent path, or
    *  a canonical child URL carrying legacy scope keys — that last shape is
    *  what a `/data-quality?ticker=…` bookmark looks like once redirected.
@@ -256,6 +166,11 @@ export class DataLabComponent {
     this.ingressApplied = true;
 
     const resolution = resolveLegacyDataLabUrl(url);
+    if (resolution.route === 'instrument') {
+      const target = legacyInstrumentTarget(resolution.params, 'chart');
+      void this.router.navigate(target.commands, { queryParams: target.queryParams, replaceUrl: true });
+      return;
+    }
     this.applyLegacyScope(resolution.params);
     // Set unconditionally: a valid legacy URL must clear warnings left by an
     // earlier invalid one, not layer over them.
@@ -297,6 +212,25 @@ export class DataLabComponent {
 
   // ── Compact scope bar ─────────────────────────────────────
   readonly draftTicker = computed(() => this.store.draft().ticker);
+
+  /** Where the chart lives now: the committed instrument's Chart tab with the committed window, else the Markets list. */
+  protected readonly chartLink = computed(() => {
+    const ticker = this.store.committedTicker();
+    const window = this.store.committedWindow();
+    if (!ticker) return { commands: [MARKETS_ROUTE], queryParams: {} };
+    const scope = this.store.committedScope();
+    if (window === null || scope === null) return { commands: instrumentCommands(ticker, 'chart'), queryParams: {} };
+    const timeframe = barTimeframeFor(scope.timespan, scope.multiplier);
+    return {
+      commands: instrumentCommands(ticker, 'chart'),
+      queryParams: {
+        from: utcMsToIsoDate(window.startMsUtc),
+        to: utcMsToIsoDate(window.endMsUtc),
+        session: scope.session === 'extended' ? 'extended' : 'regular',
+        ...(timeframe === undefined ? {} : { timeframe: timeframe.value }),
+      },
+    };
+  });
 
   /**
    * The tree this page's chart reads — the picker's coverage badge and gate
@@ -386,16 +320,12 @@ export class DataLabComponent {
     });
   }
 
-  /** Commit the draft scope. Edits before this never trigger fetches. A
-   *  successful commit requests a chart refresh — the operator applied a
-   *  scope on purpose and expects the chart to follow (2026-09-13 product
-   *  decision, superseding the earlier explicit-refresh-only rule). */
+  /** Commit the draft scope. Edits before this never trigger fetches. */
   applyScope(): void {
     // A tap can arrive in the task that refused a date, before the button is drawn disabled.
     if (this.datesUnusable()) return;
     const result = this.store.commitScope();
     this.scopeCommitError.set(result.ok ? null : result.error);
-    if (result.ok) this.store.requestChartRefresh();
   }
 
   // ── Calendar-resolved quick ranges ─────────────────────────
@@ -416,12 +346,7 @@ export class DataLabComponent {
   }
 
   /** The server's presets as the shared picker's quick ranges: Python's resolved dates under the shared labels. */
-  protected readonly presetOffers = computed<readonly QuickRangeOffer[]>(() =>
-    this.rangePresets().flatMap((preset) => {
-      const key = PRESET_LABELS[preset.key];
-      return key === undefined ? [] : [{ key, range: { from: utcMsToIsoDate(preset.start_ms_utc), to: utcMsToIsoDate(preset.end_ms_utc) }, unavailable: null }];
-    }),
-  );
+  protected readonly presetOffers = computed<readonly QuickRangeOffer[]>(() => presetQuickRanges(this.rangePresets()));
 
   /** A quick range was clicked: apply the server preset behind its label. */
   onPresetPicked(key: QuickRangeKey): void {
@@ -429,8 +354,8 @@ export class DataLabComponent {
     if (preset !== undefined) void this.applyRangePreset(preset);
   }
 
-  /** Apply a server-resolved preset: window verbatim from Python, commit,
-   *  refresh. The list is re-resolved first — the service cache is
+  /** Apply a server-resolved preset: window verbatim from Python, commit.
+   *  The list is re-resolved first — the service cache is
    *  five-minute TTL, so a Data Lab left open across an ET trading-date
    *  boundary would otherwise keep applying the previous day's windows.
    *  Short windows also get a sensible intraday default timeframe —
@@ -463,7 +388,6 @@ export class DataLabComponent {
     this.store.patchDraft(patch);
     const result = this.store.commitScope();
     this.scopeCommitError.set(result.ok ? null : result.error);
-    if (result.ok) this.store.requestChartRefresh();
   }
 
   // ── Saved setups drawer ───────────────────────────────────
@@ -608,8 +532,8 @@ export class DataLabComponent {
     this.activeSessionId.set(session.id);
     this.sessionName.set(session.name);
     this.store.setSavedSession({ id: session.id, schemaVersion: DATA_LAB_WORKSPACE_SCHEMA_VERSION });
-    // Hand the snapshot (if any) to Explore — restoring it renders cached
-    // bars with no HTTP call; the chart is marked stale meanwhile.
+    // Stage the snapshot (if any) for the chart to render from cache with no
+    // HTTP call; the chart is marked stale meanwhile.
     if (session.chartSnapshot) {
       this.store.setRestoredChartSnapshot(session.chartSnapshot);
     }

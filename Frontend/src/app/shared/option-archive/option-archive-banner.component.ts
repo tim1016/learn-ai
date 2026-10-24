@@ -12,7 +12,7 @@ import { needsAttention, OptionArchiveService } from './option-archive.service';
       <aside>
         <p>{{ archive.unavailable() ? 'Archive status is unavailable.' : 'The option archive needs attention.' }}
           Your requested sessions are checked separately by Check data.</p>
-        <a routerLink="/data-lab" [fragment]="target()">Inspect archive health</a>
+        <a routerLink="/data-lab/export" [fragment]="target()">Inspect archive health</a>
       </aside>
     }
   `,
