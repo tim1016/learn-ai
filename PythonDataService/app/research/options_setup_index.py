@@ -131,16 +131,23 @@ def indexed_approvals(
     return found
 
 
-async def _read_runs() -> tuple[list[IndexedRun], int]:
-    async def read(conn: Any) -> tuple[Any, dict[int, SavedSetup], int]:
-        rows = await saved_runs.read_run_rows(conn, limit=INDEX_LIMIT)
-        frozen = await saved_runs.read_run_setups(conn, [row["id"] for row in rows])
-        return rows, frozen, await saved_runs.count_runs(conn)
+def _runs_of(records: Sequence[RunRecord], stored: Mapping[int, tuple[str, int]]) -> list[IndexedRun]:
+    """Each run's stored setup read again with today's rules, then hashed: pure work, run on a worker thread."""
+    return indexed_runs(records, saved_runs.run_setups_of(stored))
 
-    rows, frozen, total = await with_connection(read)
+
+async def _read_runs() -> tuple[list[IndexedRun], int]:
+    async def read(conn: Any) -> tuple[Any, dict[int, tuple[str, int]], int]:
+        rows = await saved_runs.read_run_rows(conn, limit=INDEX_LIMIT)
+        stored = await saved_runs.read_run_setup_json(conn, [row["id"] for row in rows])
+        return rows, stored, await saved_runs.count_runs(conn)
+
+    rows, stored, total = await with_connection(read)
     # A running run whose job is gone reads interrupted; that asks Redis on a worker thread, after the connection is released.
     records = await saved_runs.present_runs(rows, is_live=lifecycle.job_is_live)
-    return indexed_runs(records, frozen), total
+    # Validating a thousand stored setups and hashing them is CPU work, so it does not hold the data plane's event loop
+    # (it renews leases and serves the fleet), and it starts only once the pooled connection is back.
+    return await asyncio.to_thread(_runs_of, records, stored), total
 
 
 async def _read_studies() -> tuple[list[IndexedStudy], int]:
@@ -148,7 +155,8 @@ async def _read_studies() -> tuple[list[IndexedStudy], int]:
         return await studies.index_rows(conn, limit=INDEX_LIMIT), await studies.count(conn)
 
     rows, total = await with_connection(read)
-    return indexed_studies(rows), total
+    # Each study's frozen protocol is parsed and hashed: tens of kilobytes a row, on a worker thread.
+    return await asyncio.to_thread(indexed_studies, rows), total
 
 
 async def _read_approvals() -> tuple[list[IndexedApproval], int]:
@@ -162,7 +170,8 @@ async def _read_approvals() -> tuple[list[IndexedApproval], int]:
         running = await asyncio.to_thread(current_rules_digest)
     except GoldenProofError:
         running = None
-    return indexed_approvals(records, events, running_digest=running), total
+    # Each approval's status asks the running rules, which hashes source trees: on a worker thread.
+    return await asyncio.to_thread(indexed_approvals, records, events, running_digest=running), total
 
 
 async def read_index() -> OptionsSetupIndexResponse:
@@ -172,7 +181,7 @@ async def read_index() -> OptionsSetupIndexResponse:
     approvals, approvals_total = await _read_approvals()
     return OptionsSetupIndexResponse(
         read_at_ms=now_ms_utc(),
-        setups=indexed_setups(saved),
+        setups=await asyncio.to_thread(indexed_setups, saved),
         runs=runs,
         runs_total=runs_total,
         studies=found_studies,

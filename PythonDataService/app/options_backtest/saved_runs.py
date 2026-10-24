@@ -35,7 +35,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from enum import StrEnum
@@ -488,18 +488,23 @@ async def read_run_rows(
     return tuple(rows)
 
 
-async def read_run_setups(conn: asyncpg.Connection, run_ids: Sequence[int]) -> dict[int, SavedSetup]:
-    """What each of these runs froze as its setup, read again with today's rules: the setup, or why it cannot be read.
+async def read_run_setup_json(conn: asyncpg.Connection, run_ids: Sequence[int]) -> dict[int, tuple[str, int]]:
+    """The setup each of these runs froze, as stored: its JSON and when the run was made, and nothing of its figures.
 
-    The history lists a run without its setup; the Options setups index needs the setup's identity, and never its
-    figures, so this reads only the setup column of the rows asked for.
+    The history lists a run without its setup. Reading it again with today's rules (``run_setups_of``) is pure CPU
+    work, so it is left to the caller to do off the event loop and after the connection is released.
     """
     rows = await conn.fetch(
         "SELECT id, setup_json::text AS setup_json, created_at_ms FROM research_options_backtest_runs "
         "WHERE id = ANY($1::bigint[])",
         list(run_ids),
     )
-    return {row["id"]: read_stored_setup(f"run {row['id']}", row["setup_json"], row["created_at_ms"]) for row in rows}
+    return {row["id"]: (row["setup_json"], row["created_at_ms"]) for row in rows}
+
+
+def run_setups_of(stored: Mapping[int, tuple[str, int]]) -> dict[int, SavedSetup]:
+    """What each run froze, read again with today's rules: the setup, or why it cannot be read."""
+    return {run_id: read_stored_setup(f"run {run_id}", setup_json, made_at_ms) for run_id, (setup_json, made_at_ms) in stored.items()}
 
 
 async def count_runs(conn: asyncpg.Connection) -> int:

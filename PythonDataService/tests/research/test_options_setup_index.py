@@ -9,6 +9,8 @@ evidence and no approval; and a record that can no longer be read stays listed, 
 from __future__ import annotations
 
 import json
+import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +19,7 @@ import pytest
 from httpx import ASGITransport
 
 from app.main import app
+from app.options_backtest import saved_runs
 from app.options_backtest.saved_runs import RunRecord
 from app.options_backtest.saved_setups import SavedSetup
 from app.options_bots.golden_proof import setup_sha256
@@ -231,3 +234,84 @@ async def test_the_route_serves_the_index_and_says_when_the_store_cannot_be_reac
     assert ok.json()["setups"][0]["setup_sha256"] == the_hash()
     assert unavailable.status_code == 503
     assert unavailable.json()["detail"]["code"] == "OPTIONS_SETUP_INDEX_UNAVAILABLE"
+
+
+class _OneApproval:
+    """A store that holds one approved version and no events, as the index reads it."""
+
+    async def list(self, *, limit: int) -> tuple[GoldenRecord, ...]:
+        return (a_version(),)
+
+    async def count(self) -> int:
+        return 1
+
+    async def events_for(self, ids: list[str]) -> tuple[GoldenEvent, ...]:
+        return ()
+
+
+def _spied_on(monkeypatch: pytest.MonkeyPatch, name: str, ran_on: list[int]) -> None:
+    """Wraps the pure builder `name` so that the thread it runs on is recorded."""
+    real: Callable[..., Any] = getattr(index, name)
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        ran_on.append(threading.get_ident())
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(index, name, spy)
+
+
+async def test_the_runs_are_validated_and_hashed_on_a_worker_thread_after_the_connection_is_released(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A thousand stored setups are validated and hashed per read; that must not hold the data plane's event loop (A-M3)."""
+    ran_on: list[int] = []
+    _spied_on(monkeypatch, "indexed_runs", ran_on)
+    connected = False
+
+    async def with_connection(read: Callable[..., Any], *args: Any) -> Any:
+        nonlocal connected
+        connected = True
+        try:
+            return (), {7: (setup().model_dump_json(), 1)}, 1
+        finally:
+            connected = False
+
+    real_parse = saved_runs.run_setups_of
+    held_during_parse: list[bool] = []
+
+    def parse(stored: Any) -> Any:
+        held_during_parse.append(connected)
+        return real_parse(stored)
+
+    monkeypatch.setattr(index, "with_connection", with_connection)
+    monkeypatch.setattr(saved_runs, "run_setups_of", parse)
+
+    runs, total = await index._read_runs()
+
+    assert (runs, total) == ([], 1)
+    assert ran_on and ran_on[0] != threading.get_ident()
+    assert held_during_parse == [False]
+
+
+async def test_the_studies_are_parsed_and_hashed_on_a_worker_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    ran_on: list[int] = []
+    _spied_on(monkeypatch, "indexed_studies", ran_on)
+
+    async def with_connection(read: Callable[..., Any], *args: Any) -> Any:
+        return [a_study_row()], 1
+
+    monkeypatch.setattr(index, "with_connection", with_connection)
+
+    [study], total = await index._read_studies()
+
+    assert total == 1 and study.setup_sha256 is not None
+    assert ran_on and ran_on[0] != threading.get_ident()
+
+
+async def test_the_approvals_are_judged_on_a_worker_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    ran_on: list[int] = []
+    _spied_on(monkeypatch, "indexed_approvals", ran_on)
+    monkeypatch.setattr(index, "PostgresGoldenStore", _OneApproval)
+
+    [version], total = await index._read_approvals()
+
+    assert total == 1 and version.id == a_version().id
+    assert ran_on and ran_on[0] != threading.get_ident()
