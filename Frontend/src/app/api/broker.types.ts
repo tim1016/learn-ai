@@ -6873,8 +6873,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** History */
-        get: operations["history_api_research_options_golden_search_studies_get"];
+        get?: never;
         put?: never;
         /** Create */
         post: operations["create_api_research_options_golden_search_studies_post"];
@@ -33343,21 +33342,6 @@ export interface components {
             /** Underlying */
             underlying: string;
         };
-        /** StudySummary */
-        StudySummary: {
-            /** Id */
-            id: string;
-            /** Phase */
-            phase: string;
-            /** Setup Name */
-            setup_name: string;
-            /** Status */
-            status: string;
-            /** Underlying */
-            underlying: string;
-            /** Updated At Ms */
-            updated_at_ms: number;
-        };
         /** Subtract */
         "Subtract-Input": {
             /**
@@ -48568,37 +48552,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Preflight"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    history_api_research_options_golden_search_studies_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StudySummary"][];
                 };
             };
             /** @description Validation Error */

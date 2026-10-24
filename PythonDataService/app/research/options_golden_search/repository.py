@@ -311,9 +311,3 @@ async def index_rows(conn: asyncpg.Connection, *, limit: int) -> list[dict[str, 
 
 async def count(conn: asyncpg.Connection) -> int:
     return await conn.fetchval(f"SELECT count(*) FROM {TABLE}")
-
-
-async def summaries(conn: asyncpg.Connection) -> list[dict[str, Any]]:
-    """History does not load candidate traces or evidence documents."""
-    rows = await conn.fetch(f"SELECT id,setup_name,underlying,phase,status,updated_at_ms FROM {TABLE} ORDER BY created_at_ms DESC,id LIMIT 200")
-    return [dict(row) for row in rows]
