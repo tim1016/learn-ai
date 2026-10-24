@@ -8,8 +8,9 @@ export interface NavItem {
 /**
  * The pages the Research Lab shell still hosts, each waiting for the slice
  * that moves it: instrument headlines (#3501) and the Recency Chart (#3508).
- * The five studies live under `/research`, every saved result in the Research
- * History; the two data checks are reached from Operations and need no tab.
+ * The five studies live under `/research`; every saved result and spec-run
+ * record lives in the Research History under `/research/history`; the two data
+ * checks are reached from Operations and need no tab.
  */
 export const RESEARCH_LAB_NAV: readonly NavItem[] = [
   { path: 'market/news', label: 'Ticker News' },

@@ -29,10 +29,10 @@ describe('StudyListComponent', () => {
     expect(studies.getAllByText(/^Reads Polygon/).length).toBe(5);
   });
 
-  it('links the Rule sandbox at the page that holds it until its slice moves it', async () => {
+  it('lists the Rule sandbox beside the studies, at its own page under Research', async () => {
     await renderList();
 
-    expect(screen.getByRole('link', { name: 'Rule sandbox' }).getAttribute('href')).toBe('/spec-strategy');
+    expect(screen.getByRole('link', { name: 'Rule sandbox' }).getAttribute('href')).toBe('/research/rule-sandbox');
   });
 
   it('files the Edge demonstrations under sample data, apart from the studies', async () => {

@@ -5,7 +5,8 @@ import { STORED_STUDY_TYPE_IDS } from './stored-study/stored-study';
 
 /**
  * The `/research` route family (ADR 0084): the study list, one page per study,
- * the Edge demonstrations and the History of every study's saved results.
+ * the Rule sandbox, the Edge demonstrations, and the History of every study's saved
+ * results with the native detail page of each spec-run record.
  *
  * Each study is the existing Research Lab runner, now inside the shared study
  * layout (`app-study-page`). A study's header and steps carry their own inset,
@@ -55,6 +56,15 @@ export const RESEARCH_ROUTES: Routes = [
       import('../components/edge/realized-vs-iv/realized-vs-iv.component').then((m) => m.RealizedVsIvComponent),
   },
   {
+    // Not a study: free-form rules replayed on past prices, never deployable (R27).
+    path: 'rule-sandbox',
+    data: { fullBleed: true },
+    loadComponent: () =>
+      import('../components/spec-strategy-runner/spec-strategy-runner.component').then(
+        (m) => m.SpecStrategyRunnerComponent,
+      ),
+  },
+  {
     // The History: one typed index over every store that keeps research results (R26).
     path: 'history',
     data: { fullBleed: true },
@@ -76,6 +86,38 @@ export const RESEARCH_ROUTES: Routes = [
     loadComponent: () =>
       import('../components/research-lab/signal-report-page/signal-report-page.component').then(
         (m) => m.SignalReportPageComponent,
+      ),
+  },
+  // A `StrategySpec` run and its Monte Carlo, benchmark-baseline and
+  // walk-forward children stay Research evidence at their native detail pages.
+  // Each is keyed by its own id: a run is never looked up by a name that
+  // resembles a registered strategy's (R27).
+  {
+    path: 'history/spec-run/:run_id',
+    loadComponent: () =>
+      import('../components/research-lab/strategy-runs/run-detail-page/run-detail-page.component').then(
+        (m) => m.RunDetailPageComponent,
+      ),
+  },
+  {
+    path: 'history/walk-forward/:wf_id',
+    loadComponent: () =>
+      import('../components/research-lab/walk-forward/walk-forward-detail-page/walk-forward-detail-page.component').then(
+        (m) => m.WalkForwardDetailPageComponent,
+      ),
+  },
+  {
+    path: 'history/monte-carlo/:mc_id',
+    loadComponent: () =>
+      import('../components/research-lab/monte-carlo/monte-carlo-detail-page/monte-carlo-detail-page.component').then(
+        (m) => m.MonteCarloDetailPageComponent,
+      ),
+  },
+  {
+    path: 'history/baseline/:baseline_id',
+    loadComponent: () =>
+      import('../components/research-lab/baselines/baselines-detail-page/baselines-detail-page.component').then(
+        (m) => m.BaselinesDetailPageComponent,
       ),
   },
   {

@@ -78,6 +78,12 @@ const ROWS: Readonly<Record<string, Row>> = {
   'research/signal': { group: RESEARCH },
   'research/indicator-reliability': { group: RESEARCH },
   'research/realized-vs-iv': { group: RESEARCH },
+  'research/rule-sandbox': { group: RESEARCH },
+  // A spec run and its children are Research evidence at their native detail pages.
+  'research/history/spec-run/:run_id': { group: RESEARCH },
+  'research/history/walk-forward/:wf_id': { group: RESEARCH },
+  'research/history/monte-carlo/:mc_id': { group: RESEARCH },
+  'research/history/baseline/:baseline_id': { group: RESEARCH },
   'research/demos': { group: RESEARCH, lands: '/research' },
   'research/demos/cross-asset': { group: RESEARCH },
   'research/demos/regimes': { group: RESEARCH },
@@ -91,12 +97,12 @@ const ROWS: Readonly<Record<string, Row>> = {
   'research/history/indicator-reliability/:id': { group: RESEARCH },
   'research/history/realized-vs-iv/:id': { group: RESEARCH },
   'research/history/signal-report/:id': { group: RESEARCH },
-  // The Research Lab shell still hosts the run detail pages until slice 28.
+  // The Research Lab shell still hosts the instrument headlines and the Recency Chart.
   'research-lab': { group: RESEARCH, lands: '/research' },
-  'research-lab/strategy-runs/:run_id': { group: RESEARCH },
-  'research-lab/walk-forward/:wf_id': { group: RESEARCH },
-  'research-lab/monte-carlo/:mc_id': { group: RESEARCH },
-  'research-lab/baselines/:baseline_id': { group: RESEARCH },
+  'research-lab/strategy-runs/:run_id': { group: RESEARCH, lands: '/research/history/spec-run/7' },
+  'research-lab/walk-forward/:wf_id': { group: RESEARCH, lands: '/research/history/walk-forward/7' },
+  'research-lab/monte-carlo/:mc_id': { group: RESEARCH, lands: '/research/history/monte-carlo/7' },
+  'research-lab/baselines/:baseline_id': { group: RESEARCH, lands: '/research/history/baseline/7' },
   // The saved lists went into the History, each filtered to the kind it listed.
   'research-lab/features/experiments': { group: RESEARCH, lands: '/research/history?type=feature-experiment' },
   'research-lab/inspect/experiments': { group: RESEARCH, lands: '/research/history?type=feature-experiment' },
@@ -124,7 +130,7 @@ const ROWS: Readonly<Record<string, Row>> = {
   'edge/realized-vs-iv': { group: RESEARCH, lands: '/research/realized-vs-iv' },
   'edge/cross-asset': { group: RESEARCH, lands: '/research/demos/cross-asset' },
   'edge/regimes': { group: RESEARCH, lands: '/research/demos/regimes' },
-  'spec-strategy': { group: RESEARCH },
+  'spec-strategy': { group: RESEARCH, lands: '/research/rule-sandbox' },
 
   // ── Signal strategies ────────────────────────────────────────────────────
   'strategy-lab': { group: SIGNAL },
