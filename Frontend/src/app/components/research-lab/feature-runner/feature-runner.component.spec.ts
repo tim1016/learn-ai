@@ -160,6 +160,8 @@ describe('FeatureRunnerComponent', () => {
       feature_name: 'momentum_5m',
       from_date: '2024-01-01',
       to_date: '2024-03-31',
+      // The bars it reads include extended hours; a saved run must not say "rth".
+      session: 'extended',
     });
     expect(component.jobId()).toBe('job-id-1');
   });

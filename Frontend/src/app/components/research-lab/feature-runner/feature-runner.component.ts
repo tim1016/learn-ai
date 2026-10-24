@@ -377,9 +377,12 @@ export class FeatureRunnerComponent {
       // (ii); legacy aliases are still accepted until PR (iii)'s
       // alias-removal commit.
       const submitted = this.enteredInputs();
+      // The run reads extended-hours bars whatever the request says, and the saved run keeps what was
+      // sent, so it says "extended" rather than the "rth" the wire would fill in.
       const wire = tickerRangeToWire({
         ...submitted.range,
         symbol: submitted.range.symbol.toUpperCase(),
+        session: 'extended',
       });
       const parent = this.prefill.parent();
       const id = await this.jobsService.startJob('feature_research', {

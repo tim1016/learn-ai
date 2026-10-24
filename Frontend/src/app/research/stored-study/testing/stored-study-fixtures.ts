@@ -11,12 +11,12 @@ export const SAVED_AT_MS = 1_790_000_000_000;
 
 const DATED = { symbol: 'SPY', from_date: '2024-01-02', to_date: '2024-03-28' };
 
-export const FEATURE_INPUTS = { ...DATED, timespan: 'minute', multiplier: 5, session: 'rth', feature_name: 'rsi_14' };
+export const FEATURE_INPUTS = { ...DATED, timespan: 'minute', multiplier: 5, session: 'extended', feature_name: 'rsi_14' };
 export const SIGNAL_INPUTS = {
   ...DATED,
   timespan: 'minute',
   multiplier: 15,
-  session: 'rth',
+  session: 'extended',
   feature_name: 'macd_signal',
   flip_sign: false,
   regime_gate_enabled: true,

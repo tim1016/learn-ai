@@ -129,7 +129,12 @@ describe('SignalRunnerComponent indicator catalog load', () => {
 
       await component.runSignalEngine();
 
-      expect(startJob.mock.calls[0][1]).toMatchObject({ feature_name: 'macd_signal', flip_sign: false, rerun_of: RECORD_ID });
+      expect(startJob.mock.calls[0][1]).toMatchObject({
+        feature_name: 'macd_signal',
+        flip_sign: false,
+        rerun_of: RECORD_ID,
+        session: 'extended', // the bars it reads, not the "rth" the wire would fill in
+      });
     });
   });
 
