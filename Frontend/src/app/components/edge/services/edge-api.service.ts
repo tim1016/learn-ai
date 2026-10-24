@@ -1,11 +1,13 @@
 import { HttpClient, HttpErrorResponse } from "@angular/common/http";
 import { inject, Injectable } from "@angular/core";
 import { firstValueFrom } from "rxjs";
+import type { components } from "../../../api/broker.types";
 import { JobsService } from "../../../services/jobs.service";
 import {
   readLakeStudyRefusal,
   type LakeStudyRefused,
 } from "../../../shared/lake-study/lake-study";
+import type { Session } from "../../../shared/ticker-range-picker/ticker-range-picker.types";
 import {
   RV_WINDOWS,
   type BarSize, type HfSession, type LiveIv30Marker, type LiveIv30State, type RealizedVsIvData,
@@ -35,18 +37,40 @@ interface Iv30LiveResponse {
 export type { BarSize };
 export type Tenor = "7D" | "14D" | "30D" | "60D";
 export type Estimator = "ctc" | "parkinson" | "gk" | "yz";
-export type Session = HfSession;
+
+/** The window a run reads when it names none, as the server resolves it (`GET /api/edge/realized-vs-iv/window`). */
+export interface DefaultWindow {
+  readonly barSize: BarSize;
+  /** The session the window was resolved for: a regular-hours bar holds fewer bars a session than an extended one. */
+  readonly session: Session;
+  /** ET midnight of the first and last session, `int64 ms UTC`: the values a run request takes. */
+  readonly windowStartMs: number;
+  readonly windowEndMs: number;
+  /** Scheduled sessions from the first to the last. */
+  readonly sessions: number;
+}
 
 export interface ComputeRvIvRequest {
   symbol: string;
   barSize: BarSize;
   tenor: Tenor;
   estimators: readonly Estimator[];
-  /** The HF estimator's session; only 15-minute bars have an HF estimator, so it is sent for them alone. */
-  hfSession?: HfSession;
+  /**
+   * The session the bars are folded from. Daily bars read regular hours only (the page offers no choice); a 15-minute
+   * run reads either, and its HF estimator follows it: regular hours use the HF estimator's RTH session, extended hours
+   * its ETH one, so the page has one session control and the two cannot disagree.
+   */
+  session: Session;
+  /** The window the run reads. Omitted, the server resolves its default window when the job starts. */
+  window?: { readonly startMs: number; readonly endMs: number };
   windows?: readonly number[];
   /** The saved run these inputs were filled in from; the new run's record names it. */
   rerunOf?: string;
+}
+
+/** The HF estimator's session for the session a 15-minute run folds its bars from. */
+export function hfSessionFor(session: Session): HfSession {
+  return session === "rth" ? "RTH" : "ETH";
 }
 
 /** The lake could not supply the study's bars: the reason and the counts admission reached, for the data-source line. */
@@ -82,9 +106,11 @@ export class EdgeApiService {
       symbol: req.symbol,
       bar_size: wireBarSize,
       tenor_days: tenorDays,
-      ...(wireBarSize === "15m" ? { hf_session: req.hfSession ?? "ETH" } : {}),
+      session: req.session,
+      ...(wireBarSize === "15m" ? { hf_session: hfSessionFor(req.session) } : {}),
       estimators: req.estimators,
       windows,
+      ...(req.window === undefined ? {} : { window_start_ms: req.window.startMs, window_end_ms: req.window.endMs }),
       ...(req.rerunOf === undefined ? {} : { rerun_of: req.rerunOf }),
     });
     const liveIvP = this.getLiveIv30(req.symbol, tenorDays);
@@ -97,6 +123,21 @@ export class EdgeApiService {
     }
     const result = await this.jobs.fetchResult<RealizedVsIvResultRaw>(jobId);
     return { ...projectRealizedVsIvResult(result, windows), liveIv30: await liveIvP };
+  }
+
+  /** The window a run of this bar size and session reads when its request names none: the server resolves it from the
+   *  calendar, so the page shows it and counts what the lake lacks over exactly that span, with no calendar of its own. */
+  async getDefaultWindow(barSize: BarSize, session: Session): Promise<DefaultWindow> {
+    const wire = await firstValueFrom(this.http.get<components["schemas"]["RealizedVsIvWindow"]>(
+      "/api/edge/realized-vs-iv/window", { params: { bar_size: WIRE_BAR_SIZE[barSize], session } },
+    ));
+    return {
+      barSize: wire.bar_size === "1d" ? "1D" : "15m",
+      session: wire.session,
+      windowStartMs: wire.window_start_ms,
+      windowEndMs: wire.window_end_ms,
+      sessions: wire.sessions,
+    };
   }
 
   /** Fetch the live IV30 value for `symbol`. Tries `vix-style` first
@@ -189,7 +230,7 @@ function liveResponseToMarker(
 }
 
 /** Why a live-IV request failed, in words: the server's own detail when it sent one, else the HTTP status. */
-function describeFailure(error: unknown): string {
+export function describeFailure(error: unknown): string {
   if (error instanceof HttpErrorResponse) {
     if (error.status === 0) return "the data service did not answer";
     const detail: unknown = (error.error as { detail?: unknown } | null)?.detail;

@@ -187,7 +187,7 @@ export const RESEARCH_STUDIES: readonly StudyDefinition[] = [
     constraints: [
       {
         label: 'Window',
-        value: 'the last year of daily bars, or the last month of intraday bars, ending at the last session whose tape is final, fixed',
+        value: 'the fewest sessions whose bars let a VRP z-score exist (273 daily bars), ending at the last session the study can read, fixed',
       },
     ],
     // The bars are the data lake's (#3525); the recorded IV and the current-IV marker are not. A result's own block replaces

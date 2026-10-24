@@ -40,7 +40,7 @@ export function lakeDataSource(over: Partial<LakeDataSourceRaw> = {}): LakeDataS
     bar_minutes: 1440,
     aggregation: "minute_fold_et_wall_clock_no_fill",
     identity_digest: "a".repeat(64),
-    calculation_version: "realized-vs-iv-study/1",
+    calculation_version: "realized-vs-iv-study/2",
     snapshot_digest: "b".repeat(64),
     coverage: {
       window: { ...emptyGroup, expected_sessions: 40, reused: 30, added: 10 },
@@ -257,5 +257,61 @@ export async function refuseCompute(world: ComputeWorld, refusal: Record<string,
   const refused = refusal["refusal"] as { code: string; reason: string };
   world.jobs.fail(refused.code, refused.reason, refusal);
   await answerLiveIv(world.http);
+  await tick();
+}
+
+/** `GET /api/edge/realized-vs-iv/window`, the path the page asks for the window a run reads. */
+export const WINDOW_PATH = "/api/edge/realized-vs-iv/window";
+
+/** The window the server resolves for a bar size and session: ET midnights, `int64 ms UTC`. */
+export interface WindowAnswer {
+  bar_size?: "15m" | "1d";
+  session?: "rth" | "extended";
+  window_start_ms?: number;
+  window_end_ms?: number;
+  sessions?: number;
+}
+
+/** The window of 273 sessions ending 2024-12-30 that the server resolves for daily bars at 2025-01-01 00:00 UTC. */
+export function windowResponse(asked: { bar_size: "15m" | "1d"; session: "rth" | "extended" }, over: WindowAnswer = {}) {
+  return {
+    window_start_ms: Date.UTC(2023, 10, 29, 5),
+    window_end_ms: Date.UTC(2024, 11, 30, 5),
+    sessions: 273,
+    ...asked,
+    ...over,
+  };
+}
+
+/** A window request the page has open: what it asked for, and the answers a test can give it. */
+export interface WindowRequest {
+  readonly bar_size: string | null;
+  readonly session: string | null;
+  /** Answers with the window the server would resolve for what was asked, over which a test may put its own values. */
+  answer(over?: WindowAnswer): void;
+  fail(body: unknown, status: number): void;
+}
+
+/**
+ * Takes the newest window request the page has open, which is the one it is waiting on. Requests it abandoned for a newer
+ * one (a cancelled request, or an older one whose answer it would ignore) are discarded with it.
+ */
+export function takeWindowRequest(http: HttpTestingController): WindowRequest {
+  const open = http.match((request) => request.url === WINDOW_PATH).filter((request) => !request.cancelled);
+  const request = open[open.length - 1];
+  if (request === undefined) throw new Error("the page has no window request open");
+  const bar_size = request.request.params.get("bar_size");
+  const session = request.request.params.get("session");
+  return {
+    bar_size,
+    session,
+    answer: (over = {}) => request.flush(windowResponse({ bar_size: bar_size as "15m" | "1d", session: session as "rth" | "extended" }, over)),
+    fail: (body, status) => request.flush(body as Record<string, unknown>, { status, statusText: "Unavailable" }),
+  };
+}
+
+/** Answers the newest open window request with the window the server would resolve for what it asked. */
+export async function answerWindow(http: HttpTestingController, over: WindowAnswer = {}): Promise<void> {
+  takeWindowRequest(http).answer(over);
   await tick();
 }

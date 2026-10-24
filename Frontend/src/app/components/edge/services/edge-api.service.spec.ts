@@ -4,10 +4,10 @@ import { provideHttpClient } from "@angular/common/http";
 import { HttpTestingController, provideHttpClientTesting } from "@angular/common/http/testing";
 import { JobsService } from "../../../services/jobs.service";
 import {
-  answerCompute, answerLiveIv, FakeJobs, failCompute, refuseCompute, resultResponse, tick, YZ_RV_BY_WINDOW,
-  type ComputeWorld,
+  answerCompute, answerLiveIv, FakeJobs, failCompute, refuseCompute, resultResponse, tick, WINDOW_PATH, windowResponse,
+  YZ_RV_BY_WINDOW, type ComputeWorld,
 } from "../testing/edge-compute-world";
-import { EdgeApiService, LakeStudyRefusedError } from "./edge-api.service";
+import { EdgeApiService, hfSessionFor, LakeStudyRefusedError } from "./edge-api.service";
 
 function configure(): { service: EdgeApiService; world: ComputeWorld } {
   TestBed.resetTestingModule();
@@ -127,11 +127,48 @@ describe("EdgeApiService.getLiveIv30", () => {
   });
 });
 
+describe("EdgeApiService.getDefaultWindow", () => {
+  let service: EdgeApiService;
+  let httpMock: HttpTestingController;
+
+  beforeEach(() => {
+    ({ service, world: { http: httpMock } } = configure());
+  });
+
+  afterEach(() => httpMock.verify());
+
+  it("asks for the bar size on the wire's spelling and the session, and returns the window the server resolved", async () => {
+    const promise = service.getDefaultWindow("1D", "rth");
+    const req = httpMock.expectOne((request) => request.url === WINDOW_PATH);
+    expect(req.request.method).toBe("GET");
+    expect(req.request.params.get("bar_size")).toBe("1d");
+    expect(req.request.params.get("session")).toBe("rth");
+    req.flush(windowResponse({ bar_size: "1d", session: "rth" }));
+
+    expect(await promise).toEqual({
+      barSize: "1D", session: "rth", windowStartMs: Date.UTC(2023, 10, 29, 5), windowEndMs: Date.UTC(2024, 11, 30, 5), sessions: 273,
+    });
+  });
+
+  it("returns the 15-minute window as 15m, for the session the server says it resolved it for", async () => {
+    const promise = service.getDefaultWindow("15m", "extended");
+    httpMock.expectOne((request) => request.url === WINDOW_PATH).flush(windowResponse({ bar_size: "15m", session: "extended" }, { sessions: 25 }));
+
+    expect(await promise).toMatchObject({ barSize: "15m", session: "extended", sessions: 25 });
+  });
+
+  it("rejects with the HTTP error when the server cannot say, so the page can show why", async () => {
+    const rejection = expect(service.getDefaultWindow("1D", "rth")).rejects.toMatchObject({ status: 503 });
+    httpMock.expectOne((request) => request.url === WINDOW_PATH).flush({ detail: "down" }, { status: 503, statusText: "Unavailable" });
+    await rejection;
+  });
+});
+
 describe("EdgeApiService.computeRealizedVsIv", () => {
   let service: EdgeApiService;
   let world: ComputeWorld;
 
-  const request = { symbol: "SPY", barSize: "1D", tenor: "30D", estimators: ["yz"] } as const;
+  const request = { symbol: "SPY", barSize: "1D", tenor: "30D", estimators: ["yz"], session: "rth" } as const;
 
   beforeEach(() => {
     ({ service, world } = configure());
@@ -140,26 +177,51 @@ describe("EdgeApiService.computeRealizedVsIv", () => {
   afterEach(() => world.http.verify());
 
   it("starts the study on the lake with the bar size and tenor it was asked for, and sends no bars", async () => {
-    const promise = service.computeRealizedVsIv({ ...request, barSize: "15m", tenor: "60D", hfSession: "RTH" });
+    const promise = service.computeRealizedVsIv({ ...request, barSize: "15m", tenor: "60D", session: "rth" });
     await answerCompute(world, { run: { bar_size: "15m", tenor_days: 60, hf_session: "RTH" } });
     await promise;
 
     expect(world.jobs.started).toEqual([
       {
         type: "realized_vs_iv",
-        payload: { symbol: "SPY", bar_size: "15m", tenor_days: 60, hf_session: "RTH", estimators: ["yz"], windows: [5, 10, 30] },
+        payload: { symbol: "SPY", bar_size: "15m", tenor_days: 60, session: "rth", hf_session: "RTH", estimators: ["yz"], windows: [5, 10, 30] },
       },
     ]);
     world.http.expectNone("/api/aggregates/fetch");
   });
 
-  it("sends the daily size as 1d, never as another size, and no HF session, which a daily run has no estimator for", async () => {
-    const promise = service.computeRealizedVsIv({ ...request, hfSession: "RTH" });
+  it("sends the HF estimator's session that follows the session the 15-minute bars are folded from", async () => {
+    const extended = service.computeRealizedVsIv({ ...request, barSize: "15m", session: "extended" });
+    await answerCompute(world, { run: { bar_size: "15m", tenor_days: 30, hf_session: "ETH" } });
+    await extended;
+
+    expect(world.jobs.started[0].payload).toMatchObject({ bar_size: "15m", session: "extended", hf_session: "ETH" });
+    expect(hfSessionFor("rth")).toBe("RTH");
+    expect(hfSessionFor("extended")).toBe("ETH");
+  });
+
+  it("sends the daily size as 1d, never as another size, on regular hours, and no HF session, which a daily run has no estimator for", async () => {
+    const promise = service.computeRealizedVsIv(request);
     await answerCompute(world);
     await promise;
 
     expect(world.jobs.started[0].payload["bar_size"]).toBe("1d");
+    expect(world.jobs.started[0].payload["session"]).toBe("rth");
     expect(world.jobs.started[0].payload).not.toHaveProperty("hf_session");
+  });
+
+  it("sends the window it was given as the ET midnights the server resolved, and none when it was given none", async () => {
+    const window = { startMs: Date.UTC(2023, 10, 29, 5), endMs: Date.UTC(2024, 11, 30, 5) };
+    const named = service.computeRealizedVsIv({ ...request, window });
+    await answerCompute(world);
+    await named;
+    expect(world.jobs.started[0].payload).toMatchObject({ window_start_ms: window.startMs, window_end_ms: window.endMs });
+
+    const unnamed = service.computeRealizedVsIv(request);
+    await answerCompute(world);
+    await unnamed;
+    expect(world.jobs.started[1].payload).not.toHaveProperty("window_start_ms");
+    expect(world.jobs.started[1].payload).not.toHaveProperty("window_end_ms");
   });
 
   it("returns a dataset that says it is real, with missing samples as NaN, the settings the run used, and the lake it read", async () => {

@@ -4,8 +4,11 @@ import { TestBed } from "@angular/core/testing";
 import { provideRouter } from "@angular/router";
 import { render, screen, within } from "@testing-library/angular";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { JobsService } from "../../../services/jobs.service";
+import { DataLakeService, type DataLakeRead, type InstrumentDataReport } from "../../../shared/data-lake";
+import { heldReport } from "../../../shared/data-lake/testing/instrument-data-report";
+import { TradeBackfillRunner, type TradeBackfillEnd } from "../../../shared/data-lake/trade-backfill-runner";
 import { fakePickerWorld } from "../../../shared/symbol-picker/testing/fake-picker-world";
 import type {
   IvConfidenceSummary,
@@ -13,7 +16,8 @@ import type {
   RealizedVsIvData,
 } from "../services/edge-data.model";
 import {
-  answerCompute, failCompute, FakeJobs, lakeDataSource, refuseCompute, tick, YZ_RV_BY_WINDOW, type ComputeWorld,
+  answerCompute, answerWindow, failCompute, FakeJobs, lakeDataSource, refuseCompute, takeWindowRequest, tick, YZ_RV_BY_WINDOW,
+  type ComputeWorld,
 } from "../testing/edge-compute-world";
 import { mapLakeStudyDataSource } from "../../../shared/lake-study/lake-study";
 import { environment } from "../../../../environments/environment";
@@ -22,18 +26,26 @@ import { RealizedVsIvComponent } from "./realized-vs-iv.component";
 
 async function renderPage(inputs: Record<string, unknown> = {}) {
   const jobs = new FakeJobs();
+  // The lake's count of the sessions the window needs (the page reads it once per window), and the shared capture. Left
+  // alone, the lake holds every session, so only the specs about the count see a warning.
+  const instrumentData = vi.fn<(query: unknown) => Promise<DataLakeRead<InstrumentDataReport>>>()
+    .mockResolvedValue({ kind: "ok", value: heldReport({ sessions: 273 }) });
+  const captureRun = vi.fn<(select: unknown, accepted: unknown) => Promise<TradeBackfillEnd>>()
+    .mockResolvedValue({ kind: "completed", failure: null });
   const view = await render(RealizedVsIvComponent, {
     inputs,
     providers: [
       ...fakePickerWorld().providers,
       { provide: JobsService, useValue: jobs },
+      { provide: DataLakeService, useValue: { instrumentData } },
+      { provide: TradeBackfillRunner, useValue: { run: captureRun } },
       provideHttpClient(),
       provideHttpClientTesting(),
       provideRouter([]),
     ],
   });
   const world: ComputeWorld = { http: TestBed.inject(HttpTestingController), jobs };
-  return { ...view, world, user: userEvent.setup() };
+  return { ...view, world, user: userEvent.setup(), instrumentData, captureRun };
 }
 
 /** A real-shaped result, for states that are easier to set than to drive
@@ -68,6 +80,15 @@ function realData(overrides: Partial<RealizedVsIvData> = {}): RealizedVsIvData {
 }
 
 const chartCount = () => document.querySelectorAll("canvas").length;
+
+/** Lets the page's effects and promises run. `fixture.whenStable()` is no use while a request is open: an unanswered
+ *  request is a pending task, and the page always has one open until the test answers it. */
+async function settle(fixture: { detectChanges(): void }): Promise<void> {
+  await tick();
+  fixture.detectChanges();
+  await tick();
+  fixture.detectChanges();
+}
 
 describe("RealizedVsIvComponent — opens idle", () => {
   it("shows no study, no chart and no sample label before anything is computed", async () => {
@@ -110,7 +131,7 @@ describe("RealizedVsIvComponent — the controls show what the run uses", () => 
     await answerCompute(world, { run: { bar_size: "15m", tenor_days: 60, hf_session: "ETH" } });
     fixture.detectChanges();
 
-    expect(world.jobs.started[0].payload).toMatchObject({ bar_size: "15m", tenor_days: 60, hf_session: "ETH" });
+    expect(world.jobs.started[0].payload).toMatchObject({ bar_size: "15m", tenor_days: 60, session: "extended", hf_session: "ETH" });
     expect(select("rviv-bar-size").value).toBe("15m");
     expect(select("rviv-tenor").value).toBe("60D");
     expect(screen.getByTestId("rviv-run-settings").textContent?.replace(/\s+/g, " ").trim()).toBe("15m bars · 60D tenor · HF ETH");
@@ -128,34 +149,101 @@ describe("RealizedVsIvComponent — the controls show what the run uses", () => 
     expect(screen.getByTestId("rviv-run-settings").textContent?.replace(/\s+/g, " ").trim()).toBe("1D bars · 30D tenor");
   });
 
-  it("offers the HF session for 15-minute bars only, since a daily run has no HF estimator", async () => {
+});
+
+describe("RealizedVsIvComponent — the session the bars are folded from", () => {
+  const select = (testId: string) => screen.getByTestId(testId) as HTMLSelectElement;
+  const sessionButton = (name: "RTH" | "Ext") => within(screen.getByTestId("rviv-session")).getByRole("button", { name });
+  const pressed = (name: "RTH" | "Ext") => sessionButton(name).getAttribute("aria-pressed") === "true";
+
+  it("offers the session for 15-minute bars only: daily bars read regular hours and have no choice", async () => {
     const { user } = await renderPage();
-    expect(screen.queryByTestId("rviv-hf-session"), "daily is the opening size").toBeNull();
+    expect(screen.queryByTestId("rviv-session"), "daily is the opening size").toBeNull();
 
     await user.selectOptions(select("rviv-bar-size"), "15m");
-    expect(screen.getByTestId("rviv-hf-session")).toBeTruthy();
+    expect(screen.getByTestId("rviv-session")).toBeTruthy();
 
     await user.selectOptions(select("rviv-bar-size"), "1D");
-    expect(screen.queryByTestId("rviv-hf-session")).toBeNull();
+    expect(screen.queryByTestId("rviv-session")).toBeNull();
   });
 
-  it("sends the HF session the user chose with a 15-minute run", async () => {
+  it("opens a 15-minute run on extended hours, the session the study has always read", async () => {
+    const { user } = await renderPage();
+
+    await user.selectOptions(select("rviv-bar-size"), "15m");
+
+    expect(pressed("Ext")).toBe(true);
+    expect(pressed("RTH")).toBe(false);
+  });
+
+  it("sends extended hours with the HF estimator's ETH session when nothing is changed", async () => {
     const { world, user } = await renderPage();
 
     await user.selectOptions(select("rviv-bar-size"), "15m");
-    await user.click(within(screen.getByTestId("rviv-hf-session")).getByRole("button", { name: "RTH" }));
     await user.click(screen.getByRole("button", { name: "Run study" }));
     await tick();
 
-    expect(world.jobs.started[0].payload).toMatchObject({ bar_size: "15m", hf_session: "RTH" });
+    expect(world.jobs.started[0].payload).toMatchObject({ bar_size: "15m", session: "extended", hf_session: "ETH" });
+  });
+
+  it("sends regular hours with the HF estimator's RTH session when the user chooses RTH", async () => {
+    const { world, user } = await renderPage();
+
+    await user.selectOptions(select("rviv-bar-size"), "15m");
+    await user.click(sessionButton("RTH"));
+    expect(pressed("RTH")).toBe(true);
+    await user.click(screen.getByRole("button", { name: "Run study" }));
+    await tick();
+
+    expect(world.jobs.started[0].payload).toMatchObject({ bar_size: "15m", session: "rth", hf_session: "RTH" });
+  });
+
+  it("sends regular hours for a daily run whatever 15-minute session was chosen before, and no HF session", async () => {
+    const { world, user } = await renderPage();
+    await user.selectOptions(select("rviv-bar-size"), "15m");
+    await user.click(sessionButton("Ext"));
+    await user.selectOptions(select("rviv-bar-size"), "1D");
+
+    await user.click(screen.getByRole("button", { name: "Run study" }));
+    await tick();
+
+    expect(world.jobs.started[0].payload).toMatchObject({ bar_size: "1d", session: "rth" });
+    expect(world.jobs.started[0].payload).not.toHaveProperty("hf_session");
+  });
+
+  it("carries the session into the ready summary", async () => {
+    const { user } = await renderPage();
+    const summary = () => document.querySelector(".study-run__summary")?.textContent?.replace(/\s+/g, " ").trim() ?? "";
+    expect(summary()).toContain("SPY, 1D bars, regular hours, 30D tenor");
+
+    await user.selectOptions(select("rviv-bar-size"), "15m");
+    expect(summary()).toContain("SPY, 15m bars, extended hours, 30D tenor");
+
+    await user.click(sessionButton("RTH"));
+    expect(summary()).toContain("SPY, 15m bars, regular hours, 30D tenor");
+  });
+
+  it("marks a shown result as previous when the session changes, and names the session it answered", async () => {
+    const { world, user, fixture } = await renderPage();
+    await user.selectOptions(select("rviv-bar-size"), "15m");
+    await user.click(screen.getByRole("button", { name: "Run study" }));
+    await answerCompute(world, { run: { bar_size: "15m", tenor_days: 30, hf_session: "ETH" } });
+    fixture.detectChanges();
+    expect(screen.queryByText("Previous result"), "nothing has changed since the run").toBeNull();
+
+    await user.click(sessionButton("RTH"));
+
+    const banner = screen.getByText("Previous result").closest("div");
+    if (banner === null) throw new Error("no previous-result banner");
+    expect(within(banner).getByText("extended hours"), "the session it was computed for").toBeTruthy();
   });
 });
 
 describe("RealizedVsIvComponent — the page says what it will run", () => {
-  it("says its window is fixed instead of offering dates", async () => {
+  it("names the window the study fixes instead of offering dates", async () => {
     await renderPage();
 
-    expect(screen.getByTestId("study-constraints").textContent).toContain("the last year of daily bars");
+    expect(screen.getByTestId("study-constraints").textContent).toContain("273 daily bars");
   });
 });
 
@@ -168,7 +256,7 @@ describe("RealizedVsIvComponent — one press, one run", () => {
     await user.click(screen.getByRole("button", { name: "RTH" }));
 
     expect(world.jobs.started).toHaveLength(0);
-    world.http.expectNone(() => true);
+    world.http.expectNone((request) => request.url.startsWith("/api/edge/iv30"));
   });
 
   it("starts one job when the second click lands before the page has re-rendered", async () => {
@@ -710,22 +798,28 @@ describe("RealizedVsIvComponent — live IV30 readout", () => {
 });
 
 describe("RealizedVsIvComponent — rerun from a saved run", () => {
-  it("fills the inputs from the saved run and starts nothing, then names the run when Run study is pressed", async () => {
-    const { world, user, fixture } = await renderPage({ rerun: RECORD_ID });
-    world.http
-      .expectOne(`${environment.pythonServiceUrl}/api/research/study-records/realized-vs-iv/${RECORD_ID}`)
-      .flush(
-        storedRecord("realized-vs-iv", {
-          inputs: { ...RVIV_INPUTS, symbol: "qqq", bar_size: "15m", tenor_days: 60, hf_session: "RTH" } as never,
-        }),
-      );
+  const recordUrl = `${environment.pythonServiceUrl}/api/research/study-records/realized-vs-iv/${RECORD_ID}`;
+
+  async function rerunWith(inputs: Record<string, unknown>) {
+    const page = await renderPage({ rerun: RECORD_ID });
+    page.world.http.expectOne(recordUrl).flush(storedRecord("realized-vs-iv", { inputs: { ...RVIV_INPUTS, ...inputs } as never }));
     await tick();
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await settle(page.fixture);
+    return page;
+  }
+
+  const pressedSession = () => {
+    const group = screen.queryByTestId("rviv-session");
+    if (group === null) return null;
+    return ["RTH", "Ext"].find((name) => within(group).getByRole("button", { name }).getAttribute("aria-pressed") === "true") ?? null;
+  };
+
+  it("fills the inputs from the saved run and starts nothing, then names the run when Run study is pressed", async () => {
+    const { world, user } = await rerunWith({ symbol: "qqq", bar_size: "15m", tenor_days: 60, session: "rth", hf_session: "RTH" });
 
     expect((screen.getByLabelText("Bar size") as HTMLSelectElement).value).toBe("15m");
     expect((screen.getByLabelText("Tenor") as HTMLSelectElement).value).toBe("60D");
-    expect(screen.getByRole("button", { name: "RTH" }).classList.contains("on")).toBe(true);
+    expect(pressedSession()).toBe("RTH");
     expect(screen.getByTestId("study-prefill").textContent).toContain("Nothing has run");
     expect(world.jobs.started).toHaveLength(0);
 
@@ -733,7 +827,209 @@ describe("RealizedVsIvComponent — rerun from a saved run", () => {
     await tick();
 
     expect(world.jobs.started[0].payload).toMatchObject({
-      symbol: "QQQ", bar_size: "15m", tenor_days: 60, hf_session: "RTH", rerun_of: RECORD_ID,
+      symbol: "QQQ", bar_size: "15m", tenor_days: 60, session: "rth", hf_session: "RTH", rerun_of: RECORD_ID,
     });
+  });
+
+  it("fills extended hours for a 15-minute run that names its session extended", async () => {
+    await rerunWith({ bar_size: "15m", session: "extended", hf_session: "ETH" });
+
+    expect(pressedSession()).toBe("Ext");
+  });
+
+  it("fills extended hours for a 15-minute run saved before runs named their session, which read extended hours", async () => {
+    await rerunWith({ bar_size: "15m", session: null, hf_session: "ETH" });
+
+    expect(pressedSession()).toBe("Ext");
+  });
+
+  it("fills a daily run, which has no session control, and runs it on regular hours", async () => {
+    const { world, user } = await rerunWith({ bar_size: "1d", session: null, hf_session: "ETH" });
+
+    expect(pressedSession(), "daily bars have no session control").toBeNull();
+    await user.click(screen.getByRole("button", { name: "Run study" }));
+    await tick();
+    expect(world.jobs.started[0].payload).toMatchObject({ bar_size: "1d", session: "rth" });
+  });
+
+  it.each([
+    ["extended bars with the HF estimator on RTH, which the one session control cannot say", { bar_size: "15m", session: null, hf_session: "RTH" }, /HF estimator on RTH/],
+    ["regular-hours bars with the HF estimator on ETH", { bar_size: "15m", session: "rth", hf_session: "ETH" }, /HF estimator on ETH/],
+    ["a daily run on extended hours", { bar_size: "1d", session: "extended" }, /daily bars read regular hours only/],
+    ["a session the page does not offer", { bar_size: "15m", session: "overnight", hf_session: "ETH" }, /not a session this page offers/],
+  ])("fills nothing for %s, and says why", async (_name, inputs, reason) => {
+    await rerunWith({ symbol: "qqq", tenor_days: 60, ...inputs });
+
+    expect(screen.getByTestId("study-prefill").textContent).toMatch(reason);
+    expect((screen.getByLabelText("Tenor") as HTMLSelectElement).value, "the page is as it was").toBe("30D");
+  });
+});
+
+describe("RealizedVsIvComponent — the window a run reads", () => {
+  const windowText = () => screen.getByTestId("rviv-window").textContent?.replace(/\s+/g, " ").trim();
+
+  it("asks the server which window a run reads, for the bar size and session on screen, and shows the answer", async () => {
+    const { world, user, fixture } = await renderPage();
+    await settle(fixture);
+    expect(screen.getByTestId("rviv-window-reading")).toBeTruthy();
+
+    const daily = takeWindowRequest(world.http);
+    expect(daily).toMatchObject({ bar_size: "1d", session: "rth" });
+    daily.answer();
+    await settle(fixture);
+
+    expect(windowText()).toContain("2023-11-29 to 2024-12-30");
+    expect(screen.getByTestId("rviv-window-note").textContent).toBe("273 sessions, regular hours");
+
+    await user.selectOptions(screen.getByTestId("rviv-bar-size"), "15m");
+    await settle(fixture);
+    expect(takeWindowRequest(world.http)).toMatchObject({ bar_size: "15m", session: "extended" });
+  });
+
+  it("asks again, for regular hours, when the session is changed, and shows that window", async () => {
+    const { world, user, fixture } = await renderPage();
+    await user.selectOptions(screen.getByTestId("rviv-bar-size"), "15m");
+    await settle(fixture);
+    takeWindowRequest(world.http).answer({ sessions: 25 });
+    await settle(fixture);
+    expect(screen.getByTestId("rviv-window-note").textContent).toBe("25 sessions, extended hours");
+
+    await user.click(within(screen.getByTestId("rviv-session")).getByRole("button", { name: "RTH" }));
+    await settle(fixture);
+    const regular = takeWindowRequest(world.http);
+    expect(regular).toMatchObject({ bar_size: "15m", session: "rth" });
+    regular.answer({ sessions: 31 });
+    await settle(fixture);
+
+    expect(screen.getByTestId("rviv-window-note").textContent).toBe("31 sessions, regular hours");
+  });
+
+  it("shows no window for a bar size or session the answer was not for, while the new one is read", async () => {
+    const { world, user, fixture } = await renderPage();
+    await answerWindow(world.http);
+    fixture.detectChanges();
+    expect(screen.queryByTestId("rviv-window-note")).toBeTruthy();
+
+    await user.selectOptions(screen.getByTestId("rviv-bar-size"), "15m");
+    fixture.detectChanges();
+
+    expect(screen.queryByTestId("rviv-window-note"), "the daily window is not the 15-minute run's").toBeNull();
+    expect(screen.getByTestId("rviv-window-reading")).toBeTruthy();
+  });
+
+  it("sends the window it showed with the run, so the run reads exactly the span that was counted", async () => {
+    const { world, user, fixture } = await renderPage();
+    await answerWindow(world.http);
+    fixture.detectChanges();
+
+    await user.click(screen.getByRole("button", { name: "Run study" }));
+    await tick();
+
+    expect(world.jobs.started[0].payload).toMatchObject({
+      window_start_ms: Date.UTC(2023, 10, 29, 5), window_end_ms: Date.UTC(2024, 11, 30, 5),
+    });
+  });
+
+  it("says when the window cannot be read, and still runs, leaving the server to pick it", async () => {
+    const { world, user, fixture } = await renderPage();
+    await settle(fixture);
+    takeWindowRequest(world.http).fail({ detail: "the calendar is down" }, 503);
+    await settle(fixture);
+
+    expect(screen.getByTestId("rviv-window-error").textContent).toContain("503 the calendar is down");
+
+    await user.click(screen.getByRole("button", { name: "Run study" }));
+    await tick();
+    expect(world.jobs.started[0].payload).not.toHaveProperty("window_start_ms");
+    expect(world.jobs.started[0].payload).not.toHaveProperty("window_end_ms");
+  });
+
+  it("marks a result as previous once the window it answered is not the one on screen", async () => {
+    const { world, user, fixture } = await renderPage();
+    await answerWindow(world.http);
+    fixture.detectChanges();
+    await user.click(screen.getByRole("button", { name: "Run study" }));
+    await answerCompute(world);
+    fixture.detectChanges();
+    expect(screen.queryByText("Previous result")).toBeNull();
+
+    await user.selectOptions(screen.getByTestId("rviv-bar-size"), "15m");
+    await user.selectOptions(screen.getByTestId("rviv-bar-size"), "1D");
+    await settle(fixture);
+    await answerWindow(world.http, { window_end_ms: Date.UTC(2024, 11, 31, 5), sessions: 274 });
+    fixture.detectChanges();
+
+    const banner = screen.getByText("Previous result").closest("div");
+    if (banner === null) throw new Error("no previous-result banner");
+    expect(within(banner).getByText("2023-11-29 to 2024-12-30"), "the window it was computed over").toBeTruthy();
+  });
+});
+
+describe("RealizedVsIvComponent — sessions the lake does not hold yet", () => {
+  const lacking = (missing: number) => ({ kind: "ok" as const, value: heldReport({ sessions: 273, missing }) });
+  const warning = () => screen.queryByText(/in the lake yet/);
+
+  async function renderWithWindow(read: DataLakeRead<InstrumentDataReport>) {
+    const page = await renderPage();
+    page.instrumentData.mockResolvedValue(read);
+    await answerWindow(page.world.http);
+    page.fixture.detectChanges();
+    await vi.waitFor(() => expect(page.instrumentData).toHaveBeenCalledTimes(1));
+    await settle(page.fixture);
+    return page;
+  }
+
+  it("counts the sessions of the window the server named, for the instrument on screen, in the split-adjusted tree", async () => {
+    const { instrumentData } = await renderWithWindow(lacking(0));
+
+    expect(instrumentData).toHaveBeenCalledWith({ symbol: "SPY", from: "2023-11-29", to: "2024-12-30", tree: "polygon_split_adjusted" });
+    expect(warning(), "the lake holds it all, so the page says nothing").toBeNull();
+  });
+
+  it("reads nothing until the server has named the window: the browser works out no span of its own", async () => {
+    const { instrumentData, fixture } = await renderPage();
+    await settle(fixture);
+
+    expect(instrumentData).not.toHaveBeenCalled();
+  });
+
+  it("warns how many of the run’s sessions the lake lacks and why the first run is slow, with an action to capture them", async () => {
+    await renderWithWindow(lacking(12));
+
+    expect(warning()?.textContent).toBe("12 of 273 sessions aren’t in the lake yet.");
+    expect(screen.getByText("The first run fetches them one session at a time, so it will be slow.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Capture 12 sessions" })).toBeTruthy();
+  });
+
+  it("starts no capture by itself, and does not hold up Run study", async () => {
+    const { world, user, captureRun } = await renderWithWindow(lacking(12));
+
+    expect(captureRun).not.toHaveBeenCalled();
+    expect((screen.getByRole("button", { name: "Run study" }) as HTMLButtonElement).disabled).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Run study" }));
+    await tick();
+    expect(world.jobs.started).toHaveLength(1);
+  });
+
+  it("counts again for the next window when the bar size or session changes it, and again when a run ends", async () => {
+    const { world, user, fixture, instrumentData } = await renderWithWindow(lacking(12));
+
+    await user.selectOptions(screen.getByTestId("rviv-bar-size"), "15m");
+    await settle(fixture);
+    await answerWindow(world.http, { window_start_ms: Date.UTC(2024, 10, 22, 5), sessions: 25 });
+    fixture.detectChanges();
+    await vi.waitFor(() => expect(instrumentData).toHaveBeenCalledTimes(2));
+    expect(instrumentData).toHaveBeenLastCalledWith({ symbol: "SPY", from: "2024-11-22", to: "2024-12-30", tree: "polygon_split_adjusted" });
+
+    await user.click(screen.getByRole("button", { name: "Run study" }));
+    await answerCompute(world, { run: { bar_size: "15m", tenor_days: 30, hf_session: "ETH" } });
+    await vi.waitFor(() => expect(instrumentData).toHaveBeenCalledTimes(3));
+  });
+
+  it("says the count could not be read, and that Run study still works", async () => {
+    await renderWithWindow({ kind: "unavailable", reason: "network", message: "offline" } as never);
+
+    expect(screen.getByText("Could not check which of this run’s sessions the lake holds.")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Run study" }) as HTMLButtonElement).disabled).toBe(false);
   });
 });
