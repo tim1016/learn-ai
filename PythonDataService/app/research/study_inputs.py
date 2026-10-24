@@ -81,6 +81,9 @@ logger = logging.getLogger(__name__)
 SessionPolicy = CaptureSession
 AdjustmentMode = Literal["raw", "polygon_split_adjusted"]
 
+#: The fold rule a study names in its identity: what a coarser bar is made of (see :func:`fold_minute_bars`).
+FOLD_RULE = "minute_fold_et_wall_clock_no_fill"
+
 #: What admission concludes about one required session.
 SessionOutcome = Literal["ready", "missing", "building", "corrupt", "unavailable_from_provider"]
 
@@ -325,6 +328,11 @@ class AdmittedMinuteInputs:
     @property
     def snapshot_digest(self) -> str:
         return self.snapshot.digest()
+
+    @property
+    def window_sessions(self) -> tuple[date, ...]:
+        """The scheduled sessions of the window itself (the warmup sessions that precede it excluded)."""
+        return self.snapshot.sessions[self.identity.warmup_sessions :]
 
 
 @dataclass
@@ -668,7 +676,8 @@ def fold_minute_bars(bars: Iterable[TradeBar], bar_minutes: int) -> list[TradeBa
       at references/lean/7986ed0aade3ae5de06121682409f05984e32ff7 and ported
       in the engine's consolidator.
     Canonical implementation: app/engine/consolidators/trade_bar_consolidator.py
-      (this function drives it and flushes the trailing bucket).
+      (this function drives it and flushes the trailing bucket). ``FOLD_RULE``
+      is the name a study's identity gives this rule.
     Validated against: tests/research/test_study_inputs.py::test_fold_matches_an_independent_pandas_reference
     """
     series = list(bars)
