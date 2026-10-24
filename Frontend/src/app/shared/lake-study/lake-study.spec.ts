@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   mapLakeStudyDataSource,
   readLakeStudyRefusal,
+  sessionPolicyWords,
   toDataSourceProvenance,
   type LakeCoverageGroupRaw,
   type LakeDataSourceRaw,
@@ -148,5 +149,12 @@ describe('lake study refusal payload', () => {
     ['a refusal status without a refusal', { status: 'refused' }],
   ])('is not a refusal when the payload is %s', (_label, payload) => {
     expect(readLakeStudyRefusal(payload)).toBeNull();
+  });
+});
+
+describe('the session a request asks for', () => {
+  it('words each session for a reader', () => {
+    expect.soft(sessionPolicyWords('regular')).toBe('regular hours');
+    expect.soft(sessionPolicyWords('extended')).toBe('extended hours');
   });
 });

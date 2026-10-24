@@ -33,10 +33,13 @@ A day captured before the study's session policy finished forming
 and nothing in the lake refreshes a committed day. Admission refuses it as
 ``captured_before_final`` and asks the vendor for nothing — it neither computes
 on that tape nor rewrites the day, which every other reader of the lake shares.
-Re-capturing such a day is an owner decision (``docs/known-gaps.md``). A study
-starts only a claim lease after a session's final instant, so a capture it makes
-itself is one that rule calls final, and a writer that claimed before the final
-instant has published or expired.
+A held early day stays refused: there is no re-capture path (``docs/known-gaps.md``). The lake keeps
+one copy of a day for every reader, so a study that has to capture a day starts only a claim lease after the day's
+*extended* final instant, whatever session it reads: a capture it makes itself is then one that rule calls final
+for every reader, and a writer that claimed before the final instant has published or expired. A regular-hours
+study that finds the day held waits only for its own session's final instant plus that lease, and a regular-hours
+study that would have to capture it first refuses (``window_not_complete``) rather than write a day an
+extended-hours study then refuses for good.
 
 Lead-in. A study that warms up on sessions before its window may let the
 lead-in start late (``lead_in="trim_unsupplied_prefix"``): the oldest lead-in
@@ -76,7 +79,14 @@ import asyncpg
 from app.data_lake import catalog_client
 from app.data_lake.adjustment_versions import AdjustmentVersionError, adjusted_root_for, companion_path
 from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
-from app.data_lake.capture_finality import CLAIM_LEASE_MS, CaptureSession, capture_final_ms, captured_early
+from app.data_lake.capture_finality import (
+    AFTER_HOURS_TAIL_MS,
+    CLAIM_LEASE_MS,
+    VENDOR_DELAY_MS,
+    CaptureSession,
+    capture_final_ms,
+    captured_early,
+)
 from app.data_lake.catalog_client import CatalogUnavailableError
 from app.data_lake.path_policy import LeanMinuteBarPath
 from app.data_lake.polygon_fetcher import polygon_history_floor
@@ -620,7 +630,8 @@ def admit_minute_inputs(
     required = [*lead, *window]
     # A capture counts as final only from its completion less the claim lease (``captured_early``). A study that
     # starts a lease after the final instant sees every live claim taken after it (none is renewed, and an expired
-    # one cannot publish), and every capture it makes itself is final under that rule.
+    # one cannot publish). This is the gate for reading; a study that has to capture a day waits for the extended
+    # instant too (below), so every capture it makes itself is final for every reader.
     live = [day for day in required if now < capture_final_ms(day, identity.session_policy) + CLAIM_LEASE_MS]
     if live:
         raise StudyInputRefusal(
@@ -668,7 +679,21 @@ def admit_minute_inputs(
     fixable = [day for day in needs_work if day >= floor and first_read[day].repairable]
     materialization: MinuteWindowMaterialization | None = None
     if fixable and len(fixable) == len(needs_work):
-        # Only a request the lake can complete is worth the provider's calls.
+        # Only a request the lake can complete is worth the provider's calls. A capture writes the day for every
+        # reader, so whatever session this study reads it waits for the extended tape too: a regular-hours capture
+        # taken in the hours after the close would read as final to the next extended-hours study and be refused.
+        unsettled = [day for day in fixable if now < capture_final_ms(day, "extended") + CLAIM_LEASE_MS]
+        if unsettled:
+            raise StudyInputRefusal(
+                "window_not_complete",
+                f"{len(unsettled)} session(s) the lake would have to capture have not finished forming for every "
+                f"reader (from {unsettled[0].isoformat()}): the lake keeps one copy of a day, which an extended-hours "
+                "study reads whole, so a day is captured only once its after-hours tape is final too (the close, plus "
+                f"{AFTER_HOURS_TAIL_MS // 3_600_000} hours of after-hours, plus the vendor's "
+                f"{VENDOR_DELAY_MS // 60_000}-minute delay, plus the "
+                f"{CLAIM_LEASE_MS // 60_000} minutes a capture begun before then may still be publishing). End the "
+                "window on an earlier session, or run it later.",
+            )
         try:
             materialization = materialize_minute_window(
                 symbol=symbol,

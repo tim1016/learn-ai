@@ -1,0 +1,49 @@
+<app-signal-strategy-section
+  title="Registry corpus point"
+  scope="The settings this strategy's program was validated at. It is the registry's declaration, not an approval of any symbol."
+  [read]="declared"
+>
+  @if (corpusPoint(); as pairs) {
+    <p class="note">
+      Validated for {{ entry().validated_symbols.length > 0 ? entry().validated_symbols.join(', ') : 'no symbol named' }}:
+    </p>
+    <p class="mono">{{ pairs.join(' · ') }}</p>
+  } @else {
+    <p class="note">This program declares no validated settings.</p>
+  }
+</app-signal-strategy-section>
+
+<app-signal-strategy-section
+  title="Reviewed configurations"
+  scope="A person's review of one symbol with one exact configuration. A review covers that symbol and those values only."
+  [read]="reviews()"
+  (retry)="retry.emit()"
+>
+  @if (reviews(); as state) {
+    @if (state.kind === 'ready') {
+      @if (rows().length === 0) {
+        <p class="note">No configuration has been reviewed for this strategy.</p>
+      } @else {
+        <table class="rows">
+          <thead>
+            <tr><th>Symbol</th><th>Review</th><th>Classification</th><th>Configuration</th><th>Run</th></tr>
+          </thead>
+          <tbody>
+            @for (row of rows(); track row.id) {
+              <tr>
+                <td><app-asset-identity [symbol]="row.symbol" size="sm" /></td>
+                <td>{{ row.review }}</td>
+                <td>{{ row.classification === null ? 'none yet' : (row.classification | receiptLabel) }}</td>
+                <td class="mono">{{ row.parameters === null ? 'not recorded' : row.parameters.join(' · ') }}</td>
+                <td>#{{ row.sourceRunId }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+        @if (mayBeCut()) {
+          <p class="note">The read returns at most {{ listLimit }} reviews, so older ones may not be listed here.</p>
+        }
+      }
+    }
+  }
+</app-signal-strategy-section>

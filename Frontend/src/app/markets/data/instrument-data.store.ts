@@ -1,50 +1,42 @@
 import { DestroyRef, Injectable, computed, inject, signal } from '@angular/core';
 
 import { DataLabWorkspaceStore } from '../../components/data-lab/data-lab-workspace-store';
-import { DataLakeService, describeFailure, type InstrumentDataReport } from '../../shared/data-lake';
-import type { BackfillJobRun } from '../../shared/data-lake/backfill-job-runner';
-import { TradeBackfillRunner } from '../../shared/data-lake/trade-backfill-runner';
+import {
+  DataLakeService,
+  describeFailure,
+  sameInstrumentDataRequest,
+  type InstrumentDataReport,
+  type InstrumentDataRequest,
+} from '../../shared/data-lake';
+import { createFillWindowCapture } from '../../shared/data-lake/capture-fill-window';
 import { ReturnsStudyHold } from '../returns/returns-study-hold';
-import { fillReport, type AdjustmentTree, type FillEnd, type FillReport } from './instrument-data';
-
-/** What Python is asked about: one instrument's whole-day minute bars over a window, in one lake tree. */
-export interface InspectionRequest {
-  readonly symbol: string;
-  /** `YYYY-MM-DD`, both included: the committed window as the date picker holds it. */
-  readonly from: string;
-  readonly to: string;
-  readonly tree: AdjustmentTree;
-}
+import { fillReport, type FillEnd, type FillReport } from './instrument-data';
 
 export type Inspection =
   | { readonly kind: 'idle' }
-  | { readonly kind: 'checking'; readonly request: InspectionRequest }
-  | { readonly kind: 'read'; readonly request: InspectionRequest; readonly report: InstrumentDataReport }
+  | { readonly kind: 'checking'; readonly request: InstrumentDataRequest }
+  | { readonly kind: 'read'; readonly request: InstrumentDataRequest; readonly report: InstrumentDataReport }
   /** Python refused the request and said why; nothing is substituted for it. */
-  | { readonly kind: 'refused'; readonly request: InspectionRequest; readonly reason: string; readonly message: string }
-  | { readonly kind: 'unavailable'; readonly request: InspectionRequest; readonly message: string };
-
-/** How far a running Fill's job has got, in the sessions the server counted. */
-export interface FillProgress {
-  readonly done: number;
-  readonly total: number;
-}
+  | { readonly kind: 'refused'; readonly request: InstrumentDataRequest; readonly reason: string; readonly message: string }
+  | { readonly kind: 'unavailable'; readonly request: InstrumentDataRequest; readonly message: string };
 
 export type FillState =
   | { readonly kind: 'idle' }
-  | { readonly kind: 'running'; readonly request: InspectionRequest; readonly sessions: number }
+  | {
+      readonly kind: 'running';
+      readonly request: InstrumentDataRequest;
+      readonly sessions: number;
+      /** Why the server could not be told to stop the job, when it refused a cancel; the job may still be writing. */
+      readonly cancelRefused: string | null;
+    }
   | {
       readonly kind: 'ended';
-      readonly request: InspectionRequest;
+      readonly request: InstrumentDataRequest;
       readonly end: FillEnd;
       /** The lake's reading after the job, set against the one before it. `null` when it could not be read again. */
       readonly report: FillReport | null;
       readonly rereadProblem: string | null;
     };
-
-function sameRequest(a: InspectionRequest, b: InspectionRequest): boolean {
-  return a.symbol === b.symbol && a.from === b.from && a.to === b.to && a.tree === b.tree;
-}
 
 /**
  * What an instrument's place knows about its data: Python's last reading of the
@@ -63,13 +55,12 @@ function sameRequest(a: InspectionRequest, b: InspectionRequest): boolean {
 @Injectable()
 export class InstrumentDataStore {
   private readonly lake = inject(DataLakeService);
-  private readonly runner = inject(TradeBackfillRunner);
+  private readonly capture = createFillWindowCapture();
   private readonly workspace = inject(DataLabWorkspaceStore);
   private readonly returnsHold = inject(ReturnsStudyHold);
 
   private readonly inspectionState = signal<Inspection>({ kind: 'idle' });
   private readonly fillState = signal<FillState>({ kind: 'idle' });
-  private readonly jobState = signal<BackfillJobRun | null>(null);
   /** Counts the readings asked for; an answer applies only while it is the latest. */
   private turn = 0;
   private destroyed = false;
@@ -78,41 +69,31 @@ export class InstrumentDataStore {
   readonly fill = this.fillState.asReadonly();
   readonly filling = computed(() => this.fillState().kind === 'running');
   /** The running job's own progress, from the server's ticks. */
-  readonly progress = computed<FillProgress | null>(() => {
-    const state = this.jobState()?.state();
-    const tick = state?.progress ?? null;
-    return tick === null ? null : { done: tick.current, total: tick.total };
-  });
+  readonly progress = this.capture.progress;
 
   constructor() {
+    // Leaving the place stops watching the job, never the job (the capture does that); a late answer is dropped.
     inject(DestroyRef).onDestroy(() => {
       this.destroyed = true;
-      // Leaving the place stops watching, never the job: it goes on writing, as the picker's gate leaves it.
-      this.jobState()?.detach();
     });
   }
 
   /** Reads the request unless that is what this place already holds or is already reading. */
-  show(request: InspectionRequest): void {
+  show(request: InstrumentDataRequest): void {
     const held = this.inspectionState();
-    if (held.kind !== 'idle' && sameRequest(held.request, request) && held.kind !== 'unavailable') return;
+    if (held.kind !== 'idle' && sameInstrumentDataRequest(held.request, request) && held.kind !== 'unavailable') return;
     void this.read(request);
   }
 
   /** Reads the request again, whatever is held: the explicit Check. */
-  check(request: InspectionRequest): void {
+  check(request: InstrumentDataRequest): void {
     void this.read(request);
   }
 
-  private async read(request: InspectionRequest): Promise<void> {
+  private async read(request: InstrumentDataRequest): Promise<void> {
     const turn = ++this.turn;
     this.inspectionState.set({ kind: 'checking', request });
-    const reading = await this.lake.instrumentData({
-      symbol: request.symbol,
-      startTradingDate: request.from,
-      endTradingDate: request.to,
-      priceAdjustmentMode: request.tree,
-    });
+    const reading = await this.lake.instrumentData(request);
     if (turn !== this.turn || this.destroyed) return;
     if (reading.kind === 'ok') {
       this.inspectionState.set({ kind: 'read', request, report: reading.value });
@@ -136,40 +117,23 @@ export class InstrumentDataStore {
    */
   async startFill(): Promise<void> {
     const held = this.inspectionState();
+    // A Fill stays `running` until its job has ended, a cancel the server refused included, so this one guard holds.
     if (held.kind !== 'read' || this.fillState().kind === 'running') return;
     const { request, report: before } = held;
     const window = before.fill_window;
     if (window === null || window === undefined) return;
-    this.fillState.set({ kind: 'running', request, sessions: before.summary.fetchable });
+    this.fillState.set({ kind: 'running', request, sessions: before.summary.fetchable, cancelRefused: null });
     // Not a new turn: a reading of any request started while this Fill runs keeps the screen.
     const turn = this.turn;
 
-    const outcome = await this.runner.run(
-      () => ({
-        symbol: request.symbol,
-        price_adjustment_mode: request.tree,
-        start_trading_date_ms: window.start_trading_date_ms,
-        end_trading_date_ms: window.end_trading_date_ms,
-      }),
-      (job) => {
-        if (this.destroyed) return false;
-        this.jobState.set(job);
-        return true;
-      },
-    );
-    this.jobState.set(null);
-    if (this.destroyed || outcome.kind === 'detached') {
+    const outcome = await this.capture.run(request, window);
+    if (outcome.kind === 'detached') {
       if (!this.destroyed) this.fillState.set({ kind: 'idle' });
       return;
     }
     const end: FillEnd = outcome.kind === 'completed' ? { kind: 'completed' } : outcome;
 
-    const reading = await this.lake.instrumentData({
-      symbol: request.symbol,
-      startTradingDate: request.from,
-      endTradingDate: request.to,
-      priceAdjustmentMode: request.tree,
-    });
+    const reading = await this.lake.instrumentData(request);
     if (this.destroyed) return;
     if (reading.kind !== 'ok') {
       this.fillState.set({
@@ -192,9 +156,14 @@ export class InstrumentDataStore {
     this.fillState.set({ kind: 'ended', request, end, report, rereadProblem: null });
   }
 
-  /** Asks the server to cancel the running job; what it had written stays, and the report says so. */
+  /**
+   * Asks the server to cancel the running job; what it had written stays, and the report says so. A server that
+   * could not be told is said so beside the running Fill, which is still what the job is doing.
+   */
   async cancelFill(): Promise<void> {
-    await this.jobState()?.cancel();
+    const refused = await this.capture.cancel();
+    if (refused === null) return;
+    this.fillState.update((state) => (state.kind === 'running' ? { ...state, cancelRefused: refused } : state));
   }
 
   /** Puts the last Fill's report away. */

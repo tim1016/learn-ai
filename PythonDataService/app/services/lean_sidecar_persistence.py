@@ -35,7 +35,7 @@ from app.models.responses import (
     LeanStatisticsResponse,
     LeanTradeStatsResponse,
 )
-from app.research.backtest_runs.records import persisted_execution_configuration
+from app.research.backtest_runs.records import USER_PROVIDED_ALGORITHM_NAME, persisted_execution_configuration
 from app.research.documentation.analytical_metric_catalog import metric_documentation_context_for_source
 from app.schemas.run_verdict import RunVerdictCleanliness
 from app.services.engine_validation_analytics import (
@@ -268,8 +268,8 @@ def _algorithm_name_for_run(template: str | None, algorithm_source: str | None) 
     template is in play, its name is used verbatim.
     """
     if algorithm_source:
-        return "user_provided"
-    return template or "user_provided"
+        return USER_PROVIDED_ALGORITHM_NAME
+    return template or USER_PROVIDED_ALGORITHM_NAME
 
 
 def _data_policy_json_from_manifest(

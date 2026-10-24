@@ -15,7 +15,7 @@ export const OPTION_SETUP: ServedSetup = {
   legs: [{ leg_id: 'call', side: 'buy', right: 'call', contracts: 1, expiry: { kind: 'this_week' }, strike: { kind: 'atm' }, stop_loss: { kind: 'percent', value: '25' } },
     { leg_id: 'put', side: 'buy', right: 'put', contracts: 1, expiry: { kind: 'this_week' }, strike: { kind: 'atm' }, stop_loss: { kind: 'percent', value: '25' } }],
 };
-export const SAVED_OPTION_SETUP: SavedSetup = { name: 'Saved two-leg study', setup: OPTION_SETUP, example: false, saved_at_ms: 1791294000000, cannot_open_reason: null };
+export const SAVED_OPTION_SETUP: SavedSetup = { name: 'Saved two-leg study', setup: OPTION_SETUP, setup_sha256: 'a'.repeat(64), example: false, saved_at_ms: 1791294000000, cannot_open_reason: null };
 const DECLARATIONS: SearchDeclarations = {
   setup_name: SAVED_OPTION_SETUP.name, setup: OPTION_SETUP, setup_hash: 'a'.repeat(64),
   history_bounds: { start_ms: 1704171600000, end_ms: 1790999999999 },
@@ -75,6 +75,10 @@ export async function installOptionsSearchWorld(page: Page, initial: OptionsStud
     const path = url.pathname;
     const fulfill = (json: unknown, status = 200) => route.fulfill({ status, json, headers: { 'Access-Control-Allow-Origin': '*' } });
     if (path === '/api/research/options-backtest/setups') await fulfill([SAVED_OPTION_SETUP]);
+    else if (path === '/api/research/options-backtest/setup-index') {
+      // The Golden tab finds a saved setup's evidence by the hash of its content (the saved setup lists it): this one has recorded none.
+      await fulfill({ read_at_ms: 1791294000000, runs: [], runs_total: 0, studies: [], studies_total: 0, approvals: [], approvals_total: 0 });
+    }
     else if (path === '/api/calendar/sessions') {
       // Pinned fixture sessions containing the dates typed in this browser test.
       await fulfill({ session_open_ms: [1704205800000, 1789738200000], session_close_ms: [1704229200000, 1789761600000], holidays: [] });
@@ -83,8 +87,6 @@ export async function installOptionsSearchWorld(page: Page, initial: OptionsStud
     else if (path === `${OPTIONS_SEARCH_API}/preflight`) { preflights.push(request.postDataJSON()); await fulfill(PREFLIGHT); }
     else if (path === `${OPTIONS_SEARCH_API}/studies` && request.method() === 'POST') {
       locks.push(request.postDataJSON()); current = lockedOptionsStudy(); await fulfill(publicStudy());
-    } else if (path === `${OPTIONS_SEARCH_API}/studies`) {
-      await fulfill(current === null ? [] : [{ id: current.id, setup_name: current.setup_name, underlying: current.underlying, phase: current.phase, status: current.status, updated_at_ms: 1791294000000 }]);
     } else if (path === `${OPTIONS_SEARCH_API}/studies/${OPTIONS_SEARCH_ID}` && current !== null) await fulfill(publicStudy());
     else if (path === `${OPTIONS_SEARCH_API}/studies/${OPTIONS_SEARCH_ID}/commands` && current !== null) {
       const body: StudyCommand = request.postDataJSON();

@@ -1,4 +1,4 @@
-import { signal } from '@angular/core';
+import { signal, type Provider } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { By } from '@angular/platform-browser';
@@ -7,7 +7,7 @@ import { fakePickerWorld } from '../../../shared/symbol-picker/testing/fake-pick
 import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
 import { render, screen, fireEvent } from '@testing-library/angular';
 import { of } from 'rxjs';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import type { BrokerAccountSnapshot } from '../../../api/alpaca.types';
 import { AlpacaDeployWorkflowComponent } from '../../broker/broker-deploy-page/alpaca-deploy-workflow.component';
@@ -16,6 +16,9 @@ import { AlpacaDeskAccountDataService } from '../alpaca-desk/alpaca-desk-account
 import { BrokerV2PanelService, type DeployBotBody } from '../../broker/v2-panel/lib/broker-v2-panel.service';
 import { BrokersService } from '../../../services/brokers.service';
 import { DEPLOY_VIEW } from '../../broker/broker-deploy-page/alpaca-deploy-workflow.fixtures';
+import { GoldenSearchService } from '../../golden-search/golden-search.service';
+import { deployOffer as goldenDeployOffer } from '../../golden-search/testing/fixtures';
+import { GoldenOptionSetupsService } from '../../options-backtest/golden-option-setups.service';
 import { provideFleetDirectory, testLane } from '../../../fleet/fleet-directory-testing';
 import { resourceTarget } from '../../../fleet/resource-target';
 
@@ -43,9 +46,9 @@ function fakeAccount(): BrokerAccountSnapshot {
   };
 }
 
-function activatedRoute(clerkId: string) {
+function activatedRoute(clerkId: string, query: Record<string, string> = {}) {
   const initial = convertToParamMap({ clerkId });
-  const noQuery = convertToParamMap({});
+  const noQuery = convertToParamMap(query);
   return {
     provide: ActivatedRoute,
     // `AlpacaDeployWorkflowComponent` mounts as a child of this component and
@@ -81,12 +84,16 @@ async function renderDeployTab(options: {
   readonly lane?: Parameters<typeof testLane>[0] | null;
   readonly hasAccount?: boolean;
   readonly money?: AccountDataDouble['money'];
+  /** What the address says after the path, as a handoff to Deploy carries it. */
+  readonly query?: Record<string, string>;
+  readonly extraProviders?: readonly Provider[];
 } = {}) {
-  const { lane = {}, hasAccount = true, money } = options;
+  const { lane = {}, hasAccount = true, money, query = {}, extraProviders = [] } = options;
   return render(AlpacaDeployTabComponent, {
     providers: [
       provideRouter([]),
-      activatedRoute('clrk_deploy_tab'),
+      activatedRoute('clrk_deploy_tab', query),
+      ...extraProviders,
       accountData({ hasAccount, money }),
       lane === null
         ? provideFleetDirectory({ observed_at_ms: 1_757_000_000_000, clerks: [] })
@@ -246,5 +253,53 @@ describe('AlpacaDeployTabComponent', () => {
     await fixture.whenStable();
 
     expect(reload).toHaveBeenCalledTimes(2);
+  });
+});
+
+/** Wide enough for the steps to stand side by side, every one open. */
+function roomyViewport(): void {
+  const spy = vi.spyOn(window, 'matchMedia').mockImplementation((query: string) => ({
+    matches: true, media: query, onchange: null, addListener: () => undefined, removeListener: () => undefined,
+    addEventListener: () => undefined, removeEventListener: () => undefined, dispatchEvent: () => false,
+  }));
+  onTestFinished(() => spy.mockRestore());
+}
+
+describe('AlpacaDeployTabComponent — which bot a handoff deploys (PRD #3490 R23)', () => {
+  const SIGNAL_HANDOFF = { strategy: 'ema_crossover_signal', golden_qualification: 'gq-0001-aaaa-bbbb' };
+
+  it('keeps a signal handoff in the signal workflow, which still offers Options, and reads no approved options version', async () => {
+    roomyViewport();
+    const deployOffer = vi.fn(async (id: string) => goldenDeployOffer({ qualification_id: id }));
+    const optionsVersion = vi.fn();
+    await renderDeployTab({
+      query: SIGNAL_HANDOFF,
+      extraProviders: [
+        { provide: GoldenSearchService, useValue: { deployOffer } },
+        { provide: GoldenOptionSetupsService, useValue: { get: optionsVersion, list: optionsVersion } },
+      ],
+    });
+
+    // The signal workflow took the handoff by its own keys and applied the version it names.
+    expect(await screen.findByRole('heading', { name: 'What' })).toBeTruthy();
+    await screen.findByRole('status', { name: 'Golden configuration' });
+    expect(deployOffer).toHaveBeenCalledWith('gq-0001-aaaa-bbbb');
+    expect(screen.queryByRole('heading', { name: 'Deploy an Options bot' })).toBeNull();
+    expect(optionsVersion).not.toHaveBeenCalled();
+    // A signal program that trades options is still that signal workflow's third choice, not a saved options setup.
+    fireEvent.click(screen.getByRole('button', { name: /^Trades .+ shares/ }));
+    expect(screen.getByRole('radio', { name: 'Options' })).toBeTruthy();
+  });
+
+  it('keeps Deploy again for a signal bot in the signal workflow, whatever the bot traded', async () => {
+    const optionsVersion = vi.fn();
+    await renderDeployTab({
+      query: { from: 'spy-options-20260929-0931' },
+      extraProviders: [{ provide: GoldenOptionSetupsService, useValue: { get: optionsVersion, list: optionsVersion } }],
+    });
+
+    expect(await screen.findByRole('heading', { name: 'What' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Deploy an Options bot' })).toBeNull();
+    expect(optionsVersion).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,5 @@
 import type { DataRunSpec } from './data-lake.types';
+import type { LakeTree } from './instrument-data-request';
 
 /**
  * One symbol's trade bars over a window of trading dates, in one lake tree.
@@ -6,7 +7,7 @@ import type { DataRunSpec } from './data-lake.types';
  */
 export interface TradeBackfillWindow {
   readonly symbol: string;
-  readonly price_adjustment_mode: 'raw' | 'polygon_split_adjusted';
+  readonly price_adjustment_mode: LakeTree;
   readonly start_trading_date_ms: number;
   readonly end_trading_date_ms: number;
 }

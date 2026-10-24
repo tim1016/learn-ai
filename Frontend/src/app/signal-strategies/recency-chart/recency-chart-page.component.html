@@ -1,0 +1,72 @@
+<app-workspace-header
+  [title]="title"
+  purpose="How several strategies' recent trades compare, one lane per symbol. Open it from a strategy to look at that one."
+  [breadcrumb]="breadcrumb"
+/>
+
+<div class="page">
+  <app-recency-launch-config (launchCompleted)="onLaunchCompleted()"></app-recency-launch-config>
+  <app-recency-launches (resumeCompleted)="onLaunchCompleted()"></app-recency-launches>
+
+  @if (isLoading()) {
+    <p class="status">Loading recency trades…</p>
+  } @else if (!hasTrades()) {
+    <p class="status">No timeline data yet. Set the scope above, then launch a timeline to populate it.</p>
+  } @else {
+    <section class="view-toggles">
+      <fieldset>
+        <legend>Symbols</legend>
+        @for (symbol of distinctSymbols(); track symbol) {
+          <label>
+            <input type="checkbox" [checked]="isSymbolVisible(symbol)" (change)="toggleSymbol(symbol)" />
+            {{ symbol }}
+          </label>
+        }
+      </fieldset>
+      @if (focusedStrategy(); as focus) {
+        <p class="focus">
+          Showing only <code>{{ focus }}</code> ·
+          <a [routerLink]="allStrategiesRoute">Show all strategies</a>
+        </p>
+      } @else {
+        <fieldset>
+          <legend>Strategies</legend>
+          @for (strategyKey of distinctStrategies(); track strategyKey) {
+            <label>
+              <input type="checkbox" [checked]="isStrategyVisible(strategyKey)" (change)="toggleStrategy(strategyKey)" />
+              {{ strategyKey }}
+            </label>
+          }
+        </fieldset>
+      }
+      <p class="mode-indicator">{{ displayMode() === 'single-symbol' ? 'Single-symbol' : 'All-symbols' }} view</p>
+    </section>
+
+    <section class="combo-groups">
+      @for (group of comboGroups(); track group.symbol + '::' + group.strategyKey) {
+        <button type="button" (click)="toggleGroupExpanded(group.symbol, group.strategyKey)">
+          {{ group.symbol }} · {{ group.strategyKey }}
+          {{ isGroupExpanded(group.symbol, group.strategyKey) ? '▾ combos' : '▸ combos' }}
+        </button>
+      }
+    </section>
+
+    @if (focusHasNoTrades()) {
+      <p class="status">No timeline trades are recorded for <code>{{ focusedStrategy() }}</code> yet. Launch one above, or show all strategies.</p>
+    }
+
+    <div class="chart-and-focus">
+      <app-recency-swimlane
+        [trades]="displayedTrades()"
+        [windowStartMs]="displayWindow().start"
+        [windowEndMs]="displayWindow().end"
+        (tradeSelected)="onTradeSelected($event)"
+      ></app-recency-swimlane>
+
+      <app-recency-trade-focus
+        [trade]="selectedTrade()"
+        (deleteRequested)="onDeleteRequested($event)"
+      ></app-recency-trade-focus>
+    </div>
+  }
+</div>

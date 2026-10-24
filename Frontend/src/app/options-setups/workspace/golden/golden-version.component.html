@@ -1,0 +1,61 @@
+@let a = approval();
+<article class="version" [attr.data-version]="a.id" [attr.data-path]="a.origin">
+  <p class="head">
+    <a [routerLink]="evidenceRoute('golden', a.id)">Version <code>{{ a.id }}</code></a>
+    <span class="chip" [attr.data-status]="status()">{{ status() | receiptLabel }}</span>
+    <strong class="path">{{ pathTitle() }}</strong>
+  </p>
+  <p class="words">{{ pathExplanation() }}</p>
+  @let relation = listed().relation;
+  @if (relation.kind === 'study') {
+    <p class="words" role="note">
+      A search that began from this setup’s saved content changed its settings and made this version, so its content is not what is saved now. It is linked through
+      <a [routerLink]="evidenceRoute('study', relation.study.id)">study <code>{{ relation.study.id }}</code></a>, never matched to this draft.
+    </p>
+  }
+  <dl class="facts">
+    <div>
+      <dt>Source</dt>
+      <dd>
+        <a [routerLink]="evidenceRoute('run', a.source_run_id)">Run {{ a.source_run_id }}</a>
+        @if (a.study_id; as study) { and <a [routerLink]="evidenceRoute('study', study)">study <code>{{ study }}</code></a> }
+        · approved <app-timestamp-display [value]="a.created_at_ms" mode="local" />
+      </dd>
+    </div>
+    <div>
+      <dt>Proof</dt>
+      <dd>
+        @if (detail(); as version) { {{ version.status_explanation }} }
+        @else if (detail() === undefined) { Reading this version… }
+        @else { This version could not be read by its own id, so its proof is not shown. }
+      </dd>
+    </div>
+  </dl>
+  @if (detail(); as version) {
+    <p class="words">Approved by {{ version.approved_by }}: {{ version.note }}</p>
+    @if (verdict(); as said) { <p class="words">{{ said }}</p> }
+    <app-options-qualification-evidence [evidence]="version.evidence" />
+    @if (version.evidence.limitations.length > 0) {
+      <ul class="limits" aria-label="Limitations">
+        @for (limitation of version.evidence.limitations; track limitation) { <li>{{ limitation }}</li> }
+      </ul>
+    }
+    @if (events().length > 0) {
+      <ul class="events" aria-label="Revoke and re-proof events">
+        @for (event of events(); track event.id) {
+          <li [attr.data-event]="event.kind">
+            @if (event.kind === 'revoked') {
+              <strong>Revoked</strong> by {{ event.actor }} <app-timestamp-display [value]="event.created_at_ms" mode="local" />: {{ event.reason }}
+            } @else {
+              <strong>Re-proved</strong> by {{ event.actor }} <app-timestamp-display [value]="event.created_at_ms" mode="local" />. The run’s execution was replayed under the rules then running.
+              This is not a recertification: the statistical evidence recorded when the version was approved is as it was.
+            }
+          </li>
+        }
+      </ul>
+    }
+  }
+  @if (status() !== 'revoked') {
+    <p class="words"><a [routerLink]="reviewRoute()" [queryParams]="reviewQuery()">Review run {{ a.source_run_id }}</a> to re-prove or revoke this version.</p>
+  }
+</article>

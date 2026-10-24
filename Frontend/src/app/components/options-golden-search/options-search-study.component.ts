@@ -4,6 +4,7 @@ import { RouterLink } from '@angular/router';
 
 import { AssetIdentityComponent } from '../../shared/asset-identity';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
+import { optionsSetupRoute } from '../../options-setups/options-setups.address';
 import { OptionsStudyOverviewComponent } from './options-study-overview.component';
 import { OptionsCandidateBrowserComponent } from './options-candidate-browser.component';
 import { OptionsCandidateEvidenceComponent, type CandidateLoader, type CandidatePageLoader } from './options-candidate-evidence.component';
@@ -32,6 +33,8 @@ export class OptionsSearchStudyComponent {
   readonly sessionLoader = input<SessionLoader | null>(null);
   readonly candidateLoader = input<CandidateLoader | null>(null);
   readonly candidatePageLoader = input<CandidatePageLoader | null>(null);
+  /** The Golden tab of the saved setup this study was started from, where a plan that forks it is made. */
+  protected readonly planRoute = computed(() => optionsSetupRoute(this.study().setup_name, 'golden'));
   protected readonly selection = signal({ hash: '', comment: '' });
   protected readonly fields = form(this.selection);
   protected readonly shortlist = signal<readonly string[] | null>(null);

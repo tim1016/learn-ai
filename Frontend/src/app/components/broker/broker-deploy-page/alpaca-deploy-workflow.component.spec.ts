@@ -1746,6 +1746,26 @@ describe('AlpacaDeployWorkflowComponent — Golden Search handoff (#2696)', () =
     expect(submittedBody(service)).not.toHaveProperty('replaces_strategy_instance_id');
   });
 
+  it('takes the strategy beside the version, as Golden’s Use in Deploy sends them, and applies the version’s own settings', async () => {
+    const service = mockService(GOLDEN_VIEW);
+    const offer = pendingOffer();
+    const page = await openAt(service, { strategy: 'ema_crossover_signal', [GOLDEN_QUALIFICATION_QUERY_PARAM]: 'gq-0001-aaaa-bbbb' }, [
+      { provide: GoldenSearchService, useValue: { deployOffer: offer.deployOffer } },
+    ]);
+    await formShown();
+    offer.answer(goldenDeployOffer());
+
+    await screen.findByRole('status', { name: 'Golden configuration' });
+    expect(offer.deployOffer).toHaveBeenCalledWith('gq-0001-aaaa-bbbb');
+    // The version is spent once applied; the strategy the link named stays in the address.
+    await vi.waitFor(() => expect(page.url.query).toEqual({ strategy: 'ema_crossover_signal' }));
+    await page.fixture.whenStable();
+    await openStep('What');
+    expect((screen.getByLabelText('Deployment strategy') as HTMLSelectElement).value).toBe('ema_crossover_signal');
+    expect((screen.getByRole('textbox', { name: 'Fast EMA length' }) as HTMLInputElement).value).toBe('8');
+    await vi.waitFor(() => expect(symbolPicker(page.fixture).symbol()).toBe('QQQ'));
+  });
+
   it('says when the form no longer holds the exact golden settings', async () => {
     const service = mockService(GOLDEN_VIEW);
     const offer = pendingOffer();
@@ -2087,7 +2107,7 @@ describe('AlpacaDeployWorkflowComponent — strategy, world and settings', () =>
 
     expect(screen.getByRole('button', { name: `About EMA Crossover Signal: ${EMA_STRATEGY.explanation}` })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'View validation' }).getAttribute('href'))
-      .toBe('/strategy-validation?strategy=ema_crossover_signal');
+      .toBe('/signal-strategies/ema_crossover_signal/proof');
     await chooseMoney();
     fireEvent.click(deployButton());
     await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());

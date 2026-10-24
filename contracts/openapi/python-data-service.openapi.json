@@ -3274,6 +3274,10 @@
             ],
             "title": "Commissionperorder"
           },
+          "customSource": {
+            "title": "Customsource",
+            "type": "boolean"
+          },
           "dataPolicy": {
             "anyOf": [
               {
@@ -3602,6 +3606,7 @@
           "verdictGrade",
           "verdictSignal",
           "parityGroupId",
+          "customSource",
           "requestedEngine",
           "fillMode",
           "durationMs",
@@ -3830,6 +3835,10 @@
             ],
             "title": "Commissionperorder"
           },
+          "customSource": {
+            "title": "Customsource",
+            "type": "boolean"
+          },
           "dataPolicy": {
             "anyOf": [
               {
@@ -3973,6 +3982,7 @@
           "verdictGrade",
           "verdictSignal",
           "parityGroupId",
+          "customSource",
           "hasSyntheticExit"
         ],
         "title": "BacktestRunSummaryResponse",
@@ -8096,6 +8106,33 @@
           "sessions"
         ],
         "title": "Candidate",
+        "type": "object"
+      },
+      "CapabilityAnswer": {
+        "additionalProperties": false,
+        "description": "Whether the registry allows one action for a strategy; ``reason`` says why not.",
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set exactly when the action is not supported.",
+            "title": "Reason"
+          },
+          "supported": {
+            "title": "Supported",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "supported"
+        ],
+        "title": "CapabilityAnswer",
         "type": "object"
       },
       "CaptureReceiptModel": {
@@ -17882,7 +17919,7 @@
       },
       "FeatureResearchJobRequest": {
         "additionalProperties": false,
-        "description": "Body of POST /api/jobs-internal/feature-research.\n\nThe worker reads the study's bars from the data lake itself, materializing\nwhat the lake lacks \u2014 the Frontend sends only the symbol + date range +\nfeature, no payload of OHLCV. Only minute bars of a length that divides\nthe study's 15-minute target are accepted (1, 3, 5, 15); other sizes are\nrefused with a reason (``app.services.feature_study_service``).\n\n**Default override**: ``session=\"extended\"``. ``session`` is the one\ncontrol for which bars the study computes on: ``extended`` is every bar the\nprovider served, 04:00-20:00 ET, which is what the study has always read;\n``rth`` is the scheduled session. The base default (``rth``) would have\nsilently moved every caller that omits it onto a different sample (D02).",
+        "description": "Body of POST /api/jobs-internal/feature-research.\n\nThe worker reads the study's bars from the data lake itself, materializing\nwhat the lake lacks \u2014 the Frontend sends only the symbol + date range +\nfeature, no payload of OHLCV. Only minute bars of a length that divides\nthe study's 15-minute target are accepted (1, 3, 5, 15); other sizes are\nrefused with a reason (``app.services.feature_study_service``).\n\n**Default override**: ``session=\"extended\"``. ``session`` is the one\ncontrol for which bars the study computes on, and the page offers both:\n``extended`` is every bar the provider served, 04:00-20:00 ET, which is what\nthe study has always read; ``rth`` is the scheduled session. The base\ndefault (``rth``) would have silently moved every caller that omits it onto\na different sample (#3521).",
         "properties": {
           "featureName": {
             "minLength": 1,
@@ -33164,6 +33201,261 @@
           "fetched_at_ms"
         ],
         "title": "IbkrStrikeList",
+        "type": "object"
+      },
+      "IndexedApproval": {
+        "properties": {
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "id": {
+            "pattern": "^ogs_[a-f0-9]{32}(?:[a-f0-9]{8})?$",
+            "title": "Id",
+            "type": "string"
+          },
+          "origin": {
+            "enum": [
+              "backtest",
+              "search",
+              "not_recorded"
+            ],
+            "title": "Origin",
+            "type": "string"
+          },
+          "recorded_name": {
+            "title": "Recorded Name",
+            "type": "string"
+          },
+          "setup_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Setup Sha256",
+            "type": "string"
+          },
+          "source_run_id": {
+            "maximum": 9007199254740991.0,
+            "minimum": 1.0,
+            "title": "Source Run Id",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "stale",
+              "revoked"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "study_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Study Id"
+          },
+          "underlying": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Underlying"
+          }
+        },
+        "required": [
+          "id",
+          "recorded_name",
+          "setup_sha256",
+          "source_run_id",
+          "origin",
+          "status",
+          "created_at_ms"
+        ],
+        "title": "IndexedApproval",
+        "type": "object"
+      },
+      "IndexedRun": {
+        "properties": {
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "first_session_open_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "First Session Open Ms",
+            "type": "integer"
+          },
+          "id": {
+            "maximum": 9007199254740991.0,
+            "minimum": 1.0,
+            "title": "Id",
+            "type": "integer"
+          },
+          "last_session_open_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Last Session Open Ms",
+            "type": "integer"
+          },
+          "net_profit_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Net Profit Usd"
+          },
+          "recorded_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recorded Name"
+          },
+          "sessions_requested": {
+            "title": "Sessions Requested",
+            "type": "integer"
+          },
+          "setup_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Setup Sha256"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "complete",
+              "failed",
+              "cancelled",
+              "interrupted"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "underlying": {
+            "title": "Underlying",
+            "type": "string"
+          },
+          "unreadable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unreadable Reason"
+          }
+        },
+        "required": [
+          "id",
+          "underlying",
+          "created_at_ms",
+          "status",
+          "first_session_open_ms",
+          "last_session_open_ms",
+          "sessions_requested"
+        ],
+        "title": "IndexedRun",
+        "type": "object"
+      },
+      "IndexedStudy": {
+        "properties": {
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "id": {
+            "pattern": "^os_[a-f0-9]{40}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "recorded_name": {
+            "title": "Recorded Name",
+            "type": "string"
+          },
+          "setup_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Setup Sha256"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "underlying": {
+            "title": "Underlying",
+            "type": "string"
+          },
+          "unreadable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unreadable Reason"
+          },
+          "updated_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Updated At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "recorded_name",
+          "underlying",
+          "created_at_ms",
+          "updated_at_ms",
+          "phase",
+          "status"
+        ],
+        "title": "IndexedStudy",
         "type": "object"
       },
       "IndicatorBetween": {
@@ -50191,6 +50483,64 @@
         "title": "OptionsRobustnessMetrics",
         "type": "object"
       },
+      "OptionsSetupIndexResponse": {
+        "description": "Newest first within each list. A list shorter than its ``*_total`` was cut, and the page says so.",
+        "properties": {
+          "approvals": {
+            "items": {
+              "$ref": "#/components/schemas/IndexedApproval"
+            },
+            "title": "Approvals",
+            "type": "array"
+          },
+          "approvals_total": {
+            "minimum": 0.0,
+            "title": "Approvals Total",
+            "type": "integer"
+          },
+          "read_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Read At Ms",
+            "type": "integer"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/IndexedRun"
+            },
+            "title": "Runs",
+            "type": "array"
+          },
+          "runs_total": {
+            "minimum": 0.0,
+            "title": "Runs Total",
+            "type": "integer"
+          },
+          "studies": {
+            "items": {
+              "$ref": "#/components/schemas/IndexedStudy"
+            },
+            "title": "Studies",
+            "type": "array"
+          },
+          "studies_total": {
+            "minimum": 0.0,
+            "title": "Studies Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "read_at_ms",
+          "runs",
+          "runs_total",
+          "studies",
+          "studies_total",
+          "approvals",
+          "approvals_total"
+        ],
+        "title": "OptionsSetupIndexResponse",
+        "type": "object"
+      },
       "OptionsWatchedPremiumView": {
         "properties": {
           "close_ms": {
@@ -59395,44 +59745,6 @@
             "title": "Example",
             "type": "boolean"
           },
-          "golden_setup_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Golden Setup Id"
-          },
-          "golden_status": {
-            "anyOf": [
-              {
-                "enum": [
-                  "ready",
-                  "stale",
-                  "revoked"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Golden Status"
-          },
-          "golden_status_explanation": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Golden Status Explanation"
-          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -59459,6 +59771,19 @@
                 "type": "null"
               }
             ]
+          },
+          "setup_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The exact identity of the setup's content, present when the setup is. A run, a search or an approved version is matched to a saved setup by an equal hash and never by name: a name can be edited, deleted and reused, and two names with identical content share one hash.",
+            "title": "Setup Sha256"
           }
         },
         "required": [
@@ -63891,6 +64216,43 @@
         "title": "StrategyBehavioralEquivalence",
         "type": "object"
       },
+      "StrategyCapabilities": {
+        "additionalProperties": false,
+        "description": "What the registry allows. Allowed is not approved: proof, qualification and admission are judged elsewhere.",
+        "properties": {
+          "golden": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CapabilityAnswer"
+              }
+            ],
+            "description": "A Golden Search study."
+          },
+          "live": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CapabilityAnswer"
+              }
+            ],
+            "description": "A bot of this strategy on a Live account."
+          },
+          "sweep": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CapabilityAnswer"
+              }
+            ],
+            "description": "Sweep, Walk-forward and Recency Chart, which share one eligibility rule."
+          }
+        },
+        "required": [
+          "sweep",
+          "golden",
+          "live"
+        ],
+        "title": "StrategyCapabilities",
+        "type": "object"
+      },
       "StrategyEvidenceSnapshot": {
         "properties": {
           "audit_copy_ref": {
@@ -64497,6 +64859,122 @@
           "source"
         ],
         "title": "StrategyReferenceCode",
+        "type": "object"
+      },
+      "StrategyRegistryEntry": {
+        "additionalProperties": false,
+        "description": "One registered strategy, as its registry entry declares it.",
+        "properties": {
+          "capabilities": {
+            "$ref": "#/components/schemas/StrategyCapabilities"
+          },
+          "catalog_visible": {
+            "title": "Catalog Visible",
+            "type": "boolean"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "experimental_notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Experimental Notice"
+          },
+          "parameter_units": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Parameter Units",
+            "type": "object"
+          },
+          "program_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Program Version"
+          },
+          "rule_statement": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule Statement"
+          },
+          "strategy_category": {
+            "enum": [
+              "production_candidate",
+              "operational_validation_harness"
+            ],
+            "title": "Strategy Category",
+            "type": "string"
+          },
+          "strategy_key": {
+            "title": "Strategy Key",
+            "type": "string"
+          },
+          "validated_settings": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            },
+            "title": "Validated Settings",
+            "type": "object"
+          },
+          "validated_symbols": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Validated Symbols",
+            "type": "array"
+          }
+        },
+        "required": [
+          "strategy_key",
+          "display_name",
+          "description",
+          "strategy_category",
+          "experimental_notice",
+          "catalog_visible",
+          "program_version",
+          "rule_statement",
+          "validated_settings",
+          "validated_symbols",
+          "parameter_units",
+          "capabilities"
+        ],
+        "title": "StrategyRegistryEntry",
         "type": "object"
       },
       "StrategyRunRequest": {
@@ -66232,45 +66710,6 @@
           "failure_reason"
         ],
         "title": "StudySessionIssue",
-        "type": "object"
-      },
-      "StudySummary": {
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "title": "Id",
-            "type": "string"
-          },
-          "phase": {
-            "title": "Phase",
-            "type": "string"
-          },
-          "setup_name": {
-            "title": "Setup Name",
-            "type": "string"
-          },
-          "status": {
-            "title": "Status",
-            "type": "string"
-          },
-          "underlying": {
-            "title": "Underlying",
-            "type": "string"
-          },
-          "updated_at_ms": {
-            "title": "Updated At Ms",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "id",
-          "setup_name",
-          "underlying",
-          "phase",
-          "status",
-          "updated_at_ms"
-        ],
-        "title": "StudySummary",
         "type": "object"
       },
       "Subtract-Input": {
@@ -68092,6 +68531,20 @@
             "minimum": 1000.0,
             "title": "Starting Cash",
             "type": "number"
+          },
+          "strategy_key": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Registry key of the strategy whose Explore submitted ``algorithm_source``. A custom source is not a bundled template, so this key becomes the saved run's owner (its ``strategy_name``) and the run opens under that strategy. Accepted only with ``algorithm_source``: a bundled template run is already owned by the strategy that registers the template as its LEAN twin.",
+            "title": "Strategy Key"
           },
           "strategy_parameters": {
             "anyOf": [
@@ -72593,6 +73046,26 @@
               ],
               "description": "Only this bot, with all of its runs.",
               "title": "Strategy Instance Id"
+            }
+          },
+          {
+            "description": "Only this strategy's bots, by registry key.",
+            "in": "query",
+            "name": "strategy_key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this strategy's bots, by registry key.",
+              "title": "Strategy Key"
             }
           },
           {
@@ -89955,6 +90428,32 @@
         ]
       }
     },
+    "/api/engine/strategy-registry": {
+      "get": {
+        "description": "Every registered strategy with what the registry allows for it (#3508).\n\nUnlike ``GET /strategies`` this lists the compatibility entries the picker\nhides, and it answers Sweep, Golden Search and Live for each, with the\nreason when one is not allowed. Allowed never means proven, approved or\ndeployable: those are judged by their own reads.",
+        "operationId": "list_strategy_registry_api_engine_strategy_registry_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/StrategyRegistryEntry"
+                  },
+                  "title": "Response List Strategy Registry Api Engine Strategy Registry Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Strategy Registry",
+        "tags": [
+          "engine"
+        ]
+      }
+    },
     "/api/golden-fixtures": {
       "get": {
         "description": "Return the golden fixture catalog with the most recent validation status.",
@@ -91970,7 +92469,7 @@
     },
     "/api/research/backtest-runs": {
       "get": {
-        "description": "Run history, newest first.",
+        "description": "Run history, newest first; the limit applies after the filters.",
         "operationId": "list_backtest_runs_api_research_backtest_runs_get",
         "parameters": [
           {
@@ -91991,6 +92490,26 @@
                 }
               ],
               "title": "Engine"
+            }
+          },
+          {
+            "description": "Only this strategy's runs.",
+            "in": "query",
+            "name": "strategy_name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this strategy's runs.",
+              "title": "Strategy Name"
             }
           },
           {
@@ -96821,9 +97340,41 @@
         ]
       }
     },
+    "/api/research/options-backtest/setup-index": {
+      "get": {
+        "description": "The saved setups and all Options evidence in one read, each with its exact content hash; nothing is joined by name.",
+        "operationId": "get_setup_index_api_research_options_backtest_setup_index_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsSetupIndexResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestRefusalBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Get Setup Index",
+        "tags": [
+          "research-options-backtest"
+        ]
+      }
+    },
     "/api/research/options-backtest/setups": {
       "get": {
-        "description": "The two shipped examples, then the saved setups, newest first. One that cannot be opened says why.",
+        "description": "The two shipped examples, then the saved setups, newest first. One that cannot be opened says why.\n\nEach setup carries the hash of its content. Evidence is matched to a setup by an equal hash, so this lists no\napproved version and picks none for a name (``GET /setup-index`` lists the evidence).",
         "operationId": "list_setups_api_research_options_backtest_setups_get",
         "responses": {
           "200": {
@@ -97191,57 +97742,6 @@
       }
     },
     "/api/research/options-golden-search/studies": {
-      "get": {
-        "operationId": "history_api_research_options_golden_search_studies_get",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/StudySummary"
-                  },
-                  "title": "Response History Api Research Options Golden Search Studies Get",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "History",
-        "tags": [
-          "research-options-golden-search"
-        ]
-      },
       "post": {
         "operationId": "create_api_research_options_golden_search_studies_post",
         "parameters": [

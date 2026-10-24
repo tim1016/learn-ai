@@ -122,6 +122,19 @@ def test_a_lean_payload_must_name_its_run_and_engine() -> None:
         record_from_payload(lean_payload("run-6", requested_engine="python"))
 
 
+def test_a_run_of_pasted_source_is_marked_even_though_its_owner_no_longer_says_so() -> None:
+    marked = record_from_payload(lean_payload("run-7", strategy_name="rsi_mean_reversion", custom_source=True))
+
+    assert marked.custom_source is True and marked.strategy_name == "rsi_mean_reversion"
+    assert record_from_payload(lean_payload("run-8")).custom_source is False
+    assert record_from_payload(engine_payload()).custom_source is False
+
+
+def test_a_custom_source_mark_that_is_not_a_boolean_is_refused() -> None:
+    with pytest.raises(RunPayloadError, match="custom_source must be a boolean"):
+        record_from_payload(lean_payload("run-9", custom_source="yes"))
+
+
 def test_a_missing_trade_quantity_defaults_to_one_share() -> None:
     record = record_from_payload(engine_payload(trades=[{**trade(), "quantity": None}]))
 

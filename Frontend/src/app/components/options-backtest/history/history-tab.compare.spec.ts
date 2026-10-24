@@ -9,7 +9,7 @@ import { fakeRunDetail, type FakeRunDetail } from '../run-detail/testing/fake-ru
 import type { RunListItem } from '../options-backtest.types';
 import { reads } from '../testing/page-actions';
 import { renderHistoryTab } from '../testing/render-history';
-import { fakeService, type FakeService } from '../testing/render-page';
+import { fakeService, type FakeService } from '../testing/fake-service';
 import { runItem } from '../testing/run-fixtures';
 
 const HEADLINE = { sessions_tested: 10, sessions_traded: 8, trades: 12, trades_won: 7, net_profit_usd: '1234.56', ending_cash_usd: '11234.56' };

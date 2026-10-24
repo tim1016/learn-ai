@@ -24,9 +24,9 @@ const PLAN: GridSearchPreflight = {
   run_up: { data_start_ms: 1704171600000, evaluation_start_ms: 1705035600000, evaluation_end_ms: 1735621200000, required_samples: 31, bar_span_ms: 900000, run_up_sessions: 2, carved_from_range: true },
 };
 
-async function renderForm(strategies: StrategyInfo[], service: Partial<GridSearchService>, pool?: readonly TickerOption[]) {
+async function renderForm(strategy: StrategyInfo, service: Partial<GridSearchService>, pool?: readonly TickerOption[]) {
   const view = await render(GridSearchFormComponent, {
-    inputs: { strategies, preflightDebounceMs: 0 },
+    inputs: { strategy, preflightDebounceMs: 0 },
     providers: [...fakePickerWorld(pool).providers, { provide: GridSearchService, useValue: { preflight: vi.fn(async (_spec: GridSearchSpecRequest) => PLAN), launch: vi.fn(async (_spec: GridSearchSpecRequest) => 'job-1'), ...service } }],
   });
   return view;
@@ -35,13 +35,13 @@ async function renderForm(strategies: StrategyInfo[], service: Partial<GridSearc
 describe('GridSearchFormComponent', () => {
   it('offers 5Y from the first held day when the lake holds a day or two short of five years', async () => {
     // Five years ending Friday 2026-09-18 start on 2021-09-19.
-    await renderForm([strategy()], {}, [{ symbol: 'SPY', name: 'SPDR S&P 500', firstHeld: '2021-09-21', lastHeld: '2026-09-18' }]);
+    await renderForm(strategy(), {}, [{ symbol: 'SPY', name: 'SPDR S&P 500', firstHeld: '2021-09-21', lastHeld: '2026-09-18' }]);
 
     expect(await screen.findByRole('button', { name: '5Y. Starts on 2021-09-21. SPY is held from 2021-09-21.' })).not.toBeNull();
   });
 
   it('renders the selected strategy public parameters as fixed values with vary toggles', async () => {
-    await renderForm([strategy()], {});
+    await renderForm(strategy(), {});
 
     expect(screen.getByText('Short window')).not.toBeNull();
     expect(screen.getByText('Long window')).not.toBeNull();
@@ -49,25 +49,25 @@ describe('GridSearchFormComponent', () => {
     expect((screen.getByLabelText('Fixed value for Short window') as HTMLInputElement).value).toBe('10');
   });
 
-  it('lists an ineligible strategy with its reason and offending parameters instead of offering it', async () => {
+  it('explains, with its reason and offending parameters, a strategy the catalogue does not allow sweeping, and builds no search for it', async () => {
+    const preflight = vi.fn(async (_spec: GridSearchSpecRequest) => PLAN);
     await renderForm(
-      [
-        strategy(),
-        strategy({ name: 'options_spread', display_name: 'Options Spread', sweep_eligibility: { eligible: false, reason_codes: ['NON_NUMERIC_PUBLIC_PARAMETER'], offending_parameters: ['spread_type'] } }),
-      ],
-      {},
+      strategy({ name: 'options_spread', display_name: 'Options Spread', sweep_eligibility: { eligible: false, reason_codes: ['NON_NUMERIC_PUBLIC_PARAMETER'], offending_parameters: ['spread_type'] } }),
+      { preflight },
     );
 
-    const picker = screen.getByRole('combobox', { name: 'Strategy' }) as HTMLSelectElement;
-    expect(Array.from(picker.options).map((o) => o.value)).toEqual(['sma_crossover']);
     const list = screen.getByRole('list', { name: /cannot be swept/i });
     expect(list.textContent).toContain('Options Spread');
     expect(list.textContent).toContain('spread_type');
+    expect(screen.queryByRole('combobox', { name: 'Strategy' })).toBeNull();
+    expect(screen.queryByRole('group', { name: /settings/i })).toBeNull();
+    expect((screen.getByRole('button', { name: /launch search/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect(preflight).not.toHaveBeenCalled();
   });
 
   it('reveals the range editor when a parameter is ticked to vary and preflights the count', async () => {
     const preflight = vi.fn(async (_spec: GridSearchSpecRequest) => ({ ...PLAN, total_backtests: 3 }));
-    const view = await renderForm([strategy()], { preflight });
+    const view = await renderForm(strategy(), { preflight });
 
     fireEvent.click(screen.getByRole('checkbox', { name: /short window/i }));
     await view.fixture.whenStable();
@@ -88,7 +88,7 @@ describe('GridSearchFormComponent', () => {
   it('refuses a malformed value list client-side: names the entry, disables launch, never preflights it', async () => {
     // #1940: ".3..4" was dropped silently and the shrunken grid was preflighted and launchable.
     const preflight = vi.fn(async (_spec: GridSearchSpecRequest) => PLAN);
-    const view = await renderForm([strategy()], { preflight });
+    const view = await renderForm(strategy(), { preflight });
 
     fireEvent.click(screen.getByRole('checkbox', { name: /short window/i }));
     await view.fixture.whenStable();
@@ -108,7 +108,7 @@ describe('GridSearchFormComponent', () => {
       throw new GridSearchRefusedError({ code: 'WORKLOAD_LIMIT', message: '6000 backtests exceed the limit of 5000; narrow the grid' });
     });
     const launch = vi.fn(async (_spec: GridSearchSpecRequest) => 'job-1');
-    await renderForm([strategy()], { preflight, launch });
+    await renderForm(strategy(), { preflight, launch });
 
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('exceed the limit'));
     expect((screen.getByRole('button', { name: /launch search/i }) as HTMLButtonElement).disabled).toBe(true);
@@ -117,7 +117,7 @@ describe('GridSearchFormComponent', () => {
 
   it('launches the default search: the exact preflighted spec, the job id emitted, decision-minute-open with no fee unless asked (#2599, #2601)', async () => {
     const launch = vi.fn(async (_spec: GridSearchSpecRequest) => 'job-42');
-    const view = await renderForm([strategy()], { launch });
+    const view = await renderForm(strategy(), { launch });
     const launched = vi.fn();
     view.fixture.componentInstance.launched.subscribe(launched);
 
@@ -144,7 +144,7 @@ describe('GridSearchFormComponent', () => {
       symbol === 'SPY' && bounds.max !== null ? { unheldMs: new Set(['2025-03-03', '2025-03-04'].map(sessionOpenMs)), problem: null } : null,
     );
     await render(GridSearchFormComponent, {
-      inputs: { strategies: [strategy()], preflightDebounceMs: 0 },
+      inputs: { strategy: strategy(), preflightDebounceMs: 0 },
       providers: [...fakePickerWorld().providers, { provide: HeldGapsService, useValue: { gapsFor } }, { provide: GridSearchService, useValue: { preflight: vi.fn(async () => PLAN), launch: vi.fn() } }],
     });
 
@@ -157,7 +157,7 @@ describe('GridSearchFormComponent', () => {
     // Held for a little over three months: 24 whole months do not fit, three do.
     const world = fakePickerWorld([{ symbol: 'SPY', name: 'SPDR S&P 500', firstHeld: '2026-06-10', lastHeld: '2026-09-18' }]);
     const view = await render(GridSearchFormComponent, {
-      inputs: { strategies: [strategy()], preflightDebounceMs: 0 },
+      inputs: { strategy: strategy(), preflightDebounceMs: 0 },
       providers: [...world.providers, { provide: GridSearchService, useValue: { preflight, launch: vi.fn() } }],
     });
     await waitFor(() => expect(preflight).toHaveBeenCalled());
@@ -175,7 +175,7 @@ describe('GridSearchFormComponent', () => {
 
   it('holds the launch while a date field holds no usable date, and says to pick the dates (#2858)', async () => {
     const preflight = vi.fn(async (_spec: GridSearchSpecRequest) => PLAN);
-    await renderForm([strategy()], { preflight });
+    await renderForm(strategy(), { preflight });
     await waitFor(() => expect(preflight).toHaveBeenCalled());
     const asked = preflight.mock.calls.length;
 
@@ -188,7 +188,7 @@ describe('GridSearchFormComponent', () => {
 
   it('launches under another fill mode when the researcher picks one', async () => {
     const launch = vi.fn(async (_spec: GridSearchSpecRequest) => 'job-8');
-    await renderForm([strategy()], { launch });
+    await renderForm(strategy(), { launch });
 
     fireEvent.change(screen.getByLabelText('Fill mode'), { target: { value: 'signal_bar_close' } });
     await waitFor(() => expect((screen.getByRole('button', { name: /launch search/i }) as HTMLButtonElement).disabled).toBe(false));

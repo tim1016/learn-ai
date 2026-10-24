@@ -27,10 +27,18 @@ from app.schemas.options_evidence import (
 from app.schemas.options_golden_search import StudyDetail
 
 
+def approval_origin(
+    study_id: str | None, manifest_sha256: str | None, verdict: str | None
+) -> Literal["backtest", "search", "not_recorded"]:
+    """How a version was made: a complete search link, a plain backtest, or an incomplete link that claims nothing."""
+    if study_id and manifest_sha256 and verdict:
+        return "search"
+    return "not_recorded" if study_id else "backtest"
+
+
 def approval(version: GoldenOptionSetupView, digest: str, run_id: int) -> OptionsEvidenceApproval:
     evidence = version.evidence
-    linked = bool(evidence.options_search_study_id and evidence.study_manifest_sha256 and evidence.verdict)
-    source = "search" if linked else "not_recorded" if evidence.options_search_study_id else "backtest"
+    source = approval_origin(evidence.options_search_study_id, evidence.study_manifest_sha256, evidence.verdict)
     return OptionsEvidenceApproval(
         golden_id=version.id, source_run_id=version.source_run_id, setup_sha256=version.setup_sha256,
         source=source, identity_matches=version.setup_sha256 == digest and version.source_run_id == run_id,

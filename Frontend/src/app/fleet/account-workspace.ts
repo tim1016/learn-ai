@@ -20,6 +20,7 @@
 
 import type { components } from '../api/broker.types';
 import { defineWorkspaceTabs, type WorkspaceTabDescriptor } from '../shared/workspace/workspace-tabs';
+import { OPTIONS_SETUP_QUERY_PARAM } from './options-setup-handoff';
 
 /** The workspace's tabs, in the order they are presented. Home is the
  * account's money and its bots: Overview, Bots and Gallery merged (D1, D3).
@@ -74,6 +75,15 @@ const RECONCILE_NOW: components['schemas']['RecoveryCapabilityResponse']['action
  * approved qualification from "Use in Deploy" through the account list to
  * the chosen account's Deploy, which applies its exact settings. */
 export const GOLDEN_QUALIFICATION_QUERY_PARAM = 'golden_qualification';
+
+/** A Golden Search qualification id as a path segment may carry it. The
+ * account list and Deploy both judge `?golden_qualification=` by this, so a
+ * value one of them refuses is never read by the other. */
+const QUALIFICATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
+
+export function isQualificationId(value: string | null): value is string {
+  return value !== null && QUALIFICATION_ID_PATTERN.test(value);
+}
 
 /** Where "Use in Deploy" lands: the account list, where choosing the account
  * is the owner's step (#2696). */
@@ -289,7 +299,7 @@ export function accountWorkspaceDeployAgainRoute(
 ): AccountWorkspaceLink {
   return {
     commands: [...workspaceRoute(account), 'deploy'],
-    queryParams: optionsSetupId ? { options_setup: optionsSetupId } : { [DEPLOY_AGAIN_QUERY_PARAM]: sid },
+    queryParams: optionsSetupId ? { [OPTIONS_SETUP_QUERY_PARAM]: optionsSetupId } : { [DEPLOY_AGAIN_QUERY_PARAM]: sid },
   };
 }
 

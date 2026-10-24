@@ -2,7 +2,7 @@
 
 This guide explains the charts on the Golden Search pages. For each chart it covers the question the chart answers, what is drawn, how to read it, the good signs and the warning signs, and an everyday comparison.
 
-For the end-to-end procedure, decision checkpoints and presenting a study, open the [Golden Search operating manual](/docs/golden-search-manual). Start research in [Golden Search](/golden-search).
+For the end-to-end procedure, decision checkpoints and presenting a study, open the [Golden Search operating manual](/docs/golden-search-manual). Start research from a strategy's Golden tab: open the strategy in [Signal strategies](/signal-strategies).
 
 ## How to use this guide
 

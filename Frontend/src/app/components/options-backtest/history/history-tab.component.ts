@@ -12,10 +12,17 @@ import { OptionsBacktestService, RunRefusedError } from '../options-backtest.ser
 import type { RunListItem, ServedSetup } from '../options-backtest.types';
 import { RUN_POLL_MS } from '../run-poll';
 import { CompareViewComponent } from '../run-detail/compare/compare-view.component';
+import type { GoldenOffer } from '../run/golden-offer';
 import { RunPanelComponent } from '../run/run-panel.component';
 import { RUNS_LISTED } from './runs-listed';
 
 let nextHintId = 0;
+
+/** Two runs put side by side, in the order they were ticked. */
+export interface RunPair {
+  readonly a: number;
+  readonly b: number;
+}
 
 /**
  * This page's runs, newest first as the server lists them: when each was
@@ -26,6 +33,11 @@ let nextHintId = 0;
  * so. The list is read again each time the tab is shown, and every few seconds
  * while it holds a run that is going, so that a run that ends shows as ended
  * and can be deleted without leaving the tab.
+ *
+ * Which run is open, and which two are side by side, can be told to the tab and
+ * are told by it, so that a page can keep them in its address: opening a run says
+ * so, and a run the address names is opened as if it had been chosen. Held by no
+ * page, the tab keeps them itself.
  */
 @Component({
   selector: 'app-options-backtest-history',
@@ -43,11 +55,23 @@ export class HistoryTabComponent {
 
   /** Whether the tab is the one on show; the list is read again each time it becomes so. */
   readonly active = input(true);
-  /** Why the form cannot take a setup just now, in words; null when it can. A run's Use this setup says so rather than doing nothing. */
+  /** Why a setup cannot be taken just now, in words; null when it can. A run's Use this setup says so rather than doing nothing. */
   readonly setupBlockedWhy = input<string | null>(null);
-  /** The owner asked for the setup of a run to be put into the Backtest tab's form. */
+  /** The run the page's address names as open, by id; null when it names none. */
+  readonly openRun = input<number | null>(null);
+  /** The two runs the page's address names as side by side; null when it names none. */
+  readonly compareRuns = input<RunPair | null>(null);
+  /** The page can go on from an open run to its performance and lineage: the address of the page that shows them. */
+  readonly exploreRoute = input<readonly string[] | null>(null);
+  /** What a complete run may be taken to Golden as, by id: a link, or why not. */
+  readonly goldenOffer = input<(id: number) => GoldenOffer | null>(() => null);
+  /** A run was opened (its id), or the one that was open was closed (null). */
+  readonly runShown = output<number | null>();
+  /** Two runs were put side by side, or the comparison was closed (null). */
+  readonly comparisonShown = output<RunPair | null>();
+  /** The owner asked for the setup of a run to be put into a new draft. */
   readonly useSetup = output<ServedSetup>();
-  /** A run was deleted: the Backtest tab must not go on showing it. */
+  /** A run was deleted: the page must not go on showing it. */
   readonly deleted = output<number>();
 
   private readonly listed = inject(RUNS_LISTED);
@@ -80,7 +104,9 @@ export class HistoryTabComponent {
   });
   protected readonly opened = signal<RunListItem | null>(null);
   /** The two runs on screen side by side, in the order they were ticked. */
-  protected readonly comparing = signal<{ readonly a: number; readonly b: number } | null>(null);
+  protected readonly comparing = signal<RunPair | null>(null);
+  /** Why the run the address names could not be opened, in words; null otherwise. */
+  protected readonly openProblem = signal<string | null>(null);
   protected readonly hintId = `ob-compare-hint-${nextHintId++}`;
   /** Every run the owner has ticked, in the order ticked, whether or not it is still listed. */
   private readonly ticked = signal<readonly number[]>([]);
@@ -117,6 +143,16 @@ export class HistoryTabComponent {
       const status = this.list.status();
       const onShow = this.active() && this.opened() === null && this.comparing() === null;
       untracked(() => this.lookAgainWhileAnyGoes(status, onShow));
+    });
+    // The address names the run that is open, or the two that are side by side: the tab shows them, however they came to be named.
+    effect(() => {
+      const id = this.openRun();
+      const status = this.list.status();
+      untracked(() => void this.showNamedRun(id, status === 'resolved' || status === 'error'));
+    });
+    effect(() => {
+      const pair = this.compareRuns();
+      untracked(() => this.showNamedComparison(pair));
     });
   }
 
@@ -158,18 +194,21 @@ export class HistoryTabComponent {
     const [a, b] = this.chosen();
     if (this.chosen().length !== 2) return;
     this.comparing.set({ a, b });
+    this.comparisonShown.emit({ a, b });
     afterNextRender(() => this.compareView()?.focusHeading(), { injector: this.injector });
   }
 
   /** Back to the list, with the keyboard on the Compare button that opened the comparison (or on the list's heading if it is gone). */
   protected closeCompare(): void {
     this.comparing.set(null);
+    this.comparisonShown.emit(null);
     this.list.reload();
     afterNextRender(() => (this.compareButton() ?? this.heading())?.nativeElement.focus(), { injector: this.injector });
   }
 
   protected open(run: RunListItem): void {
     this.opened.set(run);
+    this.runShown.emit(run.id);
     afterNextRender(() => this.panel()?.focusHeading(), { injector: this.injector });
   }
 
@@ -177,9 +216,50 @@ export class HistoryTabComponent {
   protected close(): void {
     const id = this.opened()?.id;
     this.opened.set(null);
+    this.openProblem.set(null);
+    this.runShown.emit(null);
     this.list.reload();
     if (id === undefined) return;
     afterNextRender(() => this.host.nativeElement.querySelector<HTMLElement>(`button[aria-label="${this.openLabel(id)}"]`)?.focus(), { injector: this.injector });
+  }
+
+  /** The address names a run, or none: show it, from the list when it is there, else as the server has it once the list has been read. */
+  private async showNamedRun(id: number | null, listRead: boolean): Promise<void> {
+    this.openProblem.set(null);
+    if (id === null) {
+      if (this.opened() !== null) {
+        this.opened.set(null);
+        this.list.reload();
+      }
+      return;
+    }
+    if (this.opened()?.id === id) return;
+    const listed = this.runs().find((row) => row.id === id);
+    if (listed !== undefined) {
+      this.opened.set(listed);
+      return;
+    }
+    // A run of the list is shown from the list: only one it does not hold is read by its id, and not before the list says it does not hold it.
+    if (!listRead) return;
+    try {
+      const detail = await this.service.run(id);
+      // A run is a list row and more, and the address may have moved on while it was read.
+      if (this.openRun() === id) this.opened.set(detail);
+    } catch (error) {
+      if (this.openRun() === id) this.openProblem.set(error instanceof RunRefusedError ? error.message : extractServerMessage(error, `Run ${id} could not be read.`));
+    }
+  }
+
+  private showNamedComparison(pair: RunPair | null): void {
+    const shown = this.comparing();
+    if (pair === null) {
+      if (shown !== null) {
+        this.comparing.set(null);
+        this.list.reload();
+      }
+      return;
+    }
+    if (shown?.a !== pair.a || shown.b !== pair.b) this.comparing.set(pair);
   }
 
   protected async remove(id: number): Promise<void> {

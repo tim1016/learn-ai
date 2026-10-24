@@ -1,0 +1,7 @@
+<section class="actions" aria-label="Run actions">
+  <div class="buttons">
+    <button pButton type="button" severity="secondary" [outlined]="true" [disabled]="!canCheck()" [attr.aria-describedby]="!canCheck() && hint() !== null ? 'ob-run-hint' : null" (click)="check.emit()"><i class="pi pi-search" aria-hidden="true"></i><span>Check data</span></button>
+    <button pButton type="button" class="start" [disabled]="!canStart()" aria-keyshortcuts="Shift+Enter" [attr.aria-describedby]="!canStart() && hint() !== null ? 'ob-run-hint' : null" (click)="start.emit()"><i class="pi pi-play" aria-hidden="true"></i><span>Start backtest</span><kbd aria-hidden="true">Shift+Enter</kbd></button>
+  </div>
+  @if (hint(); as why) { <p id="ob-run-hint" class="hint" [attr.title]="why">{{ why }}</p> }
+</section>
