@@ -95,6 +95,17 @@ describe('LakeStudySourceComponent', () => {
     expect(within(session as HTMLElement).getByText('captured before the session closed; must be captured again')).toBeTruthy();
   });
 
+  it('names the session the refusal judged in its first line, and names none when it is not told', async () => {
+    const { rerender } = await render(LakeStudySourceComponent, { inputs: { source: null, refusal: REFUSAL, session: 'regular' } });
+    expect.soft(screen.getByRole('alert').textContent).toContain('No result: the lake could not supply this study its data for regular hours.');
+
+    await rerender({ inputs: { source: null, refusal: REFUSAL, session: 'extended' } });
+    expect.soft(screen.getByRole('alert').textContent).toContain('its data for extended hours.');
+
+    await rerender({ inputs: { source: null, refusal: REFUSAL, session: null } });
+    expect.soft(screen.getByRole('alert').textContent).toContain('No result: the lake could not supply this study its data.');
+  });
+
   it('counts the sessions it does not list', async () => {
     await render(LakeStudySourceComponent, { inputs: { source: null, refusal: { ...REFUSAL, sessionsTotal: 31 } } });
 

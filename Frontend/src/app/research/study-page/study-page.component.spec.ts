@@ -84,7 +84,7 @@ describe('StudyPageComponent', () => {
   });
 
   it.each([
-    ['feature', 'extended hours included, fixed'],
+    ['feature', '15 minutes, fixed'],
     ['signal', 'extended hours included, fixed'],
     ['indicator-reliability', 'regular trading hours, fixed'],
     ['cross-sectional', 'daily, fixed'],

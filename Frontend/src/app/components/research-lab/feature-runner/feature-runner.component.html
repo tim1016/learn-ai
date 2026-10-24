@@ -18,7 +18,7 @@
       [(value)]="range"
       dateBounds="provider"
       presentation="embedded"
-      sessionMode="hidden"
+      sessionMode="enabled"
       [showAutoFetch]="false"
       [availableResolutions]="availableResolutions"
       [availableMultipliers]="availableMultipliers"
@@ -26,6 +26,7 @@
     @if (rangeWarning(); as warn) {
       <p-message severity="warn" class="w-full">{{ warn }}</p-message>
     }
+    <app-lake-holding-notice [holding]="holding" />
   </div>
 
   <div studyConfig class="study-config">
@@ -82,7 +83,7 @@
     }
 
     @if (refusal(); as refused) {
-      <app-lake-study-source [refusal]="refused.refusal" />
+      <app-lake-study-source [refusal]="refused.refusal" [session]="refusedSession()" />
     } @else if (error(); as err) {
       <p-message severity="error">{{ err }}</p-message>
     }

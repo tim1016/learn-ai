@@ -12,6 +12,7 @@
  *
  * Nothing here derives a fact. A time the server did not record is `null`.
  */
+import type { Session } from '../ticker-range-picker/ticker-range-picker.types';
 import type { DataSourceProvenance } from '../workspace/data-source-provenance';
 
 // ---------------------------------------------------------------------------
@@ -30,6 +31,23 @@ export type LakeRefusalCode =
   | 'data_building'
   | 'data_missing'
   | 'lake_unavailable';
+
+/**
+ * The session a lake study reads: `regular` is the scheduled session, `extended` every bar the provider served.
+ * The server's name (`SessionPolicy` in `app/research/study_inputs.py`); a request spells the same two choices `rth` and `extended`.
+ */
+export type LakeSessionPolicy = 'extended' | 'regular';
+
+/** What a request's `session` asks the lake for (`SESSION_POLICY_FOR_REQUEST` in `app/research/lake_study.py`). */
+export const SESSION_POLICY_FOR_REQUEST: Readonly<Record<Session, LakeSessionPolicy>> = {
+  rth: 'regular',
+  extended: 'extended',
+};
+
+/** A session in the reader's words, for a summary line or a refusal. */
+export function sessionPolicyWords(policy: LakeSessionPolicy): string {
+  return policy === 'regular' ? 'regular hours' : 'extended hours';
+}
 
 /** What admission concluded about a session it could not make ready. */
 export type LakeSessionOutcome =
@@ -63,7 +81,7 @@ export interface LakeDataSourceRaw {
   provider: string;
   symbol: string;
   price_adjustment_mode: string;
-  session_policy: 'extended' | 'regular';
+  session_policy: LakeSessionPolicy;
   /** The requested bounds, `int64 ms UTC` at ET midnight. */
   window_start_ms: number;
   window_end_ms: number;
@@ -140,7 +158,7 @@ export interface LakeStudyDataSource {
   symbol: string;
   priceAdjustmentMode: string;
   /** `extended` is every bar the provider served for the day; `regular` is the scheduled session. */
-  sessionPolicy: 'extended' | 'regular';
+  sessionPolicy: LakeSessionPolicy;
   windowStartMs: number;
   windowEndMs: number;
   effectiveWindow: { startMs: number; endMs: number } | null;
