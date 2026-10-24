@@ -24,7 +24,7 @@
       } @else {
         <p>Approval origin is incompletely recorded. The study reference alone does not establish search qualification for this version.</p>
       }
-      <a [routerLink]="['/options-golden-search', study]">Open recorded search</a>
+      <a [routerLink]="studyRoute(study)">Open recorded search</a>
       <p>Study manifest <code>{{ retained.evidence.study_manifest_sha256 ?? 'Not recorded' }}</code></p>
     } @else {
       <p>Approved from backtest. No linked search qualification is recorded.</p>

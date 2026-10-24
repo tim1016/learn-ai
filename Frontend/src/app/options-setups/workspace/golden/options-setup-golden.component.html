@@ -1,0 +1,112 @@
+@if (state(); as why) {
+  <app-workspace-state-block [state]="why" (actionTriggered)="act($event)" />
+} @else {
+  <div class="golden">
+    @if (draftChanged()) {
+      <p class="muted" role="note">{{ standing().detail }} Golden uses the content as last saved, and never what Define holds.</p>
+    }
+
+    <section class="block" aria-labelledby="gd-review">
+      <h2 id="gd-review">Approve a tested run</h2>
+      @if (runNamesNothing()) {
+        <p class="problem" role="alert">“{{ run() }}” is not a run id, so no run is under review. Nothing was approved.</p>
+      }
+      @for (id of reviewIds(); track id) {
+        <h3>Reviewing run {{ id }}</h3>
+        @if (frozen(); as item) {
+          <p class="muted">
+            Approval is of exactly what this run froze, read from the run’s own record. Editing the setup afterwards changes nothing here, and an approval that names other content is refused.
+          </p>
+          @if (frozenIsSaved() === false) {
+            <p role="note">
+              This run froze other content than this setup’s saved content now. Approving it approves what the run froze, shown below, and nothing that is saved now.
+            </p>
+          }
+          <dl class="facts">
+            <div><dt>Recorded as</dt><dd>{{ item.name }}</dd></div>
+            <div><dt>Sessions</dt><dd><app-timestamp-display [value]="item.period.first_session_open_ms" mode="date-et" granularity="date" /> to <app-timestamp-display [value]="item.period.last_session_open_ms" mode="date-et" granularity="date" />, {{ item.period.observed_sessions ?? 'unknown' }} observed of {{ item.period.scheduled_sessions }} scheduled</dd></div>
+            <div><dt>Result</dt><dd>{{ item.replay.explanation }}</dd></div>
+            <div><dt>Frozen content</dt><dd><code>{{ item.setup_sha256 }}</code></dd></div>
+          </dl>
+          <details>
+            <summary>What the run tested</summary>
+            @for (sentence of item.settings_description; track $index) { <p>{{ sentence }}</p> }
+          </details>
+          <p><a [routerLink]="evidenceRoute('run', id)">Open this run’s evidence</a></p>
+          <app-golden-option-setup-approval [runId]="id" [expectedSetupSha256]="item.setup_sha256" (changed)="versionChanged()" />
+        } @else if (reviewProblem(); as problem) {
+          <p class="problem" role="alert">{{ problem }}</p>
+          <p>Nothing can be approved without reading what the run froze.</p>
+        } @else {
+          <p class="muted" role="status">Reading what run {{ id }} froze…</p>
+        }
+        <p><a [routerLink]="goldenRoute()" [queryParams]="{ parent_study_id: parent_study_id() ?? null }">Choose another run</a></p>
+      } @empty {
+        <p class="muted">
+          A run is approved here, with a note, after you have read what it froze. <strong>Take to Golden</strong> in Explore brings a run here and approves nothing.
+        </p>
+        <ul class="list">
+          @for (item of runsOffered(); track item.id) {
+            <li [attr.data-run]="item.id">
+              <a [routerLink]="evidenceRoute('run', item.id)">Run {{ item.id }}</a>
+              <app-timestamp-display [value]="item.first_session_open_ms" mode="date-et" granularity="date" /> to <app-timestamp-display [value]="item.last_session_open_ms" mode="date-et" granularity="date" />
+              @if (item.net_profit_usd; as profit) { · net {{ profit | authoredUsd }} }
+              · <a [routerLink]="goldenRoute()" [queryParams]="{ run: item.id, parent_study_id: parent_study_id() ?? null }">Review run {{ item.id }}</a>
+            </li>
+          } @empty {
+            <li>No completed run of this exact content is recorded{{ runsCut() ? ', among ' + runsCut() : '' }}. Run a backtest in Explore first.</li>
+          }
+        </ul>
+        @if (runs().length > runsOffered().length) {
+          <p class="muted">{{ runs().length - runsOffered().length }} more runs of this content are in <a routerLink="/options-setups">Options setups</a>.</p>
+        }
+      }
+    </section>
+
+    <section class="block" aria-labelledby="gd-versions">
+      <h2 id="gd-versions">Approved versions</h2>
+      <p class="muted">
+        A single-run approval is the owner’s approval of one tested run, and is never a qualified search. A version made by a golden search carries the study’s recorded verdict. Re-proof replays a run’s execution and does not recertify old statistical evidence.
+      </p>
+      @if (versions(); as found) {
+        <h3>Of exactly this content</h3>
+        @for (listed of found.exact; track listed.approval.id) {
+          <app-options-golden-version [listed]="listed" [detail]="detailOf(listed.approval.id)" [setupName]="savedName()" />
+        } @empty {
+          <p>No approved version holds this exact content{{ approvalsCut() ? ', among ' + approvalsCut() : '' }}.</p>
+        }
+        @if (found.throughStudy.length > 0) {
+          <h3>Made by searches that began from this content, with changed settings</h3>
+          @for (listed of found.throughStudy; track listed.approval.id) {
+            <app-options-golden-version [listed]="listed" [detail]="detailOf(listed.approval.id)" [setupName]="savedName()" />
+          }
+        }
+      }
+    </section>
+
+    <section class="block" aria-labelledby="gd-search">
+      <h2 id="gd-search">Start a golden search</h2>
+      <p class="muted">
+        A search varies settings of the content saved now, tests the candidates on history the plan fixes before it starts, and ends in an approval you decide. It does not place orders.
+      </p>
+      <h3>Searches that began from this content</h3>
+      <ul class="list">
+        @for (study of studies(); track study.id) {
+          <li [attr.data-study]="study.id">
+            <a [routerLink]="evidenceRoute('study', study.id)">Study <code>{{ study.id }}</code></a>
+            <span class="chip">{{ study.status | receiptLabel }}</span> {{ study.phase | receiptLabel }}
+            · started <app-timestamp-display [value]="study.created_at_ms" mode="local" />
+          </li>
+        } @empty {
+          <li>No golden search began from this exact content{{ studiesCut() ? ', among ' + studiesCut() : '' }}. A search that changed this setup’s settings is linked from the version it produced, not matched by name.</li>
+        }
+      </ul>
+      <p>
+        <button type="button" class="toggle" [attr.aria-expanded]="planning()" (click)="togglePlanning()">{{ planning() ? 'Close the plan' : 'Set up a golden search' }}</button>
+      </p>
+      @if (planning()) {
+        <app-options-search-plan [setupName]="savedName()" [parentStudyId]="parent_study_id()" />
+      }
+    </section>
+  </div>
+}

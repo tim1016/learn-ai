@@ -2,7 +2,16 @@ import { inject } from '@angular/core';
 import { Router, type RedirectFunction } from '@angular/router';
 
 import { redirectKeepingState, redirectState } from '../shell/route-redirects';
-import { OPTIONS_SETUPS_ROOT, optionsEvidenceRoute, optionsSetupRoute, type OptionsEvidenceKind } from './options-setups.address';
+import {
+  GOLDEN_PARENT_STUDY_KEY,
+  OPTIONS_CHOOSE_GOLDEN,
+  OPTIONS_CHOOSE_KEY,
+  OPTIONS_SETUPS_ROOT,
+  optionsEvidenceRoute,
+  optionsSetupRoute,
+  optionsStudyRoute,
+  type OptionsEvidenceKind,
+} from './options-setups.address';
 
 /**
  * `/options-backtest` ends at the Options setups list; a link that carried the
@@ -25,3 +34,31 @@ export const redirectOptionsBacktest: RedirectFunction = (source) => {
 export const redirectOptionsEvidence = redirectKeepingState((params) =>
   optionsEvidenceRoute(String(params['kind'] ?? '') as OptionsEvidenceKind, String(params['subjectId'] ?? '')),
 );
+
+/**
+ * `/options-golden-search` ends at the Golden tab of the setup it named
+ * (`?setup_name=`), with the study it forks (`?parent_study_id=`) and every
+ * other key and the fragment going with it. A link that names no setup is not
+ * given one: it opens the Options setups list, which asks which setup to
+ * continue with (`?then=golden`) and carries the fork along.
+ */
+export const redirectOptionsGoldenSearch: RedirectFunction = (source) => {
+  const name: unknown = source.queryParams['setup_name'];
+  const router = inject(Router);
+  if (typeof name === 'string' && name !== '') {
+    return router.createUrlTree(optionsSetupRoute(name, 'golden'), redirectState({ drop: ['setup_name'] }, source));
+  }
+  return router.createUrlTree([OPTIONS_SETUPS_ROOT], redirectState({ set: () => ({ [OPTIONS_CHOOSE_KEY]: OPTIONS_CHOOSE_GOLDEN }) }, source));
+};
+
+/**
+ * `/options-golden-search/:studyId` ends at that study, at the address a study
+ * has by its own id. The study freezes what it started from, so no saved setup
+ * has to be found for it, and none is guessed: the page says which saved
+ * setups hold that content today. The two keys that only named a plan to start
+ * (`setup_name`, `parent_study_id`) mean nothing to a study that exists, so
+ * they are not carried to it.
+ */
+export const redirectOptionsGoldenStudy = redirectKeepingState((params) => optionsStudyRoute(String(params['studyId'] ?? '')), {
+  drop: ['setup_name', GOLDEN_PARENT_STUDY_KEY],
+});

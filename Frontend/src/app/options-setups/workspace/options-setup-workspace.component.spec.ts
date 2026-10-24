@@ -91,14 +91,17 @@ describe('a setup\'s place', () => {
     expect(within(tabs).getByRole('link', { name: 'Overview' }).getAttribute('aria-current')).toBeNull();
   });
 
-  it('keeps Golden in the strip, greyed and with no address, and says why', async () => {
+  it('gives every tab its own address, Golden included', async () => {
     await renderTab(withLibrary(servedSaved('Mine', exampleBody())), 'Mine', 'overview', quiet);
 
     const tabs = screen.getByRole('navigation', { name: 'Options setup tabs' });
 
-    expect(within(tabs).queryByRole('link', { name: /Golden/ })).toBeNull();
-    expect(tabs.textContent).toContain('Golden');
-    expect(tabs.textContent).toContain('Approving a tested run and starting a golden search are being moved into this place');
+    expect(within(tabs).getAllByRole('link').map((link) => link.getAttribute('href'))).toEqual([
+      '/options-setups/Mine/overview',
+      '/options-setups/Mine/define',
+      '/options-setups/Mine/explore',
+      '/options-setups/Mine/golden',
+    ]);
   });
 
   it('opens the manual from the header in a new tab, so the half-built setup stays as it is', async () => {

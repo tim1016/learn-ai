@@ -11,7 +11,7 @@ import type { GoldenOffer } from '../options-backtest/run/golden-offer';
 import { RunResultComponent } from '../options-backtest/run/run-result.component';
 import { holdersOf } from '../../options-setups/index/options-setup-evidence';
 import { OptionsSetupIndexService } from '../../options-setups/index/options-setup-index.service';
-import { isOptionsEvidenceKind, optionsEvidenceRoute, optionsSetupRoute, type OptionsEvidenceKind } from '../../options-setups/options-setups.address';
+import { isOptionsEvidenceKind, optionsEvidenceRoute, optionsSetupRoute, optionsStudyRoute, type OptionsEvidenceKind } from '../../options-setups/options-setups.address';
 import { OptionsEvidenceService } from './options-evidence.service';
 import { OptionsHistoricalComparisonComponent } from './options-historical-comparison.component';
 import { OptionsResearchLineageComponent } from './options-research-lineage.component';
@@ -62,6 +62,7 @@ export class OptionsEvidenceViewComponent {
   /** Where this view's own links lead: the holding page's address, else where this evidence opens by what it froze, with no saved name. */
   protected readonly address = computed<readonly string[]>(() => this.route() ?? (this.knownKind() ? optionsEvidenceRoute(this.kind() as OptionsEvidenceKind, this.subjectId()) : []));
   protected readonly goldenRoute = (id: string) => optionsEvidenceRoute('golden', id);
+  protected readonly studyRoute = optionsStudyRoute;
   protected readonly evidenceRoute = (kind: string, id: string) => (isOptionsEvidenceKind(kind) ? optionsEvidenceRoute(kind, id) : []);
   protected readonly setupRoute = optionsSetupRoute;
 

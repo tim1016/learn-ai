@@ -4,9 +4,11 @@ import { provideRouter, Router, RouterOutlet, withComponentInputBinding } from '
 import { render, screen } from '@testing-library/angular';
 import type { Mock } from 'vitest';
 
+import { GoldenOptionSetupsService } from '../../components/options-backtest/golden-option-setups.service';
 import { OptionsBacktestService } from '../../components/options-backtest/options-backtest.service';
 import { PastChainService } from '../../components/options-backtest/past-chain/past-chain.service';
 import { OptionsEvidenceService } from '../../components/options-evidence/options-evidence.service';
+import { OptionsGoldenSearchService } from '../../components/options-golden-search/options-golden-search.service';
 import { PositionPreviewService } from '../../components/options-backtest/position/position-preview.service';
 import { quietPositionPreview } from '../../components/options-backtest/position/testing';
 import { RunDetailService } from '../../components/options-backtest/run-detail/run-detail.service';
@@ -62,8 +64,14 @@ interface RenderOptions {
   chain?: object;
   /** What the retained-evidence service answers, for the views that read one run's evidence. */
   evidence?: object;
+  /** What the approved versions' own service answers, for the Golden tab. */
+  golden?: object;
+  /** What the golden search's service answers, for the plan on the Golden tab. */
+  search?: object;
   /** The poll that reads a going run again is off unless this is set, so a spec that is not about it never waits on a timer. */
   polling?: boolean;
+  /** What the address says after the tab (`?run=7`). */
+  query?: string;
 }
 
 /** A read a spec answers with a value, or with a function when it needs to answer late or to fail. */
@@ -84,6 +92,8 @@ async function renderPlace(service: FakeService, url: string, download: FakeDown
       { provide: RunDetailService, useValue: options.detail ?? inertRunDetail() },
       ...(options.chain === undefined ? [] : [{ provide: PastChainService, useValue: options.chain }]),
       ...(options.evidence === undefined ? [] : [{ provide: OptionsEvidenceService, useValue: options.evidence }]),
+      ...(options.golden === undefined ? [] : [{ provide: GoldenOptionSetupsService, useValue: options.golden }]),
+      ...(options.search === undefined ? [] : [{ provide: OptionsGoldenSearchService, useValue: options.search }]),
       ...(options.index === undefined ? [] : [{ provide: OptionsSetupIndexService, useValue: { read: reading(options.index) } }]),
       ...(options.bots === undefined ? [] : [{ provide: OptionsSetupBotsService, useValue: { read: reading(options.bots) } }]),
       ...(download === undefined ? [] : [{ provide: FileDownloadService, useValue: download }]),
@@ -117,7 +127,7 @@ export async function renderExplore(service: FakeService, name: string | null, o
 
 /** Opens one tab of one setup, whichever it is, and waits for what the place reads. */
 export async function renderTab(service: FakeService, name: string | null, tab: OptionsSetupTab, options: RenderOptions = {}) {
-  const view = await renderPlace(service, setupUrl(name, tab), undefined, options);
+  const view = await renderPlace(service, `${setupUrl(name, tab)}${options.query ?? ''}`, undefined, options);
   if (options.settled !== false) await view.fixture.whenStable();
   return view;
 }

@@ -23,6 +23,7 @@
 
     <section class="block" aria-labelledby="ov-approved">
       <h2 id="ov-approved">Approved versions of this content</h2>
+      <p class="muted">A tested run is approved, and a golden search is started, in <a [routerLink]="goldenRoute()">Golden</a>.</p>
       @for (version of approvals(); track version.id; let first = $first) {
         <article class="row" [attr.data-version]="version.id">
           <p>
@@ -96,15 +97,6 @@
       } @else {
         <p class="muted" role="status">Reading the bots…</p>
       }
-    </section>
-
-    <section class="block" aria-labelledby="ov-later">
-      <h2 id="ov-later">Not available here yet</h2>
-      <ul class="list">
-        @for (tab of unavailable(); track tab.id) {
-          <li><strong>{{ tab.label }}.</strong> {{ tab.reason }}</li>
-        }
-      </ul>
     </section>
   </div>
 }

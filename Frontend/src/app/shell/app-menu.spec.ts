@@ -130,7 +130,8 @@ describe('app menu projections', () => {
     ['/research-lab/strategy-runs/run-42', 'Research', 'Research Lab'],
     ['/edge/regimes', 'Research', 'Regimes'],
     ['/golden-search/study-9', 'Signal strategies', 'Golden Search'],
-    ['/options-golden-search/study-9', 'Options setups', 'Options Golden Search'],
+    ['/options-setups/SPY%200DTE/golden', 'Options setups', 'Options setups'],
+    ['/options-setups/evidence/study/study-9', 'Options setups', 'Options setups'],
     // Pages the menu does not list, though another place's shell still hosts them:
     // instrument headlines are Markets', the multi-strategy comparison Signal strategies'.
     ['/research-lab/market/news', 'Markets', 'Ticker News'],

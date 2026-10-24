@@ -20,7 +20,10 @@ import { AlpacaActivityPageComponent } from './components/brokers/alpaca-desk/ac
 import { BotPanelShellComponent } from './components/broker/v2-panel/panel-shell/bot-panel-shell.component';
 import { EntryComponent } from './components/entry/entry.component';
 import { OptionsSetupsIndexComponent } from './options-setups/index/options-setups-index.component';
+import { OptionsEvidencePageComponent } from './components/options-evidence/options-evidence-page.component';
+import { OptionsStudyPageComponent } from './options-setups/study/options-study-page.component';
 import { OptionsSetupExploreComponent } from './options-setups/workspace/explore/options-setup-explore.component';
+import { OptionsSetupGoldenComponent } from './options-setups/workspace/golden/options-setup-golden.component';
 import { routeTreeHasData } from './shell/current-url.service';
 import { NotFoundComponent } from './shell/not-found.component';
 import { accountWorkspaceFixRoute, type AccountWorkspaceFixDestination } from './fleet/account-workspace';
@@ -144,9 +147,9 @@ describe('routes', () => {
     // A lost address starting like a real page fails in place too.
     '/research-lab/nothing-here',
     '/no-such-page?x=1#frag',
-    // A setup's address always carries its tab: a bare name, and a tab no page serves yet, name nothing.
+    // A setup's address always carries its tab: a bare name, and a tab no page serves, name nothing.
     '/options-setups/Mine',
-    '/options-setups/Mine/golden',
+    '/options-setups/Mine/nonsense',
   ])('leaves %s where it is on the not-found page, never on a default page', async (path) => {
     TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
     const router = TestBed.inject(Router);
@@ -188,6 +191,36 @@ describe('routes', () => {
     while (leaf.firstChild !== null) leaf = leaf.firstChild;
     expect(await leaf.routeConfig?.loadComponent?.()).toBe(OptionsSetupExploreComponent);
     expect(leaf.queryParams).toEqual({ view: 'history', run: '30' });
+  });
+
+  it('opens a setup\'s Golden at its own address, whatever run it reviews and study it forks', async () => {
+    TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
+    const router = TestBed.inject(Router);
+
+    await router.navigateByUrl('/options-setups/SPY%200DTE/golden?run=76&parent_study_id=os_a');
+
+    expect(router.url).toBe('/options-setups/SPY%200DTE/golden?run=76&parent_study_id=os_a');
+    let leaf = router.routerState.snapshot.root;
+    while (leaf.firstChild !== null) leaf = leaf.firstChild;
+    expect(await leaf.routeConfig?.loadComponent?.()).toBe(OptionsSetupGoldenComponent);
+    expect(leaf.queryParams).toEqual({ run: '76', parent_study_id: 'os_a' });
+  });
+
+  it('opens a study by its own id, before the other kinds of evidence, and the other kinds still open at theirs', async () => {
+    TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
+    const router = TestBed.inject(Router);
+    const leafOf = () => {
+      let leaf = router.routerState.snapshot.root;
+      while (leaf.firstChild !== null) leaf = leaf.firstChild;
+      return leaf;
+    };
+
+    await router.navigateByUrl('/options-setups/evidence/study/os_a?view=lineage');
+    expect(await leafOf().routeConfig?.loadComponent?.()).toBe(OptionsStudyPageComponent);
+    expect(leafOf().paramMap.get('studyId')).toBe('os_a');
+
+    await router.navigateByUrl('/options-setups/evidence/run/76');
+    expect(await leafOf().routeConfig?.loadComponent?.()).toBe(OptionsEvidencePageComponent);
   });
 
   it('lazily loads the Data Lake Observatory and keeps it distinct from Data Lab', async () => {

@@ -33,7 +33,7 @@
       <a [routerLink]="address()" [queryParams]="query()" [class.active]="activeView() === 'performance'">Performance</a>
       <a [routerLink]="address()" [queryParams]="lineageQuery()" [class.active]="activeView() === 'lineage'">Research lineage</a>
       @if (item.source_run_id) { <a [routerLink]="address()" [queryParams]="comparisonQuery()" [class.active]="activeView() === 'comparison'">Historical comparison</a> }
-      @if (item.study_id) { <a [routerLink]="['/options-golden-search', item.study_id]">Blocked-study detail and research</a> }
+      @if (item.study_id && item.subject_kind !== 'study') { <a [routerLink]="studyRoute(item.study_id)">Blocked-study detail and research</a> }
     </nav>
   }
   @if (activeView() === 'lineage') {
@@ -44,7 +44,7 @@
           @if (!version.identity_matches) { <p class="problem">Identity mismatch. This approval does not match the selected source setup.</p> }
           <a [routerLink]="goldenRoute(version.golden_id)" [queryParams]="lineageQuery()">Open exact Golden version</a>
           <p>Source run {{ version.source_run_id }}. {{ version.note }}</p><p>Execution proof: {{ version.proof_status | receiptLabel }}. {{ version.proof_explanation }}</p>
-          @if (version.study_id && version.identity_matches) { <a [routerLink]="['/options-golden-search', version.study_id]">Open recorded search</a> }
+          @if (version.study_id && version.identity_matches) { <a [routerLink]="studyRoute(version.study_id)">Open recorded search</a> }
           @if (version.study_manifest_sha256) { <p>Study manifest <code>{{ version.study_manifest_sha256 }}</code></p> }
           @if (version.research_verdict) { <p>Historical research: {{ version.research_verdict | receiptLabel }}</p> }
           @if (version.exposure; as exposure) { <p>Final history: {{ exposure.classification | receiptLabel }}. {{ exposure.explanation }}</p> }
@@ -60,7 +60,7 @@
     @if (performance.isLoading()) { <p>Reading retained replay…</p> }
     @if (performanceProblem(); as why) { <p class="problem">{{ why }}</p><button type="button" (click)="performance.reload()">Retry replay</button> }
     @if (performance.hasValue()) { <app-options-backtest-run-result [run]="performance.value()" /> }
-    @if (item.subject_kind === 'study') { <p>This is a search procedure. Inspect its candidates and partial evidence in the study; it is not the combined strategy's replay.</p><a [routerLink]="['/options-golden-search', item.study_id]">Inspect this study</a> }
+    @if (item.subject_kind === 'study') { <p>This is a search procedure, not a replay of one strategy. Its candidates and partial evidence are in the study; its recorded procedure is in Research lineage.</p> }
   }
   <details class="settings"><summary>Exact strategy settings and costs</summary>
     @if (setup.hasValue()) { <app-options-backtest-setup-sentences [summary]="setup.value()" /> } @else { @for (sentence of item.settings_description; track $index) { <p>{{ sentence }}</p> } }

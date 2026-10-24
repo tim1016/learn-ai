@@ -106,7 +106,6 @@ export const APP_MENU: readonly AppMenuGroup[] = [
     icon: 'pi pi-sliders-h',
     items: [
       { title: 'Options setups', route: '/options-setups' },
-      { title: 'Options Golden Search', route: '/options-golden-search' },
     ],
     // The analytical builder is an Options Lab tab until the options setup
     // workspace hosts it (R32 files it under Options setups, not Markets).

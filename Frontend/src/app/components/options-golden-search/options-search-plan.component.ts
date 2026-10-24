@@ -1,50 +1,52 @@
-import type { CandidateLoader, CandidatePageLoader } from './options-candidate-evidence.component';
-import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, inject, input, resource, signal, untracked } from '@angular/core';
-import { form, FormField } from '@angular/forms/signals';
+import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, inject, input, signal, untracked } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
 
-import { OptionsSearchPositionComponent } from './options-search-position.component';
-import { TimestampDisplayComponent } from '../../shared/timestamp';
-import { OptionsSearchTimingComponent } from './options-search-timing.component';
+import { optionsSetupRoute, optionsStudyRoute } from '../../options-setups/options-setups.address';
 import { AssetIdentityComponent } from '../../shared/asset-identity';
 import type { DateRange } from '../../shared/date-picker';
-import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { rangeInstants } from '../options-backtest/duration';
-import { OptionsBacktestService } from '../options-backtest/options-backtest.service';
+import { OptionsGoldenSearchService, OptionsSearchDispatchError, optionsSearchErrorMessage } from './options-golden-search.service';
+import type { PlanRequest, Preflight, SearchDeclarations } from './options-golden-search.types';
 import { OptionsSearchKnobsComponent, type KnobSelection } from './options-search-knobs.component';
 import { OptionsSearchRulesComponent, type RuleSelection } from './options-search-rules.component';
-import { OptionsSearchStudyComponent, type StudyAction } from './options-search-study.component';
-import { OptionsGoldenSearchService, OptionsSearchDispatchError, optionsSearchErrorMessage } from './options-golden-search.service';
-import type { OptionsStudy, PlanRequest, Preflight, SearchCommand, SearchDeclarations, SessionLoader } from './options-golden-search.types';
+import { OptionsSearchTimingComponent } from './options-search-timing.component';
 
-const STEPS = ['Research', 'Compare and final test', 'Approval'];
 interface CaptureState { readonly stamp: string; readonly kind: 'starting' | 'running' | 'checking' | 'done' | 'failed'; readonly jobId?: string; readonly current?: number; readonly total?: number; readonly message?: string }
 
+/**
+ * Plans and starts a golden search from one saved setup, as last saved.
+ *
+ * The seed is the setup the server holds under the saved name, read back as its
+ * declarations with the hash of its content. Every check and the start carry that
+ * name and hash as `expected_setup_hash`, so a setup saved differently since it was
+ * read is refused by the server and never searched. The setup is edited in Define,
+ * not here, and a search never starts from a draft.
+ *
+ * Starting freezes the plan under a key tied to its checked preflight, then asks for
+ * the research with the study's own revision; a repeated click or a retry is the same
+ * request. Nothing here places an order.
+ */
 @Component({
-  selector: 'app-options-golden-search-page',
-  imports: [OptionsSearchPositionComponent, TimestampDisplayComponent, OptionsSearchTimingComponent, AssetIdentityComponent, FormField, PageHeaderComponent, ReceiptLabelPipe, RouterLink, OptionsSearchStudyComponent, OptionsSearchKnobsComponent, OptionsSearchRulesComponent],
+  selector: 'app-options-search-plan',
+  imports: [AssetIdentityComponent, ReceiptLabelPipe, RouterLink, OptionsSearchTimingComponent, OptionsSearchRulesComponent, OptionsSearchKnobsComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
-  templateUrl: './options-golden-search-page.component.html',
+  templateUrl: './options-search-plan.component.html',
   styleUrl: './options-golden-search.component.scss',
 })
-export class OptionsGoldenSearchPageComponent {
+export class OptionsSearchPlanComponent {
   private readonly service = inject(OptionsGoldenSearchService);
-  private readonly setupsService = inject(OptionsBacktestService);
   private readonly router = inject(Router);
-  readonly studyId = input<string | undefined>(undefined);
-  readonly setup_name = input<string | undefined>(undefined);
-  readonly parent_study_id = input<string | undefined>(undefined);
-  protected readonly steps = STEPS;
-  protected readonly candidatePageLoader: CandidatePageLoader = (studyId, offset) => this.service.candidatePage(studyId, offset);
-  protected readonly candidateLoader: CandidateLoader = (studyId, digest, window, offset) => this.service.candidateEvidence(studyId, digest, window, offset);
-  protected readonly sessionLoader: SessionLoader = (studyId, candidateHash, window, sessionOpenMs) => this.service.session(studyId, candidateHash, window, sessionOpenMs);
-  protected readonly step = signal(0);
-  protected readonly selection = signal({ name: '' });
-  protected readonly fields = form(this.selection);
-  protected readonly positionDirty = signal(false);
+  private readonly destroyRef = inject(DestroyRef);
+
+  /** The saved name whose content is the seed. */
+  readonly setupName = input.required<string>();
+  /** The study this plan forks, when the plan was opened from one. */
+  readonly parentStudyId = input<string | undefined>(undefined);
+
+  protected readonly studyRoute = optionsStudyRoute;
+  protected readonly defineRoute = computed(() => optionsSetupRoute(this.setupName(), 'define'));
   protected readonly declarations = signal<SearchDeclarations | null>(null);
-  protected readonly study = signal<OptionsStudy | null>(null);
   protected readonly error = signal<string | null>(null);
   protected readonly busy = signal(false);
   protected readonly loading = signal(false);
@@ -56,18 +58,12 @@ export class OptionsGoldenSearchPageComponent {
   protected readonly rules = signal<RuleSelection | null>(null);
   protected readonly checked = signal<{ readonly stamp: string; readonly value: Preflight } | null>(null);
   protected readonly captureState = signal<CaptureState | null>(null);
-  protected readonly library = resource({ loader: () => this.setupsService.list() });
-  protected readonly history = resource({ loader: () => this.service.list() });
-  protected readonly savedSetups = computed(() => this.library.hasValue() ? this.library.value() : []);
-  protected readonly studies = computed(() => this.history.hasValue() ? this.history.value() : []);
-  protected readonly libraryError = computed(() => this.library.error() === undefined ? null : optionsSearchErrorMessage(this.library.error(), 'Saved setups could not be loaded.'));
-  protected readonly historyError = computed(() => this.history.error() === undefined ? null : optionsSearchErrorMessage(this.history.error(), 'Study history could not be loaded.'));
   protected readonly request = computed<PlanRequest | null>(() => {
     const declarations = this.declarations();
     const rules = this.rules();
     const range = rangeInstants(this.range());
-    if (this.positionDirty() || declarations === null || rules === null || range === null || this.timing() === null || this.knobs() === null || ((this.knobs()?.length ?? 0) === 0 && this.timing()?.length === 0)) return null;
-    return { setup_name: declarations.setup_name, expected_setup_hash: declarations.setup_hash, ...(this.parent_study_id() ? { parent_study_id: this.parent_study_id() } : {}), knobs: [...(this.timing() ?? []), ...(this.knobs() ?? [])], method: rules.method, policy: rules.policy, history: { ...range, train_months: rules.train_months, test_months: rules.test_months, final_months: rules.final_months }, budget: rules.budget, finalist_count: rules.finalist_count, stress: rules.stress, zoom: rules.zoom, pair_audits: rules.pair_audits };
+    if (declarations === null || rules === null || range === null || this.timing() === null || this.knobs() === null || ((this.knobs()?.length ?? 0) === 0 && this.timing()?.length === 0)) return null;
+    return { setup_name: declarations.setup_name, expected_setup_hash: declarations.setup_hash, ...(this.parentStudyId() ? { parent_study_id: this.parentStudyId() } : {}), knobs: [...(this.timing() ?? []), ...(this.knobs() ?? [])], method: rules.method, policy: rules.policy, history: { ...range, train_months: rules.train_months, test_months: rules.test_months, final_months: rules.final_months }, budget: rules.budget, finalist_count: rules.finalist_count, stress: rules.stress, zoom: rules.zoom, pair_audits: rules.pair_audits };
   });
   protected readonly preflight = computed(() => this.checked()?.stamp === JSON.stringify(this.request()) ? this.checked()?.value ?? null : null);
   protected readonly captureForPlan = computed(() => {
@@ -78,7 +74,6 @@ export class OptionsGoldenSearchPageComponent {
   protected readonly canLock = computed(() => this.request() !== null && this.preflight()?.can_lock === true && !this.busy() && !this.capturing());
   private generation = 0;
   private readonly keys = new Map<string, string>();
-  private readonly destroyRef = inject(DestroyRef);
   private captureUnsubscribe: (() => void) | null = null;
 
   constructor() {
@@ -92,33 +87,10 @@ export class OptionsGoldenSearchPageComponent {
       }
     });
     effect(() => {
-      const id = this.studyId();
-      const name = this.setup_name();
-      untracked(() => {
-        if (id) void this.loadStudy(id);
-        else if (name) {
-          this.selection.update((value) => ({ ...value, name }));
-          void this.loadSetup(name);
-        }
-      });
-    });
-    effect((onCleanup) => {
-      const value = this.study();
-      if (value === null || !value.allowed_commands.includes('cancel')) return;
-      const timer = setInterval(() => { if (!this.busy()) void this.refresh(); }, 2500);
-      onCleanup(() => clearInterval(timer));
+      const name = this.setupName();
+      untracked(() => void this.loadSetup(name));
     });
     this.destroyRef.onDestroy(() => { this.generation += 1; });
-  }
-
-  protected chooseStep(step: number): void {
-    if (this.study() === null && step > 2) return;
-    this.step.set(step);
-  }
-
-  protected async chooseSetup(): Promise<void> {
-    const name = this.selection().name;
-    if (name !== '') await this.loadSetup(name);
   }
 
   private async loadSetup(name: string): Promise<void> {
@@ -141,14 +113,8 @@ export class OptionsGoldenSearchPageComponent {
     }
   }
 
-  protected positionSaved(declarations: SearchDeclarations): void {
-    this.declarations.set(declarations);
-    this.selection.set({ name: declarations.setup_name });
-    this.positionDirty.set(false);
-    this.checked.set(null);
-    this.knobs.set([]);
-    this.timing.set([]);
-    this.library.reload();
+  protected retry(): void {
+    void this.loadSetup(this.setupName());
   }
 
   protected async checkPlan(): Promise<void> {
@@ -224,6 +190,12 @@ export class OptionsGoldenSearchPageComponent {
     }
   }
 
+  /**
+   * Freezes the checked plan, asks for its research, and opens the study. The freeze is keyed by the
+   * checked preflight and the research request by the study's revision, so starting again after a
+   * failure reuses both and cannot make a second study. The research is asked before the study opens,
+   * so the page that opens it already reads the study as running.
+   */
   protected async lock(): Promise<void> {
     const request = this.request();
     const checked = this.preflight();
@@ -232,65 +204,22 @@ export class OptionsGoldenSearchPageComponent {
     this.error.set(null);
     try {
       const study = await this.service.create(request, checked.preflight_hash, this.key(`lock:${checked.preflight_hash}`));
-      this.acceptStudy(study);
-      this.step.set(3);
-      this.history.reload();
-      this.busy.set(false);
-      await this.command({ command: 'run_research' });
-      await this.router.navigate(['/options-golden-search', study.id]);
+      if (study.allowed_commands.includes('run_research')) {
+        try {
+          await this.service.command(study.id, { command: 'run_research', expected_revision: study.revision, idempotency_key: this.key(`${study.id}:${study.revision}:run_research:{}`) });
+        } catch (error) {
+          // The research was committed but its job did not start: the study is there to resume. Any other failure leaves
+          // the plan here to start again, which reuses the same study and the same request.
+          if (!(error instanceof OptionsSearchDispatchError)) {
+            this.error.set(optionsSearchErrorMessage(error, 'The plan was frozen, but its research could not be requested. Start the search again to reuse the same study.'));
+            return;
+          }
+        }
+      }
+      await this.router.navigate(this.studyRoute(study.id));
     } catch (error) {
       this.error.set(optionsSearchErrorMessage(error, 'The plan could not be locked.'));
     } finally { this.busy.set(false); }
-  }
-
-  private async loadStudy(id: string): Promise<void> {
-    const generation = ++this.generation;
-    this.loading.set(true);
-    this.error.set(null);
-    try {
-      const study = await this.service.get(id);
-      if (generation !== this.generation) return;
-      if (this.study()?.id === study.id && (this.study()?.revision ?? 0) > study.revision) return;
-      this.acceptStudy(study);
-      this.step.set(['final', 'approval', 'approved'].includes(study.phase) || study.final_results.length > 0 ? 5 : study.phase === 'compare' || study.candidates.length > 0 ? 4 : 3);
-    } catch (error) {
-      if (generation === this.generation) this.error.set(optionsSearchErrorMessage(error, 'The study could not be loaded.'));
-    } finally {
-      if (generation === this.generation) this.loading.set(false);
-    }
-  }
-
-  protected async refresh(): Promise<void> {
-    const current = this.study();
-    if (current === null) return;
-    try {
-      const value = await this.service.get(current.id);
-      if (this.study()?.id === current.id && value.revision >= (this.study()?.revision ?? 0)) this.acceptStudy(value);
-    } catch (error) { this.error.set(optionsSearchErrorMessage(error, 'The latest study state could not be read.')); }
-  }
-
-  protected allowed(command: SearchCommand): boolean {
-    return !this.busy() && this.study()?.allowed_commands.includes(command) === true;
-  }
-
-  protected async command(action: StudyAction): Promise<void> {
-    const study = this.study();
-    if (study === null || !this.allowed(action.command)) return;
-    const { command, ...details } = action;
-    this.busy.set(true);
-    this.error.set(null);
-    try {
-      const value = await this.service.command(study.id, { command, expected_revision: study.revision, idempotency_key: this.key(`${study.id}:${study.revision}:${command}:${JSON.stringify(details)}`), ...details });
-      this.acceptStudy(value);
-      if (command === 'open_final') this.step.set(5);
-    } catch (error) {
-      if (error instanceof OptionsSearchDispatchError) this.acceptStudy(error.study);
-      this.error.set(error instanceof OptionsSearchDispatchError ? error.message : optionsSearchErrorMessage(error, 'The command did not complete. Refresh to read the latest durable state.'));
-    } finally { this.busy.set(false); }
-  }
-
-  private acceptStudy(study: OptionsStudy): void {
-    this.study.set(study);
   }
 
   private key(intent: string): string {

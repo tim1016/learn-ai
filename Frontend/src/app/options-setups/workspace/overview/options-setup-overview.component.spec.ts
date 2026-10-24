@@ -176,13 +176,12 @@ describe('Overview: when it cannot show what it is for', () => {
     expect(screen.getByRole('link', { name: 'Go to Define' }).getAttribute('href')).toBe('/options-setups/_new/define');
   });
 
-  it('says Golden is not available here yet, and why, and says nothing of Explore, which is', async () => {
+  it('leads to Golden, where a tested run is approved and a golden search is started', async () => {
     await overview('Alpha', { index: indexOf({ setups: [savedName('Alpha', '1')] }), bots: { kind: 'known', bots: [] } });
 
-    const later = await screen.findByRole('region', { name: 'Not available here yet' });
+    const approved = await screen.findByRole('region', { name: 'Approved versions of this content' });
 
-    expect(text(later)).toContain('Golden. Approving a tested run and starting a golden search are being moved into this place');
-    expect(text(later)).not.toContain('Explore');
+    expect(within(approved).getByRole('link', { name: 'Golden' }).getAttribute('href')).toBe('/options-setups/Alpha/golden');
   });
 });
 

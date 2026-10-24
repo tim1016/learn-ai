@@ -1,5 +1,5 @@
 <main class="workspace">
   <app-breadcrumb heading="Options evidence" />
-  <nav class="return">@if (botReturn(); as path) { <a [routerLink]="path">Back to bot</a> }<a routerLink="/options-setups">Options setups</a><a routerLink="/options-golden-search">Options Search</a></nav>
+  <nav class="return">@if (botReturn(); as path) { <a [routerLink]="path">Back to bot</a> }<a routerLink="/options-setups">Options setups</a></nav>
   <app-options-evidence-view [kind]="kind()" [subjectId]="subjectId()" [view]="view()" [inspected_study_id]="inspected_study_id()" [comparator_run_id]="comparator_run_id()" [botReturn]="botReturn()" />
 </main>

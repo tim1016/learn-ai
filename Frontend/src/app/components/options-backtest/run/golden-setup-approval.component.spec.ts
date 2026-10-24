@@ -1,3 +1,4 @@
+import { provideRouter } from '@angular/router';
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -8,11 +9,11 @@ import { GoldenSetupApprovalComponent } from './golden-setup-approval.component'
 describe('Golden setup approval', () => {
   it('retains the owner exception, failed rule and exposure label on a ready approved version', async () => {
     const version = exceptionGoldenSetup();
-    await render(GoldenSetupApprovalComponent, { inputs: { runId: version.source_run_id }, providers: [{ provide: GoldenOptionSetupsService, useValue: { list: async () => [version] } }] });
+    await render(GoldenSetupApprovalComponent, { inputs: { runId: version.source_run_id }, providers: [provideRouter([]), { provide: GoldenOptionSetupsService, useValue: { list: async () => [version] } }] });
     expect(await screen.findByText('Owner exception', { exact: true })).toBeTruthy();
     expect(screen.getByText(/The final Sharpe hurdle was not met/)).toBeTruthy();
     expect(screen.getByText(/The final interval was used in recorded research/)).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Review source Options study' }).getAttribute('href')).toBe('/options-golden-search/' + version.evidence.options_search_study_id);
+    expect(screen.getByRole('link', { name: 'Review source Options study' }).getAttribute('href')).toBe('/options-setups/evidence/study/' + version.evidence.options_search_study_id);
   });
 
   it('approves the chosen completed run and retries a lost response under the same key', async () => {

@@ -6,13 +6,19 @@ const carriesATab: CanMatchFn = (_route, segments) => segments.length >= 2;
 /**
  * The Options setups place (ADR 0084). A saved name is one segment and a tab
  * is the next, so a bare second segment never names a setup; evidence has
- * three segments after the group and needs no name.
+ * three segments after the group and needs no name. A golden search study is
+ * evidence too (`evidence/study/:studyId`), and is declared before the other
+ * kinds because it holds the study's workbench, not only its record.
  */
 export const OPTIONS_SETUPS_ROUTES: Routes = [
   {
     path: '',
     pathMatch: 'full',
     loadComponent: () => import('./index/options-setups-index.component').then((m) => m.OptionsSetupsIndexComponent),
+  },
+  {
+    path: 'evidence/study/:studyId',
+    loadComponent: () => import('./study/options-study-page.component').then((m) => m.OptionsStudyPageComponent),
   },
   {
     path: 'evidence/:kind/:subjectId',
@@ -37,6 +43,11 @@ export const OPTIONS_SETUPS_ROUTES: Routes = [
         // The view and the run it is about are query keys (`?view=history&run=68`), so an opened run has an address.
         path: 'explore',
         loadComponent: () => import('./workspace/explore/options-setup-explore.component').then((m) => m.OptionsSetupExploreComponent),
+      },
+      {
+        // The run under review and the study a plan forks are query keys (`?run=76&parent_study_id=os_…`), so a review has an address.
+        path: 'golden',
+        loadComponent: () => import('./workspace/golden/options-setup-golden.component').then((m) => m.OptionsSetupGoldenComponent),
       },
     ],
   },

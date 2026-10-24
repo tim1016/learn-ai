@@ -9,13 +9,7 @@ import type { WorkspaceStateContent } from '../../../shared/workspace/workspace-
 import { WorkspaceStateBlockComponent } from '../../../shared/workspace/workspace-state-block.component';
 import { evidenceHolding, namesHolding, newestFirst } from '../../index/options-setup-evidence';
 import { OptionsSetupIndexService, type IndexedApproval } from '../../index/options-setup-index.service';
-import {
-  OPTIONS_SETUP_TAB_UNAVAILABLE,
-  OPTIONS_SETUP_TABS,
-  optionsEvidenceRoute,
-  optionsSetupRoute,
-  type OptionsSetupTab,
-} from '../../options-setups.address';
+import { optionsEvidenceRoute, optionsSetupRoute } from '../../options-setups.address';
 import { describeStanding } from '../draft-standing';
 import { OptionsSetupWorkspaceStore } from '../options-setup-store';
 import { OptionsSetupBotsService } from './options-setup-bots.service';
@@ -56,13 +50,8 @@ export class OptionsSetupOverviewComponent {
   protected readonly name = this.store.address;
   protected readonly standing = computed(() => describeStanding(this.store.standing()));
   protected readonly evidenceRoute = optionsEvidenceRoute;
-  protected readonly unavailable = computed(() =>
-    OPTIONS_SETUP_TABS.tabs.flatMap((tab) => {
-      const reason = OPTIONS_SETUP_TAB_UNAVAILABLE[tab.id];
-      return reason === undefined ? [] : [{ id: tab.id as OptionsSetupTab, label: tab.label, reason }];
-    }),
-  );
   protected readonly defineRoute = computed(() => optionsSetupRoute(this.name(), 'define'));
+  protected readonly goldenRoute = computed(() => optionsSetupRoute(this.name(), 'golden'));
 
   /** The saved setup, as the index read it just now. */
   private readonly saved = computed(() => {

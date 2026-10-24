@@ -66,6 +66,32 @@ describe('the Options setups list', () => {
   });
 });
 
+describe('asking which setup to continue with (?then=golden)', () => {
+  async function renderChoosing(inputs: Record<string, string>) {
+    const view = await render(OptionsSetupsIndexComponent, {
+      inputs,
+      providers: [provideRouter([]), ...fakePickerWorld().providers, { provide: OptionsSetupIndexService, useValue: { read: async () => indexOf({ setups: [savedName('Alpha', '1'), savedName('Old rules', null)] }) } }, { provide: OptionsBacktestService, useValue: {} }],
+    });
+    await view.fixture.whenStable();
+  }
+
+  it('opens every saved setup on its Golden tab, carrying the study a plan forks, and picks none', async () => {
+    await renderChoosing({ then: 'golden', parent_study_id: 'os_a' });
+
+    expect(within(saved()).getByRole('link', { name: 'Alpha' }).getAttribute('href')).toBe('/options-setups/Alpha/golden?parent_study_id=os_a');
+    expect(within(saved()).getByRole('status').textContent).toContain('Choose the saved setup whose Golden tab to open');
+    expect(within(saved()).getByRole('status').textContent).toContain('os_a');
+    expect(within(saved()).queryByRole('link', { name: 'Old rules' })).toBeNull();
+  });
+
+  it('opens a saved setup on its Overview, as ever, when nothing is asked', async () => {
+    await renderChoosing({});
+
+    expect(within(saved()).getByRole('link', { name: 'Alpha' }).getAttribute('href')).toBe('/options-setups/Alpha/overview');
+    expect(within(saved()).queryByRole('status')).toBeNull();
+  });
+});
+
 describe('every run, search and approved version', () => {
   const world = () =>
     indexOf({

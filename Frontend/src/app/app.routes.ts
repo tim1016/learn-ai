@@ -5,7 +5,7 @@ import { RETIRED_LENS_QUERY_PARAM, dropRetiredLensGuard } from "./fleet/retired-
 import { EntryComponent } from "./components/entry/entry.component";
 import { redirectLegacyDataLab } from "./components/data-lab/data-lab-ingress";
 import { brokerClerkRedirectGuard } from "./fleet/broker-clerk-redirect.guard";
-import { redirectOptionsBacktest, redirectOptionsEvidence } from "./options-setups/options-setups.redirects";
+import { redirectOptionsBacktest, redirectOptionsEvidence, redirectOptionsGoldenSearch, redirectOptionsGoldenStudy } from "./options-setups/options-setups.redirects";
 import { redirectKeepingState } from "./shell/route-redirects";
 
 const loadBrokerLaneUnavailable = () =>
@@ -265,11 +265,13 @@ export const routes: Routes = [
   },
   {
     path: "options-golden-search",
-    loadComponent: () => import("./components/options-golden-search/options-golden-search-page.component").then((m) => m.OptionsGoldenSearchPageComponent),
+    redirectTo: redirectOptionsGoldenSearch,
+    pathMatch: "full",
   },
   {
     path: "options-golden-search/:studyId",
-    loadComponent: () => import("./components/options-golden-search/options-golden-search-page.component").then((m) => m.OptionsGoldenSearchPageComponent),
+    redirectTo: redirectOptionsGoldenStudy,
+    pathMatch: "full",
   },
   {
     path: "options-backtest",

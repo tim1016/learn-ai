@@ -10,7 +10,6 @@ import { WorkspaceHeaderComponent } from '../../shared/workspace/workspace-heade
 import { WorkspaceStateBlockComponent } from '../../shared/workspace/workspace-state-block.component';
 import { WorkspaceTabListComponent, type WorkspaceTabItem } from '../../shared/workspace/workspace-tab-list.component';
 import {
-  OPTIONS_SETUP_TAB_UNAVAILABLE,
   OPTIONS_SETUP_TABS,
   OPTIONS_SETUPS_ROOT,
   optionsSetupLocation,
@@ -26,8 +25,7 @@ import { OptionsSetupWorkspaceStore } from './options-setup-store';
  * tabs, and the working copy of the setup kept alive across them.
  *
  * It fails in place, with a way back, for a name the library does not hold: it
- * never opens another setup instead. The tabs it cannot offer yet stay in the
- * strip, greyed, with the reason. Define's working copy and Explore's dates and
+ * never opens another setup instead. Define's working copy and Explore's dates and
  * backtest are kept here, so a tab switch loses neither.
  */
 @Component({
@@ -65,13 +63,9 @@ export class OptionsSetupWorkspaceComponent {
     return [...trail, { label: this.title() }];
   });
 
-  /** A tab the workspace can open has an address; one it cannot yet stays, greyed, with its reason. */
   protected readonly tabs = computed<readonly WorkspaceTabItem[]>(() => {
     const name = this.savedName();
-    return OPTIONS_SETUP_TABS.tabs.map((tab) => {
-      const reason = OPTIONS_SETUP_TAB_UNAVAILABLE[tab.id];
-      return reason === undefined ? { ...tab, route: optionsSetupRoute(name, tab.id) } : { ...tab, route: null, unavailableReason: reason };
-    });
+    return OPTIONS_SETUP_TABS.tabs.map((tab) => ({ ...tab, route: optionsSetupRoute(name, tab.id) }));
   });
 
   /** What to say, in place, when the address names no setup the workspace can open. Absent: the workspace opens. */

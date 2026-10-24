@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject, resource, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input, resource, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
 import { extractServerMessage } from '../../components/broker/operation-error';
@@ -12,7 +12,7 @@ import type { WorkspaceAction } from '../../shared/workspace/workspace-action';
 import { WorkspaceHeaderComponent } from '../../shared/workspace/workspace-header.component';
 import type { WorkspaceStateContent } from '../../shared/workspace/workspace-state';
 import { WorkspaceStateBlockComponent } from '../../shared/workspace/workspace-state-block.component';
-import { optionsEvidenceRoute, optionsSetupRoute, type OptionsEvidenceKind } from '../options-setups.address';
+import { GOLDEN_PARENT_STUDY_KEY, OPTIONS_CHOOSE_GOLDEN, optionsEvidenceRoute, optionsSetupRoute, type OptionsEvidenceKind, type OptionsSetupTab } from '../options-setups.address';
 import { evidenceHolding, holdersOf, newestFirst, type ContentHolders } from './options-setup-evidence';
 import { OptionsSetupIndexService, type IndexedSetup, type OptionsSetupIndex } from './options-setup-index.service';
 
@@ -59,6 +59,9 @@ const FILTERS: readonly { readonly id: KindFilter; readonly label: string }[] = 
  * still holds the content it froze. A name addresses a draft that can be edited,
  * deleted and reused, so evidence is never listed under one: each row opens by
  * its own id, and says which saved names hold its exact content today, if any.
+ *
+ * `?then=golden` asks which setup to continue with: an old Options Golden Search link that named no
+ * setup ends here, and every saved setup then opens on its Golden tab, carrying the study it forks.
  */
 @Component({
   selector: 'app-options-setups-index',
@@ -79,6 +82,15 @@ const FILTERS: readonly { readonly id: KindFilter; readonly label: string }[] = 
 export class OptionsSetupsIndexComponent {
   private readonly indexService = inject(OptionsSetupIndexService);
   private readonly backtest = inject(OptionsBacktestService);
+
+  /** What the list is asked to continue with: `golden` sends each saved setup to its Golden tab. */
+  readonly then = input<string | undefined>(undefined);
+  /** The study a plan forks, kept for the Golden tab the owner chooses. */
+  readonly parent_study_id = input<string | undefined>(undefined);
+  protected readonly choosing = computed(() => this.then() === OPTIONS_CHOOSE_GOLDEN);
+  /** The tab a saved setup opens on, and what it carries there. */
+  protected readonly landing = computed<OptionsSetupTab>(() => (this.choosing() ? 'golden' : 'overview'));
+  protected readonly landingQuery = computed(() => (this.choosing() ? { [GOLDEN_PARENT_STUDY_KEY]: this.parent_study_id() ?? null } : {}));
 
   protected readonly index = resource({ loader: () => this.indexService.read() });
   protected readonly filters = FILTERS;

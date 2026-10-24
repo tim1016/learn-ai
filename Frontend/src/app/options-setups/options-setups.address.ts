@@ -26,12 +26,24 @@ export const OPTIONS_SETUP_TABS = defineWorkspaceTabs<OptionsSetupTab>(
 );
 
 /**
- * The tabs this place cannot open yet, and why. They stay in the strip so the
- * workspace shows what it will have, and are not routes until they exist.
+ * What Golden's address says besides the setup: the run being reviewed for approval (`?run=<id>`, which Take to Golden
+ * carries), and the study a new plan forks (`?parent_study_id=`). Neither is a name or content: the run and the study
+ * are addressed by their own ids.
  */
-export const OPTIONS_SETUP_TAB_UNAVAILABLE: Readonly<Partial<Record<OptionsSetupTab, string>>> = {
-  golden: 'Approving a tested run and starting a golden search are being moved into this place. Approved versions open from the Options setups list.',
-};
+export const GOLDEN_RUN_KEY = 'run';
+export const GOLDEN_PARENT_STUDY_KEY = 'parent_study_id';
+
+/** The Golden address of one setup, with the run it reviews and the study it forks, when it names them. */
+export function optionsGoldenQuery(run: number | null, parentStudyId: string | null = null): Record<string, string | null> {
+  return { [GOLDEN_RUN_KEY]: run === null ? null : String(run), [GOLDEN_PARENT_STUDY_KEY]: parentStudyId };
+}
+
+/**
+ * `/options-setups?then=golden` asks the list which setup to continue with: each saved setup opens on its Golden tab.
+ * It is where an old Options Golden Search address that names no setup ends.
+ */
+export const OPTIONS_CHOOSE_KEY = 'then';
+export const OPTIONS_CHOOSE_GOLDEN = 'golden';
 
 /**
  * What Explore shows, by the `view` of its address (`/options-setups/:name/explore?view=`). Backtest is the one
@@ -87,6 +99,11 @@ export function optionsSetupRoute(name: string | null, tab: OptionsSetupTab): st
 /** Immutable evidence, by what it froze. It needs no saved name. */
 export function optionsEvidenceRoute(kind: OptionsEvidenceKind, id: string | number): string[] {
   return [OPTIONS_SETUPS_ROOT, 'evidence', kind, String(id)];
+}
+
+/** One golden search study, with its workbench: by its own id, whether or not a saved setup still holds what it started from. */
+export function optionsStudyRoute(studyId: string): string[] {
+  return optionsEvidenceRoute('study', studyId);
 }
 
 export interface OptionsSetupLocation {

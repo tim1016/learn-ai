@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, input } from '@angular/co
 import { RouterLink } from '@angular/router';
 
 import { BreadcrumbComponent } from '../../shared/breadcrumb/breadcrumb.component';
+import { botReturnPath } from './bot-return';
 import { OptionsEvidenceViewComponent } from './options-evidence-view.component';
 
 /**
@@ -23,8 +24,5 @@ export class OptionsEvidencePageComponent {
   readonly inspected_study_id = input<string>();
   readonly comparator_run_id = input<string>();
   readonly bot_return = input<string>();
-  protected readonly botReturn = computed(() => {
-    const path = this.bot_return();
-    return path && /^\/brokers\/alpaca\/clerks\/[^/?#]+\/accounts\/[^/?#]+\/bots\/[^/?#]+$/.test(path) ? path : null;
-  });
+  protected readonly botReturn = computed(() => botReturnPath(this.bot_return()));
 }

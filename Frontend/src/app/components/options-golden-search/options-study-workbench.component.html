@@ -1,0 +1,11 @@
+@if (error(); as message) {
+  <p class="notice problem" role="alert">{{ message }}</p>
+  @if (study() === null) { <button type="button" [disabled]="loading()" (click)="retry()">Read the study again</button> }
+}
+@if (study(); as value) {
+  <nav class="steps" aria-label="Study steps">@for (label of steps; track label; let i = $index) { <button type="button" [class.active]="step() === i + 3" (click)="chooseStep(i + 3)">{{ label }}</button> }</nav>
+  <div class="actions"><button type="button" [disabled]="busy()" (click)="refresh()">Refresh study</button></div>
+  <app-options-search-study [study]="value" [step]="step()" [busy]="busy()" [sessionLoader]="sessionLoader" [candidateLoader]="candidateLoader" [candidatePageLoader]="candidatePageLoader" (action)="command($event)" />
+} @else if (loading()) {
+  <p role="status">Reading the study…</p>
+}

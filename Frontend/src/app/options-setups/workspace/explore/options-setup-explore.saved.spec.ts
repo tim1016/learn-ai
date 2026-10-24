@@ -320,14 +320,13 @@ describe('the views about one run', () => {
 });
 
 describe('the tab', () => {
-  it('is a link in the strip, and Golden alone is greyed', async () => {
+  it('is a link in the strip, beside Golden, which has its own address', async () => {
     await renderExplore(fakeService(vi, mine()), 'Mine');
 
     const tabs = screen.getByRole('navigation', { name: 'Options setup tabs' });
 
     expect(within(tabs).getByRole('link', { name: 'Explore' }).getAttribute('aria-current')).toBe('page');
-    expect(within(tabs).queryByRole('link', { name: /Golden/ })).toBeNull();
-    expect(tabs.textContent).toContain('Golden');
+    expect(within(tabs).getByRole('link', { name: 'Golden' }).getAttribute('href')).toBe('/options-setups/Mine/golden');
   });
 
   it('keeps the dates and the answer of Check data when the owner leaves for Overview and comes back', async () => {

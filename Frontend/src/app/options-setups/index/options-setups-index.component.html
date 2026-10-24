@@ -8,6 +8,9 @@
   <div class="index">
     <section class="block" aria-labelledby="osi-saved">
       <h2 id="osi-saved">Saved setups</h2>
+      @if (choosing()) {
+        <p role="status">Choose the saved setup whose Golden tab to open. A golden search starts from a saved setup, and a run is approved under the setup that saved its content.@if (parent_study_id()) { The plan will fork study <code>{{ parent_study_id() }}</code>. }</p>
+      }
       <p class="muted">A saved name is a label on a draft you can edit, delete and reuse. The evidence below is matched to a setup by its exact content, never by its name.</p>
       @if (deleteProblem(); as why) { <p class="problem" role="alert">{{ why }}</p> }
       <table class="table">
@@ -18,7 +21,7 @@
           @for (row of setups(); track row.setup.name) {
             <tr>
               <th scope="row">
-                @if (row.setup.setup_sha256 !== null) { <a [routerLink]="setupRoute(row.setup.name, 'overview')">{{ row.setup.name }}</a> }
+                @if (row.setup.setup_sha256 !== null) { <a [routerLink]="setupRoute(row.setup.name, landing())" [queryParams]="landingQuery()">{{ row.setup.name }}</a> }
                 @else { {{ row.setup.name }} }
                 @if (row.setup.example) { <span class="chip">Example</span> }
                 @if (row.sharedWith.length > 0) { <span class="note">Same content as @for (other of row.sharedWith; track other; let last = $last) {“{{ other }}”{{ last ? '' : ', ' }}}</span> }
