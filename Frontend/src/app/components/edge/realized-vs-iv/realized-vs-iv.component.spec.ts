@@ -263,8 +263,8 @@ describe("RealizedVsIvComponent — where the bars came from", () => {
         sessions: [{ group: "window", trading_date_ms: Date.UTC(2025, 5, 4, 13, 30), outcome: "unavailable_from_provider", reason: "provider_no_data", failure_reason: "provider_no_data" }],
         sessions_total: 1,
         coverage: {
-          window: { expected_sessions: 252, reused: 200, added: 51, missing: 0, failed: 1, building: 0, corrupt: 0, unavailable_from_provider: 1 },
-          warmup: { expected_sessions: 0, reused: 0, added: 0, missing: 0, failed: 0, building: 0, corrupt: 0, unavailable_from_provider: 0 },
+          window: { expected_sessions: 252, reused: 200, added: 51, missing: 0, failed: 1, building: 0, corrupt: 0, captured_before_final: 0, unavailable_from_provider: 1 },
+          warmup: { expected_sessions: 0, reused: 0, added: 0, missing: 0, failed: 0, building: 0, corrupt: 0, captured_before_final: 0, unavailable_from_provider: 0 },
           artifacts: { fetched: 51, reused: 200, refreshed: 0 },
         },
       },

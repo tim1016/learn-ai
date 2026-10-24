@@ -23,7 +23,7 @@ export const YZ_RV_BY_WINDOW: Readonly<Record<number, number>> = { 5: 0.31, 10: 
 const OTHER_ESTIMATOR_RV = 0.5;
 const WINDOWS = [5, 10, 30];
 
-const emptyGroup = { expected_sessions: 0, reused: 0, added: 0, missing: 0, failed: 0, building: 0, corrupt: 0, unavailable_from_provider: 0 };
+const emptyGroup = { expected_sessions: 0, reused: 0, added: 0, missing: 0, failed: 0, building: 0, corrupt: 0, captured_before_final: 0, unavailable_from_provider: 0 };
 
 /** The `data_source` block a lake study writes, as the server sends it. */
 export function lakeDataSource(over: Partial<LakeDataSourceRaw> = {}): LakeDataSourceRaw {
