@@ -1,22 +1,29 @@
-import { provideHttpClient } from '@angular/common/http';
-import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { HttpErrorResponse, HttpResponse, provideHttpClient, withInterceptors, type HttpInterceptorFn } from '@angular/common/http';
+import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { Router, type Routes } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { fireEvent, screen, within } from '@testing-library/angular';
+import { of, throwError } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AlpacaAccountListPageComponent } from '../../components/brokers/alpaca-desk/alpaca-account-list-page.component';
 import { BrokerConfigurationService } from '../../components/brokers/alpaca-desk/configuration/broker-configuration.service';
+import { BotHistoryService } from '../../components/brokers/alpaca-history/bot-history.service';
 import { BrokerV2PanelService } from '../../components/broker/v2-panel/lib/broker-v2-panel.service';
+import { GoldenSearchService } from '../../components/golden-search/golden-search.service';
 import type { GoldenQualificationSummary, QualificationDeployOffer } from '../../components/golden-search/golden-search.types';
 import { deployOffer as goldenDeployOffer } from '../../components/golden-search/testing/fixtures';
 import { provideFleetDirectory, testLane, TEST_ACCOUNT_ID } from '../../fleet/fleet-directory-testing';
 import { AlpacaLiveVerdictService } from '../../services/alpaca-live-verdict.service';
+import { GoldenValidationService } from '../../services/golden-validation.service';
+import { JobsService } from '../../services/jobs.service';
+import { StrategyValidationService } from '../../services/strategy-validation.service';
 import { fakeAccountMoney } from '../../testing/account-money-fixtures';
 import { fakeVerdictState } from '../../testing/alpaca-live-verdict-fixtures';
-import { harnessEntry, qualification, registryEntry } from '../testing/fixtures';
+import { SignalStrategyRegistryService } from '../signal-strategy-registry.service';
+import { fleetPage, harnessEntry, qualification, registryEntry } from '../testing/fixtures';
 import { emptyWorld, provideSignalStrategyWorld } from '../testing/signal-strategy-world';
 
 /**
@@ -26,6 +33,10 @@ import { emptyWorld, provideSignalStrategyWorld } from '../testing/signal-strate
  * own specs; what is proved here is that the exact intent reaches it, survives the
  * owner's choosing and re-choosing an account, and is refused, not replaced, when
  * the version is revoked on the way.
+ *
+ * The pages' own services run over the real HTTP client, in front of a fake backend
+ * that answers the reads and records every request, so a page that sent a command
+ * would show up as a request that is not a read.
  */
 
 const EMA = 'ema_crossover_signal';
@@ -59,11 +70,19 @@ const ROUTES: Routes = [
   { path: 'brokers/alpaca/clerks/:clerkId/accounts/:accountId/deploy', component: DeployAddressStubComponent },
 ];
 
+/** One request the pages sent over the wire. */
+interface Sent {
+  readonly method: string;
+  readonly url: string;
+}
+
 interface Walk {
   readonly harness: RouterTestingHarness;
-  readonly http: HttpTestingController;
-  readonly deployOffer: ReturnType<typeof vi.fn>;
+  /** Every request the pages sent, in order. */
+  readonly sent: readonly Sent[];
   readonly getAccountMoney: ReturnType<typeof vi.fn>;
+  /** The versions the pages asked Deploy's offer for. */
+  offersAskedFor(): string[];
   /** A version the server now says is revoked. */
   revoke(id: string): void;
 }
@@ -82,13 +101,41 @@ function offerOf(version: GoldenQualificationSummary, revoked: ReadonlySet<strin
   });
 }
 
+const OFFER_PATH = /^\/api\/research\/golden-qualifications\/([^/]+)\/deploy-offer$/;
+
+/**
+ * The wire behind the pages: it records every request, answers the reads the walk makes,
+ * and refuses anything that is not a read, so a command cannot go unseen.
+ */
+function walkBackend(
+  versions: readonly GoldenQualificationSummary[],
+  entries: readonly ReturnType<typeof registryEntry>[],
+  revoked: ReadonlySet<string>,
+  sent: Sent[],
+): HttpInterceptorFn {
+  const answer = (body: unknown) => of(new HttpResponse({ status: 200, body }));
+  const fail = (status: number, url: string) => throwError(() => new HttpErrorResponse({ status, url }));
+  return (request) => {
+    sent.push({ method: request.method, url: request.url });
+    if (request.method !== 'GET') return fail(405, request.url);
+    if (request.url.endsWith('/api/engine/strategy-registry')) return answer(entries);
+    if (request.url === '/api/strategy-validation/strategies') return answer({ strategies: [] });
+    if (request.url === '/api/research/golden-qualifications') return answer(versions);
+    if (request.url === '/api/research/golden-search/capabilities') return answer([]);
+    if (request.url === '/api/research/golden-validations') return answer([]);
+    if (request.url.endsWith('/api/broker-clerks/aggregate/bot-history')) return answer(fleetPage({ rows: [] }));
+    const offered = OFFER_PATH.exec(request.url);
+    if (offered !== null) {
+      const version = versions.find((candidate) => candidate.id === decodeURIComponent(offered[1]));
+      return version === undefined ? fail(404, request.url) : answer(offerOf(version, revoked));
+    }
+    return fail(404, request.url);
+  };
+}
+
 async function start(url: string, versions: readonly GoldenQualificationSummary[], entries = [registryEntry(), harnessEntry()]): Promise<Walk> {
   const revoked = new Set<string>();
-  const deployOffer = vi.fn(async (id: string) => {
-    const version = versions.find((candidate) => candidate.id === id);
-    if (version === undefined) throw new Error(`No version ${id} exists.`);
-    return offerOf(version, revoked);
-  });
+  const sent: Sent[] = [];
   const getAccountMoney = vi.fn(async (target: { accountId?: string }) => fakeAccountMoney({ account_id: target.accountId ?? '' }));
   const directory = provideFleetDirectory({
     observed_at_ms: 1,
@@ -103,9 +150,16 @@ async function start(url: string, versions: readonly GoldenQualificationSummary[
   });
   TestBed.configureTestingModule({
     providers: [
-      ...provideSignalStrategyWorld(emptyWorld({ entries, qualifications: versions }), {}, { golden: { deployOffer } }, ROUTES),
-      provideHttpClient(),
+      ...provideSignalStrategyWorld(emptyWorld({ entries, qualifications: versions }), {}, {}, ROUTES),
+      provideHttpClient(withInterceptors([walkBackend(versions, entries, revoked, sent)])),
       provideHttpClientTesting(),
+      // The services the walk reads through are the real ones, over the wire above.
+      { provide: SignalStrategyRegistryService, useClass: SignalStrategyRegistryService },
+      { provide: StrategyValidationService, useClass: StrategyValidationService },
+      { provide: GoldenSearchService, useClass: GoldenSearchService },
+      { provide: GoldenValidationService, useClass: GoldenValidationService },
+      { provide: BotHistoryService, useClass: BotHistoryService },
+      { provide: JobsService, useValue: {} },
       { provide: directory.provide, useValue: directory.useValue },
       { provide: AlpacaLiveVerdictService, useValue: { stateFor: () => fakeVerdictState('paper') } },
       { provide: BrokerV2PanelService, useValue: { getAccountMoney } },
@@ -114,7 +168,13 @@ async function start(url: string, versions: readonly GoldenQualificationSummary[
   });
   const harness = await RouterTestingHarness.create();
   await harness.navigateByUrl(url);
-  return { harness, http: TestBed.inject(HttpTestingController), deployOffer, getAccountMoney, revoke: (id) => revoked.add(id) };
+  return {
+    harness,
+    sent,
+    getAccountMoney,
+    offersAskedFor: () => sent.flatMap((request) => OFFER_PATH.exec(request.url)?.slice(1) ?? []),
+    revoke: (id) => revoked.add(id),
+  };
 }
 
 /** The header's "Deploy a bot", opened. */
@@ -189,7 +249,8 @@ describe('Deploy a bot from a strategy to an account’s Deploy (T13)', () => {
     expect(refusal.textContent).toContain('No other version was chosen in its place and no account was chosen.');
     expect(refusal.textContent).not.toContain('spy-default');
     // The default is ready, and is never asked for, linked or carried instead.
-    expect(walk.deployOffer.mock.calls.every(([id]) => id === 'spy-earlier')).toBe(true);
+    expect(walk.offersAskedFor().length).toBeGreaterThan(0);
+    expect(new Set(walk.offersAskedFor())).toEqual(new Set(['spy-earlier']));
     for (const link of screen.getAllByRole('link', { name: /Paper|Live/ })) {
       expect(link.getAttribute('href')).toContain('golden_qualification=spy-earlier');
       expect(link.getAttribute('href')).not.toContain('spy-default');
@@ -209,7 +270,7 @@ describe('Deploy a bot from a strategy to an account’s Deploy (T13)', () => {
     expect(TestBed.inject(Router).url).toBe(`${LIST_PATH}?deploy=&strategy=deployment_validation`);
     fireEvent.click(cardFor('Paper'));
     expect(await screen.findByText(`Deploy on ${TEST_ACCOUNT_ID}: strategy deployment_validation, version none`)).toBeTruthy();
-    expect(walk.deployOffer).not.toHaveBeenCalled();
+    expect(walk.offersAskedFor()).toEqual([]);
   });
 
   it('sends no request but reads, from the header to an account’s Deploy address', async () => {
@@ -219,9 +280,9 @@ describe('Deploy a bot from a strategy to an account’s Deploy (T13)', () => {
     fireEvent.click(cardFor('Paper'));
     await screen.findByText(`Deploy on ${TEST_ACCOUNT_ID}: strategy ${EMA}, version spy-earlier`);
 
-    // The fakes hold only reads, so a page that reached for a command would have thrown.
     expect(walk.getAccountMoney).toHaveBeenCalled();
-    const sent = walk.http.match(() => true).map((request) => request.request.method);
-    expect(sent.filter((method) => method !== 'GET')).toEqual([]);
+    // The pages did ask the wire for something, and everything they asked was a read.
+    expect(walk.sent.length).toBeGreaterThan(0);
+    expect(walk.sent.filter((request) => request.method !== 'GET')).toEqual([]);
   });
 });
