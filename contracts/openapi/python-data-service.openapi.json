@@ -11884,6 +11884,17 @@
             ],
             "title": "Artifact Id"
           },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
           "rebuild_reason": {
             "anyOf": [
               {
@@ -12596,6 +12607,40 @@
           "sign"
         ],
         "title": "CustomGateSave",
+        "type": "object"
+      },
+      "DailyRollup": {
+        "description": "The symbol's derived daily file in this tree. It is symbol-wide, not scoped to the window.",
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "sources_changed",
+                  "adjustment_evidence_invalid"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "state": {
+            "enum": [
+              "current",
+              "stale",
+              "not_built"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "DailyRollup",
         "type": "object"
       },
       "DataAvailabilityResult": {
@@ -18226,6 +18271,25 @@
           "source"
         ],
         "title": "FigureView",
+        "type": "object"
+      },
+      "FillWindow": {
+        "description": "The span a Fill asks the admission for: first through last fetchable session.",
+        "properties": {
+          "end_trading_date_ms": {
+            "title": "End Trading Date Ms",
+            "type": "integer"
+          },
+          "start_trading_date_ms": {
+            "title": "Start Trading Date Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start_trading_date_ms",
+          "end_trading_date_ms"
+        ],
+        "title": "FillWindow",
         "type": "object"
       },
       "FinalScenarioOutcome": {
@@ -33448,6 +33512,223 @@
           "bar_count"
         ],
         "title": "IndicatorReliabilityResponse",
+        "type": "object"
+      },
+      "InstrumentDataResponse": {
+        "properties": {
+          "as_of_ms": {
+            "title": "As Of Ms",
+            "type": "integer"
+          },
+          "daily_rollup": {
+            "$ref": "#/components/schemas/DailyRollup"
+          },
+          "data_root_id": {
+            "format": "uuid",
+            "title": "Data Root Id",
+            "type": "string"
+          },
+          "data_type": {
+            "const": "trade",
+            "default": "trade",
+            "title": "Data Type"
+          },
+          "fill_window": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FillWindow"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "market": {
+            "title": "Market",
+            "type": "string"
+          },
+          "price_adjustment_mode": {
+            "title": "Price Adjustment Mode",
+            "type": "string"
+          },
+          "provider_history_start_ms": {
+            "title": "Provider History Start Ms",
+            "type": "integer"
+          },
+          "resolution": {
+            "const": "minute",
+            "default": "minute",
+            "title": "Resolution"
+          },
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/InstrumentSession"
+            },
+            "title": "Sessions",
+            "type": "array"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/InstrumentDataSummary"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "market",
+          "symbol",
+          "price_adjustment_mode",
+          "data_root_id",
+          "provider_history_start_ms",
+          "as_of_ms",
+          "summary",
+          "sessions",
+          "daily_rollup"
+        ],
+        "title": "InstrumentDataResponse",
+        "type": "object"
+      },
+      "InstrumentDataSummary": {
+        "properties": {
+          "before_provider_history": {
+            "title": "Before Provider History",
+            "type": "integer"
+          },
+          "building": {
+            "title": "Building",
+            "type": "integer"
+          },
+          "calendar_day_count": {
+            "title": "Calendar Day Count",
+            "type": "integer"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "fetchable": {
+            "title": "Fetchable",
+            "type": "integer"
+          },
+          "forming": {
+            "title": "Forming",
+            "type": "integer"
+          },
+          "missing": {
+            "title": "Missing",
+            "type": "integer"
+          },
+          "needs_rebuild": {
+            "title": "Needs Rebuild",
+            "type": "integer"
+          },
+          "provider_no_data": {
+            "title": "Provider No Data",
+            "type": "integer"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "integer"
+          },
+          "run_readable": {
+            "title": "Run Readable",
+            "type": "boolean"
+          },
+          "session_count": {
+            "title": "Session Count",
+            "type": "integer"
+          },
+          "upcoming": {
+            "title": "Upcoming",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "calendar_day_count",
+          "session_count",
+          "ready",
+          "building",
+          "needs_rebuild",
+          "missing",
+          "failed",
+          "forming",
+          "upcoming",
+          "fetchable",
+          "before_provider_history",
+          "provider_no_data",
+          "run_readable"
+        ],
+        "title": "InstrumentDataSummary",
+        "type": "object"
+      },
+      "InstrumentSession": {
+        "properties": {
+          "artifact_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Id"
+          },
+          "blocked_by": {
+            "anyOf": [
+              {
+                "enum": [
+                  "before_provider_history",
+                  "provider_no_data"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked By"
+          },
+          "fetchable": {
+            "default": false,
+            "title": "Fetchable",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "state": {
+            "enum": [
+              "ready",
+              "building",
+              "needs_rebuild",
+              "missing",
+              "failed",
+              "forming",
+              "upcoming"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "trading_date_ms": {
+            "title": "Trading Date Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "trading_date_ms",
+          "state"
+        ],
+        "title": "InstrumentSession",
         "type": "object"
       },
       "InsufficientCoverageDetail": {
@@ -87130,6 +87411,96 @@
           }
         },
         "summary": "Post Ensure Data",
+        "tags": [
+          "data-lake"
+        ]
+      }
+    },
+    "/api/data-lake/instrument-data": {
+      "get": {
+        "description": "Per scheduled session in the window: ready, or why not, and whether a Fill can close it.\n\n``price_adjustment_mode`` has no default, for the reason ``/coverage``\ngives, and names only the trees the fetch pipeline writes. The window is\ntwo ``int64 ms UTC`` instants inside the first and last ET day wanted.\nA window the coverage read refuses (too wide, reversed, a symbol the lake\ncannot hold) is refused with its typed reason; it is never cut short.",
+        "operationId": "get_instrument_data_api_data_lake_instrument_data_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "symbol",
+            "required": true,
+            "schema": {
+              "title": "Symbol",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "start_trading_date_ms",
+            "required": true,
+            "schema": {
+              "title": "Start Trading Date Ms",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "end_trading_date_ms",
+            "required": true,
+            "schema": {
+              "title": "End Trading Date Ms",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "price_adjustment_mode",
+            "required": true,
+            "schema": {
+              "enum": [
+                "raw",
+                "polygon_split_adjusted"
+              ],
+              "title": "Price Adjustment Mode",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstrumentDataResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Instrument Data",
         "tags": [
           "data-lake"
         ]
