@@ -11,13 +11,11 @@ import type {
   ParameterStability,
   RegimeBucket,
   RegimeCoverageEntry,
-  ResearchExperiment,
   SharpeCi,
   SignalBacktestResult,
   SignalBehaviorMetrics,
   SignalDiagnostics,
   SignalEngineResult,
-  SignalExperiment,
   Stage0Failure,
   Stage0Rejection,
   StageAdvanceCriterion,
@@ -29,51 +27,10 @@ import type {
 type Schema = components['schemas'];
 
 /**
- * Python's stored experiment rows and signal reports (snake_case, instants as
- * `*_ms`) to the Research Lab's view models. One mapper per wire shape; each
- * lists every field so a rename on either side fails the type check.
+ * Python's stored signal report (snake_case) to the Research Lab's view model.
+ * One mapper per wire shape; each lists every field so a rename on either side
+ * fails the type check.
  */
-
-export function toResearchExperiment(row: Schema['ResearchExperimentResponse']): ResearchExperiment {
-  return {
-    id: row.id,
-    ticker: row.ticker,
-    featureName: row.feature_name,
-    startDate: row.start_date,
-    endDate: row.end_date,
-    barsUsed: row.bars_used,
-    meanIC: row.mean_ic,
-    icTStat: row.ic_t_stat,
-    icPValue: row.ic_p_value,
-    adfPValue: row.adf_p_value,
-    kpssPValue: row.kpss_p_value,
-    isStationary: row.is_stationary,
-    passedValidation: row.passed_validation,
-    monotonicityRatio: row.monotonicity_ratio,
-    isMonotonic: row.is_monotonic,
-    createdAt: row.created_at_ms,
-  };
-}
-
-export function toSignalExperiment(row: Schema['SignalExperimentResponse']): SignalExperiment {
-  return {
-    id: row.id,
-    ticker: row.ticker,
-    featureName: row.feature_name,
-    startDate: row.start_date,
-    endDate: row.end_date,
-    barsUsed: row.bars_used,
-    overallGrade: row.overall_grade,
-    statusLabel: row.status_label,
-    overallPassed: row.overall_passed,
-    meanOosSharpe: row.mean_oos_sharpe,
-    bestThreshold: row.best_threshold,
-    bestCostBps: row.best_cost_bps,
-    flipSign: row.flip_sign,
-    regimeGateEnabled: row.regime_gate_enabled,
-    createdAt: row.created_at_ms,
-  };
-}
 
 export function toSignalEngineResult(report: Schema['SignalExperimentReport']): SignalEngineResult {
   return {

@@ -45,6 +45,7 @@ from app.research.indicator_reliability import (
     generate_warnings,
     get_indicator_category,
 )
+from app.research.study_records.recorder import capture_request, keeps_route_record
 from app.services.dataset_service import (
     INDICATOR_CONFIGS,
     bar_minutes_for,
@@ -144,6 +145,7 @@ def _build_verdict(
 
 
 @router.post("/indicator-reliability", response_model=IndicatorReliabilityResponse)
+@keeps_route_record("indicator-reliability", capture_request, body="request")
 async def calculate_indicator_reliability(
     request: IndicatorReliabilityRequest,
 ) -> IndicatorReliabilityResponse:

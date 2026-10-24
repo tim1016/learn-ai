@@ -138,11 +138,11 @@ export const routes: Routes = [
     ],
   },
   {
+    // The Strategy Spec builder became Research's Rule sandbox; its saved specs
+    // are browser state under the same key, so they open at the new address.
     path: "spec-strategy",
-    loadComponent: () =>
-      import(
-        "./components/spec-strategy-runner/spec-strategy-runner.component"
-      ).then((m) => m.SpecStrategyRunnerComponent),
+    redirectTo: redirectKeepingState(["/research", "rule-sandbox"]),
+    pathMatch: "full",
   },
   {
     // Moved into an instrument's Options tab; the symbol and the expiry go with it.
@@ -312,6 +312,16 @@ export const routes: Routes = [
     pathMatch: "full",
   },
   {
+    // Research: the study list, one page per study and the Edge demonstrations.
+    path: "research",
+    loadChildren: () =>
+      import("./research/research.routes").then((m) => m.RESEARCH_ROUTES),
+  },
+  {
+    // The Research Lab shell still hosts the Recency Chart (#3508). Its five
+    // studies moved to /research, its saved lists and run records to the
+    // History, and its headlines under the instrument; their old addresses
+    // redirect from here.
     path: "research-lab",
     loadChildren: () =>
       import("./components/research-lab/research-lab.routes").then(
@@ -571,33 +581,29 @@ export const routes: Routes = [
     pathMatch: "full",
   },
   ...RETIRED_IBKR_NAVIGATION_ROUTES,
+  // Edge became Research: its Realized vs IV page is a study, and the rest are
+  // demonstrations on sample data. Each old address goes straight to its page,
+  // keeping its query and fragment; the hub, which showed hard-coded numbers,
+  // goes to the study list that now names those pages.
   {
     path: "edge",
-    loadComponent: () =>
-      import("./components/edge/edge.component").then((m) => m.EdgeComponent),
-    children: [
-      {
-        path: "realized-vs-iv",
-        loadComponent: () =>
-          import(
-            "./components/edge/realized-vs-iv/realized-vs-iv.component"
-          ).then((m) => m.RealizedVsIvComponent),
-      },
-      {
-        path: "cross-asset",
-        loadComponent: () =>
-          import("./components/edge/cross-asset/cross-asset.component").then(
-            (m) => m.CrossAssetComponent
-          ),
-      },
-      {
-        path: "regimes",
-        loadComponent: () =>
-          import("./components/edge/regimes/regimes.component").then(
-            (m) => m.RegimesComponent
-          ),
-      },
-    ],
+    redirectTo: redirectKeepingState(["/research"]),
+    pathMatch: "full",
+  },
+  {
+    path: "edge/realized-vs-iv",
+    redirectTo: redirectKeepingState(["/research", "realized-vs-iv"]),
+    pathMatch: "full",
+  },
+  {
+    path: "edge/cross-asset",
+    redirectTo: redirectKeepingState(["/research", "demos", "cross-asset"]),
+    pathMatch: "full",
+  },
+  {
+    path: "edge/regimes",
+    redirectTo: redirectKeepingState(["/research", "demos", "regimes"]),
+    pathMatch: "full",
   },
   {
     // The Golden Fixtures catalog became Operations → Math checks.

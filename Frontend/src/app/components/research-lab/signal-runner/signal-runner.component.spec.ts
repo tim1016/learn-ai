@@ -7,6 +7,7 @@ import {
 } from '@angular/common/http/testing';
 import { signal } from '@angular/core';
 import { vi } from 'vitest';
+import { provideRouter } from '@angular/router';
 
 import { environment } from '../../../../environments/environment';
 import {
@@ -19,6 +20,7 @@ import {
 } from '../../../shared/symbol-catalog/testing/fake-symbol-catalog';
 
 import { JobsService, type JobState } from '../../../services/jobs.service';
+import { RECORD_ID, storedRecord } from '../../../research/stored-study/testing/stored-study-fixtures';
 import { SignalRunnerComponent } from './signal-runner.component';
 
 /** A one-indicator `/api/dataset/available` catalog. */
@@ -38,9 +40,11 @@ const CATALOG = {
 describe('SignalRunnerComponent indicator catalog load', () => {
   const catalogUrl = `${environment.pythonServiceUrl}/api/dataset/available`;
   let fixture: ComponentFixture<SignalRunnerComponent>;
+  let startJob: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     const jobs = signal<JobState[]>([]);
+    startJob = vi.fn().mockResolvedValue('job-id-1');
     await TestBed.configureTestingModule({
       imports: [SignalRunnerComponent, HttpClientTestingModule],
       providers: [
@@ -49,12 +53,13 @@ describe('SignalRunnerComponent indicator catalog load', () => {
           useValue: {
             jobs,
             job: () => undefined,
-            startJob: vi.fn(),
+            startJob,
             cancelJob: vi.fn(),
             fetchResult: vi.fn(),
             dismiss: vi.fn(),
           },
         },
+        provideRouter([]),
         // The ticker card reads the lake catalog on init; without this the
         // real service fires a doomed XHR on every run.
         provideFakeTickerCatalog(
@@ -102,5 +107,75 @@ describe('SignalRunnerComponent indicator catalog load', () => {
     expect(picker?.querySelector('[role="alert"]')).toBeNull();
     expect(picker?.textContent).not.toContain('Indicators could not be loaded.');
     expect(picker?.textContent).toContain('1 of 1');
+  });
+
+  describe('rerun from a saved run', () => {
+    it('fills the inputs, flip sign and regime gate from the saved run, starts nothing, then names it when Run study is pressed', async () => {
+      const component = fixture.componentInstance;
+      fixture.componentRef.setInput('rerun', RECORD_ID);
+      fixture.detectChanges();
+      TestBed.inject(HttpTestingController)
+        .expectOne(`${environment.pythonServiceUrl}/api/research/study-records/signal-study/${RECORD_ID}`)
+        .flush(storedRecord('signal-study'));
+      await new Promise((resolve) => setTimeout(resolve)); // the read resolves in a later task than the flush
+      await fixture.whenStable();
+
+      expect(component.range()).toEqual({ symbol: 'SPY', from: '2024-01-02', to: '2024-03-28', resolution: 'minute', multiplier: 15 });
+      expect(component.selectedIndicator()).toBe('macd');
+      expect(component.selectedParams()).toEqual({ fast: 12, slow: 26, signal: 9 });
+      expect(component.flipSign()).toBe(false);
+      expect(component.regimeGateEnabled()).toBe(true);
+      expect(startJob).not.toHaveBeenCalled();
+
+      await component.runSignalEngine();
+
+      expect(startJob.mock.calls[0][1]).toMatchObject({
+        feature_name: 'macd_signal',
+        flip_sign: false,
+        rerun_of: RECORD_ID,
+        session: 'extended', // the bars it reads, not the "rth" the wire would fill in
+      });
+    });
+  });
+
+  describe('study layout', () => {
+    const root = () => fixture.nativeElement as HTMLElement;
+
+    it('offers only the bars the 15-bar target can use, and no session control', () => {
+      const resolutions = Array.from(root().querySelectorAll('.res-btn')).map((el) => el.textContent?.trim());
+      const multipliers = Array.from(
+        root().querySelectorAll('select[aria-label="Bar multiplier"] option'),
+      ).map((el) => el.textContent?.trim());
+
+      expect.soft(resolutions, 'hour and daily bars always fail').toEqual(['1m']);
+      expect.soft(multipliers, 'bars of 30 minutes or longer always fail').toEqual(['1×', '5×', '15×']);
+      expect.soft(root().querySelector('.session'), 'the session is not a control').toBeNull();
+      expect.soft(root().querySelector('[data-testid="study-constraints"]')?.textContent).toContain(
+        'extended hours included, fixed',
+      );
+      // The default window is long enough for the picker's hour-bars hint.
+      expect.soft(root().textContent, 'no hint to switch to bars that always fail').not.toContain('Switch to hour');
+    });
+
+    it('starts nothing when an input changes', () => {
+      const component = fixture.componentInstance;
+      component.range.update((r) => ({ ...r, symbol: 'MSFT' }));
+      component.flipSign.set(false);
+      component.regimeGateEnabled.set(false);
+      fixture.detectChanges();
+
+      expect(startJob).not.toHaveBeenCalled();
+    });
+
+    it('starts one job when Run study is pressed twice before the page re-renders', async () => {
+      const run = root().querySelector<HTMLButtonElement>('button.study-run');
+      if (run === null) throw new Error('no Run study button');
+
+      run.click();
+      run.click();
+      await fixture.whenStable();
+
+      expect(startJob).toHaveBeenCalledTimes(1);
+    });
   });
 });

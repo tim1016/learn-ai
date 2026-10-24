@@ -1,5 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { ActivatedRoute, convertToParamMap } from '@angular/router';
+import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
 import { describe, it, expect, vi } from 'vitest';
 import { of, throwError } from 'rxjs';
 
@@ -11,6 +11,7 @@ async function renderPage(id: string, getSignalExperimentReport: ReturnType<type
   await TestBed.configureTestingModule({
     imports: [SignalReportPageComponent],
     providers: [
+      provideRouter([]),
       { provide: ResearchService, useValue: { getSignalExperimentReport } },
       { provide: ActivatedRoute, useValue: { snapshot: { paramMap: convertToParamMap({ id }) } } },
     ],
@@ -23,6 +24,14 @@ async function renderPage(id: string, getSignalExperimentReport: ReturnType<type
 }
 
 describe('SignalReportPageComponent', () => {
+  it('leaves a way back to the History, whether or not the report is held', async () => {
+    const fixture = await renderPage('999', vi.fn(() => of(null)));
+
+    const back: HTMLAnchorElement = fixture.nativeElement.querySelector('a.back-link');
+    expect(back.textContent).toContain('Back to History');
+    expect(back.getAttribute('href')).toBe('/research/history?type=signal-report');
+  });
+
   it('says the experiment was not found when no report is held for it', async () => {
     const fixture = await renderPage('999', vi.fn(() => of(null)));
 

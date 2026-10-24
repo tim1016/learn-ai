@@ -149,7 +149,7 @@ describe('MonteCarloSectionComponent', () => {
   it('open(mc) navigates to the MC detail route', () => {
     component.open(makeMcConfig({ monte_carlo_id: 'c'.repeat(32) }));
     expect(routerNavigate).toHaveBeenCalledWith([
-      '/research-lab/monte-carlo',
+      '/research/history/monte-carlo',
       'c'.repeat(32),
     ]);
   });

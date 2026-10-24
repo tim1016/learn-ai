@@ -2,35 +2,11 @@
   <app-page-header
     [title]="title()"
     [hasTabs]="true"
-  >
-    @if (help(); as target) {
-      <app-how-this-works slot="actions" [route]="target.route" [anchor]="target.anchor" />
-    }
-  </app-page-header>
+  />
 
-  <nav
-    class="rl-subnav rl-subnav--two-row"
-    role="navigation"
-    aria-label="Research Lab sections"
-  >
-    <div class="rl-parent-segmented">
-      @for (group of groups; track group.label) {
-        @let isActive = group === activeGroup();
-        <button
-          type="button"
-          class="rl-parent-tab"
-          [class.active]="isActive"
-          [attr.aria-current]="isActive ? 'section' : null"
-          (click)="selectGroup(group)"
-        >
-          <span class="parent-label">{{ group.label }}</span>
-          <span class="parent-count">{{ group.items.length }}</span>
-        </button>
-      }
-    </div>
-
+  <nav class="rl-subnav" aria-label="Research Lab pages">
     <div class="rl-children-row">
-      @for (item of activeGroup().items; track item.path) {
+      @for (item of items; track item.path) {
         <a
           class="rl-tab"
           [routerLink]="item.path"
