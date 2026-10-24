@@ -207,17 +207,17 @@ class ReliabilityWarmup(BaseModel):
     shortened: bool
     shortfall_bars: int
     cause: WarmupShortfallCause
-    notice: str | None = Field(None, description="The shortfall in a sentence; null when there is none")
+    notice: str | None = Field(..., description="The shortfall in a sentence; null when there is none")
 
 
 class ReliabilityDataSource(LakeDataSource):
     """The lake data source of a reliability run, plus its warmup report and the identity a stored result would key on."""
 
     warmup: ReliabilityWarmup | None = Field(
-        None, description="Requested against admitted lead-in; null when a refusal came before any bar was read"
+        ..., description="Requested against admitted lead-in; null when a refusal came before any bar was read"
     )
     result_identity_digest: str | None = Field(
-        None, description="identity + admitted snapshot + calculation version; null when nothing was admitted"
+        ..., description="identity + admitted snapshot + calculation version; null when nothing was admitted"
     )
 
 
@@ -315,7 +315,7 @@ class ReliabilityRefusedResult(LakeRefusedResult):
 
     ticker: str
     data_source: ReliabilityDataSource | None = Field(
-        None, description="Null when the refusal came before anything was read"
+        ..., description="Null when the refusal came before anything was read"
     )
 
 

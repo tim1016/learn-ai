@@ -33964,6 +33964,8 @@
           "cached_at_ms": {
             "anyOf": [
               {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
                 "type": "integer"
               },
               {
@@ -33979,7 +33981,8 @@
           }
         },
         "required": [
-          "hit"
+          "hit",
+          "cached_at_ms"
         ],
         "title": "LakeCacheState",
         "type": "object"
@@ -33988,10 +33991,14 @@
         "description": "The first and last session admitted (ET midnight, int64 ms UTC), unlike the requested bounds in the identity.",
         "properties": {
           "end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
             "title": "End Ms",
             "type": "integer"
           },
           "start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
             "title": "Start Ms",
             "type": "integer"
           }
@@ -55352,7 +55359,6 @@
           },
           "kind": {
             "const": "lake",
-            "default": "lake",
             "title": "Kind"
           },
           "minute_bars_read": {
@@ -55433,28 +55439,42 @@
           },
           "window_end_ms": {
             "description": "Requested last date, ET midnight, int64 ms UTC",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
             "title": "Window End Ms",
             "type": "integer"
           },
           "window_start_ms": {
             "description": "Requested first date, ET midnight, int64 ms UTC",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
             "title": "Window Start Ms",
             "type": "integer"
           }
         },
         "required": [
+          "kind",
           "provider",
           "symbol",
           "price_adjustment_mode",
           "session_policy",
           "window_start_ms",
           "window_end_ms",
+          "effective_window",
           "warmup_sessions",
           "bar_minutes",
           "aggregation",
           "identity_digest",
           "calculation_version",
-          "cache"
+          "data_root_id",
+          "snapshot_digest",
+          "corporate_action_versions",
+          "coverage",
+          "minute_bars_read",
+          "bars_used",
+          "cache",
+          "warmup",
+          "result_identity_digest"
         ],
         "title": "ReliabilityDataSource",
         "type": "object"
@@ -55535,7 +55555,6 @@
           },
           "kind": {
             "const": "lake",
-            "default": "lake",
             "title": "Kind"
           },
           "minute_bars_read": {
@@ -55616,28 +55635,42 @@
           },
           "window_end_ms": {
             "description": "Requested last date, ET midnight, int64 ms UTC",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
             "title": "Window End Ms",
             "type": "integer"
           },
           "window_start_ms": {
             "description": "Requested first date, ET midnight, int64 ms UTC",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
             "title": "Window Start Ms",
             "type": "integer"
           }
         },
         "required": [
+          "kind",
           "provider",
           "symbol",
           "price_adjustment_mode",
           "session_policy",
           "window_start_ms",
           "window_end_ms",
+          "effective_window",
           "warmup_sessions",
           "bar_minutes",
           "aggregation",
           "identity_digest",
           "calculation_version",
-          "cache"
+          "data_root_id",
+          "snapshot_digest",
+          "corporate_action_versions",
+          "coverage",
+          "minute_bars_read",
+          "bars_used",
+          "cache",
+          "warmup",
+          "result_identity_digest"
         ],
         "title": "ReliabilityDataSource",
         "type": "object"
@@ -55665,12 +55698,10 @@
           },
           "status": {
             "const": "refused",
-            "default": "refused",
             "title": "Status"
           },
           "success": {
             "const": false,
-            "default": false,
             "title": "Success"
           },
           "ticker": {
@@ -55679,8 +55710,11 @@
           }
         },
         "required": [
+          "success",
+          "status",
           "error",
           "refusal",
+          "data_source",
           "ticker"
         ],
         "title": "ReliabilityRefusedResult",
@@ -55755,7 +55789,8 @@
           "admitted_bars",
           "shortened",
           "shortfall_bars",
-          "cause"
+          "cause",
+          "notice"
         ],
         "title": "ReliabilityWarmup",
         "type": "object"
@@ -64869,7 +64904,8 @@
           "code",
           "reason",
           "sessions",
-          "sessions_total"
+          "sessions_total",
+          "coverage"
         ],
         "title": "StudyRefusal",
         "type": "object"
@@ -64913,6 +64949,8 @@
           },
           "trading_date_ms": {
             "description": "The session's canonical open, int64 ms UTC",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
             "title": "Trading Date Ms",
             "type": "integer"
           }
@@ -64921,7 +64959,8 @@
           "group",
           "trading_date_ms",
           "outcome",
-          "reason"
+          "reason",
+          "failure_reason"
         ],
         "title": "StudySessionIssue",
         "type": "object"
