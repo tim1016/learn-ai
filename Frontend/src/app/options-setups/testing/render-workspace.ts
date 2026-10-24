@@ -18,6 +18,7 @@ import { fakeJobs, type FakeJobs } from '../../components/options-backtest/testi
 import type { FakeService } from '../../components/options-backtest/testing/fake-service';
 import { JobsService } from '../../services/jobs.service';
 import { FileDownloadService } from '../../shared/file/file-download.service';
+import { fakeScopedHealth, projection } from '../../shared/scoped-health/testing/scoped-health-fixtures';
 import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
 import { OptionsSetupIndexService, type OptionsSetupIndex } from '../index/options-setup-index.service';
 import { OptionsSetupBotsService, type OptionsBotsRead } from '../workspace/overview/options-setup-bots.service';
@@ -90,6 +91,8 @@ async function renderPlace(service: FakeService, url: string, download: FakeDown
       { provide: SETUP_DESCRIBE_DEBOUNCE_MS, useValue: 0 },
       { provide: PositionPreviewService, useValue: quietPositionPreview },
       ...fakePickerWorld().providers,
+      // The data plane has nothing to say unless a spec scripts it, so its notice never stands in for what a spec is about.
+      fakeScopedHealth(projection()).provider,
       ...(options.polling === true ? [] : [{ provide: RUN_POLL_MS, useValue: 0 }]),
       { provide: OptionsBacktestService, useValue: service },
       { provide: JobsService, useValue: (options.jobs ?? fakeJobs()).service },
